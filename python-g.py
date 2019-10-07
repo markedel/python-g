@@ -4,14 +4,16 @@ import icon
 from PIL import Image, ImageDraw, ImageTk, ImageWin
 
 windowBgColor = (128, 128, 128, 255)
+defaultWindowSize = (800, 800)
 
 class Window:
-    def __init__(self, master):
+    def __init__(self, master, size=None):
         self.top = tk.Toplevel(master)
         self.top.bind("<Destroy>", self.destroyCb)
         self.top.title("Python-G")
         self.frame = tk.Frame(self.top)
         self.menubar = tk.Menu(self.frame)
+        self.icons = []
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="File", menu=menu)
         menu.add_command(label="New", command=self.newCb)
@@ -21,15 +23,30 @@ class Window:
         menu.add_command(label="Copy")
         menu.add_command(label="Paste")
         self.top.config(menu=self.menubar)
-        width = 2400
-        height = 1800
+        if size is None:
+            size = defaultWindowSize
+        width, height = size
         self.imgFrame = tk.Frame(self.frame, bg="", width=width, height=height)
+        self.imgFrame.bind("<Expose>", self.exposeCb)
+        self.imgFrame.bind("<Configure>", self.configureCb)
         self.winImg = WindowImage(self.imgFrame, width, height)
-        self.imgFrame.pack()
-        self.frame.grid()
+        self.imgFrame.pack(fill=tk.BOTH, expand=True)
+        self.frame.pack(fill=tk.BOTH, expand=True)
 
     def newCb(self):
         appData.newWindow()
+
+    def configureCb(self, evt):
+        "Called when window is initially displayed or resized"
+        if evt.width != self.winImg.image.width or evt.height != self.winImg.image.height:
+            print('resizing', evt.width, evt.height)
+            self.winImg.resize(evt.width, evt.height)
+        for ic in self.icons:
+            ic.drawIcon()
+
+    def exposeCb(self, evt):
+        "Called when a new part of the window is exposed and needs to be redrawn"
+        self.winImg.refresh()
 
     def destroyCb(self, evt):
         if evt.widget == self.top:
@@ -54,6 +71,10 @@ class WindowImage:
         self.widget.config(bg="") # may not be necessary
         self.dc = None
         self.dirty = False
+
+    def resize(self, width, height):
+        self.image = Image.new('RGB', (width, height), color=windowBgColor)
+        self.draw = ImageDraw.Draw(self.image)
 
     def refresh(self, region=None):
         if region == None:
@@ -93,12 +114,7 @@ class App:
         self.frameCount = 0
 
     def mainLoop(self):
-        self.icons = [icon.Icon("Icon %d" % (i % 150)) for i in range((40*90))]
-        for x in range(40):
-            for y in range(90):
-                self.icons[y*4+x].drawIcon(self.windows[0].winImg,
-                    x*60 + (self.frameCount % 100)*10, y*20, 42, (5, 10))
-        self.root.after(1000, self.animate)
+        #self.root.after(2000, self.animate)
         self.root.mainloop()
 
     def animate(self):
@@ -108,7 +124,8 @@ class App:
         fc = appData.frameCount
         x = fc % (winImg.image.width - 500)
         y = fc % (winImg.image.height - 500)
-        winImg.refresh((x, y, x + 500, y + 500))
+        #winImg.refresh((x, y, x + 500, y + 500))
+        winImg.refresh()
         self.root.after(10, self.animate)
 
     def removeWindow(self, window):
@@ -117,7 +134,13 @@ class App:
             exit(1)
 
     def newWindow(self):
-        self.windows.append(Window(self.root))
+        window = Window(self.root)
+        self.windows.append(window)
+        for x in range(8):
+            for y in range(18):
+                loc = (x*60, y*20)
+                window.icons.append(icon.Icon("Icon %d" % (x), loc,
+                 42, (5, 10), window))
 
 if __name__ == '__main__':
     appData = App()

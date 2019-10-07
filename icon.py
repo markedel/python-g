@@ -34,26 +34,35 @@ outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
 
 class Icon:
-    def __init__(self, text):
+    def __init__(self, text, location, outOffset, inOffsets=None, window=None):
+        self.window = window
         self.text = text
+        self.location = location
+        self.outOffset = outOffset
+        self.inOffsets = inOffsets
 
-    def drawIcon(self, windowImage, x, y, outOffset, inOffsets=None):
+    def drawIcon(self, image=None, location=None):
+        if image is None:
+            image = self.window.winImg.image
+        if location is None:
+            location = self.location
         if self.text not in renderCache:
             width, height = globalFont.getsize(self.text)
-            image = Image.new('RGBA', (width+2*textMargin, height+2*textMargin),
+            txtImg = Image.new('RGBA', (width+2*textMargin, height+2*textMargin),
              color=(255, 255, 255, 255))
-            draw = ImageDraw.Draw(image)
+            draw = ImageDraw.Draw(txtImg)
             draw.text((textMargin, textMargin), self.text, font=globalFont,
              fill=(0, 0, 0, 255))
             draw.rectangle((0, 0, width+2*textMargin-1, height+2*textMargin-1),
              fill=None, outline=outlineColor)
-            renderCache[self.text] = image
+            renderCache[self.text] = txtImg
         else:
-            image = renderCache[self.text]
-        windowImage.image.paste(image, (x, y, x+image.width, y+image.height))
-        self.drawSpine(windowImage, x, y+image.height, image.width-1, outOffset, inOffsets)
+            txtImg = renderCache[self.text]
+        x, y = self.location
+        image.paste(txtImg, (x, y, x+txtImg.width, y+txtImg.height))
+        self.drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
 
-    def drawSpine(self, windowImage, x, y, baseIconWidth, outOffset, inOffsets=None):
+    def drawSpine(self, image, x, y, baseIconWidth, outOffset, inOffsets=None):
         if inOffsets is not None:
             spineLength = max(inOffsets) + outSiteImage.width // 2 + 2
             spineImage = Image.new('RGBA', (spineLength, spineThickness), iconBgColor)
@@ -63,7 +72,7 @@ class Icon:
             draw.line((spineLength-1, 0, spineLength-1, spineThickness), fill=outlineColor)
             for inOff in inOffsets:
                 spineImage.paste(inSiteImage, (inOff - inSiteImage.width // 2, 0))
-            windowImage.image.paste(spineImage, (x+baseIconWidth, y-spineThickness,
+            image.paste(spineImage, (x+baseIconWidth, y-spineThickness,
              x+baseIconWidth+spineLength, y), mask=spineImage)
-        windowImage.image.paste(outSiteImage, (x+outOffset-outSiteImage.width//2, y-1),
+        image.paste(outSiteImage, (x+outOffset-outSiteImage.width//2, y-1),
          mask=outSiteImage)
