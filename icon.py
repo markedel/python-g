@@ -43,7 +43,7 @@ class Icon:
 
     def drawIcon(self, image=None, location=None):
         if image is None:
-            image = self.window.winImg.image
+            image = self.window.image
         if location is None:
             location = self.location
         if self.text not in renderCache:
