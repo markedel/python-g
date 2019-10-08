@@ -1,5 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont
-import python_g
+from python_g import msTime
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 11)
 
@@ -41,6 +41,7 @@ class Icon:
         self.outOffset = outOffset
         self.inOffsets = inOffsets
         self.rect = self._calcRectangle(location)
+        self.selected = False
 
     def _calcRectangle(self, location):
         width, height = globalFont.getsize(self.text)
@@ -68,6 +69,9 @@ class Icon:
             txtImg = renderCache[self.text]
         x, y = location
         image.paste(txtImg, (x, y, x+txtImg.width, y+txtImg.height))
+        if self.selected:
+            selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 100, 50))
+            image.paste(selImg, (x, y, x+txtImg.width, y+txtImg.height), mask=selImg)
         self._drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
 
     def _spineLength(self):
