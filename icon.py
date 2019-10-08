@@ -1,4 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont
+import python_g
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 11)
 
@@ -37,15 +38,22 @@ class Icon:
     def __init__(self, text, location, outOffset, inOffsets=None, window=None):
         self.window = window
         self.text = text
-        self.location = location
         self.outOffset = outOffset
         self.inOffsets = inOffsets
+        self.rect = self._calcRectangle(location)
+
+    def _calcRectangle(self, location):
+        width, height = globalFont.getsize(self.text)
+        width += self._spineLength() + 2*textMargin + 1
+        height += 2*textMargin + outSiteImage.height
+        x, y = location
+        return x, y, x + width, y + height
 
     def drawIcon(self, image=None, location=None):
         if image is None:
             image = self.window.image
         if location is None:
-            location = self.location
+            location = self.rect[:2]
         if self.text not in renderCache:
             width, height = globalFont.getsize(self.text)
             txtImg = Image.new('RGBA', (width+2*textMargin, height+2*textMargin),
@@ -58,13 +66,16 @@ class Icon:
             renderCache[self.text] = txtImg
         else:
             txtImg = renderCache[self.text]
-        x, y = self.location
+        x, y = location
         image.paste(txtImg, (x, y, x+txtImg.width, y+txtImg.height))
-        self.drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
+        self._drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
 
-    def drawSpine(self, image, x, y, baseIconWidth, outOffset, inOffsets=None):
+    def _spineLength(self):
+        return max(self.inOffsets) + outSiteImage.width // 2 + 2
+
+    def _drawSpine(self, image, x, y, baseIconWidth, outOffset, inOffsets=None):
         if inOffsets is not None:
-            spineLength = max(inOffsets) + outSiteImage.width // 2 + 2
+            spineLength = self._spineLength()
             spineImage = Image.new('RGBA', (spineLength, spineThickness), iconBgColor)
             draw = ImageDraw.Draw(spineImage)
             draw.line((0, 0, spineLength, 0), fill=outlineColor)

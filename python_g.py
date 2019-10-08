@@ -17,6 +17,12 @@ defaultWindowSize = (800, 800)
 # a PIL image in a two-step process that is sufficiently fast for the purposes
 # of this program.
 
+def combineRects(rect1, rect2):
+    "Find the minimum rectangle enclosing rect1 and rect2"
+    l1, t1, r1, b1 = rect1
+    l2, t2, r2, b2 = rect2
+    return min(l1, l2), min(t1, t2), max(r1, r2), max(b1, b2)
+
 class Window:
     def __init__(self, master, size=None):
         self.top = tk.Toplevel(master)
@@ -40,6 +46,7 @@ class Window:
         self.imgFrame = tk.Frame(self.frame, bg="", width=width, height=height)
         self.imgFrame.bind("<Expose>", self.exposeCb)
         self.imgFrame.bind("<Configure>", self.configureCb)
+        self.imgFrame.bind("<Motion>", self.motionCb)
         self.imgFrame.pack(fill=tk.BOTH, expand=True)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
@@ -62,6 +69,14 @@ class Window:
     def exposeCb(self, evt):
         "Called when a new part of the window is exposed and needs to be redrawn"
         self.refresh()
+    def motionCb(self, evt):
+        print('motion')
+
+    def buttonPressCb(self, evt):
+        print('button press')
+
+    def buttonReleaseCb(self, evt):
+        print('button release')
 
     def destroyCb(self, evt):
         if evt.widget == self.top:
@@ -102,6 +117,42 @@ class Window:
             self.dc = dib.image.getdc(self.imgFrame.winfo_id())
         dib.draw(self.dc, (x, y, x + width, y + height))
 
+    def findIconsInRegion(self, rect):
+        return [ic for ic in self.icons if rectsTouch(rect, ic.rect)]
+
+    def moveIcons(self, icons, offset):
+        redrawRect = None
+        xOffset, yOffset = offset
+        for ic in icons:
+            if redrawRect is None:
+                redrawRect = ic.rect
+            else:
+                redrawRect = combineRects(redrawRect, ic.rect)
+            self.icons.remove(ic)
+            self.draw.rectangle(ic.rect, fill=windowBgColor)
+            x1, y1, x2, y2 = ic.rect
+            ic.rect = (x1+xOffset, y1+yOffset, x2+xOffset, y2+yOffset)
+        for ic in self.findIconsInRegion(redrawRect):
+            if ic is not self:
+                ic.drawIcon()
+        for ic in icons:
+            redrawRect = combineRects(redrawRect, ic.rect)
+            ic.drawIcon()
+        self.refresh(redrawRect)
+        self.icons += icons
+
+def rectsTouch(rect1, rect2):
+    "Returns true if rectangles rect1 and rect2 overlap"
+    l1, t1, r1, b1 = rect1
+    l2, t2, r2, b2 = rect2
+    # One is to the right side of the other
+    if l1 > r2  or l2 > r1:
+        return False
+    # One is above the other
+    if (t1 > b2 or t2 > b1):
+        return False
+    return True
+
 class App:
     def __init__(self):
         self.windows = []
@@ -112,19 +163,23 @@ class App:
         self.newWindow()
         self.frameCount = 0
 
+        window = self.windows[0]
+        for x in range(8):
+            for y in range(18):
+                loc = (x*60, y*20)
+                window.icons.append(icon.Icon("Icon %d" % (x*8+y), loc,
+                 42, (5, 10), window))
+        self.animateIcons = list(window.icons[:80])
+
     def mainLoop(self):
-        #self.root.after(2000, self.animate)
+        self.root.after(2000, self.animate)
         self.root.mainloop()
 
     def animate(self):
         print(self.frameCount)
         self.frameCount += 1
-        image = self.window[0].image
-        fc = appData.frameCount
-        x = fc % (image.width - 500)
-        y = fc % (image.height - 500)
-        #refresh((x, y, x + 500, y + 500))
-        self.windows[0].refresh()
+        offset = 1 if self.frameCount % 1000 < 500 else -1
+        self.windows[0].moveIcons(self.animateIcons, (offset, offset))
         self.root.after(10, self.animate)
 
     def removeWindow(self, window):
@@ -135,11 +190,6 @@ class App:
     def newWindow(self):
         window = Window(self.root)
         self.windows.append(window)
-        for x in range(8):
-            for y in range(18):
-                loc = (x*60, y*20)
-                window.icons.append(icon.Icon("Icon %d" % (x), loc,
-                 42, (5, 10), window))
 
 if __name__ == '__main__':
     appData = App()
