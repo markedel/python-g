@@ -11,7 +11,7 @@ dragThreshold = 2
 SHIFT_MASK = 0x001
 CTRL_MASK = 0x004
 LEFT_MOUSE_MASK = 0x100
-RIGHT_MOUSE_MASK = 0x200
+RIGHT_MOUSE_MASK = 0x300
 
 # Notes on window drawing:
 #
@@ -82,11 +82,19 @@ class Window:
         self.imgFrame = tk.Frame(self.frame, bg="", width=width, height=height)
         self.imgFrame.bind("<Expose>", self._exposeCb)
         self.imgFrame.bind("<Configure>", self._configureCb)
-        self.imgFrame.bind("<Button>", self._buttonPressCb)
-        self.imgFrame.bind("<ButtonRelease>", self._buttonReleaseCb)
+        self.imgFrame.bind("<Button-1>", self._buttonPressCb)
+        self.imgFrame.bind("<ButtonRelease-1>", self._buttonReleaseCb)
+        self.imgFrame.bind('<Button-3>', self._btn3Cb)
+        self.imgFrame.bind('<ButtonRelease-3>', self._btn3ReleaseCb)
         self.imgFrame.bind("<Motion>", self._motionCb)
         self.imgFrame.pack(fill=tk.BOTH, expand=True)
         self.frame.pack(fill=tk.BOTH, expand=True)
+
+        self.popup = tk.Menu(self.imgFrame, tearoff=0)
+        self.popup.add_command(label="Cut")
+        self.popup.add_command(label="Copy")
+        self.popup.add_command(label="Paste")
+        self.popup.add_command(label="Delete", command=self._deleteCb)
 
         self.buttonDownTime = None
         self.buttonDownLoc = None
@@ -103,6 +111,14 @@ class Window:
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
 
+    def _btn3Cb(self, evt):
+        selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
+        if len(selected) == 0:
+            self._select(evt)
+
+    def _btn3ReleaseCb(self, evt):
+        self.popup.tk_popup(evt.x_root, evt.y_root, 0)
+
     def _newCb(self):
         appData.newWindow()
 
@@ -118,7 +134,7 @@ class Window:
         self.refresh()
 
     def _motionCb(self, evt):
-        if self.buttonDownTime is None:
+        if self.buttonDownTime is None or not (evt.state & LEFT_MOUSE_MASK):
             return
         if self.dragging is None and not self.inRectSelect:
             xDist = abs(evt.x - self.buttonDownLoc[0])
@@ -139,7 +155,6 @@ class Window:
         self.buttonDownTime = msTime()
         self.buttonDownLoc = evt.x, evt.y
         self.buttonDownState = evt.state
-        print('button press')
         selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
         if len(selected) == 0 and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
             self.unselectAll()
@@ -162,6 +177,9 @@ class Window:
     def _destroyCb(self, evt):
         if evt.widget == self.top:
             appData.removeWindow(self)
+
+    def _deleteCb(self):
+        self.removeIcons([ic for ic in self.icons if ic.selected])
 
     def _startDrag(self, evt, icons):
         for ic in icons:
@@ -200,7 +218,6 @@ class Window:
         dragImage.paste(self.dragImage, mask=self.dragImage)
         self.drawImage(dragImage, (x, y))
         self.lastDragImageRegion = dragImageRegion
-        print("dragged to", evt.x, evt.y)
 
     def _endDrag(self):
         l, t, r, b = self.lastDragImageRegion
@@ -247,7 +264,6 @@ class Window:
         self.drawImage(hLineImg, (l, b))
         self.drawImage(vLineImg, (l, t))
         self.drawImage(vLineImg, (r, t))
-        print('updating rect select')
         self.lastRectSelect = newRect
 
     def _eraseRectSelect(self):
@@ -381,8 +397,8 @@ class App:
         self.frameCount = 0
 
         window = self.windows[0]
-        for x in range(40):
-            for y in range(90):
+        for x in range(8):
+            for y in range(14):
                 loc = (x*60, y*20)
                 window.icons.append(icon.Icon("Icon %d" % (x*8+y), loc,
                  42, (5, 10), window))
