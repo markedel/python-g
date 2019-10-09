@@ -189,29 +189,50 @@ class Window:
 
     def _copyCb(self, evt=None):
         selected = [ic for ic in self.icons if ic.selected]
+        if len(selected) == 0:
+            return
+        xOff, yOff = icon.containingRect(selected)[:2]
+        clipIcons = [(ic.text, (ic.rect[0]-xOff, ic.rect[1]-yOff)) for ic in selected]
+        print(repr(clipIcons))
+        clipTxt = " ".join([ic.text for ic in selected])
+        print(clipIcons, clipTxt)
         self.top.clipboard_clear()
-        clip = [ic.text for ic in selected]
-        clipTxt = " ".join(clip)
+        self.top.clipboard_append(repr(clipIcons), type='ICONS')
         self.top.clipboard_append(clipTxt, type='STRING')
-        clipIcons = ", Icon: ".join(clip)
-        self.top.clipboard_append(clipIcons, type='ICONS')
 
     def _pasteCb(self, evt=None):
         #print(self.top.selection_get(selection='CLIPBOARD', type='TARGETS'))
         try:
-            icons = self.top.clipboard_get(type="ICONS")
+            iconData = eval(self.top.clipboard_get(type="ICONS"))
         except:
-            icons = None
-        text = None
-        if icons is None:
+            iconData = None
+        selected = [ic for ic in self.icons if ic.selected]
+        if len(selected) > 0:
+            px, py = icon.containingRect(selected)[:2]
+            self.removeIcons(selected)
+        elif evt is not None:
+            px, py = evt.x, evt.y
+        else:
+            px, py = 10, 10
+        icons = []
+        if iconData is not None:
+            for id in iconData:
+                ix, iy = id[1]
+                icons.append(icon.Icon(id[0], (px+ix, py+iy), 42, (5, 10), window=self))
+        else:
+            # Couldn't get icon data.  Make an icon out of text if there
             try:
                 text = self.top.clipboard_get(type="STRING")
             except:
-                pass
-        if icons is not None:
-            print("Have icons (%s), but don't know what to do with them, yet" % icons)
-        elif text is not None:
-            print("Have text (%s), but can't convert to icons, yet" % text)
+                return
+            icons.append(icon.Icon(repr(text), (px, py), window=self))
+        redrawRect = AccumRects()
+        for ic in icons:
+            ic.selected = True
+            ic.drawIcon()
+            redrawRect.add(ic.rect)
+            self.icons.append(ic)
+        self.refresh(redrawRect.get())
 
     def _deleteCb(self, evt=None):
         self.removeIcons([ic for ic in self.icons if ic.selected])
@@ -439,7 +460,6 @@ class App:
                 loc = (x*60, y*20)
                 window.icons.append(icon.Icon("Icon %d" % (x*8+y), loc,
                  42, (5, 10), window))
-        self.animateIcons = list(window.icons[:80])
 
     def mainLoop(self):
         #self.root.after(2000, self.animate)

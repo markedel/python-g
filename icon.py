@@ -1,5 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont
-from python_g import msTime
+from python_g import msTime, AccumRects
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 11)
 
@@ -53,7 +53,7 @@ inSiteImage = asciiToImage(inSitePixmap)
 inSiteSelImage = asciiToImage(inSitePixmap, selected=True)
 
 class Icon:
-    def __init__(self, text, location, outOffset, inOffsets=None, window=None):
+    def __init__(self, text, location, outOffset=0, inOffsets=None, window=None):
         self.window = window
         self.text = text
         self.outOffset = outOffset
@@ -91,10 +91,13 @@ class Icon:
         if self.selected:
             selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 80, 50))
             image.paste(selImg, textDrawRect, mask=selImg)
-        self._drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
+        if self.inOffsets:
+            self._drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
 
     def _spineLength(self):
-        return max(self.inOffsets) + outSiteImage.width // 2 + 2
+        if self.inOffsets:
+            return max(self.inOffsets) + outSiteImage.width // 2 + 2
+        return 0
 
     def _drawSpine(self, image, x, y, baseIconWidth, outOffset, inOffsets=None):
         if inOffsets is not None:
@@ -119,3 +122,9 @@ class Icon:
             image.paste(spineImage, (x+baseIconWidth, y-spineThickness,
              x+baseIconWidth+spineLength, y), mask=spineImage)
         image.paste(outImg, (x+outOffset-outImg.width//2, y-1), mask=outImg)
+
+def containingRect(icons):
+    maxRect = AccumRects()
+    for ic in icons:
+        maxRect.add(ic.rect)
+    return maxRect.get()
