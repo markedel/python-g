@@ -40,17 +40,36 @@ def makeRect(pos1, pos2):
     x2, y2 = pos2
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
+def exposedRegions(oldRect, newRect):
+    "List rectangles covering space needing to be filled when oldRect becomes newRect"
+    lo, to, ro, bo = oldRect
+    ln, tn, rn, bn = newRect
+    exposed = []
+    if lo < ln:
+        exposed.append((lo, to, ln, bo))
+    if ro > rn:
+        exposed.append((rn, to, ro, bo))
+    if to < tn:
+        exposed.append((lo, to, ro, tn))
+    if bo > bn:
+        exposed.append((lo, bn, ro, bo))
+    return exposed
+
+def offsetRect(rect, xOff, yOff):
+    l, t, r, b = rect
+    return (l+xOff, t+yOff, r+xOff, b+yOff)
+
 class Window:
     def __init__(self, master, size=None):
         self.top = tk.Toplevel(master)
-        self.top.bind("<Destroy>", self.destroyCb)
+        self.top.bind("<Destroy>", self._destroyCb)
         self.top.title("Python-G")
         self.frame = tk.Frame(self.top)
         self.menubar = tk.Menu(self.frame)
         self.icons = []
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="File", menu=menu)
-        menu.add_command(label="New", command=self.newCb)
+        menu.add_command(label="New", command=self._newCb)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu)
         menu.add_command(label="Cut")
@@ -61,135 +80,163 @@ class Window:
             size = defaultWindowSize
         width, height = size
         self.imgFrame = tk.Frame(self.frame, bg="", width=width, height=height)
-        self.imgFrame.bind("<Expose>", self.exposeCb)
-        self.imgFrame.bind("<Configure>", self.configureCb)
-        self.imgFrame.bind("<Button>", self.buttonPressCb)
-        self.imgFrame.bind("<ButtonRelease>", self.buttonReleaseCb)
-        self.imgFrame.bind("<Motion>", self.motionCb)
+        self.imgFrame.bind("<Expose>", self._exposeCb)
+        self.imgFrame.bind("<Configure>", self._configureCb)
+        self.imgFrame.bind("<Button>", self._buttonPressCb)
+        self.imgFrame.bind("<ButtonRelease>", self._buttonReleaseCb)
+        self.imgFrame.bind("<Motion>", self._motionCb)
         self.imgFrame.pack(fill=tk.BOTH, expand=True)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
         self.buttonDownTime = None
         self.buttonDownLoc = None
+        self.buttonDownState = None
         self.dragging = None
+        self.dragImageOffset = None
+        self.dragImage = None
+        self.lastDragImageRegion = None
         self.inRectSelect = False
         self.lastRectSelect = None
+        self.rectSelectInitialStates = {}
 
         self.image = Image.new('RGB', (width, height), color=windowBgColor)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
-        self.dirty = False
 
-    def newCb(self):
+    def _newCb(self):
         appData.newWindow()
 
-    def configureCb(self, evt):
+    def _configureCb(self, evt):
         "Called when window is initially displayed or resized"
         if evt.width != self.image.width or evt.height != self.image.height:
-            print('resizing', evt.width, evt.height)
             self.resize(evt.width, evt.height)
         for ic in self.icons:
             ic.drawIcon()
 
-    def exposeCb(self, evt):
+    def _exposeCb(self, evt):
         "Called when a new part of the window is exposed and needs to be redrawn"
         self.refresh()
 
-    def motionCb(self, evt):
+    def _motionCb(self, evt):
         if self.buttonDownTime is None:
             return
-        print('motion')
         if self.dragging is None and not self.inRectSelect:
             xDist = abs(evt.x - self.buttonDownLoc[0])
             yDist = abs(evt.y - self.buttonDownLoc[1])
             if xDist + yDist > dragThreshold:
                 icons = self.findIconsAt((evt.x, evt.y))
                 if len(icons) > 0:
-                    self.startDrag(evt, icons)
+                    self._startDrag(evt, icons)
                 else:
-                    self.startRectSelect(evt)
+                    self._startRectSelect(evt)
         else:
             if self.dragging is not None:
-                self.updateDrag(evt)
+                self._updateDrag(evt)
             elif self.inRectSelect:
-                self.updateRectSelect(evt)
+                self._updateRectSelect(evt)
 
-    def buttonPressCb(self, evt):
+    def _buttonPressCb(self, evt):
         self.buttonDownTime = msTime()
         self.buttonDownLoc = evt.x, evt.y
         self.buttonDownState = evt.state
         print('button press')
+        selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
+        if len(selected) == 0 and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
+            self.unselectAll()
 
-    def buttonReleaseCb(self, evt):
+    def _buttonReleaseCb(self, evt):
         if self.buttonDownTime is None:
             return
-        print('button release')
         if self.dragging is not None:
-            self.endDrag()
+            self._endDrag()
         elif self.inRectSelect:
-            self.endRectSelect()
+            self._endRectSelect()
         elif self.buttonDownState & SHIFT_MASK:
-            self.select(evt, 'add')
+            self._select(evt, 'add')
         elif self.buttonDownState & CTRL_MASK:
-            self.select(evt, 'toggle')
+            self._select(evt, 'toggle')
         else:
-            self.select(evt, 'select')
+            self._select(evt, 'select')
         self.buttonDownTime = None
 
-    def destroyCb(self, evt):
+    def _destroyCb(self, evt):
         if evt.widget == self.top:
             appData.removeWindow(self)
 
-    def startDrag(self, evt, icons):
+    def _startDrag(self, evt, icons):
         for ic in icons:
             if ic.selected:
                 self.dragging = [i for i in self.icons if i.selected]
                 break
         else:
             self.dragging = icons
-        self.lastDragOffset = (0, 0)
-        self.updateDrag(evt)
-        print("starting drag", self.dragging)
+        self.removeIcons(self.dragging)
+        moveRegion = AccumRects()
+        for ic in self.dragging:
+            moveRegion.add(ic.rect)
+        el, et, er, eb = moveRegion.get()
+        xOff = el
+        yOff = et
+        self.dragImageOffset = xOff, yOff
+        self.dragImage = Image.new('RGBA', (er - xOff, eb - yOff), color=(0, 0, 0, 0))
+        self.lastDragImageRegion = None
+        for ic in self.dragging:
+            l, t = ic.rect[:2]
+            ic.drawIcon(self.dragImage, (l-xOff, t-yOff))
+        self._updateDrag(evt)
 
-    def updateDrag(self, evt):
+    def _updateDrag(self, evt):
         if self.buttonDownTime is None or not self.dragging:
             return
+        x = self.dragImageOffset[0] + evt.x - self.buttonDownLoc[0]
+        y = self.dragImageOffset[1] + evt.y - self.buttonDownLoc[1]
+        width = self.dragImage.width
+        height = self.dragImage.height
+        dragImageRegion = (x, y, x+width, y+height)
+        if self.lastDragImageRegion is not None:
+            for r in exposedRegions(self.lastDragImageRegion, dragImageRegion):
+                self.refresh(r)
+        dragImage = self.image.crop(dragImageRegion)
+        dragImage.paste(self.dragImage, mask=self.dragImage)
+        self.drawImage(dragImage, (x, y))
+        self.lastDragImageRegion = dragImageRegion
         print("dragged to", evt.x, evt.y)
-        offsetX = evt.x - self.buttonDownLoc[0] - self.lastDragOffset[0]
-        offsetY = evt.y - self.buttonDownLoc[1] - self.lastDragOffset[1]
-        self.moveIcons(self.dragging, (offsetX, offsetY))
-        self.lastDragOffset = evt.x - self.buttonDownLoc[0], evt.y - self.buttonDownLoc[1]
 
-    def endDrag(self):
-        print('ending drag')
+    def _endDrag(self):
+        l, t, r, b = self.lastDragImageRegion
+        xOff = l - self.dragImageOffset[0]
+        yOff = t - self.dragImageOffset[1]
+        for ic in self.dragging:
+            ic.rect = offsetRect(ic.rect, xOff, yOff)
+            ic.drawIcon()
+        self.icons += self.dragging
         self.dragging = None
+        # A refresh, here, is technically unnecessary, but after all that's been written to
+        # the display, it's better to ensure it's really in sync with the image pixmap
+        self.refresh()
 
-    def startRectSelect(self, evt):
+    def _startRectSelect(self, evt):
         self.inRectSelect = True
         self.lastRectSelect = None
-        refreshRegion = AccumRects()
-        for ic in self.icons:
-            if ic.selected:
-                refreshRegion.add(ic.rect)
-                ic.selected = False
-                ic.drawIcon()
-                self.refresh(refreshRegion.get())
-        self.updateRectSelect(evt)
+        self.rectSelectInitialStates = {ic:ic.selected for ic in self.icons}
+        self._updateRectSelect(evt)
 
-    def updateRectSelect(self, evt):
+    def _updateRectSelect(self, evt):
+        toggle = evt.state & CTRL_MASK
         if self.lastRectSelect is not None:
             self._eraseRectSelect()
         newRect = makeRect(self.buttonDownLoc, (evt.x, evt.y))
         redrawRegion = AccumRects()
         for ic in self.icons:
-            if ic.selected and not rectsTouch(ic.rect, newRect):
-                ic.selected = False
+            if ic.selected != self.rectSelectInitialStates[ic] and not rectsTouch(ic.rect, newRect):
+                ic.selected = self.rectSelectInitialStates[ic]
                 redrawRegion.add(ic.rect)
                 ic.drawIcon()
         selectedIcons = self.findIconsInRegion(newRect)
         for ic in selectedIcons:
-            if not ic.selected:
-                ic.selected = True
+            newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
+            if ic.selected != newSelect:
+                ic.selected = newSelect
                 redrawRegion.add(ic.rect)
                 ic.drawIcon()
         self.refresh(redrawRegion.get())
@@ -210,22 +257,16 @@ class Window:
         self.refresh((l, t, l+1, b+1))
         self.refresh((r, t, r+1, b+1))
 
-    def endRectSelect(self):
-        print('ending rect select')
+    def _endRectSelect(self):
         self._eraseRectSelect()
         self.inRectSelect = False
 
-    def select(self, evt, op='select'):
+    def _select(self, evt, op='select'):
         "Make a selection.  Options are 'select', 'toggle' and 'add'"
-        refreshRegion = AccumRects()
         if op is 'select':
-            for ic in self.icons:
-                if ic.selected:
-                    refreshRegion.add(ic.rect)
-                    ic.selected = False
-                    ic.drawIcon()
-        selectedIcons = self.findIconsAt((evt.x, evt.y))
-        for ic in selectedIcons:
+            self.unselectAll()
+        refreshRegion = AccumRects()
+        for ic in self.findIconsAt((evt.x, evt.y)):
             refreshRegion.add(ic.rect)
             if op is 'toggle':
                 ic.selected = not ic.selected
@@ -233,7 +274,16 @@ class Window:
                 ic.selected = True
             ic.drawIcon()
         self.refresh(refreshRegion.get())
-        print('select')
+
+    def unselectAll(self):
+        refreshRegion = AccumRects()
+        for ic in self.icons:
+            if ic.selected:
+                refreshRegion.add(ic.rect)
+                ic.selected = False
+                ic.drawIcon()
+        if refreshRegion.get() is not None:
+            self.refresh(refreshRegion.get())
 
     def resize(self, width, height):
         self.image = Image.new('RGB', (width, height), color=windowBgColor)
@@ -248,7 +298,7 @@ class Window:
             self.drawImage(self.image, (region[0], region[1]), region)
 
     def drawImage(self, image, location, subImage=None):
-        "Draw an arbitrary image anywhere in the window"
+        "Draw an arbitrary image anywhere in the window, ignoring the window image"
         if subImage:
             x1, y1, x2, y2 = subImage
             width = x2 - x1
@@ -276,27 +326,22 @@ class Window:
     def findIconsAt(self, loc):
         return [ic for ic in self.icons if pointInRect(loc, ic.rect)]
 
-    def moveIcons(self, icons, offset):
-        redrawRect = AccumRects()
-        xOffset, yOffset = offset
+    def removeIcons(self, icons):
+        "Remove icons from window icon list redraw affected areas of the display"
+        redrawRegion = AccumRects()
         for ic in icons:
-            redrawRect.add(ic.rect)
             self.icons.remove(ic)
-            self.draw.rectangle(ic.rect, fill=windowBgColor)
-            x1, y1, x2, y2 = ic.rect
-            ic.rect = (x1+xOffset, y1+yOffset, x2+xOffset, y2+yOffset)
-        for ic in self.findIconsInRegion(redrawRect.get()):
-            if ic is not self:
-                ic.drawIcon()
-        for ic in icons:
-            redrawRect.add(ic.rect)
+            redrawRegion.add(ic.rect)
+        self.draw.rectangle(redrawRegion.get(), fill=windowBgColor)
+        for ic in self.findIconsInRegion(redrawRegion.get()):
             ic.drawIcon()
-        self.refresh(redrawRect.get())
-        self.icons += icons
+            redrawRegion.add(ic.rect)
+        self.refresh(redrawRegion.get())
 
 class AccumRects:
-    def __init__(self):
-        self.rect = None
+    "Make one big rectangle out of all rectangles added."
+    def __init__(self, initRect=None):
+        self.rect = initRect
 
     def add(self, rect):
         if self.rect is None:
@@ -305,12 +350,12 @@ class AccumRects:
             self.rect = combineRects(rect, self.rect)
 
     def get(self):
+        "Return the enclosing rectangle.  Returns None if no rectangles were added"
         return self.rect
 
 def pointInRect(point, rect):
     l, t, r, b = rect
     x, y = point
-    print('pir', l, t, r, b, '  ', x, y, '->', x >= l and x <= r and y <= b and y >= t)
     return x >= l and x <= r and y <= b and y >= t
 
 def rectsTouch(rect1, rect2):
@@ -336,8 +381,8 @@ class App:
         self.frameCount = 0
 
         window = self.windows[0]
-        for x in range(8):
-            for y in range(18):
+        for x in range(40):
+            for y in range(90):
                 loc = (x*60, y*20)
                 window.icons.append(icon.Icon("Icon %d" % (x*8+y), loc,
                  42, (5, 10), window))
@@ -350,8 +395,6 @@ class App:
     def animate(self):
         print(self.frameCount, msTime())
         self.frameCount += 1
-        offset = 1 if self.frameCount % 1000 < 500 else -1
-        self.windows[0].moveIcons(self.animateIcons, (offset, offset))
         self.root.after(10, self.animate)
 
     def removeWindow(self, window):

@@ -38,7 +38,6 @@ def asciiToImage(asciiPixmap, selected=False):
     else:
         outLineColor = iconOutlineColor
         bgColor = iconBgColor
-    print('bgcolor', bgColor)
     asciiMap = {'.': (0, 0, 0, 0), 'o': outLineColor, 'b': bgColor, 'x': (0, 0, 0, 0)}
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
