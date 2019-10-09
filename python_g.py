@@ -72,9 +72,10 @@ class Window:
         menu.add_command(label="New", command=self._newCb)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu)
-        menu.add_command(label="Cut")
-        menu.add_command(label="Copy")
-        menu.add_command(label="Paste")
+        menu.add_command(label="Cut", command = self._cutCb, accelerator="Ctrl+X")
+        menu.add_command(label="Copy", command = self._copyCb, accelerator="Ctrl+C")
+        menu.add_command(label="Paste", command = self._pasteCb, accelerator="Ctrl+V")
+        menu.add_command(label="Delete", command = self._deleteCb, accelerator="Delete")
         self.top.config(menu=self.menubar)
         if size is None:
             size = defaultWindowSize
@@ -87,14 +88,18 @@ class Window:
         self.imgFrame.bind('<Button-3>', self._btn3Cb)
         self.imgFrame.bind('<ButtonRelease-3>', self._btn3ReleaseCb)
         self.imgFrame.bind("<Motion>", self._motionCb)
+        self.top.bind("<Control-x>", self._cutCb)
+        self.top.bind("<Control-c>", self._copyCb)
+        self.top.bind("<Control-v>", self._pasteCb)
+        self.top.bind("<Delete>", self._deleteCb)
         self.imgFrame.pack(fill=tk.BOTH, expand=True)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
         self.popup = tk.Menu(self.imgFrame, tearoff=0)
-        self.popup.add_command(label="Cut")
-        self.popup.add_command(label="Copy")
-        self.popup.add_command(label="Paste")
-        self.popup.add_command(label="Delete", command=self._deleteCb)
+        self.popup.add_command(label="Cut", command = self._cutCb, accelerator="Ctrl+X")
+        self.popup.add_command(label="Copy", command = self._copyCb, accelerator="Ctrl+C")
+        self.popup.add_command(label="Paste", command = self._pasteCb, accelerator="Ctrl+V")
+        self.popup.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
 
         self.buttonDownTime = None
         self.buttonDownLoc = None
@@ -178,7 +183,37 @@ class Window:
         if evt.widget == self.top:
             appData.removeWindow(self)
 
-    def _deleteCb(self):
+    def _cutCb(self, evt=None):
+        self._copyCb()
+        self.removeIcons([ic for ic in self.icons if ic.selected])
+
+    def _copyCb(self, evt=None):
+        selected = [ic for ic in self.icons if ic.selected]
+        self.top.clipboard_clear()
+        clip = [ic.text for ic in selected]
+        clipTxt = " ".join(clip)
+        self.top.clipboard_append(clipTxt, type='STRING')
+        clipIcons = ", Icon: ".join(clip)
+        self.top.clipboard_append(clipIcons, type='ICONS')
+
+    def _pasteCb(self, evt=None):
+        #print(self.top.selection_get(selection='CLIPBOARD', type='TARGETS'))
+        try:
+            icons = self.top.clipboard_get(type="ICONS")
+        except:
+            icons = None
+        text = None
+        if icons is None:
+            try:
+                text = self.top.clipboard_get(type="STRING")
+            except:
+                pass
+        if icons is not None:
+            print("Have icons (%s), but don't know what to do with them, yet" % icons)
+        elif text is not None:
+            print("Have text (%s), but can't convert to icons, yet" % text)
+
+    def _deleteCb(self, evt=None):
         self.removeIcons([ic for ic in self.icons if ic.selected])
 
     def _startDrag(self, evt, icons):
@@ -323,6 +358,8 @@ class Window:
         else:
             width = image.width
             height = image.height
+        if width == 0 or height == 0:
+            return
         dib = ImageWin.Dib('RGB', (width, height))
         dib.paste(image)
         x, y = location
