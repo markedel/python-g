@@ -6,9 +6,9 @@ globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 11)
 textMargin = 2
 spineThickness = 4
 outSiteWidth = 5
-outlineColor = (230, 230, 230, 255)
+iconOutlineColor = (230, 230, 230, 255)
 iconBgColor = (255, 255, 255, 255)
-#windowBgColor = (255, 255, 255, 255)
+selectModColor = (0, 0, 80, 50)
 
 outSitePixmap = (
  "obbbo",
@@ -21,8 +21,25 @@ inSitePixmap = (
 
 renderCache = {}
 
-def asciiToImage(asciiPixmap):
-    asciiMap = {'.': (0, 0, 0, 0), 'o': outlineColor, 'b': iconBgColor, 'x': (0, 0, 0, 0)}
+def overlayColor(c1, c2):
+    r1, g1, b1, a1 = c1
+    r2, g2, b2, a2 = c2
+    w1 = (255 - a2) / 255.0
+    w2 = a2 / 255.0
+    return int(r1*w1 + r2*w2), int(g1*w1 + g2*w2), int(b1*w1+b2*w2), a1
+
+iconOutlineSelColor = overlayColor(iconOutlineColor, selectModColor)
+iconBgSelColor = overlayColor(iconBgColor, selectModColor)
+
+def asciiToImage(asciiPixmap, selected=False):
+    if selected:
+        outLineColor = iconOutlineSelColor
+        bgColor = iconBgSelColor
+    else:
+        outLineColor = iconOutlineColor
+        bgColor = iconBgColor
+    print('bgcolor', bgColor)
+    asciiMap = {'.': (0, 0, 0, 0), 'o': outLineColor, 'b': bgColor, 'x': (0, 0, 0, 0)}
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
     pixels = "".join(asciiPixmap)
@@ -32,7 +49,9 @@ def asciiToImage(asciiPixmap):
     return image
 
 outSiteImage = asciiToImage(outSitePixmap)
+outSiteSelImage = asciiToImage(outSitePixmap, selected=True)
 inSiteImage = asciiToImage(inSitePixmap)
+inSiteSelImage = asciiToImage(inSitePixmap, selected=True)
 
 class Icon:
     def __init__(self, text, location, outOffset, inOffsets=None, window=None):
@@ -63,15 +82,16 @@ class Icon:
             draw.text((textMargin, textMargin), self.text, font=globalFont,
              fill=(0, 0, 0, 255))
             draw.rectangle((0, 0, width+2*textMargin-1, height+2*textMargin-1),
-             fill=None, outline=outlineColor)
+             fill=None, outline=iconOutlineColor)
             renderCache[self.text] = txtImg
         else:
             txtImg = renderCache[self.text]
         x, y = location
-        image.paste(txtImg, (x, y, x+txtImg.width, y+txtImg.height))
+        textDrawRect = (x, y, x+txtImg.width, y+txtImg.height)
+        image.paste(txtImg, textDrawRect)
         if self.selected:
-            selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 100, 50))
-            image.paste(selImg, (x, y, x+txtImg.width, y+txtImg.height), mask=selImg)
+            selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 80, 50))
+            image.paste(selImg, textDrawRect, mask=selImg)
         self._drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
 
     def _spineLength(self):
@@ -80,14 +100,23 @@ class Icon:
     def _drawSpine(self, image, x, y, baseIconWidth, outOffset, inOffsets=None):
         if inOffsets is not None:
             spineLength = self._spineLength()
-            spineImage = Image.new('RGBA', (spineLength, spineThickness), iconBgColor)
+            if self.selected:
+                bgColor = iconBgSelColor
+                outlineColor = iconOutlineSelColor
+                inImg = inSiteSelImage
+                outImg = outSiteSelImage
+            else:
+                bgColor = iconBgColor
+                outlineColor = iconOutlineColor
+                inImg = inSiteImage
+                outImg = outSiteImage
+            spineImage = Image.new('RGBA', (spineLength, spineThickness), bgColor)
             draw = ImageDraw.Draw(spineImage)
             draw.line((0, 0, spineLength, 0), fill=outlineColor)
             draw.line((0, spineThickness-1, spineLength, spineThickness-1), fill=outlineColor)
             draw.line((spineLength-1, 0, spineLength-1, spineThickness), fill=outlineColor)
             for inOff in inOffsets:
-                spineImage.paste(inSiteImage, (inOff - inSiteImage.width // 2, 0))
+                spineImage.paste(inImg, (inOff - inImg.width // 2, 0))
             image.paste(spineImage, (x+baseIconWidth, y-spineThickness,
              x+baseIconWidth+spineLength, y), mask=spineImage)
-        image.paste(outSiteImage, (x+outOffset-outSiteImage.width//2, y-1),
-         mask=outSiteImage)
+        image.paste(outImg, (x+outOffset-outImg.width//2, y-1), mask=outImg)
