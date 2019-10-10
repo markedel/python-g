@@ -66,7 +66,6 @@ class Window:
         self.top.title("Python-G")
         self.frame = tk.Frame(self.top)
         self.menubar = tk.Menu(self.frame)
-        self.icons = []
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="File", menu=menu)
         menu.add_command(label="New", command=self._newCb)
@@ -112,9 +111,21 @@ class Window:
         self.lastRectSelect = None
         self.rectSelectInitialStates = {}
 
+        self.topIcons = []
         self.image = Image.new('RGB', (width, height), color=windowBgColor)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
+
+    def allIcons(self):
+        "Iterate over of all icons in the window (warning: generator)"
+        for ic in self.topIcons:
+            yield from ic.traverse()
+
+    def selectedIcons(self):
+        "Iterator for all selected icons in the window (warning: generator)"
+        for ic in self.allIcons():
+            if ic.selected:
+                yield ic
 
     def _btn3Cb(self, evt):
         selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
@@ -131,7 +142,7 @@ class Window:
         "Called when window is initially displayed or resized"
         if evt.width != self.image.width or evt.height != self.image.height:
             self.resize(evt.width, evt.height)
-        for ic in self.icons:
+        for ic in self.allIcons():
             ic.drawIcon()
 
     def _exposeCb(self, evt):
@@ -185,31 +196,28 @@ class Window:
 
     def _cutCb(self, evt=None):
         self._copyCb()
-        self.removeIcons([ic for ic in self.icons if ic.selected])
+        self.removeIcons(self.selectedIcons())
 
     def _copyCb(self, evt=None):
-        selected = [ic for ic in self.icons if ic.selected]
-        if len(selected) == 0:
+        selectedRect = icon.containingRect(self.selectedIcons())
+        if selectedRect is None:
             return
-        xOff, yOff = icon.containingRect(selected)[:2]
-        clipIcons = [(ic.text, (ic.rect[0]-xOff, ic.rect[1]-yOff)) for ic in selected]
-        print(repr(clipIcons))
-        clipTxt = " ".join([ic.text for ic in selected])
-        print(clipIcons, clipTxt)
+        xOff, yOff = selectedRect[:2]
+        clipIcons = [(ic.text, (ic.rect[0]-xOff, ic.rect[1]-yOff)) for ic in self.selectedIcons()]
+        clipTxt = " ".join([ic.text for ic in self.selectedIcons()])
         self.top.clipboard_clear()
         self.top.clipboard_append(repr(clipIcons), type='ICONS')
         self.top.clipboard_append(clipTxt, type='STRING')
 
     def _pasteCb(self, evt=None):
-        #print(self.top.selection_get(selection='CLIPBOARD', type='TARGETS'))
         try:
             iconData = eval(self.top.clipboard_get(type="ICONS"))
         except:
             iconData = None
-        selected = [ic for ic in self.icons if ic.selected]
-        if len(selected) > 0:
-            px, py = icon.containingRect(selected)[:2]
-            self.removeIcons(selected)
+        selectedRect = icon.containingRect(self.selectedIcons())
+        if selectedRect is not None:
+            px, py = selectedRect[:2]
+            self.removeIcons(self.selectedIcons())
         elif evt is not None:
             px, py = evt.x, evt.y
         else:
@@ -231,16 +239,16 @@ class Window:
             ic.selected = True
             ic.drawIcon()
             redrawRect.add(ic.rect)
-            self.icons.append(ic)
+            self.topIcons.append(ic)
         self.refresh(redrawRect.get())
 
     def _deleteCb(self, evt=None):
-        self.removeIcons([ic for ic in self.icons if ic.selected])
+        self.removeIcons(self.selectedIcons())
 
     def _startDrag(self, evt, icons):
         for ic in icons:
             if ic.selected:
-                self.dragging = [i for i in self.icons if i.selected]
+                self.dragging = list(self.selectedIcons())
                 break
         else:
             self.dragging = icons
@@ -282,7 +290,7 @@ class Window:
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
             ic.drawIcon()
-        self.icons += self.dragging
+        self.topIcons += self.dragging # ... do snapping here
         self.dragging = None
         # A refresh, here, is technically unnecessary, but after all that's been written to
         # the display, it's better to ensure it's really in sync with the image pixmap
@@ -291,7 +299,7 @@ class Window:
     def _startRectSelect(self, evt):
         self.inRectSelect = True
         self.lastRectSelect = None
-        self.rectSelectInitialStates = {ic:ic.selected for ic in self.icons}
+        self.rectSelectInitialStates = {ic:ic.selected for ic in self.allIcons()}
         self._updateRectSelect(evt)
 
     def _updateRectSelect(self, evt):
@@ -300,7 +308,7 @@ class Window:
             self._eraseRectSelect()
         newRect = makeRect(self.buttonDownLoc, (evt.x, evt.y))
         redrawRegion = AccumRects()
-        for ic in self.icons:
+        for ic in self.allIcons():
             if ic.selected != self.rectSelectInitialStates[ic] and not rectsTouch(ic.rect, newRect):
                 ic.selected = self.rectSelectInitialStates[ic]
                 redrawRegion.add(ic.rect)
@@ -349,11 +357,10 @@ class Window:
 
     def unselectAll(self):
         refreshRegion = AccumRects()
-        for ic in self.icons:
-            if ic.selected:
-                refreshRegion.add(ic.rect)
-                ic.selected = False
-                ic.drawIcon()
+        for ic in self.selectedIcons():
+            refreshRegion.add(ic.rect)
+            ic.selected = False
+            ic.drawIcon()
         if refreshRegion.get() is not None:
             self.refresh(refreshRegion.get())
 
@@ -395,17 +402,41 @@ class Window:
         dib.draw(self.dc, (x, y, x + width, y + height))
 
     def findIconsInRegion(self, rect):
-        return [ic for ic in self.icons if rectsTouch(rect, ic.rect)]
+        return [ic for ic in self.allIcons() if rectsTouch(rect, ic.rect)]
 
     def findIconsAt(self, loc):
-        return [ic for ic in self.icons if pointInRect(loc, ic.rect)]
+        return [ic for ic in self.allIcons() if pointInRect(loc, ic.rect)]
 
     def removeIcons(self, icons):
         "Remove icons from window icon list redraw affected areas of the display"
+        deletedDict = {ic:True for ic in icons}
+        print('len del', len(deletedDict))
+        detachList = []
         redrawRegion = AccumRects()
-        for ic in icons:
-            self.icons.remove(ic)
-            redrawRegion.add(ic.rect)
+        for ic in self.allIcons():
+            for child in ic.children:
+                if ic in deletedDict:
+                    if child not in deletedDict:
+                        detachList.append((ic, child))
+                else:
+                    if child in deletedDict:
+                        detachList.append((ic, child))
+        newTopIcons = []
+        for ic in self.topIcons:
+            if ic in deletedDict:
+                redrawRegion.add(ic.rect)
+            else:
+                newTopIcons.append(ic)
+        self.topIcons = newTopIcons
+        for ic, child in detachList:
+            ic.detach(child)
+            if child not in deletedDict:
+                self.topIcons.append(child)
+        for ic in self.topIcons:
+            if ic.needsLayout():
+                redrawRegion.add(ic.hierRect())
+                ic.layout()
+                redrawRegion.add(ic.hierRect())
         self.draw.rectangle(redrawRegion.get(), fill=windowBgColor)
         for ic in self.findIconsInRegion(redrawRegion.get()):
             ic.drawIcon()
@@ -458,7 +489,7 @@ class App:
         for x in range(8):
             for y in range(14):
                 loc = (x*60, y*20)
-                window.icons.append(icon.Icon("Icon %d" % (x*8+y), loc,
+                window.topIcons.append(icon.Icon("Icon %d" % (x*14+y), loc,
                  42, (5, 10), window))
 
     def mainLoop(self):

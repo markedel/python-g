@@ -60,6 +60,8 @@ class Icon:
         self.inOffsets = inOffsets
         self.rect = self._calcRectangle(location)
         self.selected = False
+        self.layoutDirty = False
+        self.children = []
 
     def _calcRectangle(self, location):
         width, height = globalFont.getsize(self.text)
@@ -122,6 +124,31 @@ class Icon:
             image.paste(spineImage, (x+baseIconWidth, y-spineThickness,
              x+baseIconWidth+spineLength, y), mask=spineImage)
         image.paste(outImg, (x+outOffset-outImg.width//2, y-1), mask=outImg)
+
+    def traverse(self, includeSelf=True):
+        if inSiteImage:
+            yield self
+        for child in self.children:
+            yield from child.traverse()
+
+    def detach(self, child):
+        self.layoutDirty = True
+        self.children.remove(child)
+
+    def needsLayout(self):
+        # For the moment need to lay-out propagates all the way to the top of
+        # the hierarchy.  Once sequences are introduced.  This will probably
+        # stop, there
+        for ic in self.traverse():
+            if ic.layoutDirty:
+                return True
+
+    def hierRect(self):
+        return containingRect(self.traverse())
+
+    def layout(self):
+        "Computes layout for icon and its children, but does not redraw"
+        print("layout called")
 
 def containingRect(icons):
     maxRect = AccumRects()
