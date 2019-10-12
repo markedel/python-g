@@ -1,5 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont
-from python_g import msTime, AccumRects
+from python_g import msTime, AccumRects, offsetRect
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 11)
 
@@ -53,89 +53,46 @@ inSiteImage = asciiToImage(inSitePixmap)
 inSiteSelImage = asciiToImage(inSitePixmap, selected=True)
 
 class Icon:
-    def __init__(self, text, location, outOffset=0, inOffsets=None, window=None):
+    def __init__(self, window=None):
         self.window = window
-        self.text = text
-        self.outOffset = outOffset
-        self.inOffsets = inOffsets
-        self.rect = self._calcRectangle(location)
+        self.rect = None
         self.selected = False
-        self.layoutDirty = False
+        self.outOffset = (0, 0)
         self.children = []
+        self.layoutDirty = False
 
-    def _calcRectangle(self, location):
-        width, height = globalFont.getsize(self.text)
-        width += self._spineLength() + 2*textMargin + 1
-        height += 2*textMargin + outSiteImage.height
-        x, y = location
-        return x, y, x + width, y + height
+    def draw(self, image=None, location=None):
+        """Draw the icon.  The image to which it is drawn and the location at which it is drawn
+         can be optionally overridden by specifying image and/or location."""
+        pass
 
-    def drawIcon(self, image=None, location=None):
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.text not in renderCache:
-            width, height = globalFont.getsize(self.text)
-            txtImg = Image.new('RGBA', (width+2*textMargin, height+2*textMargin),
-             color=(255, 255, 255, 255))
-            draw = ImageDraw.Draw(txtImg)
-            draw.text((textMargin, textMargin), self.text, font=globalFont,
-             fill=(0, 0, 0, 255))
-            draw.rectangle((0, 0, width+2*textMargin-1, height+2*textMargin-1),
-             fill=None, outline=iconOutlineColor)
-            renderCache[self.text] = txtImg
-        else:
-            txtImg = renderCache[self.text]
-        x, y = location
-        textDrawRect = (x, y, x+txtImg.width, y+txtImg.height)
-        image.paste(txtImg, textDrawRect)
-        if self.selected:
-            selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 80, 50))
-            image.paste(selImg, textDrawRect, mask=selImg)
-        if self.inOffsets:
-            self._drawSpine(image, x, y+txtImg.height, txtImg.width-1, self.outOffset, self.inOffsets)
-
-    def _spineLength(self):
-        if self.inOffsets:
-            return max(self.inOffsets) + outSiteImage.width // 2 + 2
-        return 0
-
-    def _drawSpine(self, image, x, y, baseIconWidth, outOffset, inOffsets=None):
-        if inOffsets is not None:
-            spineLength = self._spineLength()
-            if self.selected:
-                bgColor = iconBgSelColor
-                outlineColor = iconOutlineSelColor
-                inImg = inSiteSelImage
-                outImg = outSiteSelImage
-            else:
-                bgColor = iconBgColor
-                outlineColor = iconOutlineColor
-                inImg = inSiteImage
-                outImg = outSiteImage
-            spineImage = Image.new('RGBA', (spineLength, spineThickness), bgColor)
-            draw = ImageDraw.Draw(spineImage)
-            draw.line((0, 0, spineLength, 0), fill=outlineColor)
-            draw.line((0, spineThickness-1, spineLength, spineThickness-1), fill=outlineColor)
-            draw.line((spineLength-1, 0, spineLength-1, spineThickness), fill=outlineColor)
-            for inOff in inOffsets:
-                spineImage.paste(inImg, (inOff - inImg.width // 2, 0))
-            image.paste(spineImage, (x+baseIconWidth, y-spineThickness,
-             x+baseIconWidth+spineLength, y), mask=spineImage)
-        image.paste(outImg, (x+outOffset-outImg.width//2, y-1), mask=outImg)
+    def layout(self):
+        "Compute layout and set locations for icon and its children, but do not redraw"
+        pass
 
     def traverse(self, includeSelf=True):
-        if inSiteImage:
+        "Iterator for traversing the tree below this icon"
+        if includeSelf:
             yield self
         for child in self.children:
             yield from child.traverse()
 
+    def hierRect(self):
+        "Return a rectangle covering this icon and its children"
+        return containingRect(self.traverse())
+
     def detach(self, child):
+        "Remove a child icon"
         self.layoutDirty = True
         self.children.remove(child)
 
+    def addChild(self, child):
+        "Add a child icon"
+        self.children.append(child)
+        self.layoutDirty = True
+
     def needsLayout(self):
+        "Returns True if the icon requires re-layout due to changes to child icons"
         # For the moment need to lay-out propagates all the way to the top of
         # the hierarchy.  Once sequences are introduced.  This will probably
         # stop, there
@@ -143,15 +100,175 @@ class Icon:
             if ic.layoutDirty:
                 return True
 
-    def hierRect(self):
-        return containingRect(self.traverse())
+class IdentIcon(Icon):
+    def __init__(self, name, window=None, location=None):
+        Icon.__init__(self, window)
+        self.name = name
+        bodyWidth, bodyHeight = globalFont.getsize(self.name)
+        bodyWidth += 2*textMargin
+        bodyHeight += 2*textMargin
+        self.bodySize = (bodyWidth, bodyHeight)
+        if location is None:
+            x, y = 0, 0
+        else:
+            x, y = location
+        self.rect = (x, y, x + bodyWidth, y + bodyHeight + outSiteImage.height)
+        self.outSiteOffset = (5, bodyHeight + outSiteImage.height)
 
-    def layout(self):
-        "Computes layout for icon and its children, but does not redraw"
-        print("layout called")
+    def draw(self, image=None, location=None):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        drawIconBoxedText(self.name, image, location, self.selected)
+        x, y = location
+        outImg = outSiteSelImage if self.selected else outSiteImage
+        outSiteX, outSiteY = self.outSiteOffset
+        outSiteX += x - outImg.width//2
+        outSiteY += y - outImg.height -1
+        image.paste(outImg, (outSiteX, outSiteY), mask=outImg)
+
+    def layout(self, location=None):
+        if location is None:
+            x, y = self.rect[:2]
+        else:
+            x, y = location
+        self._doLayout(x, y+self.bodySize[1])
+
+    def _doLayout(self, x, bottom, calculatedSizes=None):
+        width, height = self.bodySize
+        self.rect = (x, bottom-height, x + width, bottom+outSiteImage.height)
+
+    def _calcLayout(self):
+        width, height = rectSize(self.rect)
+        return (self, width, height-outSiteImage.height, [])
+
+class FnIcon(Icon):
+    def __init__(self, name, window=None, location=None):
+        Icon.__init__(self, window)
+        self.name = name
+        self.emptyInOffsets = (inSiteImage.width//2 + 1, )
+        self.inOffsets = self.emptyInOffsets
+        bodyWidth, bodyHeight = globalFont.getsize(self.name)
+        self.bodySize = (bodyWidth + 2*textMargin, bodyHeight + 2*textMargin)
+        width, height = self._size()
+        self.outSiteOffset = (5, height)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + width, y + height)
+
+    def _size(self):
+        width, height = globalFont.getsize(self.name)
+        width += 2*textMargin + self._spineLength(self.inOffsets)
+        height += 2*textMargin + outSiteImage.height
+        return width, height
+
+    def draw(self, image=None, location=None):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        width, height = drawIconBoxedText(self.name, image, location, self.selected)
+        x, y = location
+        self._drawSpine(image, x+width-1, y+height)
+        outSiteX, outSiteY = self.outSiteOffset
+        outImg = outSiteSelImage if self.selected else outSiteImage
+        outSiteX += x - outImg.width//2
+        outSiteY += y - outImg.height -1
+        image.paste(outImg, (outSiteX, outSiteY), mask=outImg)
+
+    def _spineLength(self, inOffsets):
+        return max(inOffsets) + inSiteImage.width // 2 + 2
+
+    def _drawSpine(self, image, x, y):
+        spineLength = self._spineLength(self.inOffsets)
+        if self.selected:
+            bgColor = iconBgSelColor
+            outlineColor = iconOutlineSelColor
+            inImg = inSiteSelImage
+        else:
+            bgColor = iconBgColor
+            outlineColor = iconOutlineColor
+            inImg = inSiteImage
+            outImg = outSiteImage
+        spineImage = Image.new('RGBA', (spineLength, spineThickness), bgColor)
+        draw = ImageDraw.Draw(spineImage)
+        draw.line((0, 0, spineLength, 0), fill=outlineColor)
+        draw.line((0, spineThickness-1, spineLength, spineThickness-1), fill=outlineColor)
+        draw.line((spineLength-1, 0, spineLength-1, spineThickness), fill=outlineColor)
+        for inOff in self.inOffsets:
+            spineImage.paste(inImg, (inOff - inImg.width // 2, 0))
+        image.paste(spineImage, (x, y-spineThickness, x+spineLength, y), mask=spineImage)
+
+    def layout(self, location=None):
+        if location is None:
+            x, y = self.rect[:2]
+        else:
+            x, y = location
+        self._doLayout(x, y+self.bodySize[1], self._calcLayout())
+
+    def _doLayout(self, x, bottom, calculatedSizes):
+        icn, layoutWidth, layoutHeight, childLayouts = calculatedSizes
+        bodyWidth, bodyHeight = self.bodySize
+        #bottom = y + bodyHeight
+        #top = bottom - bodyHeight
+        if len(childLayouts) == 0:
+            self.inOffsets = self.emptyInOffsets
+        else:
+            self.inOffsets = []
+            childX = 0
+            for childLayout in childLayouts:
+                childIcon, childWidth, childHeight, subLayouts = childLayout
+                self.inOffsets.append(childX + childIcon.outSiteOffset[0])
+                childIcon._doLayout(x+bodyWidth+childX, bottom-spineThickness,
+                        childLayout)
+                childX += childWidth
+        width, height = self._size()
+        self.rect = (x, bottom-bodyHeight, x+width, bottom+outSiteImage.height)
+        self.layoutDirty = False
+
+    def _calcLayout(self):
+        childLayouts = [c._calcLayout() for c in self.children]
+        if len(childLayouts) == 0:
+            childWidth = self._spineLength(self.emptyInOffsets)
+            height = self.bodySize[1]
+        else:
+            childWidth = sum((c[1] for c in childLayouts))
+            height = max((c[2] for c in childLayouts)) + spineThickness
+        return (self, self.bodySize[0] + childWidth, height, childLayouts)
+
+def drawIconBoxedText(text, image, location, selected):
+    if text not in renderCache:
+        width, height = globalFont.getsize(text)
+        txtImg = Image.new('RGBA', (width+2*textMargin, height+2*textMargin),
+         color=iconBgColor)
+        draw = ImageDraw.Draw(txtImg)
+        draw.text((textMargin, textMargin), text, font=globalFont,
+         fill=(0, 0, 0, 255))
+        draw.rectangle((0, 0, width+2*textMargin-1, height+2*textMargin-1),
+         fill=None, outline=iconOutlineColor)
+        renderCache[text] = txtImg
+    else:
+        txtImg = renderCache[text]
+    x, y = location
+    textDrawRect = (x, y, x + txtImg.width, y + txtImg.height)
+    image.paste(txtImg, textDrawRect)
+    if selected:
+        selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 80, 50))
+        image.paste(selImg, textDrawRect, mask=selImg)
+    return txtImg.width, txtImg.height
 
 def containingRect(icons):
     maxRect = AccumRects()
     for ic in icons:
         maxRect.add(ic.rect)
     return maxRect.get()
+
+def rectWidth(rect):
+    return rect[2] - rect[0]
+
+def rectHeight(rect):
+    return rect[3] - rect[1]
+
+def rectSize(rect):
+    l, t, r, b = rect
+    return r - l, b - t

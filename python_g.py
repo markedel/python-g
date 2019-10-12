@@ -3,6 +3,7 @@ import tkinter as tk
 import icon
 from PIL import Image, ImageDraw, ImageTk, ImageWin
 import time
+import compile_eval
 
 windowBgColor = (128, 128, 128, 255)
 defaultWindowSize = (800, 800)
@@ -143,7 +144,7 @@ class Window:
         if evt.width != self.image.width or evt.height != self.image.height:
             self.resize(evt.width, evt.height)
         for ic in self.allIcons():
-            ic.drawIcon()
+            ic.draw()
 
     def _exposeCb(self, evt):
         "Called when a new part of the window is exposed and needs to be redrawn"
@@ -196,63 +197,78 @@ class Window:
 
     def _cutCb(self, evt=None):
         self._copyCb()
-        self.removeIcons(self.selectedIcons())
+        self.removeIcons(list(self.selectedIcons()))
 
     def _copyCb(self, evt=None):
         selectedRect = icon.containingRect(self.selectedIcons())
         if selectedRect is None:
             return
         xOff, yOff = selectedRect[:2]
-        clipIcons = [(ic.text, (ic.rect[0]-xOff, ic.rect[1]-yOff)) for ic in self.selectedIcons()]
-        clipTxt = " ".join([ic.text for ic in self.selectedIcons()])
+        clipIcons = [(ic.name, (ic.rect[0]-xOff, ic.rect[1]-yOff)) for ic in self.selectedIcons()]
+        clipTxt = " ".join([ic.name for ic in self.selectedIcons()])
         self.top.clipboard_clear()
         self.top.clipboard_append(repr(clipIcons), type='ICONS')
         self.top.clipboard_append(clipTxt, type='STRING')
 
     def _pasteCb(self, evt=None):
-        try:
-            iconData = eval(self.top.clipboard_get(type="ICONS"))
-        except:
-            iconData = None
         selectedRect = icon.containingRect(self.selectedIcons())
         if selectedRect is not None:
             px, py = selectedRect[:2]
-            self.removeIcons(self.selectedIcons())
+            self.removeIcons(list(self.selectedIcons()))
         elif evt is not None:
             px, py = evt.x, evt.y
         else:
             px, py = 10, 10
-        icons = []
+        try:
+            iconData = eval(self.top.clipboard_get(type="ICONS"))
+        except:
+            iconData = None
         if iconData is not None:
+            pastedIcons = []
             for id in iconData:
                 ix, iy = id[1]
-                icons.append(icon.Icon(id[0], (px+ix, py+iy), 42, (5, 10), window=self))
+                pastedIcons.append(icon.IdentIcon(id[0], self, (px+ix, py+iy)))
         else:
-            # Couldn't get icon data.  Make an icon out of text if there
+            # Couldn't get icon data.  Use string on clipboard
             try:
                 text = self.top.clipboard_get(type="STRING")
             except:
                 return
-            icons.append(icon.Icon(repr(text), (px, py), window=self))
+            # Try to parse the string as Python code
+            pastedIcons = compile_eval.parsePasted(text, self, (px, py))
+            if pastedIcons is None:
+                pastedIcons = [icon.IdentIcon(repr(text), self, (px, py))]
         redrawRect = AccumRects()
-        for ic in icons:
-            ic.selected = True
-            ic.drawIcon()
-            redrawRect.add(ic.rect)
-            self.topIcons.append(ic)
+        for pastedTopIcon in pastedIcons:
+            self.topIcons.append(pastedTopIcon)
+            for ic in pastedTopIcon.traverse():
+                ic.selected = True
+                ic.draw()
+                redrawRect.add(ic.rect)
         self.refresh(redrawRect.get())
 
     def _deleteCb(self, evt=None):
-        self.removeIcons(self.selectedIcons())
+        self.removeIcons(list(self.selectedIcons()))
 
     def _startDrag(self, evt, icons):
+        # Determine what icons to drag: if a selected icon was clicked, drag all of
+        # the selected icons.  Otherwise, drag anything that was clicked
         for ic in icons:
             if ic.selected:
                 self.dragging = list(self.selectedIcons())
                 break
         else:
             self.dragging = icons
+        # Remove the icons from the window image and handle the resulting detachments
+        # re-layouts, and redrawing.
         self.removeIcons(self.dragging)
+        # Dragging parent icons away from their children may require re-layout of the
+        # (moving) parent icons
+        for ic in findTopIcons(self.dragging):
+            if ic.needsLayout():
+                ic.layout()
+        # For top performance, make a separate image containing the moving icons against
+        # a transparent background, which can be redrawn with imaging calls, only.
         moveRegion = AccumRects()
         for ic in self.dragging:
             moveRegion.add(ic.rect)
@@ -264,7 +280,7 @@ class Window:
         self.lastDragImageRegion = None
         for ic in self.dragging:
             l, t = ic.rect[:2]
-            ic.drawIcon(self.dragImage, (l-xOff, t-yOff))
+            ic.draw(self.dragImage, (l-xOff, t-yOff))
         self._updateDrag(evt)
 
     def _updateDrag(self, evt):
@@ -289,12 +305,14 @@ class Window:
         yOff = t - self.dragImageOffset[1]
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
-            ic.drawIcon()
-        self.topIcons += self.dragging # ... do snapping here
+            ic.draw()
+        self.topIcons += findTopIcons(self.dragging) # ... do snapping here
         self.dragging = None
         # A refresh, here, is technically unnecessary, but after all that's been written to
         # the display, it's better to ensure it's really in sync with the image pixmap
         self.refresh()
+        #for ic in self.topIcons:
+        #    dumpHier(ic)
 
     def _startRectSelect(self, evt):
         self.inRectSelect = True
@@ -312,14 +330,14 @@ class Window:
             if ic.selected != self.rectSelectInitialStates[ic] and not rectsTouch(ic.rect, newRect):
                 ic.selected = self.rectSelectInitialStates[ic]
                 redrawRegion.add(ic.rect)
-                ic.drawIcon()
+                ic.draw()
         selectedIcons = self.findIconsInRegion(newRect)
         for ic in selectedIcons:
             newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
             if ic.selected != newSelect:
                 ic.selected = newSelect
                 redrawRegion.add(ic.rect)
-                ic.drawIcon()
+                ic.draw()
         self.refresh(redrawRegion.get())
         l, t, r, b = newRect
         hLineImg = Image.new('RGB', (r - l, 1), color=(255, 255, 255, 255))
@@ -352,7 +370,7 @@ class Window:
                 ic.selected = not ic.selected
             else:
                 ic.selected = True
-            ic.drawIcon()
+            ic.draw()
         self.refresh(refreshRegion.get())
 
     def unselectAll(self):
@@ -360,7 +378,7 @@ class Window:
         for ic in self.selectedIcons():
             refreshRegion.add(ic.rect)
             ic.selected = False
-            ic.drawIcon()
+            ic.draw()
         if refreshRegion.get() is not None:
             self.refresh(refreshRegion.get())
 
@@ -409,29 +427,25 @@ class Window:
 
     def removeIcons(self, icons):
         "Remove icons from window icon list redraw affected areas of the display"
+        if len(icons) == 0:
+            return
         deletedDict = {ic:True for ic in icons}
-        print('len del', len(deletedDict))
         detachList = []
         redrawRegion = AccumRects()
+        for ic in icons:
+            redrawRegion.add(ic.rect)
         for ic in self.allIcons():
             for child in ic.children:
-                if ic in deletedDict:
-                    if child not in deletedDict:
-                        detachList.append((ic, child))
-                else:
-                    if child in deletedDict:
-                        detachList.append((ic, child))
-        newTopIcons = []
-        for ic in self.topIcons:
-            if ic in deletedDict:
-                redrawRegion.add(ic.rect)
-            else:
-                newTopIcons.append(ic)
-        self.topIcons = newTopIcons
+                if ic in deletedDict and child not in deletedDict:
+                    detachList.append((ic, child))
+                elif ic not in deletedDict and child in deletedDict:
+                    detachList.append((ic, child))
+        newTopIcons = [ic for ic in self.topIcons if ic not in deletedDict]
         for ic, child in detachList:
             ic.detach(child)
             if child not in deletedDict:
-                self.topIcons.append(child)
+                newTopIcons.append(child)
+        self.topIcons = newTopIcons
         for ic in self.topIcons:
             if ic.needsLayout():
                 redrawRegion.add(ic.hierRect())
@@ -439,7 +453,7 @@ class Window:
                 redrawRegion.add(ic.hierRect())
         self.draw.rectangle(redrawRegion.get(), fill=windowBgColor)
         for ic in self.findIconsInRegion(redrawRegion.get()):
-            ic.drawIcon()
+            ic.draw()
             redrawRegion.add(ic.rect)
         self.refresh(redrawRegion.get())
 
@@ -486,11 +500,11 @@ class App:
         self.frameCount = 0
 
         window = self.windows[0]
-        for x in range(8):
-            for y in range(14):
-                loc = (x*60, y*20)
-                window.topIcons.append(icon.Icon("Icon %d" % (x*14+y), loc,
-                 42, (5, 10), window))
+        # for x in range(8):
+        #     for y in range(14):
+        #         loc = (x*60, y*20)
+        #         iconType = icon.FnIcon if x % 2 else  icon.IdentIcon
+        #         window.topIcons.append(iconType("Icon %d" % (x*14+y), window, loc))
 
     def mainLoop(self):
         #self.root.after(2000, self.animate)
@@ -509,6 +523,18 @@ class App:
     def newWindow(self):
         window = Window(self.root)
         self.windows.append(window)
+
+def findTopIcons(icons):
+    iconDir = {ic:True for ic in icons}
+    for ic, isChild in iconDir.items():
+        for child in ic.children:
+            iconDir[child] = False
+    return [ic for ic, isTop in iconDir.items() if isTop]
+
+def dumpHier(ic, indent=""):
+    print(indent + ic.name)
+    for child in ic.children:
+        dumpHier(child, indent+"  ")
 
 if __name__ == '__main__':
     appData = App()
