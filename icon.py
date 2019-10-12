@@ -21,6 +21,30 @@ inSitePixmap = (
 
 renderCache = {}
 
+def iconsFromClipboardString(clipString, window, offset):
+    try:
+        clipData = eval(clipString)
+    except:
+        return None
+    icons = clipboardDataToIcons(clipData, window, offset)
+    for ic in icons:
+        ic.layout()
+    return icons
+
+def clipboardDataToIcons(clipData, window, offset):
+    pastedIcons = []
+    for clipIcon in clipData:
+        iconClass, iconData = clipIcon
+        try:
+            parseMethod = eval(iconClass).fromClipboard
+        except:
+            continue
+        pastedIcons.append(parseMethod(iconData, window, offset))
+    return pastedIcons
+
+def clipboardRepr(icons, offset):
+    return repr([ic.clipboardRepr(offset) for ic in icons])
+
 def overlayColor(c1, c2):
     r1, g1, b1, a1 = c1
     r2, g2, b2, a2 = c2
@@ -83,8 +107,8 @@ class Icon:
 
     def detach(self, child):
         "Remove a child icon"
-        self.layoutDirty = True
         self.children.remove(child)
+        self.layoutDirty = True
 
     def addChild(self, child):
         "Add a child icon"
@@ -129,11 +153,8 @@ class IdentIcon(Icon):
         image.paste(outImg, (outSiteX, outSiteY), mask=outImg)
 
     def layout(self, location=None):
-        if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        self._doLayout(x, y+self.bodySize[1])
+        if location is not None:
+            self.rect = moveRect(self.rect, location)
 
     def _doLayout(self, x, bottom, calculatedSizes=None):
         width, height = self.bodySize
@@ -142,6 +163,15 @@ class IdentIcon(Icon):
     def _calcLayout(self):
         width, height = rectSize(self.rect)
         return (self, width, height-outSiteImage.height, [])
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return (self.__class__.__name__, (self.name, addPoints(location, offset)))
+
+    @staticmethod
+    def fromClipboard(clipData, window, locationOffset):
+        name, location = clipData
+        return IdentIcon(name, window, (addPoints(location, locationOffset)))
 
 class FnIcon(Icon):
     def __init__(self, name, window=None, location=None):
@@ -209,8 +239,6 @@ class FnIcon(Icon):
     def _doLayout(self, x, bottom, calculatedSizes):
         icn, layoutWidth, layoutHeight, childLayouts = calculatedSizes
         bodyWidth, bodyHeight = self.bodySize
-        #bottom = y + bodyHeight
-        #top = bottom - bodyHeight
         if len(childLayouts) == 0:
             self.inOffsets = self.emptyInOffsets
         else:
@@ -235,6 +263,18 @@ class FnIcon(Icon):
             childWidth = sum((c[1] for c in childLayouts))
             height = max((c[2] for c in childLayouts)) + spineThickness
         return (self, self.bodySize[0] + childWidth, height, childLayouts)
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return (self.__class__.__name__, (self.name, addPoints(location, offset),
+         [c.clipboardRepr(offset) for c in self.children]))
+
+    @staticmethod
+    def fromClipboard(clipData, window, offset):
+        name, location, children = clipData
+        ic = FnIcon(name, window, (addPoints(location, offset)))
+        ic.children = clipboardDataToIcons(children, window, offset)
+        return ic
 
 def drawIconBoxedText(text, image, location, selected):
     if text not in renderCache:
@@ -272,3 +312,13 @@ def rectHeight(rect):
 def rectSize(rect):
     l, t, r, b = rect
     return r - l, b - t
+
+def moveRect(rect, newLoc):
+    l, t, r, b = rect
+    x, y = newLoc
+    return(x, y, x+r-l, y+b-t)
+
+def addPoints(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+    return (x1 + x2, y1 + y2)

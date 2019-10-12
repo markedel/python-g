@@ -123,10 +123,8 @@ class Window:
             yield from ic.traverse()
 
     def selectedIcons(self):
-        "Iterator for all selected icons in the window (warning: generator)"
-        for ic in self.allIcons():
-            if ic.selected:
-                yield ic
+        "Return a list of the icons in the window that are currently selected"
+        return [ic for ic in self.allIcons() if ic.selected]
 
     def _btn3Cb(self, evt):
         selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
@@ -197,37 +195,35 @@ class Window:
 
     def _cutCb(self, evt=None):
         self._copyCb()
-        self.removeIcons(list(self.selectedIcons()))
+        self.removeIcons(self.selectedIcons())
 
     def _copyCb(self, evt=None):
-        selectedRect = icon.containingRect(self.selectedIcons())
+        selectedIcons = self.selectedIcons()
+        selectedRect = icon.containingRect(selectedIcons)
         if selectedRect is None:
             return
         xOff, yOff = selectedRect[:2]
-        clipIcons = [(ic.name, (ic.rect[0]-xOff, ic.rect[1]-yOff)) for ic in self.selectedIcons()]
-        clipTxt = " ".join([ic.name for ic in self.selectedIcons()])
+        clipIcons = icon.clipboardRepr(findTopIcons(selectedIcons), (-xOff, -yOff))
+        clipTxt = " ".join([ic.name for ic in selectedIcons])
         self.top.clipboard_clear()
-        self.top.clipboard_append(repr(clipIcons), type='ICONS')
+        self.top.clipboard_append(clipIcons, type='ICONS')
         self.top.clipboard_append(clipTxt, type='STRING')
 
     def _pasteCb(self, evt=None):
         selectedRect = icon.containingRect(self.selectedIcons())
         if selectedRect is not None:
             px, py = selectedRect[:2]
-            self.removeIcons(list(self.selectedIcons()))
+            self.removeIcons(self.selectedIcons())
         elif evt is not None:
             px, py = evt.x, evt.y
         else:
             px, py = 10, 10
         try:
-            iconData = eval(self.top.clipboard_get(type="ICONS"))
+            iconString = self.top.clipboard_get(type="ICONS")
         except:
-            iconData = None
-        if iconData is not None:
-            pastedIcons = []
-            for id in iconData:
-                ix, iy = id[1]
-                pastedIcons.append(icon.IdentIcon(id[0], self, (px+ix, py+iy)))
+            iconString = None
+        if iconString is not None:
+            pastedIcons = icon.iconsFromClipboardString(iconString, self, (px, py))
         else:
             # Couldn't get icon data.  Use string on clipboard
             try:
@@ -248,14 +244,14 @@ class Window:
         self.refresh(redrawRect.get())
 
     def _deleteCb(self, evt=None):
-        self.removeIcons(list(self.selectedIcons()))
+        self.removeIcons(self.selectedIcons())
 
     def _startDrag(self, evt, icons):
         # Determine what icons to drag: if a selected icon was clicked, drag all of
         # the selected icons.  Otherwise, drag anything that was clicked
         for ic in icons:
             if ic.selected:
-                self.dragging = list(self.selectedIcons())
+                self.dragging = self.selectedIcons()
                 break
         else:
             self.dragging = icons
@@ -311,8 +307,6 @@ class Window:
         # A refresh, here, is technically unnecessary, but after all that's been written to
         # the display, it's better to ensure it's really in sync with the image pixmap
         self.refresh()
-        #for ic in self.topIcons:
-        #    dumpHier(ic)
 
     def _startRectSelect(self, evt):
         self.inRectSelect = True
@@ -331,8 +325,7 @@ class Window:
                 ic.selected = self.rectSelectInitialStates[ic]
                 redrawRegion.add(ic.rect)
                 ic.draw()
-        selectedIcons = self.findIconsInRegion(newRect)
-        for ic in selectedIcons:
+        for ic in self.findIconsInRegion(newRect):
             newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
             if ic.selected != newSelect:
                 ic.selected = newSelect
@@ -526,7 +519,7 @@ class App:
 
 def findTopIcons(icons):
     iconDir = {ic:True for ic in icons}
-    for ic, isChild in iconDir.items():
+    for ic in icons:
         for child in ic.children:
             iconDir[child] = False
     return [ic for ic, isTop in iconDir.items() if isTop]
