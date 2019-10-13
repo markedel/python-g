@@ -117,14 +117,16 @@ class Window:
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
 
-    def allIcons(self):
-        "Iterate over of all icons in the window (warning: generator)"
-        for ic in self.topIcons:
-            yield from ic.traverse()
+    def allIcons(self, order="draw"):
+        """Iterate over of all icons in the window, in drawing order, "draw", by default,
+         but optionally in opposite, "pick", order.  (warning: generator)"""
+        for ic in reversed(self.topIcons) if order is "pick" else self.topIcons:
+            yield from ic.traverse(order)
 
-    def selectedIcons(self):
-        "Return a list of the icons in the window that are currently selected"
-        return [ic for ic in self.allIcons() if ic.selected]
+    def selectedIcons(self, order="draw"):
+        """Return a list of the icons in the window that are currently selected.  Result
+        can be returned in "draw" or "pick" order"""
+        return [ic for ic in self.allIcons(order) if ic.selected]
 
     def _btn3Cb(self, evt):
         selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
@@ -140,7 +142,8 @@ class Window:
     def _configureCb(self, evt):
         "Called when window is initially displayed or resized"
         if evt.width != self.image.width or evt.height != self.image.height:
-            self.resize(evt.width, evt.height)
+            self.image = Image.new('RGB', (evt.width, evt.height), color=windowBgColor)
+            self.draw = ImageDraw.Draw(self.image)
         for ic in self.allIcons():
             ic.draw()
 
@@ -239,7 +242,7 @@ class Window:
             self.topIcons.append(pastedTopIcon)
             for ic in pastedTopIcon.traverse():
                 ic.selected = True
-                ic.draw()
+                ic.draw() # No need to clip or erase, all drawn on top
                 redrawRect.add(ic.rect)
         self.refresh(redrawRect.get())
 
@@ -299,13 +302,14 @@ class Window:
         l, t, r, b = self.lastDragImageRegion
         xOff = l - self.dragImageOffset[0]
         yOff = t - self.dragImageOffset[1]
+        # self.dragging icons are not stored hierarchically, but are in draw order
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
             ic.draw()
         self.topIcons += findTopIcons(self.dragging) # ... do snapping here
         self.dragging = None
-        # A refresh, here, is technically unnecessary, but after all that's been written to
-        # the display, it's better to ensure it's really in sync with the image pixmap
+        # A refresh, here, is technically unnecessary, but after all that's been written
+        # to the display, it's better to ensure it's really in sync with the image pixmap
         self.refresh()
 
     def _startRectSelect(self, evt):
@@ -316,21 +320,25 @@ class Window:
 
     def _updateRectSelect(self, evt):
         toggle = evt.state & CTRL_MASK
-        if self.lastRectSelect is not None:
-            self._eraseRectSelect()
         newRect = makeRect(self.buttonDownLoc, (evt.x, evt.y))
+        if self.lastRectSelect is None:
+            combinedRegion = newRect
+        else:
+            combinedRegion = combineRects(newRect, self.lastRectSelect)
+            self._eraseRectSelect()
         redrawRegion = AccumRects()
-        for ic in self.allIcons():
-            if ic.selected != self.rectSelectInitialStates[ic] and not rectsTouch(ic.rect, newRect):
-                ic.selected = self.rectSelectInitialStates[ic]
-                redrawRegion.add(ic.rect)
-                ic.draw()
-        for ic in self.findIconsInRegion(newRect):
-            newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
+        changedIcons = []
+        for ic in self.findIconsInRegion(combinedRegion):
+            if rectsTouch(newRect, ic.rect):
+                newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
+            else:
+                newSelect = self.rectSelectInitialStates[ic]
             if ic.selected != newSelect:
                 ic.selected = newSelect
                 redrawRegion.add(ic.rect)
-                ic.draw()
+                changedIcons.append(ic)
+        for ic in self.allIcons():
+            ic.draw(clip=redrawRegion.get())
         self.refresh(redrawRegion.get())
         l, t, r, b = newRect
         hLineImg = Image.new('RGB', (r - l, 1), color=(255, 255, 255, 255))
@@ -353,31 +361,34 @@ class Window:
         self.inRectSelect = False
 
     def _select(self, evt, op='select'):
-        "Make a selection.  Options are 'select', 'toggle' and 'add'"
+        """Select or toggle the top icon being pointed at, and bring it to the top.
+           Options are 'select', 'toggle' and 'add'"""
         if op is 'select':
             self.unselectAll()
         refreshRegion = AccumRects()
-        for ic in self.findIconsAt((evt.x, evt.y)):
+        changedIcons = self.findIconsAt((evt.x, evt.y)) #... Change to pickded/hierarchical definition
+        #... bring these icons to the top: self.bringToTop(changedIcons)
+        for ic in changedIcons:
             refreshRegion.add(ic.rect)
             if op is 'toggle':
                 ic.selected = not ic.selected
             else:
                 ic.selected = True
-            ic.draw()
+        for ic in changedIcons:
+            ic.draw(clip=refreshRegion.get())
         self.refresh(refreshRegion.get())
 
     def unselectAll(self):
         refreshRegion = AccumRects()
-        for ic in self.selectedIcons():
+        selectedIcons = self.selectedIcons()
+        if len(selectedIcons) == 0:
+            return
+        for ic in selectedIcons:
             refreshRegion.add(ic.rect)
             ic.selected = False
-            ic.draw()
-        if refreshRegion.get() is not None:
-            self.refresh(refreshRegion.get())
-
-    def resize(self, width, height):
-        self.image = Image.new('RGB', (width, height), color=windowBgColor)
-        self.draw = ImageDraw.Draw(self.image)
+        for ic in selectedIcons:
+            ic.draw(clip=refreshRegion.get())
+        self.refresh(refreshRegion.get())
 
     def refresh(self, region=None):
         """Redraw any rectangle (region) of the window from the pseudo-framebuffer
@@ -444,11 +455,16 @@ class Window:
                 redrawRegion.add(ic.hierRect())
                 ic.layout()
                 redrawRegion.add(ic.hierRect())
-        self.draw.rectangle(redrawRegion.get(), fill=windowBgColor)
+        self.clearBgRect(redrawRegion.get())
         for ic in self.findIconsInRegion(redrawRegion.get()):
-            ic.draw()
-            redrawRegion.add(ic.rect)
+            ic.draw(clip=redrawRegion.get())
         self.refresh(redrawRegion.get())
+
+    def clearBgRect(self, rect):
+        """Clear but don't refresh a rectangle of the window"""
+        # Fill rectangle seems to go one beyond
+        l, t, r, b = rect
+        self.draw.rectangle((l, t, r-1, b-1), fill=windowBgColor)
 
 class AccumRects:
     "Make one big rectangle out of all rectangles added."
@@ -478,7 +494,7 @@ def rectsTouch(rect1, rect2):
     if l1 > r2  or l2 > r1:
         return False
     # One is above the other
-    if (t1 > b2 or t2 > b1):
+    if t1 > b2 or t2 > b1:
         return False
     return True
 
@@ -493,8 +509,8 @@ class App:
         self.frameCount = 0
 
         window = self.windows[0]
-        # for x in range(8):
-        #     for y in range(14):
+        # for x in range(40):
+        #     for y in range(90):
         #         loc = (x*60, y*20)
         #         iconType = icon.FnIcon if x % 2 else  icon.IdentIcon
         #         window.topIcons.append(iconType("Icon %d" % (x*14+y), window, loc))
@@ -516,6 +532,7 @@ class App:
     def newWindow(self):
         window = Window(self.root)
         self.windows.append(window)
+
 
 def findTopIcons(icons):
     iconDir = {ic:True for ic in icons}

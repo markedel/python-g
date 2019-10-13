@@ -44,7 +44,7 @@ def parseExpr(expr):
         return (fn, compareOps[expr.ops[0].__class__], parseExpr(expr.left), parseExpr(expr.comparators[0]))
     elif expr.__class__ == ast.Call:
         # No keywords or other cool stuff, yet
-        return (fn, expr.func.id, [parseExpr(e) for e in expr.args])
+        return (fn, expr.func.value.id, [parseExpr(e) for e in expr.args])
     elif expr.__class__ == ast.Num:
         return (id, str(expr.n))
     elif expr.__class__ == ast.Str:

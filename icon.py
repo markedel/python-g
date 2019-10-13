@@ -1,4 +1,4 @@
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from python_g import msTime, AccumRects, offsetRect
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 11)
@@ -45,24 +45,8 @@ def clipboardDataToIcons(clipData, window, offset):
 def clipboardRepr(icons, offset):
     return repr([ic.clipboardRepr(offset) for ic in icons])
 
-def overlayColor(c1, c2):
-    r1, g1, b1, a1 = c1
-    r2, g2, b2, a2 = c2
-    w1 = (255 - a2) / 255.0
-    w2 = a2 / 255.0
-    return int(r1*w1 + r2*w2), int(g1*w1 + g2*w2), int(b1*w1+b2*w2), a1
-
-iconOutlineSelColor = overlayColor(iconOutlineColor, selectModColor)
-iconBgSelColor = overlayColor(iconBgColor, selectModColor)
-
 def asciiToImage(asciiPixmap, selected=False):
-    if selected:
-        outLineColor = iconOutlineSelColor
-        bgColor = iconBgSelColor
-    else:
-        outLineColor = iconOutlineColor
-        bgColor = iconBgColor
-    asciiMap = {'.': (0, 0, 0, 0), 'o': outLineColor, 'b': bgColor, 'x': (0, 0, 0, 0)}
+    asciiMap = {'.': (0, 0, 0, 0), 'o': iconOutlineColor, 'b': iconBgColor, 'x': (0, 0, 0, 0)}
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
     pixels = "".join(asciiPixmap)
@@ -72,9 +56,7 @@ def asciiToImage(asciiPixmap, selected=False):
     return image
 
 outSiteImage = asciiToImage(outSitePixmap)
-outSiteSelImage = asciiToImage(outSitePixmap, selected=True)
 inSiteImage = asciiToImage(inSitePixmap)
-inSiteSelImage = asciiToImage(inSitePixmap, selected=True)
 
 class Icon:
     def __init__(self, window=None):
@@ -85,7 +67,7 @@ class Icon:
         self.children = []
         self.layoutDirty = False
 
-    def draw(self, image=None, location=None):
+    def draw(self, image=None, location=None, clip=None):
         """Draw the icon.  The image to which it is drawn and the location at which it is drawn
          can be optionally overridden by specifying image and/or location."""
         pass
@@ -94,12 +76,17 @@ class Icon:
         "Compute layout and set locations for icon and its children, but do not redraw"
         pass
 
-    def traverse(self, includeSelf=True):
-        "Iterator for traversing the tree below this icon"
-        if includeSelf:
+    def traverse(self, order="draw", includeSelf=True):
+        """Iterator for traversing the tree below this icon.  Traversal can be in either
+        drawing (order="draw") or picking (order="pick") order."""
+        if includeSelf and order is not "pick":
             yield self
+        # For "pick" order to be the true opposite of "draw", this loop should run in
+        # reverse, but child icons are not intended to overlap in a detectable way.
         for child in self.children:
-            yield from child.traverse()
+            yield from child.traverse(order)
+        if includeSelf and order is "pick":
+            yield self
 
     def hierRect(self):
         "Return a rectangle covering this icon and its children"
@@ -138,19 +125,22 @@ class IdentIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth, y + bodyHeight + outSiteImage.height)
         self.outSiteOffset = (5, bodyHeight + outSiteImage.height)
+        self.cachedImage = None
 
-    def draw(self, image=None, location=None):
+    def draw(self, image=None, location=None, clip=None):
         if image is None:
             image = self.window.image
         if location is None:
             location = self.rect[:2]
-        drawIconBoxedText(self.name, image, location, self.selected)
-        x, y = location
-        outImg = outSiteSelImage if self.selected else outSiteImage
-        outSiteX, outSiteY = self.outSiteOffset
-        outSiteX += x - outImg.width//2
-        outSiteY += y - outImg.height -1
-        image.paste(outImg, (outSiteX, outSiteY), mask=outImg)
+        if self.cachedImage is None:
+            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect), rectHeight(self.rect)), color=(0,0,0,0))
+            drawIconBoxedText(self.name, self.cachedImage, (0,0), False)
+            outSiteX, outSiteY = self.outSiteOffset
+            outSiteX -= outSiteImage.width//2
+            outSiteY -= outSiteImage.height + 1
+            self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
+         location, clip)
 
     def layout(self, location=None):
         if location is not None:
@@ -185,6 +175,7 @@ class FnIcon(Icon):
         self.outSiteOffset = (5, height)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
+        self.cachedImage = None
 
     def _size(self):
         width, height = globalFont.getsize(self.name)
@@ -192,42 +183,34 @@ class FnIcon(Icon):
         height += 2*textMargin + outSiteImage.height
         return width, height
 
-    def draw(self, image=None, location=None):
+    def draw(self, image=None, location=None, clip=None):
         if image is None:
             image = self.window.image
         if location is None:
             location = self.rect[:2]
-        width, height = drawIconBoxedText(self.name, image, location, self.selected)
-        x, y = location
-        self._drawSpine(image, x+width-1, y+height)
-        outSiteX, outSiteY = self.outSiteOffset
-        outImg = outSiteSelImage if self.selected else outSiteImage
-        outSiteX += x - outImg.width//2
-        outSiteY += y - outImg.height -1
-        image.paste(outImg, (outSiteX, outSiteY), mask=outImg)
+        if self.cachedImage is None:
+            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect), rectHeight(self.rect)), color=(0,0,0,0))
+            width, height = drawIconBoxedText(self.name, self.cachedImage, (0,0), False)
+            self._drawSpine(self.cachedImage, width-1, height)
+            outSiteX, outSiteY = self.outSiteOffset
+            outSiteX -= outSiteImage.width//2
+            outSiteY -= outSiteImage.height + 1
+            self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
+         location, clip)  # ... try w/o mask
 
     def _spineLength(self, inOffsets):
         return max(inOffsets) + inSiteImage.width // 2 + 2
 
     def _drawSpine(self, image, x, y):
         spineLength = self._spineLength(self.inOffsets)
-        if self.selected:
-            bgColor = iconBgSelColor
-            outlineColor = iconOutlineSelColor
-            inImg = inSiteSelImage
-        else:
-            bgColor = iconBgColor
-            outlineColor = iconOutlineColor
-            inImg = inSiteImage
-            outImg = outSiteImage
-        spineImage = Image.new('RGBA', (spineLength, spineThickness), bgColor)
-        draw = ImageDraw.Draw(spineImage)
-        draw.line((0, 0, spineLength, 0), fill=outlineColor)
-        draw.line((0, spineThickness-1, spineLength, spineThickness-1), fill=outlineColor)
-        draw.line((spineLength-1, 0, spineLength-1, spineThickness), fill=outlineColor)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((x, y-spineThickness, x+spineLength, y-1), fill=iconBgColor)
+        draw.line((x, y-1, x+spineLength, y-1), fill=iconOutlineColor)
+        draw.line((x, y-spineThickness, x+spineLength, y-spineThickness), fill=iconOutlineColor)
+        draw.line((x+spineLength-1, y-1, x+spineLength-1, y-spineThickness), fill=iconOutlineColor)
         for inOff in self.inOffsets:
-            spineImage.paste(inImg, (inOff - inImg.width // 2, 0))
-        image.paste(spineImage, (x, y-spineThickness, x+spineLength, y), mask=spineImage)
+            image.paste(inSiteImage, (x+inOff - inSiteImage.width // 2, y-spineThickness))
 
     def layout(self, location=None):
         if location is None:
@@ -252,6 +235,7 @@ class FnIcon(Icon):
                 childX += childWidth
         width, height = self._size()
         self.rect = (x, bottom-bodyHeight, x+width, bottom+outSiteImage.height)
+        self.cachedImage = None
         self.layoutDirty = False
 
     def _calcLayout(self):
@@ -296,6 +280,42 @@ def drawIconBoxedText(text, image, location, selected):
         selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 80, 50))
         image.paste(selImg, textDrawRect, mask=selImg)
     return txtImg.width, txtImg.height
+
+def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
+    """clipping rectangle is in the coordinate system of the destination image"""
+    if clipRect is None:
+        dstImage.paste(srcImage, box=pos, mask=srcImage)
+        return
+    cl, ct, cr, cb = clipRect
+    pl, pt = pos
+    pr, pb = pl + srcImage.width, pt + srcImage.height
+    # Pasted region is entirely outside of the clip rectangle
+    if cl > pr or pl > cr or ct > pb or pt > cb:
+        return
+    # Pasted region is entirely inside of the clip rectangle
+    if pl >= cl and pr <= cr and pt >= ct and pb <= cb:
+        dstImage.paste(srcImage, box=pos, mask=srcImage)
+        return
+    # Find the area that will be drawn
+    dl = max(pl, cl)
+    dt = max(pt, ct)
+    dr = min(pr, cr)
+    db = min(pb, cb)
+    # Crop the pasted image to the drawn area transformed to its coordinates
+    croppedImage = srcImage.crop((dl - pl, dt - pt, dr - pl, db - pt))
+    # Paste the cropped image in the drawn area
+    dstImage.paste(croppedImage, box=(dl, dt), mask=croppedImage)
+
+def tintSelectedImage(image, selected):
+    if not selected:
+        return image
+    #... This is wasteful and should be an image filter if I can figure out how to
+    # make one properly
+    alphaImg = image.getchannel('A')
+    colorImg = Image.new('RGBA', (image.width, image.height), color=(0, 0, 255, 0))
+    colorImg.putalpha(alphaImg)
+    selImg = Image.blend(image, colorImg, .15)
+    return selImg
 
 def containingRect(icons):
     maxRect = AccumRects()
