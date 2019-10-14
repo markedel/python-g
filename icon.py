@@ -1,12 +1,12 @@
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from python_g import msTime, AccumRects, offsetRect
 
-globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 11)
+globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
 textMargin = 2
 spineThickness = 4
 outSiteWidth = 5
-iconOutlineColor = (230, 230, 230, 255)
+iconOutlineColor = (180, 180, 180, 255)
 iconBgColor = (255, 255, 255, 255)
 selectModColor = (0, 0, 80, 50)
 
@@ -211,8 +211,8 @@ class FnIcon(Icon):
     def _drawSpine(self, image, x, y):
         spineLength = self._spineLength(self.inOffsets)
         draw = ImageDraw.Draw(image)
-        draw.rectangle((x, y-spineThickness, x+spineLength, y-1), fill=iconBgColor)
-        draw.line((x, y-1, x+spineLength, y-1), fill=iconOutlineColor)
+        draw.rectangle((x, y-spineThickness, x+spineLength-1, y-1), fill=iconBgColor)
+        draw.line((x, y-1, x+spineLength-1, y-1), fill=iconOutlineColor)
         draw.line((x, y-spineThickness, x+spineLength, y-spineThickness), fill=iconOutlineColor)
         draw.line((x+spineLength-1, y-1, x+spineLength-1, y-spineThickness), fill=iconOutlineColor)
         for inOff in self.inOffsets:
@@ -236,9 +236,9 @@ class FnIcon(Icon):
             for childLayout in childLayouts:
                 childIcon, childWidth, childHeight, subLayouts = childLayout
                 self.inOffsets.append(childX + childIcon.outSiteOffset[0])
-                childIcon._doLayout(x+bodyWidth+childX, bottom-spineThickness,
+                childIcon._doLayout(x+bodyWidth-1+childX, bottom-spineThickness+1,
                         childLayout)
-                childX += childWidth
+                childX += childWidth-1
         width, height = self._size()
         self.rect = (x, bottom-bodyHeight, x+width, bottom+outSiteImage.height)
         self.cachedImage = None
@@ -250,8 +250,8 @@ class FnIcon(Icon):
             childWidth = self._spineLength(self.emptyInOffsets)
             height = self.bodySize[1]
         else:
-            childWidth = sum((c[1] for c in childLayouts))
-            height = max((c[2] for c in childLayouts)) + spineThickness
+            childWidth = sum((c[1]-1 for c in childLayouts))
+            height = max((c[2] for c in childLayouts)) + spineThickness - 1
         return (self, self.bodySize[0] + childWidth, height, childLayouts)
 
     def clipboardRepr(self, offset):
