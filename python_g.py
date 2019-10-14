@@ -370,14 +370,13 @@ class Window:
         if ic is None:
             return
         changedIcons = list(ic.traverse())
-        #... bring these icons to the top: self.bringToTop(changedIcons)
         for ic in changedIcons:
             refreshRegion.add(ic.rect)
             if op is 'toggle':
                 ic.selected = not ic.selected
             else:
                 ic.selected = True
-        for ic in changedIcons:
+        for ic in self.findIconsInRegion(refreshRegion.get()):
             ic.draw(clip=refreshRegion.get())
         self.refresh(refreshRegion.get())
 
@@ -389,7 +388,7 @@ class Window:
         for ic in selectedIcons:
             refreshRegion.add(ic.rect)
             ic.selected = False
-        for ic in selectedIcons:
+        for ic in self.findIconsInRegion(refreshRegion.get()):
             ic.draw(clip=refreshRegion.get())
         self.refresh(refreshRegion.get())
 
@@ -439,28 +438,40 @@ class Window:
         "Remove icons from window icon list redraw affected areas of the display"
         if len(icons) == 0:
             return
-        deletedDict = {ic:True for ic in icons}
+        # deletedDict serves the dual purpose of figuring out quickly if an icon was on
+        # the removal list, and holding the non-deleted child icons that need to be
+        # put back in the same position in the top icon list
+        deletedDict = {ic:[] for ic in icons}
         detachList = []
         redrawRegion = AccumRects()
         for ic in icons:
             redrawRegion.add(ic.rect)
+        # Find and unlink child icons from parents at deletion boundary
         for ic in self.allIcons():
             for child in ic.children:
                 if ic in deletedDict and child not in deletedDict:
                     detachList.append((ic, child))
+                    deletedDict[ic].append(child)
+                    redrawRegion.add(child.hierRect())
                 elif ic not in deletedDict and child in deletedDict:
                     detachList.append((ic, child))
-        newTopIcons = [ic for ic in self.topIcons if ic not in deletedDict]
         for ic, child in detachList:
             ic.detach(child)
-            if child not in deletedDict:
-                newTopIcons.append(child)
+        # Remove or replace the deleted icons in the top icon list
+        newTopIcons = []
+        for ic in self.topIcons:
+            if ic in deletedDict:
+                newTopIcons += deletedDict[ic]
+            else:
+                newTopIcons.append(ic)
         self.topIcons = newTopIcons
+        # Redo layouts of icons affected by detachment of children
         for ic in self.topIcons:
             if ic.needsLayout():
                 redrawRegion.add(ic.hierRect())
                 ic.layout()
                 redrawRegion.add(ic.hierRect())
+        # Redraw the area affected by the deletion
         self.clearBgRect(redrawRegion.get())
         for ic in self.findIconsInRegion(redrawRegion.get()):
             ic.draw(clip=redrawRegion.get())

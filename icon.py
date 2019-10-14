@@ -342,7 +342,7 @@ def rectSize(rect):
 def pointInRect(point, rect):
     l, t, r, b = rect
     x, y = point
-    return x >= l and x <= r and y <= b and y >= t
+    return x >= l and x < r and y >= t and y < b
 
 def moveRect(rect, newLoc):
     l, t, r, b = rect

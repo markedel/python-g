@@ -53,7 +53,7 @@ def parseExpr(expr):
     elif expr.__class__ == ast.Name:
         return (id, expr.id)
     else:
-        return(id, "**Couldn't Parse**")
+        return (id, "**Couldn't Parse**")
 
 def makeIcons(parsedExpr, window, x, y):
     if parsedExpr[0] == 'identIcon':
