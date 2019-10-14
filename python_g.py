@@ -129,8 +129,8 @@ class Window:
         return [ic for ic in self.allIcons(order) if ic.selected]
 
     def _btn3Cb(self, evt):
-        selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
-        if len(selected) == 0:
+        ic = self.findIconAt(evt.x, evt.y)
+        if ic is not None and ic.selected == False:
             self._select(evt)
 
     def _btn3ReleaseCb(self, evt):
@@ -158,11 +158,11 @@ class Window:
             xDist = abs(evt.x - self.buttonDownLoc[0])
             yDist = abs(evt.y - self.buttonDownLoc[1])
             if xDist + yDist > dragThreshold:
-                icons = self.findIconsAt((evt.x, evt.y))
-                if len(icons) > 0:
-                    self._startDrag(evt, icons)
-                else:
+                ic = self.findIconAt(evt.x, evt.y)
+                if ic is None:
                     self._startRectSelect(evt)
+                else:
+                    self._startDrag(evt, list(ic.traverse()))
         else:
             if self.dragging is not None:
                 self._updateDrag(evt)
@@ -173,8 +173,8 @@ class Window:
         self.buttonDownTime = msTime()
         self.buttonDownLoc = evt.x, evt.y
         self.buttonDownState = evt.state
-        selected = [ic for ic in self.findIconsAt((evt.x, evt.y)) if ic.selected]
-        if len(selected) == 0 and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
+        ic = self.findIconAt(evt.x, evt.y)
+        if ic is None or not ic.selected and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
             self.unselectAll()
 
     def _buttonReleaseCb(self, evt):
@@ -366,7 +366,10 @@ class Window:
         if op is 'select':
             self.unselectAll()
         refreshRegion = AccumRects()
-        changedIcons = self.findIconsAt((evt.x, evt.y)) #... Change to pickded/hierarchical definition
+        ic = self.findIconAt(evt.x, evt.y)
+        if ic is None:
+            return
+        changedIcons = list(ic.traverse())
         #... bring these icons to the top: self.bringToTop(changedIcons)
         for ic in changedIcons:
             refreshRegion.add(ic.rect)
@@ -426,8 +429,11 @@ class Window:
     def findIconsInRegion(self, rect):
         return [ic for ic in self.allIcons() if rectsTouch(rect, ic.rect)]
 
-    def findIconsAt(self, loc):
-        return [ic for ic in self.allIcons() if pointInRect(loc, ic.rect)]
+    def findIconAt(self, x, y):
+        for ic in self.allIcons(order="pick"):
+            if ic.touchesPosition(x, y):
+                return ic
+        return None
 
     def removeIcons(self, icons):
         "Remove icons from window icon list redraw affected areas of the display"
@@ -480,11 +486,6 @@ class AccumRects:
     def get(self):
         "Return the enclosing rectangle.  Returns None if no rectangles were added"
         return self.rect
-
-def pointInRect(point, rect):
-    l, t, r, b = rect
-    x, y = point
-    return x >= l and x <= r and y <= b and y >= t
 
 def rectsTouch(rect1, rect2):
     "Returns true if rectangles rect1 and rect2 overlap"

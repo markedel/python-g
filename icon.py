@@ -66,6 +66,7 @@ class Icon:
         self.outOffset = (0, 0)
         self.children = []
         self.layoutDirty = False
+        self.cachedImage = None
 
     def draw(self, image=None, location=None, clip=None):
         """Draw the icon.  The image to which it is drawn and the location at which it is drawn
@@ -87,6 +88,13 @@ class Icon:
             yield from child.traverse(order)
         if includeSelf and order is "pick":
             yield self
+
+    def touchesPosition(self, x, y):
+        if not pointInRect((x, y), self.rect) or self.cachedImage is None:
+            return False
+        l, t = self.rect[:2]
+        pixel = self.cachedImage.getpixel((x-l, y-t))
+        return pixel[3] > 128
 
     def hierRect(self):
         "Return a rectangle covering this icon and its children"
@@ -125,7 +133,6 @@ class IdentIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth, y + bodyHeight + outSiteImage.height)
         self.outSiteOffset = (5, bodyHeight + outSiteImage.height)
-        self.cachedImage = None
 
     def draw(self, image=None, location=None, clip=None):
         if image is None:
@@ -175,7 +182,6 @@ class FnIcon(Icon):
         self.outSiteOffset = (5, height)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
-        self.cachedImage = None
 
     def _size(self):
         width, height = globalFont.getsize(self.name)
@@ -332,6 +338,11 @@ def rectHeight(rect):
 def rectSize(rect):
     l, t, r, b = rect
     return r - l, b - t
+
+def pointInRect(point, rect):
+    l, t, r, b = rect
+    x, y = point
+    return x >= l and x <= r and y <= b and y >= t
 
 def moveRect(rect, newLoc):
     l, t, r, b = rect

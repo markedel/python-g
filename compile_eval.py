@@ -52,6 +52,8 @@ def parseExpr(expr):
     # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
     elif expr.__class__ == ast.Name:
         return (id, expr.id)
+    else:
+        return(id, "**Couldn't Parse**")
 
 def makeIcons(parsedExpr, window, x, y):
     if parsedExpr[0] == 'identIcon':
