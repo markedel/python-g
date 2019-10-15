@@ -63,7 +63,6 @@ class Icon:
         self.window = window
         self.rect = None
         self.selected = False
-        self.outOffset = (0, 0)
         self.children = []
         self.layoutDirty = False
         self.cachedImage = None
@@ -105,8 +104,8 @@ class Icon:
         self.children.remove(child)
         self.layoutDirty = True
 
-    def addChild(self, child):
-        "Add a child icon"
+    def addChild(self, child, pos=None):
+        "Add a child icon at the end of the child list"
         self.children.append(child)
         self.layoutDirty = True
 
@@ -132,7 +131,7 @@ class IdentIcon(Icon):
         else:
             x, y = location
         self.rect = (x, y, x + bodyWidth, y + bodyHeight + outSiteImage.height)
-        self.outSiteOffset = (5, bodyHeight + outSiteImage.height)
+        self.outSiteOffset = (5, bodyHeight + outSiteImage.height - 1)
 
     def draw(self, image=None, location=None, clip=None):
         if image is None:
@@ -144,10 +143,14 @@ class IdentIcon(Icon):
             drawIconBoxedText(self.name, self.cachedImage, (0,0), False)
             outSiteX, outSiteY = self.outSiteOffset
             outSiteX -= outSiteImage.width//2
-            outSiteY -= outSiteImage.height + 1
+            outSiteY -= outSiteImage.height
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)
+
+    def snapLists(self):
+        x, y = self.rect[:2]
+        return {"output":[(x + self.outSiteOffset[0], y + self.outSiteOffset[1])]}
 
     def layout(self, location=None):
         if location is not None:
@@ -218,6 +221,44 @@ class FnIcon(Icon):
         for inOff in self.inOffsets:
             image.paste(inSiteImage, (x+inOff - inSiteImage.width // 2, y-spineThickness))
 
+    def snapLists(self):
+        x, y = self.rect[:2]
+        outOffsets = [(x + self.outSiteOffset[0], y + self.outSiteOffset[1])]
+        width, height = self.bodySize
+        x += width - 1
+        y += height - spineThickness + outSiteImage.height
+        inOffsets = [(x+i, y) for i in self.inOffsets]
+        return {"output":outOffsets, "input":inOffsets}
+
+    def addChild(self, child, pos=None):
+        "Add a child icon at the end of the child list"
+        if pos is None:
+            self.children.append(child)
+        else:
+            index = 0
+            for sitePos in self.snapLists().get("input", []):
+                if sitePos == pos:
+                    self.children.insert(index, child)
+                index += 1
+                break
+            else:
+                print("Failed to add child icon.  Icon not found at site position")
+                return
+        self.layoutDirty = True
+
+    def replaceChild(self, childToRemove, childToInsert):
+        index = self.children.index(childToRemove)
+        self.children[index] = childToInsert
+        self.layoutDirty = True
+
+    def childAt(self, pos):
+        for child in self.children:
+            index = 0
+            for sitePos in child.snapLists().get("output", []):
+                if sitePos == pos:
+                    return child
+        return None
+
     def layout(self, location=None):
         if location is None:
             x, y = self.rect[:2]
@@ -265,6 +306,49 @@ class FnIcon(Icon):
         ic = FnIcon(name, window, (addPoints(location, offset)))
         ic.children = clipboardDataToIcons(children, window, offset)
         return ic
+
+class ImageIcon(Icon):
+    def __init__(self, image, window=None, location=None):
+        Icon.__init__(self, window)
+        self.cachedImage = self.image = image.convert('RGBA')
+        if location is None:
+            x, y = 0, 0
+        else:
+            x, y = location
+        self.rect = (x, y, x + image.width, y + image.height)
+
+    def draw(self, image=None, location=None, clip=None):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        pasteImageWithClip(image, tintSelectedImage(self.image, self.selected),
+         location, clip)
+
+    def snapLists(self):
+        return {}
+
+    def layout(self, location=None):
+        if location is not None:
+            self.rect = moveRect(self.rect, location)
+
+    def _doLayout(self, x, bottom, calculatedSizes=None):
+        self.rect = (x, bottom-self.image.height, x + self.image.width, bottom)
+
+    def _calcLayout(self):
+        width, height = rectSize(self.rect)
+        return (self, self.image.width, self.image.height, [])
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        #... base64 encode a jpeg
+        return ("IdentIcon", ("TODO", addPoints(location, offset)))
+
+    @staticmethod
+    def fromClipboard(clipData, window, locationOffset):
+        #... base64 decode a jpeg
+        # image, location = clipData
+        return None
 
 def drawIconBoxedText(text, image, location, selected):
     if text not in renderCache:

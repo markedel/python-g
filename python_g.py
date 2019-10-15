@@ -1,7 +1,7 @@
 # Python-g main module
 import tkinter as tk
 import icon
-from PIL import Image, ImageDraw, ImageTk, ImageWin
+from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import compile_eval
 
@@ -13,6 +13,8 @@ SHIFT_MASK = 0x001
 CTRL_MASK = 0x004
 LEFT_MOUSE_MASK = 0x100
 RIGHT_MOUSE_MASK = 0x300
+
+SNAP_DIST = 8
 
 # Notes on window drawing:
 #
@@ -232,11 +234,17 @@ class Window:
             try:
                 text = self.top.clipboard_get(type="STRING")
             except:
-                return
+                text = None
             # Try to parse the string as Python code
-            pastedIcons = compile_eval.parsePasted(text, self, (px, py))
-            if pastedIcons is None:
-                pastedIcons = [icon.IdentIcon(repr(text), self, (px, py))]
+            if text is not None:
+                pastedIcons = compile_eval.parsePasted(text, self, (px, py))
+                if pastedIcons is None:
+                    pastedIcons = [icon.IdentIcon(repr(text), self, (px, py))]
+            else:
+                clipImage = ImageGrab.grabclipboard()
+                if clipImage is None:
+                    return
+                pastedIcons = [icon.ImageIcon(clipImage, self, (px, py))]
         redrawRect = AccumRects()
         for pastedTopIcon in pastedIcons:
             self.topIcons.append(pastedTopIcon)
@@ -263,7 +271,8 @@ class Window:
         self.removeIcons(self.dragging)
         # Dragging parent icons away from their children may require re-layout of the
         # (moving) parent icons
-        for ic in findTopIcons(self.dragging):
+        topDraggingIcons = findTopIcons(self.dragging)
+        for ic in topDraggingIcons:
             if ic.needsLayout():
                 ic.layout()
         # For top performance, make a separate image containing the moving icons against
@@ -280,6 +289,25 @@ class Window:
         for ic in self.dragging:
             l, t = ic.rect[:2]
             ic.draw(self.dragImage, (l-xOff, t-yOff))
+        # Construct a master snap list for all mating sites between stationary and
+        # dragged icons
+        draggingOutputs = []
+        for ic in topDraggingIcons:
+            for s in ic.snapLists().get("output", []):
+                x, y = s
+                draggingOutputs.append(((x-xOff, y-yOff), ic))
+        stationaryInputs = []
+        for ic in self.allIcons():
+            for s in ic.snapLists().get("input", []):
+                xi, yi = s
+                stationaryInputs.append(((xi, yi), ic))
+        self.snapList = []
+        for si in stationaryInputs:
+            sx, sy = si[0]
+            for do in draggingOutputs:
+                dx, dy = do[0]
+                self.snapList.append((sx-dx, sy-dy, si[1], do[1], si[0]))
+        self.snapped = None
         self._updateDrag(evt)
 
     def _updateDrag(self, evt):
@@ -287,12 +315,27 @@ class Window:
             return
         x = self.dragImageOffset[0] + evt.x - self.buttonDownLoc[0]
         y = self.dragImageOffset[1] + evt.y - self.buttonDownLoc[1]
+        # If the drag results in mating sites being within snapping distance, change the
+        # drag position to mate them exactly (snap them together)
+        self.snapped = None
+        nearest = SNAP_DIST + 1
+        for sx, sy, inIcon, outIcon, pos in self.snapList:
+            dist = abs(x-sx) + abs(y-sy)
+            if dist < nearest:
+                nearest = dist
+                x = sx
+                y = sy
+                self.snapped = (inIcon, outIcon, pos)
+        # Erase the old drag image
         width = self.dragImage.width
         height = self.dragImage.height
         dragImageRegion = (x, y, x+width, y+height)
         if self.lastDragImageRegion is not None:
             for r in exposedRegions(self.lastDragImageRegion, dragImageRegion):
                 self.refresh(r)
+        # Draw the image of the moving icons in their new locations directly to the
+        # display (leaving self.image clean).  This makes dragging fast by eliminating
+        # individual icon drawing of while the user is dragging.
         dragImage = self.image.crop(dragImageRegion)
         dragImage.paste(self.dragImage, mask=self.dragImage)
         self.drawImage(dragImage, (x, y))
@@ -306,10 +349,36 @@ class Window:
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
             ic.draw()
-        self.topIcons += findTopIcons(self.dragging) # ... do snapping here
+        self.topIcons += findTopIcons(self.dragging)
+        if self.snapped is not None:
+            # The drag ended in a snap.  Attach or replace existing icons at the site
+            parentIcon, childIcon, pos = self.snapped
+            print('snapped to', self.snapped[0].name)
+            self.topIcons.remove(childIcon)
+            toDelete =  parentIcon.childAt(pos)
+            redrawRegion = AccumRects(parentIcon.hierRect())
+            if toDelete is not None:
+                print("replacing child icon ", toDelete.name)
+                parentIcon.replaceChild(toDelete, childIcon)
+                redrawRegion.add(childIcon.hierRect())
+            else:
+                parentIcon.addChild(childIcon, pos)
+            # Redo layouts for all affected (all the way to the top)
+            for ic in self.topIcons:
+                if ic.needsLayout():
+                    redrawRegion.add(ic.hierRect())
+                    ic.layout()
+                    redrawRegion.add(ic.hierRect())
+            # Redraw the areas affected by the updated layouts
+            self.clearBgRect(redrawRegion.get())
+            for ic in self.findIconsInRegion(redrawRegion.get()):
+                ic.draw(clip=redrawRegion.get())
         self.dragging = None
-        # A refresh, here, is technically unnecessary, but after all that's been written
-        # to the display, it's better to ensure it's really in sync with the image pixmap
+        self.snapped = None
+        self.snapList = None
+        # Refresh the entire display.  While refreshing a smaller area is technically
+        # possible, after all the dragging and drawing, it's prudent to ensure that the
+        # display remains in sync with the image pixmap
         self.refresh()
 
     def _startRectSelect(self, evt):
