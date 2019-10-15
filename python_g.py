@@ -28,23 +28,23 @@ SNAP_DIST = 8
 # of this program.
 
 def combineRects(rect1, rect2):
-    "Find the minimum rectangle enclosing rect1 and rect2"
+    """Find the minimum rectangle enclosing rect1 and rect2"""
     l1, t1, r1, b1 = rect1
     l2, t2, r2, b2 = rect2
     return min(l1, l2), min(t1, t2), max(r1, r2), max(b1, b2)
 
 def msTime():
-    "Return a millisecond-resolution timestamp"
+    """Return a millisecond-resolution timestamp"""
     return int(time.process_time() * 1000)
 
 def makeRect(pos1, pos2):
-    "Make a rectangle tuple from two points (our rectangles are ordered)"
+    """Make a rectangle tuple from two points (our rectangles are ordered)"""
     x1, y1 = pos1
     x2, y2 = pos2
     return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
 
 def exposedRegions(oldRect, newRect):
-    "List rectangles covering space needing to be filled when oldRect becomes newRect"
+    """List rectangles covering space needing to be filled when oldRect becomes newRect"""
     lo, to, ro, bo = oldRect
     ln, tn, rn, bn = newRect
     exposed = []
@@ -60,7 +60,7 @@ def exposedRegions(oldRect, newRect):
 
 def offsetRect(rect, xOff, yOff):
     l, t, r, b = rect
-    return (l+xOff, t+yOff, r+xOff, b+yOff)
+    return l+xOff, t+yOff, r+xOff, b+yOff
 
 class Window:
     def __init__(self, master, size=None):
@@ -74,10 +74,10 @@ class Window:
         menu.add_command(label="New", command=self._newCb)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu)
-        menu.add_command(label="Cut", command = self._cutCb, accelerator="Ctrl+X")
-        menu.add_command(label="Copy", command = self._copyCb, accelerator="Ctrl+C")
-        menu.add_command(label="Paste", command = self._pasteCb, accelerator="Ctrl+V")
-        menu.add_command(label="Delete", command = self._deleteCb, accelerator="Delete")
+        menu.add_command(label="Cut", command=self._cutCb, accelerator="Ctrl+X")
+        menu.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
+        menu.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
+        menu.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
         self.top.config(menu=self.menubar)
         if size is None:
             size = defaultWindowSize
@@ -98,9 +98,9 @@ class Window:
         self.frame.pack(fill=tk.BOTH, expand=True)
 
         self.popup = tk.Menu(self.imgFrame, tearoff=0)
-        self.popup.add_command(label="Cut", command = self._cutCb, accelerator="Ctrl+X")
-        self.popup.add_command(label="Copy", command = self._copyCb, accelerator="Ctrl+C")
-        self.popup.add_command(label="Paste", command = self._pasteCb, accelerator="Ctrl+V")
+        self.popup.add_command(label="Cut", command=self._cutCb, accelerator="Ctrl+X")
+        self.popup.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
+        self.popup.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
         self.popup.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
 
         self.buttonDownTime = None
@@ -132,7 +132,7 @@ class Window:
 
     def _btn3Cb(self, evt):
         ic = self.findIconAt(evt.x, evt.y)
-        if ic is not None and ic.selected == False:
+        if ic is not None and ic.selected is False:
             self._select(evt)
 
     def _btn3ReleaseCb(self, evt):
@@ -142,15 +142,15 @@ class Window:
         appData.newWindow()
 
     def _configureCb(self, evt):
-        "Called when window is initially displayed or resized"
+        """Called when window is initially displayed or resized"""
         if evt.width != self.image.width or evt.height != self.image.height:
             self.image = Image.new('RGB', (evt.width, evt.height), color=windowBgColor)
             self.draw = ImageDraw.Draw(self.image)
         for ic in self.allIcons():
             ic.draw()
 
-    def _exposeCb(self, evt):
-        "Called when a new part of the window is exposed and needs to be redrawn"
+    def _exposeCb(self, _evt):
+        """Called when a new part of the window is exposed and needs to be redrawn"""
         self.refresh()
 
     def _motionCb(self, evt):
@@ -198,7 +198,7 @@ class Window:
         if evt.widget == self.top:
             appData.removeWindow(self)
 
-    def _cutCb(self, evt=None):
+    def _cutCb(self, _evt=None):
         self._copyCb()
         self.removeIcons(self.selectedIcons())
 
@@ -250,11 +250,11 @@ class Window:
             self.topIcons.append(pastedTopIcon)
             for ic in pastedTopIcon.traverse():
                 ic.selected = True
-                ic.draw() # No need to clip or erase, all drawn on top
+                ic.draw()  # No need to clip or erase, all drawn on top
                 redrawRect.add(ic.rect)
         self.refresh(redrawRect.get())
 
-    def _deleteCb(self, evt=None):
+    def _deleteCb(self, _evt=None):
         self.removeIcons(self.selectedIcons())
 
     def _startDrag(self, evt, icons):
@@ -355,7 +355,7 @@ class Window:
             parentIcon, childIcon, pos = self.snapped
             print('snapped to', self.snapped[0].name)
             self.topIcons.remove(childIcon)
-            toDelete =  parentIcon.childAt(pos)
+            toDelete = parentIcon.childAt(pos)
             redrawRegion = AccumRects(parentIcon.hierRect())
             if toDelete is not None:
                 print("replacing child icon ", toDelete.name)
@@ -464,13 +464,13 @@ class Window:
     def refresh(self, region=None):
         """Redraw any rectangle (region) of the window from the pseudo-framebuffer
            (self.image).  Redraw the whole window if region==None"""
-        if region == None:
+        if region is None:
             self.drawImage(self.image, (0, 0))
         else:
             self.drawImage(self.image, (region[0], region[1]), region)
 
     def drawImage(self, image, location, subImage=None):
-        "Draw an arbitrary image anywhere in the window, ignoring the window image"
+        """Draw an arbitrary image anywhere in the window, ignoring the window image"""
         if subImage:
             x1, y1, x2, y2 = subImage
             width = x2 - x1
@@ -504,7 +504,7 @@ class Window:
         return None
 
     def removeIcons(self, icons):
-        "Remove icons from window icon list redraw affected areas of the display"
+        """Remove icons from window icon list redraw affected areas of the display"""
         if len(icons) == 0:
             return
         # deletedDict serves the dual purpose of figuring out quickly if an icon was on
@@ -553,7 +553,7 @@ class Window:
         self.draw.rectangle((l, t, r-1, b-1), fill=windowBgColor)
 
 class AccumRects:
-    "Make one big rectangle out of all rectangles added."
+    """Make one big rectangle out of all rectangles added."""
     def __init__(self, initRect=None):
         self.rect = initRect
 
@@ -564,15 +564,15 @@ class AccumRects:
             self.rect = combineRects(rect, self.rect)
 
     def get(self):
-        "Return the enclosing rectangle.  Returns None if no rectangles were added"
+        """Return the enclosing rectangle.  Returns None if no rectangles were added"""
         return self.rect
 
 def rectsTouch(rect1, rect2):
-    "Returns true if rectangles rect1 and rect2 overlap"
+    """Returns true if rectangles rect1 and rect2 overlap"""
     l1, t1, r1, b1 = rect1
     l2, t2, r2, b2 = rect2
     # One is to the right side of the other
-    if l1 > r2  or l2 > r1:
+    if l1 > r2 or l2 > r1:
         return False
     # One is above the other
     if t1 > b2 or t2 > b1:
@@ -583,13 +583,13 @@ class App:
     def __init__(self):
         self.windows = []
         self.root = tk.Tk()
-        self.root.overrideredirect(1) # Stop vestigial root window from flashing up
+        self.root.overrideredirect(1)  # Stop vestigial root window from flashing up
         self.root.iconbitmap("python-g.ico")
         self.root.withdraw()
         self.newWindow()
         self.frameCount = 0
 
-        window = self.windows[0]
+        # window = self.windows[0]
         # for x in range(40):
         #     for y in range(90):
         #         loc = (x*60, y*20)
@@ -597,7 +597,7 @@ class App:
         #         window.topIcons.append(iconType("Icon %d" % (x*14+y), window, loc))
 
     def mainLoop(self):
-        #self.root.after(2000, self.animate)
+        # self.root.after(2000, self.animate)
         self.root.mainloop()
 
     def animate(self):

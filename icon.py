@@ -4,7 +4,7 @@ from python_g import msTime, AccumRects, offsetRect
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
 textMargin = 2
-spineThickness = 4
+spineThickness = 3
 outSiteWidth = 5
 iconOutlineColor = (180, 180, 180, 255)
 iconBgColor = (255, 255, 255, 255)
@@ -14,10 +14,16 @@ outSitePixmap = (
  "obbbo",
  ".obo.",
  "..o..")
-inSitePixmap = (
- "oxxxo",
- "boxob",
- "bbobb")
+if spineThickness == 3:
+    inSitePixmap = (
+     "oxxxo",
+     "boxob",
+     "ooooo")
+else:
+    inSitePixmap = (
+     "oxxxo",
+     "boxob",
+     "bbobb")
 
 renderCache = {}
 
@@ -45,7 +51,7 @@ def clipboardDataToIcons(clipData, window, offset):
 def clipboardRepr(icons, offset):
     return repr([ic.clipboardRepr(offset) for ic in icons])
 
-def asciiToImage(asciiPixmap, selected=False):
+def asciiToImage(asciiPixmap):
     asciiMap = {'.': (0, 0, 0, 0), 'o': iconOutlineColor, 'b': iconBgColor, 'x': (0, 0, 0, 0)}
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
@@ -73,7 +79,7 @@ class Icon:
         pass
 
     def layout(self):
-        "Compute layout and set locations for icon and its children, but do not redraw"
+        """Compute layout and set locations for icon and its children, but do not redraw"""
         pass
 
     def traverse(self, order="draw", includeSelf=True):
@@ -96,21 +102,21 @@ class Icon:
         return pixel[3] > 128
 
     def hierRect(self):
-        "Return a rectangle covering this icon and its children"
+        """Return a rectangle covering this icon and its children"""
         return containingRect(self.traverse())
 
     def detach(self, child):
-        "Remove a child icon"
+        """Remove a child icon"""
         self.children.remove(child)
         self.layoutDirty = True
 
     def addChild(self, child, pos=None):
-        "Add a child icon at the end of the child list"
+        """Add a child icon at the end of the child list"""
         self.children.append(child)
         self.layoutDirty = True
 
     def needsLayout(self):
-        "Returns True if the icon requires re-layout due to changes to child icons"
+        """Returns True if the icon requires re-layout due to changes to child icons"""
         # For the moment need to lay-out propagates all the way to the top of
         # the hierarchy.  Once sequences are introduced.  This will probably
         # stop, there
@@ -139,8 +145,9 @@ class IdentIcon(Icon):
         if location is None:
             location = self.rect[:2]
         if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect), rectHeight(self.rect)), color=(0,0,0,0))
-            drawIconBoxedText(self.name, self.cachedImage, (0,0), False)
+            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            drawIconBoxedText(self.name, self.cachedImage, (0, 0), False)
             outSiteX, outSiteY = self.outSiteOffset
             outSiteX -= outSiteImage.width//2
             outSiteY -= outSiteImage.height
@@ -156,17 +163,17 @@ class IdentIcon(Icon):
         if location is not None:
             self.rect = moveRect(self.rect, location)
 
-    def _doLayout(self, x, bottom, calculatedSizes=None):
+    def _doLayout(self, x, bottom, _calculatedSizes=None):
         width, height = self.bodySize
         self.rect = (x, bottom-height, x + width, bottom+outSiteImage.height)
 
     def _calcLayout(self):
         width, height = rectSize(self.rect)
-        return (self, width, height-outSiteImage.height, [])
+        return self, width, height-outSiteImage.height, []
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
-        return (self.__class__.__name__, (self.name, addPoints(location, offset)))
+        return self.__class__.__name__, (self.name, addPoints(location, offset))
 
     @staticmethod
     def fromClipboard(clipData, window, locationOffset):
@@ -198,8 +205,9 @@ class FnIcon(Icon):
         if location is None:
             location = self.rect[:2]
         if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect), rectHeight(self.rect)), color=(0,0,0,0))
-            width, height = drawIconBoxedText(self.name, self.cachedImage, (0,0), False)
+            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            width, height = drawIconBoxedText(self.name, self.cachedImage, (0, 0), False)
             self._drawSpine(self.cachedImage, width-1, height)
             outSiteX, outSiteY = self.outSiteOffset
             outSiteX -= outSiteImage.width//2
@@ -216,7 +224,7 @@ class FnIcon(Icon):
         draw = ImageDraw.Draw(image)
         draw.rectangle((x, y-spineThickness, x+spineLength-1, y-1), fill=iconBgColor)
         draw.line((x, y-1, x+spineLength-1, y-1), fill=iconOutlineColor)
-        draw.line((x, y-spineThickness, x+spineLength, y-spineThickness), fill=iconOutlineColor)
+        draw.line((x, y-spineThickness, x+spineLength-1, y-spineThickness), fill=iconOutlineColor)
         draw.line((x+spineLength-1, y-1, x+spineLength-1, y-spineThickness), fill=iconOutlineColor)
         for inOff in self.inOffsets:
             image.paste(inSiteImage, (x+inOff - inSiteImage.width // 2, y-spineThickness))
@@ -231,7 +239,7 @@ class FnIcon(Icon):
         return {"output":outOffsets, "input":inOffsets}
 
     def addChild(self, child, pos=None):
-        "Add a child icon at the end of the child list"
+        """Add a child icon at the end of the child list"""
         if pos is None:
             self.children.append(child)
         else:
@@ -253,7 +261,6 @@ class FnIcon(Icon):
 
     def childAt(self, pos):
         for child in self.children:
-            index = 0
             for sitePos in child.snapLists().get("output", []):
                 if sitePos == pos:
                     return child
@@ -293,7 +300,7 @@ class FnIcon(Icon):
         else:
             childWidth = sum((c[1]-1 for c in childLayouts))
             height = max((c[2] for c in childLayouts)) + spineThickness - 1
-        return (self, self.bodySize[0] + childWidth, height, childLayouts)
+        return self, self.bodySize[0] + childWidth, height, childLayouts
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -332,21 +339,20 @@ class ImageIcon(Icon):
         if location is not None:
             self.rect = moveRect(self.rect, location)
 
-    def _doLayout(self, x, bottom, calculatedSizes=None):
+    def _doLayout(self, x, bottom, _calculatedSizes=None):
         self.rect = (x, bottom-self.image.height, x + self.image.width, bottom)
 
     def _calcLayout(self):
-        width, height = rectSize(self.rect)
-        return (self, self.image.width, self.image.height, [])
+        return self, self.image.width, self.image.height, []
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
-        #... base64 encode a jpeg
-        return ("IdentIcon", ("TODO", addPoints(location, offset)))
+        # ... base64 encode a jpeg
+        return "IdentIcon", ("TODO", addPoints(location, offset))
 
     @staticmethod
-    def fromClipboard(clipData, window, locationOffset):
-        #... base64 decode a jpeg
+    def fromClipboard(_clipData, _window, _locationOffset):
+        # ... base64 decode a jpeg
         # image, location = clipData
         return None
 
@@ -399,7 +405,7 @@ def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
 def tintSelectedImage(image, selected):
     if not selected:
         return image
-    #... This is wasteful and should be an image filter if I can figure out how to
+    # ... This is wasteful and should be an image filter if I can figure out how to
     # make one properly
     alphaImg = image.getchannel('A')
     colorImg = Image.new('RGBA', (image.width, image.height), color=(0, 0, 255, 0))
@@ -426,14 +432,14 @@ def rectSize(rect):
 def pointInRect(point, rect):
     l, t, r, b = rect
     x, y = point
-    return x >= l and x < r and y >= t and y < b
+    return l <= x < r and t <= y < b
 
 def moveRect(rect, newLoc):
     l, t, r, b = rect
     x, y = newLoc
-    return(x, y, x+r-l, y+b-t)
+    return x, y, x + r - l, y + b - t
 
 def addPoints(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
-    return (x1 + x2, y1 + y2)
+    return x1 + x2, y1 + y2
