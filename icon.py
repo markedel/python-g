@@ -244,12 +244,10 @@ class FnIcon(Icon):
         if pos is None:
             self.argIcons.append(child)
         else:
-            index = 0
-            for sitePos in self.snapLists().get("input", []):
+            for index, sitePos in enumerate(self.snapLists().get("input", [])):
                 if sitePos == pos:
                     self.argIcons.insert(index, child)
                     break
-                index += 1
             else:
                 print("Failed to add child icon.  Icon not found at site position")
                 return
