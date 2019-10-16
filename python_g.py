@@ -157,10 +157,9 @@ class Window:
         if self.buttonDownTime is None or not (evt.state & LEFT_MOUSE_MASK):
             return
         if self.dragging is None and not self.inRectSelect:
-            xDist = abs(evt.x - self.buttonDownLoc[0])
-            yDist = abs(evt.y - self.buttonDownLoc[1])
-            if xDist + yDist > dragThreshold:
-                ic = self.findIconAt(evt.x, evt.y)
+            btnX, btnY = self.buttonDownLoc
+            if abs(evt.x - btnX) + abs(evt.y - btnY) > dragThreshold:
+                ic = self.findIconAt(btnX, btnY)
                 if ic is None:
                     self._startRectSelect(evt)
                 else:
@@ -249,7 +248,6 @@ class Window:
         for pastedTopIcon in pastedIcons:
             self.topIcons.append(pastedTopIcon)
             for ic in pastedTopIcon.traverse():
-                ic.selected = True
                 ic.draw()  # No need to clip or erase, all drawn on top
                 redrawRect.add(ic.rect)
         self.refresh(redrawRect.get())
@@ -353,12 +351,10 @@ class Window:
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             parentIcon, childIcon, pos = self.snapped
-            print('snapped to', self.snapped[0].name)
             self.topIcons.remove(childIcon)
             toDelete = parentIcon.childAt(pos)
             redrawRegion = AccumRects(parentIcon.hierRect())
             if toDelete is not None:
-                print("replacing child icon ", toDelete.name)
                 parentIcon.replaceChild(toDelete, childIcon)
                 redrawRegion.add(childIcon.hierRect())
             else:
@@ -507,33 +503,31 @@ class Window:
         """Remove icons from window icon list redraw affected areas of the display"""
         if len(icons) == 0:
             return
-        # deletedDict serves the dual purpose of figuring out quickly if an icon was on
-        # the removal list, and holding the non-deleted child icons that need to be
-        # put back in the same position in the top icon list
-        deletedDict = {ic:[] for ic in icons}
+        # deletedDict is used to quickly determine if an icon is on the deleted list
+        deletedDict = {ic:True for ic in icons}
         detachList = []
         redrawRegion = AccumRects()
         for ic in icons:
             redrawRegion.add(ic.rect)
         # Find and unlink child icons from parents at deletion boundary
+        addTopIcons = []
         for ic in self.allIcons():
-            for child in ic.children:
+            for child in ic.children():
                 if ic in deletedDict and child not in deletedDict:
                     detachList.append((ic, child))
-                    deletedDict[ic].append(child)
+                    addTopIcons.append(child)
                     redrawRegion.add(child.hierRect())
                 elif ic not in deletedDict and child in deletedDict:
                     detachList.append((ic, child))
         for ic, child in detachList:
             ic.detach(child)
-        # Remove or replace the deleted icons in the top icon list
+        # Update the window's top-icon list to remove deleted icons and add those that
+        # have become top icons via deletion of their parents (bring those to the front)
         newTopIcons = []
         for ic in self.topIcons:
-            if ic in deletedDict:
-                newTopIcons += deletedDict[ic]
-            else:
+            if ic not in deletedDict:
                 newTopIcons.append(ic)
-        self.topIcons = newTopIcons
+        self.topIcons = newTopIcons + addTopIcons
         # Redo layouts of icons affected by detachment of children
         for ic in self.topIcons:
             if ic.needsLayout():
@@ -618,13 +612,13 @@ class App:
 def findTopIcons(icons):
     iconDir = {ic:True for ic in icons}
     for ic in icons:
-        for child in ic.children:
+        for child in ic.children():
             iconDir[child] = False
     return [ic for ic, isTop in iconDir.items() if isTop]
 
 def dumpHier(ic, indent=""):
     print(indent + ic.name)
-    for child in ic.children:
+    for child in ic.children():
         dumpHier(child, indent+"  ")
 
 if __name__ == '__main__':

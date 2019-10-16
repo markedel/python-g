@@ -69,7 +69,6 @@ class Icon:
         self.window = window
         self.rect = None
         self.selected = False
-        self.children = []
         self.layoutDirty = False
         self.cachedImage = None
 
@@ -89,7 +88,7 @@ class Icon:
             yield self
         # For "pick" order to be the true opposite of "draw", this loop should run in
         # reverse, but child icons are not intended to overlap in a detectable way.
-        for child in self.children:
+        for child in self.children():
             yield from child.traverse(order)
         if includeSelf and order is "pick":
             yield self
@@ -105,16 +104,6 @@ class Icon:
         """Return a rectangle covering this icon and its children"""
         return containingRect(self.traverse())
 
-    def detach(self, child):
-        """Remove a child icon"""
-        self.children.remove(child)
-        self.layoutDirty = True
-
-    def addChild(self, child, pos=None):
-        """Add a child icon at the end of the child list"""
-        self.children.append(child)
-        self.layoutDirty = True
-
     def needsLayout(self):
         """Returns True if the icon requires re-layout due to changes to child icons"""
         # For the moment need to lay-out propagates all the way to the top of
@@ -123,6 +112,9 @@ class Icon:
         for ic in self.traverse():
             if ic.layoutDirty:
                 return True
+
+    def children(self):
+        return []
 
 class IdentIcon(Icon):
     def __init__(self, name, window=None, location=None):
@@ -184,6 +176,7 @@ class FnIcon(Icon):
     def __init__(self, name, window=None, location=None):
         Icon.__init__(self, window)
         self.name = name
+        self.argIcons = []
         self.emptyInOffsets = (inSiteImage.width//2 + 1, )
         self.inOffsets = self.emptyInOffsets
         bodyWidth, bodyHeight = globalFont.getsize(self.name)
@@ -216,6 +209,9 @@ class FnIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)  # ... try w/o mask
 
+    def children(self):
+        return self.argIcons
+
     def _spineLength(self, inOffsets):
         return max(inOffsets) + inSiteImage.width // 2 + 2
 
@@ -238,32 +234,38 @@ class FnIcon(Icon):
         inOffsets = [(x+i, y) for i in self.inOffsets]
         return {"output":outOffsets, "input":inOffsets}
 
+    def detach(self, child):
+        """Remove a child icon"""
+        self.argIcons.remove(child)
+        self.layoutDirty = True
+
     def addChild(self, child, pos=None):
         """Add a child icon at the end of the child list"""
         if pos is None:
-            self.children.append(child)
+            self.argIcons.append(child)
         else:
             index = 0
             for sitePos in self.snapLists().get("input", []):
                 if sitePos == pos:
-                    self.children.insert(index, child)
+                    self.argIcons.insert(index, child)
+                    break
                 index += 1
-                break
             else:
                 print("Failed to add child icon.  Icon not found at site position")
                 return
         self.layoutDirty = True
 
     def replaceChild(self, childToRemove, childToInsert):
-        index = self.children.index(childToRemove)
-        self.children[index] = childToInsert
+        index = self.argIcons.index(childToRemove)
+        self.argIcons[index] = childToInsert
         self.layoutDirty = True
 
     def childAt(self, pos):
-        for child in self.children:
-            for sitePos in child.snapLists().get("output", []):
-                if sitePos == pos:
-                    return child
+        for index, sitePos in enumerate(self.snapLists().get("input", [])):
+            if sitePos == pos:
+                if len(self.argIcons) <= index:
+                    return None
+                return self.argIcons[index]
         return None
 
     def layout(self, location=None):
@@ -293,7 +295,7 @@ class FnIcon(Icon):
         self.layoutDirty = False
 
     def _calcLayout(self):
-        childLayouts = [c._calcLayout() for c in self.children]
+        childLayouts = [c._calcLayout() for c in self.argIcons]
         if len(childLayouts) == 0:
             childWidth = self._spineLength(self.emptyInOffsets)
             height = self.bodySize[1]
@@ -305,13 +307,13 @@ class FnIcon(Icon):
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (self.name, addPoints(location, offset),
-         [c.clipboardRepr(offset) for c in self.children]))
+         [c.clipboardRepr(offset) for c in self.argIcons]))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         name, location, children = clipData
         ic = FnIcon(name, window, (addPoints(location, offset)))
-        ic.children = clipboardDataToIcons(children, window, offset)
+        ic.argIcons = clipboardDataToIcons(children, window, offset)
         return ic
 
 class ImageIcon(Icon):
