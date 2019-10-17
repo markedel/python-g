@@ -5,7 +5,8 @@ from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import compile_eval
 
-windowBgColor = (128, 128, 128, 255)
+#windowBgColor = (255, 255,255)
+windowBgColor = (128, 128, 128)
 defaultWindowSize = (800, 800)
 dragThreshold = 2
 

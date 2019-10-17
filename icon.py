@@ -3,27 +3,44 @@ from python_g import msTime, AccumRects, offsetRect
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
-textMargin = 2
-spineThickness = 3
-outSiteWidth = 5
-iconOutlineColor = (180, 180, 180, 255)
-iconBgColor = (255, 255, 255, 255)
-selectModColor = (0, 0, 80, 50)
+TEXT_MARGIN = 2
+SPINE_THICKNESS = 3
+OUTLINE_COLOR = (180, 180, 180, 255)
+ICON_BG_COLOR = (255, 255, 255, 255)
+SELECT_TINT = (0, 0, 255, 0)
+GRAY_75 = (192, 192, 192, 255)
+GRAY_50 = (128, 128, 128, 255)
+GRAY_25 = (64, 64, 64, 255)
+BLACK = (0, 0, 0, 255)
 
 outSitePixmap = (
- "obbbo",
- ".obo.",
- "..o..")
-if spineThickness == 3:
-    inSitePixmap = (
-     "oxxxo",
-     "boxob",
-     "ooooo")
-else:
-    inSitePixmap = (
-     "oxxxo",
-     "boxob",
-     "bbobb")
+ "..o",
+ ".o ",
+ "o  ",
+ ".o ",
+ "..o")
+
+inSitePixmap = (
+ "  o",
+ " o.",
+ "o..",
+ " o.",
+ "  o")
+
+commaPixmap = (
+ "ooooo",
+ "o   o",
+ "o  o.",
+ "o o..",
+ "o  o.",
+ "o   o",
+ "o   o",
+ "o % o",
+ "o1% o",
+ "o21 o",
+ "o   o",
+ "ooooo",
+)
 
 renderCache = {}
 
@@ -52,7 +69,8 @@ def clipboardRepr(icons, offset):
     return repr([ic.clipboardRepr(offset) for ic in icons])
 
 def asciiToImage(asciiPixmap):
-    asciiMap = {'.': (0, 0, 0, 0), 'o': iconOutlineColor, 'b': iconBgColor, 'x': (0, 0, 0, 0)}
+    asciiMap = {'.':(0, 0, 0, 0), 'o':OUTLINE_COLOR, ' ':ICON_BG_COLOR,
+     '1':GRAY_25, '2':GRAY_50, '3':GRAY_75, '%':BLACK}
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
     pixels = "".join(asciiPixmap)
@@ -61,8 +79,24 @@ def asciiToImage(asciiPixmap):
     image.putdata(colors)
     return image
 
+def iconBoxedText(text):
+    if text in renderCache:
+        return renderCache[text]
+    width, height = globalFont.getsize(text)
+    txtImg = Image.new('RGBA', (width + 2 * TEXT_MARGIN + 1, height + 2 * TEXT_MARGIN + 1),
+     color=ICON_BG_COLOR)
+    draw = ImageDraw.Draw(txtImg)
+    draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=globalFont,
+     fill=(0, 0, 0, 255))
+    draw.rectangle((0, 0, width + 2 * TEXT_MARGIN, height + 2 * TEXT_MARGIN),
+     fill=None, outline=OUTLINE_COLOR)
+    renderCache[text] = txtImg
+    return txtImg
+
 outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
+commaImage = asciiToImage(commaPixmap)
+parenImage = iconBoxedText(')')
 
 class Icon:
     def __init__(self, window=None):
@@ -94,6 +128,8 @@ class Icon:
             yield self
 
     def touchesPosition(self, x, y):
+        # ... reevaluate whether it is always best to cache the whole image when
+        #     we're drawing little bits of fully-overlapped icons
         if not pointInRect((x, y), self.rect) or self.cachedImage is None:
             return False
         l, t = self.rect[:2]
@@ -121,15 +157,15 @@ class IdentIcon(Icon):
         Icon.__init__(self, window)
         self.name = name
         bodyWidth, bodyHeight = globalFont.getsize(self.name)
-        bodyWidth += 2*textMargin
-        bodyHeight += 2*textMargin
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
         if location is None:
             x, y = 0, 0
         else:
             x, y = location
-        self.rect = (x, y, x + bodyWidth, y + bodyHeight + outSiteImage.height)
-        self.outSiteOffset = (5, bodyHeight + outSiteImage.height - 1)
+        self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
+        self.outSiteOffset = (0, bodyHeight // 2)
 
     def draw(self, image=None, location=None, clip=None):
         if image is None:
@@ -139,10 +175,10 @@ class IdentIcon(Icon):
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            drawIconBoxedText(self.name, self.cachedImage, (0, 0), False)
+            txtImg = iconBoxedText(self.name)
+            self.cachedImage.paste(txtImg, (outSiteImage.width-1, 0))
             outSiteX, outSiteY = self.outSiteOffset
-            outSiteX -= outSiteImage.width//2
-            outSiteY -= outSiteImage.height
+            outSiteY -= outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)
@@ -155,13 +191,15 @@ class IdentIcon(Icon):
         if location is not None:
             self.rect = moveRect(self.rect, location)
 
-    def _doLayout(self, x, bottom, _calculatedSizes=None):
+    def _doLayout(self, outSiteX, outSiteY, _calculatedSizes=None):
         width, height = self.bodySize
-        self.rect = (x, bottom-height, x + width, bottom+outSiteImage.height)
+        width += outSiteImage.width - 1
+        top =  outSiteY - height//2
+        self.rect = (outSiteX, top, outSiteX + width, top + height)
 
     def _calcLayout(self):
-        width, height = rectSize(self.rect)
-        return self, width, height-outSiteImage.height, []
+        width, height = self.bodySize
+        return self, width, height, []
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -177,19 +215,22 @@ class FnIcon(Icon):
         Icon.__init__(self, window)
         self.name = name
         self.argIcons = []
-        self.emptyInOffsets = (inSiteImage.width//2 + 1, )
+        self.emptyInOffsets = (0, 6)
         self.inOffsets = self.emptyInOffsets
-        bodyWidth, bodyHeight = globalFont.getsize(self.name)
-        self.bodySize = (bodyWidth + 2*textMargin, bodyHeight + 2*textMargin)
-        width, height = self._size()
-        self.outSiteOffset = (5, height)
+        bodyWidth, bodyHeight = globalFont.getsize(self.name + '(')
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        closeWidth, closeHeight = globalFont.getsize(')')
+        self.closeParenWidth = closeWidth + 2 * TEXT_MARGIN + 1
+        self.outSiteOffset = (0, bodyHeight // 2)
         x, y = (0, 0) if location is None else location
+        width, height = self._size()
         self.rect = (x, y, x + width, y + height)
 
     def _size(self):
-        width, height = globalFont.getsize(self.name)
-        width += 2*textMargin + self._spineLength(self.inOffsets)
-        height += 2*textMargin + outSiteImage.height
+        width, height = self.bodySize
+        width += self.inOffsets[-1] + parenImage.width
         return width, height
 
     def draw(self, image=None, location=None, clip=None):
@@ -198,39 +239,39 @@ class FnIcon(Icon):
         if location is None:
             location = self.rect[:2]
         if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
-             rectHeight(self.rect)), color=(0, 0, 0, 0))
-            width, height = drawIconBoxedText(self.name, self.cachedImage, (0, 0), False)
-            self._drawSpine(self.cachedImage, width-1, height)
-            outSiteX, outSiteY = self.outSiteOffset
-            outSiteX -= outSiteImage.width//2
-            outSiteY -= outSiteImage.height + 1
+            self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
+            # Body
+            txtImg = iconBoxedText(self.name + '(')
+            self.cachedImage.paste(txtImg, (outSiteImage.width-1, 0))
+            # Output site
+            outSiteX, siteY = self.outSiteOffset
+            outSiteY = siteY - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
+            # Body input site
+            inSiteX = outSiteImage.width-1 + txtImg.width - inSiteImage.width
+            inSiteY = siteY - inSiteImage.height // 2
+            self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
+            # Commas
+            commaXOffset = inSiteX + inSiteImage.width - commaImage.width
+            commaY = siteY + txtImg.height//2 - commaImage.height
+            for inOff in self.inOffsets[1:-1]:
+                self.cachedImage.paste(commaImage, (inOff + commaXOffset, commaY))
+            # End paren
+            parenY = siteY - parenImage.height//2
+            parenX = inSiteX + self.inOffsets[-1] + inSiteImage.width - 1
+            self.cachedImage.paste(parenImage, (parenX, parenY))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)  # ... try w/o mask
 
     def children(self):
         return self.argIcons
 
-    def _spineLength(self, inOffsets):
-        return max(inOffsets) + inSiteImage.width // 2 + 2
-
-    def _drawSpine(self, image, x, y):
-        spineLength = self._spineLength(self.inOffsets)
-        draw = ImageDraw.Draw(image)
-        draw.rectangle((x, y-spineThickness, x+spineLength-1, y-1), fill=iconBgColor)
-        draw.line((x, y-1, x+spineLength-1, y-1), fill=iconOutlineColor)
-        draw.line((x, y-spineThickness, x+spineLength-1, y-spineThickness), fill=iconOutlineColor)
-        draw.line((x+spineLength-1, y-1, x+spineLength-1, y-spineThickness), fill=iconOutlineColor)
-        for inOff in self.inOffsets:
-            image.paste(inSiteImage, (x+inOff - inSiteImage.width // 2, y-spineThickness))
-
     def snapLists(self):
         x, y = self.rect[:2]
         outOffsets = [(x + self.outSiteOffset[0], y + self.outSiteOffset[1])]
         width, height = self.bodySize
-        x += width - 1
-        y += height - spineThickness + outSiteImage.height
+        x += width + outSiteImage.width - 1 - inSiteImage.width-1
+        y += height // 2
         inOffsets = [(x+i, y) for i in self.inOffsets]
         return {"output":outOffsets, "input":inOffsets}
 
@@ -271,36 +312,43 @@ class FnIcon(Icon):
             x, y = self.rect[:2]
         else:
             x, y = location
-        self._doLayout(x, y+self.bodySize[1], self._calcLayout())
+        self._doLayout(x, y+self.bodySize[1] // 2, self._calcLayout())
 
-    def _doLayout(self, x, bottom, calculatedSizes):
+    def _doLayout(self, outSiteX, outSiteY, calculatedSizes):
         icn, layoutWidth, layoutHeight, childLayouts = calculatedSizes
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
             self.inOffsets = self.emptyInOffsets
         else:
             self.inOffsets = []
+            childXOffset = outSiteX + bodyWidth + outSiteImage.width - 1 - inSiteImage.width
             childX = 0
             for childLayout in childLayouts:
                 childIcon, childWidth, childHeight, subLayouts = childLayout
-                self.inOffsets.append(childX + childIcon.outSiteOffset[0])
-                childIcon._doLayout(x+bodyWidth-1+childX, bottom-spineThickness+1,
-                        childLayout)
-                childX += childWidth-1
+                self.inOffsets.append(childX)
+                childIcon._doLayout(childXOffset + childX, outSiteY, childLayout)
+                childX += childWidth-1 + commaImage.width-1
+            self.inOffsets.append(childX - (commaImage.width-1))
         width, height = self._size()
-        self.rect = (x, bottom-bodyHeight, x+width, bottom+outSiteImage.height)
+        x = outSiteX
+        y = outSiteY - bodyHeight // 2
+        self.rect = (x, y, x+width, y+height)
         self.cachedImage = None
         self.layoutDirty = False
 
     def _calcLayout(self):
         childLayouts = [c._calcLayout() for c in self.argIcons]
+        bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
-            childWidth = self._spineLength(self.emptyInOffsets)
-            height = self.bodySize[1]
+            childWidth = self.emptyInOffsets[-1] + parenImage.width
+            height = bodyHeight
         else:
-            childWidth = sum((c[1]-1 for c in childLayouts))
-            height = max((c[2] for c in childLayouts)) + spineThickness - 1
-        return self, self.bodySize[0] + childWidth, height, childLayouts
+            numCommas = len(childLayouts) - 2
+            commaParenWidth = numCommas*(commaImage.width-1) + parenImage.width-1
+            childWidth = sum((c[1]-1 for c in childLayouts)) + commaParenWidth
+            height = max(bodyHeight, max((c[2] for c in childLayouts)))
+        width = self.bodySize[0] + outSiteImage.width + childWidth
+        return self, width, height, childLayouts
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -356,27 +404,6 @@ class ImageIcon(Icon):
         # image, location = clipData
         return None
 
-def drawIconBoxedText(text, image, location, selected):
-    if text not in renderCache:
-        width, height = globalFont.getsize(text)
-        txtImg = Image.new('RGBA', (width+2*textMargin, height+2*textMargin),
-         color=iconBgColor)
-        draw = ImageDraw.Draw(txtImg)
-        draw.text((textMargin, textMargin), text, font=globalFont,
-         fill=(0, 0, 0, 255))
-        draw.rectangle((0, 0, width+2*textMargin-1, height+2*textMargin-1),
-         fill=None, outline=iconOutlineColor)
-        renderCache[text] = txtImg
-    else:
-        txtImg = renderCache[text]
-    x, y = location
-    textDrawRect = (x, y, x + txtImg.width, y + txtImg.height)
-    image.paste(txtImg, textDrawRect)
-    if selected:
-        selImg = Image.new('RGBA', (txtImg.width, txtImg.height), color=(0, 0, 80, 50))
-        image.paste(selImg, textDrawRect, mask=selImg)
-    return txtImg.width, txtImg.height
-
 def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
     """clipping rectangle is in the coordinate system of the destination image"""
     if clipRect is None:
@@ -408,7 +435,7 @@ def tintSelectedImage(image, selected):
     # ... This is wasteful and should be an image filter if I can figure out how to
     # make one properly
     alphaImg = image.getchannel('A')
-    colorImg = Image.new('RGBA', (image.width, image.height), color=(0, 0, 255, 0))
+    colorImg = Image.new('RGBA', (image.width, image.height), color=SELECT_TINT)
     colorImg.putalpha(alphaImg)
     selImg = Image.blend(image, colorImg, .15)
     return selImg
