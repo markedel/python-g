@@ -3,6 +3,10 @@ from python_g import msTime, AccumRects, offsetRect
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
+
+binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
+        '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11}
+
 TEXT_MARGIN = 2
 SPINE_THICKNESS = 3
 OUTLINE_COLOR = (180, 180, 180, 255)
@@ -27,6 +31,17 @@ inSitePixmap = (
  " o.",
  "  o")
 
+leftInSitePixmap = (
+    "...o ",
+    "..o  ",
+    ".o  o",
+    "o  o.",
+    "o o..",
+    "o  o.",
+    ".o  o",
+    "..o  ",
+    "...o ",
+)
 commaPixmap = (
  "ooooo",
  "o   o",
@@ -40,6 +55,60 @@ commaPixmap = (
  "o21 o",
  "o   o",
  "ooooo",
+)
+
+# binLOpPixmap = (
+#  "..ooo",
+#  "..o o",
+#  ".o o.",
+#  "o o..",
+#  ".o o.",
+#  "..o o",
+#  "..ooo",
+# )
+
+binOutPixmap = (
+ "..ooo",
+ ".o  o",
+ "o   o",
+ ".o  o",
+ "..ooo",
+)
+
+binLParenPixmap = (
+ "..ooooooo",
+ "..o     o",
+ "..o  32 o",
+ "..o 1%  o",
+ "..o 32  o",
+ "..o %   o",
+ ".o 1%   o",
+ "o  2%   o",
+ ".o 1%   o",
+ "..o %   o",
+ "..o 32  o",
+ "..o 1%  o",
+ "..o  32 o",
+ "..o     o",
+ "..ooooooo",
+)
+
+binRParenPixmap = (
+ "oooooooo",
+ "o      o",
+ "o 23   o",
+ "o  %1  o",
+ "o  23  o",
+ "o   %  o",
+ "o   %1 o",
+ "o   %2 o",
+ "o   %1 o",
+ "o   %  o",
+ "o  23  o",
+ "o  %1  o",
+ "o 23   o",
+ "o      o",
+ "oooooooo",
 )
 
 renderCache = {}
@@ -57,12 +126,15 @@ def iconsFromClipboardString(clipString, window, offset):
 def clipboardDataToIcons(clipData, window, offset):
     pastedIcons = []
     for clipIcon in clipData:
-        iconClass, iconData = clipIcon
-        try:
-            parseMethod = eval(iconClass).fromClipboard
-        except:
-            continue
-        pastedIcons.append(parseMethod(iconData, window, offset))
+        if clipIcon is None:
+            pastedIcons.append(None)
+        else:
+            iconClass, iconData = clipIcon
+            try:
+                parseMethod = eval(iconClass).fromClipboard
+            except:
+                continue
+            pastedIcons.append(parseMethod(iconData, window, offset))
     return pastedIcons
 
 def clipboardRepr(icons, offset):
@@ -95,8 +167,12 @@ def iconBoxedText(text):
 
 outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
+leftInSiteImage = asciiToImage(leftInSitePixmap)
 commaImage = asciiToImage(commaPixmap)
 parenImage = iconBoxedText(')')
+binOutImage = asciiToImage(binOutPixmap)
+lParenImage = asciiToImage(binLParenPixmap)
+rParenImage = asciiToImage(binRParenPixmap)
 
 class Icon:
     def __init__(self, window=None):
@@ -191,13 +267,13 @@ class IdentIcon(Icon):
         if location is not None:
             self.rect = moveRect(self.rect, location)
 
-    def _doLayout(self, outSiteX, outSiteY, _calculatedSizes=None):
+    def _doLayout(self, outSiteX, outSiteY, _calculatedSizes=None, parentPrecedence=None):
         width, height = self.bodySize
         width += outSiteImage.width - 1
         top =  outSiteY - height//2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
 
-    def _calcLayout(self):
+    def _calcLayout(self, parentPrecedence=None):
         width, height = self.bodySize
         return self, width, height, []
 
@@ -314,7 +390,7 @@ class FnIcon(Icon):
             x, y = location
         self._doLayout(x, y+self.bodySize[1] // 2, self._calcLayout())
 
-    def _doLayout(self, outSiteX, outSiteY, calculatedSizes):
+    def _doLayout(self, outSiteX, outSiteY, calculatedSizes, parentPrecedence=None):
         icn, layoutWidth, layoutHeight, childLayouts = calculatedSizes
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
@@ -336,7 +412,7 @@ class FnIcon(Icon):
         self.cachedImage = None
         self.layoutDirty = False
 
-    def _calcLayout(self):
+    def _calcLayout(self, parentPrecedence=None):
         childLayouts = [c._calcLayout() for c in self.argIcons]
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
@@ -361,6 +437,211 @@ class FnIcon(Icon):
         ic = FnIcon(name, window, (addPoints(location, offset)))
         ic.argIcons = clipboardDataToIcons(children, window, offset)
         return ic
+
+class BinOpIcon(Icon):
+    def __init__(self, operator, window=None, location=None):
+        Icon.__init__(self, window)
+        self.operator = operator
+        self.precedence = binOpPrecedence[operator]
+        self.hasParens = False  # Filled in by layout methods
+        self.leftArg = None
+        self.rightArg = None
+        self.emptyArgWidth = 11
+        self.leftArgWidth = self.emptyArgWidth
+        self.rightArgWidth = self.emptyArgWidth
+        opWidth, opHeight = globalFont.getsize(' ' + self.operator + ' ')
+        opHeight = max(opHeight, lParenImage.height)
+        self.opSize = (opWidth + 2*TEXT_MARGIN - 1, opHeight + 2*TEXT_MARGIN)
+        self.rect = (0, 0, *self._size())
+        self.outSiteOffset = (0, opHeight // 2)
+
+    def _size(self):
+        opWidth, opHeight = self.opSize
+        if self.hasParens:
+            parenWidth = lParenImage.width - 1 + rParenImage.width - 1
+        else:
+            parenWidth = 0
+        width = parenWidth + self.leftArgWidth + self.rightArgWidth + opWidth
+        return width, lParenImage.height
+
+    def draw(self, image=None, location=None, clip=None):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        if self.cachedImage is None:
+            self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
+            # Output part (connector or paren)
+            outSiteX, siteY = self.outSiteOffset
+            if self.hasParens:
+                outSiteY = siteY - lParenImage.height // 2
+                self.cachedImage.paste(lParenImage, (outSiteX, outSiteY), mask=lParenImage)
+                leftArgX = outSiteX + lParenImage.width - 1
+            else:
+                outSiteY = siteY - binOutImage.height // 2
+                self.cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
+                leftArgX = outSiteX + outSiteImage.width - 1
+            # Body
+            txtImg = iconBoxedText(' ' + self.operator + ' ')
+            opX = leftArgX + self.leftArgWidth - 1
+            opY = siteY - txtImg.height // 2
+            self.cachedImage.paste(txtImg, (opX, opY))
+            lInSiteX = opX - leftInSiteImage.width + 1
+            lInSiteY = siteY - leftInSiteImage.height // 2
+            self.cachedImage.paste(leftInSiteImage, (lInSiteX, lInSiteY))
+            rInSiteX = opX + txtImg.width - inSiteImage.width
+            rInSiteY = siteY - inSiteImage.height // 2
+            self.cachedImage.paste(inSiteImage, (rInSiteX, rInSiteY))
+            # End paren
+            if self.hasParens:
+                rParenX = opX + txtImg.width - 1 + self.rightArgWidth - 1
+                rParenY = siteY - rParenImage.height//2
+                self.cachedImage.paste(rParenImage, (rParenX, rParenY))
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
+         location, clip)  # ... try w/o mask
+
+    def children(self):
+        return [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
+
+    def snapLists(self):
+        x, y = self.rect[:2]
+        y += self.outSiteOffset[1]
+        outOffsets = [(x + self.outSiteOffset[0], y)]
+        lArgX = x + self.leftArgWidth - 1
+        if self.hasParens:
+            lArgX += lParenImage.width - 1
+        else:
+            lArgX += 1
+        rArgX = lArgX + self.opSize[0]
+        inOffsets = [(lArgX, y), (rArgX, y)]
+        return {"output":outOffsets, "input":inOffsets}
+
+    def detach(self, child):
+        """Remove a child icon"""
+        if child is self.leftArg:
+            self.leftArg = None
+        elif child is self.rightArg:
+            self.rightArg = None
+        else:
+            print("BinOpIcon: attempt to detach child that is not attached")
+        self.layoutDirty = True
+
+    def addChild(self, child, pos=None):
+        """Add a child icon"""
+        if pos is None:
+            print("BinOpIcon: Should not add child without position (fix)")
+            if self.leftArg is None:
+                self.leftArg = child
+            elif self.rightArg is None:
+                self.rightArg = child
+            else:
+                print("BinOpIcon: Could not add child to full icon")
+                return
+        else:
+            snapPositions = self.snapLists()["input"]
+            if snapPositions[0] == pos:
+                self.leftArg = child
+            elif snapPositions[1] == pos:
+                self.rightArg = child
+            else:
+                print("BinOpIcon: Failed to add child icon, not found at site position")
+                return
+        self.layoutDirty = True
+
+    def replaceChild(self, childToRemove, childToInsert):
+        if childToRemove is self.leftArg:
+            self.leftArg = childToInsert
+        elif childToRemove is self.rightArg:
+            self.rightArg = childToInsert
+        else:
+            print("BinOpIcon: Attempt to replace child that is not attached")
+        self.layoutDirty = True
+
+    def childAt(self, pos):
+        snapPositions = self.snapLists()["input"]
+        if snapPositions[0] == pos:
+            return self.leftArg
+        elif snapPositions[1] == pos:
+            return self.rightArg
+        return None
+
+    def layout(self, location=None):
+        if location is None:
+            x, y = self.rect[:2]
+        else:
+            x, y = location
+        self._doLayout(x, y + lParenImage.height // 2, self._calcLayout())
+
+    def _doLayout(self, outSiteX, outSiteY, calculatedSizes, parentPrecedence=None):
+        if parentPrecedence is None:
+            self.hasParens = False
+        else:
+            self.hasParens = self.precedence < parentPrecedence
+        lArgLayout, rArgLayout = calculatedSizes[3]
+        if self.hasParens:
+            lArgX = outSiteX + lParenImage.width - outSiteImage.width
+        else:
+            lArgX = outSiteX
+        if lArgLayout is None:
+            self.leftArgWidth = self.emptyArgWidth
+        else:
+            lIcon, lArgWidth, lArgHeight, lArgChildLayouts = lArgLayout
+            self.leftArgWidth = lArgWidth
+            lIcon._doLayout(lArgX, outSiteY, lArgLayout, parentPrecedence=self.precedence)
+        if rArgLayout is None:
+            self.rightArgWidth = self.emptyArgWidth
+        else:
+            rIcon, rArgWidth, rArgHeight, rArgChildLayouts = rArgLayout
+            self.rightArgWidth = rArgWidth
+            rArgX = lArgX + self.leftArgWidth + self.opSize[0]
+            rIcon._doLayout(rArgX, outSiteY, rArgLayout, parentPrecedence=self.precedence)
+        width, height = self._size()
+        x = outSiteX
+        y = outSiteY - height // 2
+        self.rect = (x, y, x+width, y+height)
+        self.cachedImage = None
+        self.layoutDirty = False
+
+    def _calcLayout(self, parentPrecedence=None):
+        if parentPrecedence is None:
+            hasParens = False
+        else:
+            hasParens = self.precedence < parentPrecedence
+        if self.leftArg is None:
+            lArgLayout = None
+            lArgWidth, lArgHeight = (self.emptyArgWidth, 0)
+        else:
+            lArgLayout = self.leftArg._calcLayout(parentPrecedence=self.precedence)
+            lArgWidth, lArgHeight = lArgLayout[1:3]
+        if self.rightArg is None:
+            rArgLayout = None
+            rArgWidth, rArgHeight = (self.emptyArgWidth, 0)
+        else:
+            rArgLayout = self.rightArg._calcLayout(parentPrecedence=self.precedence)
+            rArgWidth, rArgHeight = rArgLayout[1:3]
+        opWidth, opHeight = self.opSize
+        if hasParens:
+            parenWidth = lParenImage.width - 2 + rParenImage.width - 2
+        else:
+            parenWidth = 0
+        width = parenWidth + lArgWidth + rArgWidth + opWidth
+        height = max(lArgHeight, rArgHeight, opHeight)
+        return self, width, height, (lArgLayout, rArgLayout)
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return (self.__class__.__name__, (self.operator, addPoints(location, offset),
+         (None if self.leftArg is None else self.leftArg.clipboardRepr(offset),
+          None if self.rightArg is None else self.rightArg.clipboardRepr(offset))))
+
+    @staticmethod
+    def fromClipboard(clipData, window, offset):
+        op, location, children = clipData
+        ic = BinOpIcon(op, window, (addPoints(location, offset)))
+        ic.leftArg, ic.rightArg = clipboardDataToIcons(children, window, offset)
+        return ic
+
+
 
 class ImageIcon(Icon):
     def __init__(self, image, window=None, location=None):
@@ -387,10 +668,10 @@ class ImageIcon(Icon):
         if location is not None:
             self.rect = moveRect(self.rect, location)
 
-    def _doLayout(self, x, bottom, _calculatedSizes=None):
+    def _doLayout(self, x, bottom, _calculatedSizes=None, parentPrecedence=None):
         self.rect = (x, bottom-self.image.height, x + self.image.width, bottom)
 
-    def _calcLayout(self):
+    def _calcLayout(self, parentPrecedence=None):
         return self, self.image.width, self.image.height, []
 
     def clipboardRepr(self, offset):

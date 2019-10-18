@@ -33,10 +33,11 @@ def parsePasted(text, window, location):
 def parseExpr(expr):
     fn = 'functionIcon'
     id = 'identIcon'
+    bin = 'binOpIcon'
     if expr.__class__ == ast.UnaryOp:
         return (fn, unaryOps[expr.op.__class__], parseExpr(expr.operand))
     elif expr.__class__ == ast.BinOp:
-        return (fn, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
+        return (bin, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
     elif expr.__class__ == ast.BoolOp:
         return (fn, boolOps[expr.op.__class__], [parseExpr(e) for e in expr.values])
     elif expr.__class__ == ast.Compare:
@@ -63,4 +64,10 @@ def makeIcons(parsedExpr, window, x, y):
         for pe in parsedExpr[2:]:
             childIcon = makeIcons(pe, window, x, y)
             topIcon.addChild(childIcon)
+        return topIcon
+    if parsedExpr[0] == 'binOpIcon':
+        topIcon = icon.BinOpIcon(parsedExpr[1], window, (x, y))
+        # ... Have to fix positional attachment after getting everything else working
+        topIcon.addChild(makeIcons(parsedExpr[2], window, x, y))
+        topIcon.addChild(makeIcons(parsedExpr[3], window, x, y))
         return topIcon
