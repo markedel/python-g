@@ -705,8 +705,8 @@ class DivideIcon(Icon):
             # Body
             bodyLeft = outSiteImage.width - 1
             bodyRight = width - 1
-            bodyTop = cntrY - 2
-            bodyBottom = cntrY + 2
+            bodyTop = cntrY - 5
+            bodyBottom = cntrY + 5
             draw = ImageDraw.Draw(self.cachedImage)
             draw.rectangle((bodyLeft, bodyTop, bodyRight, bodyBottom),
              outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
@@ -789,16 +789,17 @@ class DivideIcon(Icon):
     def _doLayout(self, outSiteX, outSiteY, calculatedSizes, parentPrecedence=None):
         width = calculatedSizes[1] + 2
         tArgLayout, bArgLayout = calculatedSizes[4]
+        emptyArgWidth, emptyArgHeight = self.emptyArgSize
         if tArgLayout is None:
             self.topArgSize = self.emptyArgSize
-            self.topArgSiteOffset = (1, -self.emptyArgSize[1]//2 - 2)
+            self.topArgSiteOffset = ((width-emptyArgWidth)//2, -emptyArgHeight//2 - 2)
         else:
             tIcon, tArgWidth, tArgHeight, tArgYOffset, tArgChildLayouts = tArgLayout
             self.topArgSize = (tArgWidth, tArgHeight)
             self.topArgSiteOffset = (1 + (width - 2 - tArgWidth)//2, -tArgHeight + tArgYOffset - 1)
         if bArgLayout is None:
             self.bottomArgSize = self.emptyArgSize
-            self.bottomArgSiteOffset = (1, self.emptyArgSize[1]//2 + 2)
+            self.bottomArgSiteOffset = ((width-emptyArgWidth)//2, emptyArgHeight//2 + 2)
         else:
             bIcon, bArgWidth, bArgHeight, bArgYOffset, bArgChildLayouts = bArgLayout
             self.bottomArgSize = (bArgWidth, bArgHeight)
