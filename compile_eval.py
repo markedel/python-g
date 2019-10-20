@@ -34,9 +34,12 @@ def parseExpr(expr):
     fn = 'functionIcon'
     id = 'identIcon'
     bin = 'binOpIcon'
+    div = 'divideIcon'
     if expr.__class__ == ast.UnaryOp:
         return (fn, unaryOps[expr.op.__class__], parseExpr(expr.operand))
     elif expr.__class__ == ast.BinOp:
+        if expr.op.__class__ is ast.Div:
+            return (div, parseExpr(expr.left), parseExpr(expr.right))
         return (bin, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
     elif expr.__class__ == ast.BoolOp:
         return (fn, boolOps[expr.op.__class__], [parseExpr(e) for e in expr.values])
@@ -71,3 +74,9 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon.addChild(makeIcons(parsedExpr[2], window, x, y))
         topIcon.addChild(makeIcons(parsedExpr[3], window, x, y))
         return topIcon
+    if parsedExpr[0] == 'divideIcon':
+        topIcon = icon.DivideIcon(window, (x, y))
+        topIcon.addChild(makeIcons(parsedExpr[1], window, x, y))
+        topIcon.addChild(makeIcons(parsedExpr[2], window, x, y))
+        return topIcon
+
