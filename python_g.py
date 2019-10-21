@@ -164,7 +164,7 @@ class Window:
                 if ic is None:
                     self._startRectSelect(evt)
                 else:
-                    self._startDrag(evt, list(ic.traverse()))
+                    self._startDrag(evt, list(self.findLeftOuterIcon(ic).traverse()))
         else:
             if self.dragging is not None:
                 self._updateDrag(evt)
@@ -498,6 +498,14 @@ class Window:
         for ic in self.allIcons(order="pick"):
             if ic.touchesPosition(x, y):
                 return ic
+        return None
+
+    def findLeftOuterIcon(self, ic):
+        """Selection method for execution and dragging:  See description in icon.py"""
+        for topIcon in self.topIcons:
+            leftIcon = icon.findLeftOuterIcon(ic, topIcon)
+            if leftIcon is not None:
+                return leftIcon
         return None
 
     def removeIcons(self, icons):

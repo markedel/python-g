@@ -526,7 +526,7 @@ class BinOpIcon(Icon):
             lArgX += lParenImage.width - 1
         else:
             lArgX += 1
-        rArgX = lArgX + self.opSize[0]
+        rArgX = lArgX + self.opSize[0] + self.depthWidth
         inOffsets = [(lArgX, y), (rArgX, y)]
         return {"output":outOffsets, "input":inOffsets}
 
@@ -955,6 +955,35 @@ def tintSelectedImage(image, selected):
     colorImg.putalpha(alphaImg)
     selImg = Image.blend(image, colorImg, .15)
     return selImg
+
+def findLeftOuterIcon(targetIcon, fromIcon):
+    """Because we have icons with no pickable structure left of their arguments (binary
+    operations), we have to make rules about what it means to click or drag the leftmost
+    icon in an expression.  For the purpose of selection, that is simply the icon that was
+    clicked.  For dragging and double clicking (execution), this function is used to
+    find the outermost operation that claims the picked icon as its leftmost operand."""
+    if targetIcon is fromIcon:
+        return targetIcon
+    # Only binary operations are candidates, and only when the expression directly below
+    # has claimed itself to be the leftmost operand of an expression
+    if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None:
+        left = findLeftOuterIcon(targetIcon, fromIcon.leftArg)
+        if left is fromIcon.leftArg and targetIcon.__class__ is not BinOpIcon:
+            return fromIcon  # Claim outermost status for this icon
+        # Pass on status from non-contiguous expressions below fromIcon in the hierarchy
+        if left is not None:
+            return left
+        if fromIcon.rightArg is None:
+            return None
+        return findLeftOuterIcon(targetIcon, fromIcon.rightArg)
+    # Pass on any results from below fromIcon in the hierarchy
+    children = fromIcon.children()
+    if children is not None:
+        for child in fromIcon.children():
+            result = findLeftOuterIcon(targetIcon, child)
+            if result is not None:
+                return result
+    return None
 
 def containingRect(icons):
     maxRect = AccumRects()
