@@ -42,13 +42,13 @@ def parseExpr(expr):
             return (div, parseExpr(expr.left), parseExpr(expr.right))
         return (bin, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
     elif expr.__class__ == ast.BoolOp:
-        return (fn, boolOps[expr.op.__class__], [parseExpr(e) for e in expr.values])
+        return (bin, boolOps[expr.op.__class__], *(parseExpr(e) for e in expr.values))
     elif expr.__class__ == ast.Compare:
         # Note: this does not handle multi-comparison types
         return (fn, compareOps[expr.ops[0].__class__], parseExpr(expr.left), parseExpr(expr.comparators[0]))
     elif expr.__class__ == ast.Call:
         # No keywords or other cool stuff, yet
-        return (fn, expr.func.id, [parseExpr(e) for e in expr.args])
+        return (fn, expr.func.id, *(parseExpr(e) for e in expr.args))
     elif expr.__class__ == ast.Num:
         return (id, str(expr.n))
     elif expr.__class__ == ast.Str:
@@ -79,4 +79,5 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon.addChild(makeIcons(parsedExpr[1], window, x, y))
         topIcon.addChild(makeIcons(parsedExpr[2], window, x, y))
         return topIcon
-
+    else:
+        return icon.IdentIcon("**Internal Parse Error**", window, (x,y))
