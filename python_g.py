@@ -274,6 +274,7 @@ class Window:
         for ic in topDraggingIcons:
             if ic.needsLayout():
                 ic.layout()
+            ic.becomeTopLevel()
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
         moveRegion = AccumRects()
@@ -291,15 +292,15 @@ class Window:
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons
         draggingOutputs = []
-        for ic in topDraggingIcons:
-            for s in ic.snapLists().get("output", []):
-                x, y = s
+        for dragIcon in topDraggingIcons:
+            for ic, x, y in dragIcon.snapLists().get("output", []):
                 draggingOutputs.append(((x-xOff, y-yOff), ic))
         stationaryInputs = []
-        for ic in self.allIcons():
-            for s in ic.snapLists().get("input", []):
-                xi, yi = s
-                stationaryInputs.append(((xi, yi), ic))
+        for topIcon in self.topIcons:
+            for winIcon in topIcon.traverse():
+                isTopIcon = winIcon is topIcon
+                for ic, xi, yi in winIcon.snapLists(isTopIcon).get("input", []):
+                    stationaryInputs.append(((xi, yi), ic))
         self.snapList = []
         for si in stationaryInputs:
             sx, sy = si[0]
@@ -345,10 +346,13 @@ class Window:
         xOff = l - self.dragImageOffset[0]
         yOff = t - self.dragImageOffset[1]
         # self.dragging icons are not stored hierarchically, but are in draw order
+        topDraggedIcons = findTopIcons(self.dragging)
+        for ic in topDraggedIcons:
+            ic.becomeTopLevel()
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
             ic.draw()
-        self.topIcons += findTopIcons(self.dragging)
+        self.topIcons += topDraggedIcons
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             parentIcon, childIcon, pos = self.snapped

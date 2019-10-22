@@ -77,6 +77,18 @@ binOutPixmap = (
  "..ooo",
 )
 
+binInPixmap = (
+ "ooo",
+ "o o",
+ "oo.",
+ "o..",
+ "...",
+ "o..",
+ "oo.",
+ "o o",
+ "ooo",
+)
+
 binLParenPixmap = (
  "..ooooooo",
  "..o     o",
@@ -174,6 +186,7 @@ commaImage = asciiToImage(commaPixmap)
 floatInImage = asciiToImage(floatInPixmap)
 parenImage = iconBoxedText(')')
 binOutImage = asciiToImage(binOutPixmap)
+binInImage = asciiToImage(binInPixmap)
 lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
 
@@ -231,6 +244,9 @@ class Icon:
     def children(self):
         return []
 
+    def becomeTopLevel(self):
+        pass  # Most icons look exactly the same at the top level
+
 class IdentIcon(Icon):
     def __init__(self, name, window=None, location=None):
         Icon.__init__(self, window)
@@ -262,9 +278,9 @@ class IdentIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)
 
-    def snapLists(self):
+    def snapLists(self, atTop=False):
         x, y = self.rect[:2]
-        return {"output":[(x + self.outSiteOffset[0], y + self.outSiteOffset[1])]}
+        return {"output":[(self, x + self.outSiteOffset[0], y + self.outSiteOffset[1])]}
 
     def layout(self, location=None):
         if location is not None:
@@ -345,13 +361,17 @@ class FnIcon(Icon):
     def children(self):
         return self.argIcons
 
-    def snapLists(self):
+    def snapLists(self, atTop=False):
         x, y = self.rect[:2]
-        outOffsets = [(x + self.outSiteOffset[0], y + self.outSiteOffset[1])]
+        outOffsets = [(self, x + self.outSiteOffset[0], y + self.outSiteOffset[1])]
         width, height = self.bodySize
-        x += width + outSiteImage.width - 1 - inSiteImage.width-1
+        x += width + outSiteImage.width - 1 - inSiteImage.width
         y += height // 2
-        inOffsets = [(x+i, y) for i in self.inOffsets]
+        inOffsets = []
+        for i, child in enumerate(self.children()):
+            xOff = self.inOffsets[i]
+            inOffsets.append((giveInputSiteToBinOpChild(self, child), x + xOff, y))
+        inOffsets.append((self, self.inOffsets[-1], y))
         return {"output":outOffsets, "input":inOffsets}
 
     def detach(self, child):
@@ -364,8 +384,9 @@ class FnIcon(Icon):
         if pos is None:
             self.argIcons.append(child)
         else:
+            posX, posY = pos
             for index, sitePos in enumerate(self.snapLists().get("input", [])):
-                if sitePos == pos:
+                if sitePos[1] == posX and sitePos[2] == posY:
                     self.argIcons.insert(index, child)
                     break
             else:
@@ -379,8 +400,9 @@ class FnIcon(Icon):
         self.layoutDirty = True
 
     def childAt(self, pos):
+        posX, posY = pos
         for index, sitePos in enumerate(self.snapLists().get("input", [])):
-            if sitePos == pos:
+            if sitePos[1] == posX and sitePos[2] == posY:
                 if len(self.argIcons) <= index:
                     return None
                 return self.argIcons[index]
@@ -458,6 +480,7 @@ class BinOpIcon(Icon):
         self.depthWidth = 0
         self.rect = (0, 0, *self._size())
         self.outSiteOffset = (0, opHeight // 2)
+        self.leftSiteDrawn = False
 
     def _size(self):
         opWidth, opHeight = self.opSize
@@ -470,64 +493,92 @@ class BinOpIcon(Icon):
         return width, opHeight
 
     def draw(self, image=None, location=None, clip=None):
+        cachedImage = self.cachedImage
+        temporaryOutputSite = False
+        if image is not None and self.leftSiteDrawn:
+            # When image is specified the icon is being dragged, and it must display
+            # something indicating where its output site is
+            cachedImage = None
+            self.cachedImage = None
+            temporaryOutputSite = True
         if image is None:
             image = self.window.image
         if location is None:
             location = self.rect[:2]
-        if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
+        if cachedImage is None:
+            cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
             # Output part (connector or paren)
             outSiteX, siteY = self.outSiteOffset
+            leftArgX = outSiteX + outSiteImage.width - 1
             if self.hasParens:
                 outSiteY = siteY - lParenImage.height // 2
-                self.cachedImage.paste(lParenImage, (outSiteX, outSiteY), mask=lParenImage)
+                cachedImage.paste(lParenImage, (outSiteX, outSiteY), mask=lParenImage)
                 leftArgX = outSiteX + lParenImage.width - 1
-            else:
+            elif temporaryOutputSite:
                 outSiteY = siteY - binOutImage.height // 2
-                self.cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
-                leftArgX = outSiteX + outSiteImage.width - 1
+                cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
+            elif self.leftSiteDrawn:
+                outSiteY = siteY - binInImage.height // 2
+                cachedImage.paste(binInImage, (outSiteX, outSiteY), mask=binInImage)
             # Body
             txtImg = iconBoxedText(self.operator)
             opX = leftArgX + self.leftArgWidth - 1
             opY = siteY - txtImg.height // 2
             if self.depthWidth > 0:
-                draw = ImageDraw.Draw(self.cachedImage)
+                draw = ImageDraw.Draw(cachedImage)
                 opWidth = txtImg.width + self.depthWidth
                 draw.rectangle((opX, opY, opX+opWidth-1, opY+txtImg.height-1),
                  outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
                 txtSubImg = txtImg.crop((1, 0, txtImg.width-1, txtImg.height))
-                self.cachedImage.paste(txtSubImg, (opX + self.depthWidth//2 + 1, opY))
+                cachedImage.paste(txtSubImg, (opX + self.depthWidth//2 + 1, opY))
             else:
                 opWidth = txtImg.width
-                self.cachedImage.paste(txtImg, (opX + self.depthWidth//2, opY))
-            lInSiteX = opX - leftInSiteImage.width + 1
-            lInSiteY = siteY - leftInSiteImage.height // 2
-            self.cachedImage.paste(leftInSiteImage, (lInSiteX, lInSiteY))
+                cachedImage.paste(txtImg, (opX + self.depthWidth//2, opY))
             rInSiteX = opX + opWidth - inSiteImage.width
             rInSiteY = siteY - inSiteImage.height // 2
-            self.cachedImage.paste(inSiteImage, (rInSiteX, rInSiteY))
+            cachedImage.paste(inSiteImage, (rInSiteX, rInSiteY))
             # End paren
             if self.hasParens:
                 rParenX = opX + opWidth - 1 + self.rightArgWidth - 1
                 rParenY = siteY - rParenImage.height//2
-                self.cachedImage.paste(rParenImage, (rParenX, rParenY))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
-         location, clip)  # ... try w/o mask
+                cachedImage.paste(rParenImage, (rParenX, rParenY))
+        pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected),
+         location, clip)
+        if not temporaryOutputSite:
+            self.cachedImage = cachedImage
+
+    def becomeTopLevel(self):
+        # When a BinOpIcon is dropped it can become a top level icon, which may mean it
+        # needs to have its's left site restored.
+        if not self.leftSiteDrawn:
+            self.leftSiteDrawn = True
+            self.cachedImage = None
 
     def children(self):
         return [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
 
-    def snapLists(self):
+    def snapLists(self, allAllowed=False, atTop=False):
         x, y = self.rect[:2]
         y += self.outSiteOffset[1]
-        outOffsets = [(x + self.outSiteOffset[0], y)]
-        lArgX = x + self.leftArgWidth - 1
+        outOffsets = [(self, x + self.outSiteOffset[0], y)]
+        bodyX = x + self.leftArgWidth - 1
         if self.hasParens:
-            lArgX += lParenImage.width - 1
+            lArgX = x + lParenImage.width - inSiteImage.width
+            bodyX += lParenImage.width - 1
         else:
-            lArgX += 1
-        rArgX = lArgX + self.opSize[0] + self.depthWidth
-        inOffsets = [(lArgX, y), (rArgX, y)]
+            lArgX = x
+            bodyX += 1
+        rArgX = bodyX + self.opSize[0] + self.depthWidth
+        inOffsets = []
+        if allAllowed:
+            inOffsets.append((self, lArgX, y))
+            inOffsets.append((self, rArgX, y))
+            #inOffsets.append((self, bodyX, y))
+        else:
+            if self.hasParens or self.leftArg is None or atTop:
+                inOffsets.append((giveInputSiteToBinOpChild(self, self.leftArg), lArgX, y))
+            inOffsets.append((giveInputSiteToBinOpChild(self, self.rightArg), rArgX, y))
+            # include body site: 1) how to know if top (do we care) 2) how to refer site to parent
         return {"output":outOffsets, "input":inOffsets}
 
     def detach(self, child):
@@ -552,13 +603,17 @@ class BinOpIcon(Icon):
                 print("BinOpIcon: Could not add child to full icon")
                 return
         else:
-            snapPositions = self.snapLists()["input"]
-            if snapPositions[0] == pos:
+            posX, posY = pos
+            snapPositions = self.snapLists(allAllowed=True)["input"]
+            if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
                 self.leftArg = child
-            elif snapPositions[1] == pos:
+            elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
                 self.rightArg = child
             else:
                 print("BinOpIcon: Failed to add child icon, not found at site position")
+                print("   icon", self.operator)
+                print("   snapPositions", snapPositions)
+                print("   pos", pos)
                 return
         self.layoutDirty = True
 
@@ -572,10 +627,11 @@ class BinOpIcon(Icon):
         self.layoutDirty = True
 
     def childAt(self, pos):
-        snapPositions = self.snapLists()["input"]
-        if snapPositions[0] == pos:
+        posX, posY = pos
+        snapPositions = self.snapLists(allAllowed=True)["input"]
+        if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
             return self.leftArg
-        elif snapPositions[1] == pos:
+        elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
             return self.rightArg
         return None
 
@@ -585,6 +641,7 @@ class BinOpIcon(Icon):
         else:
             x, y = location
         self._doLayout(x, y + self.opSize[1] // 2, self._calcLayout())
+        self.leftSiteDrawn = True
 
     def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
         if parentPrecedence is None:
@@ -618,6 +675,7 @@ class BinOpIcon(Icon):
         x = outSiteX
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
+        self.leftSiteDrawn = False # self.layout will reset on top-level icon
         self.cachedImage = None
         self.layoutDirty = False
 
@@ -734,15 +792,16 @@ class DivideIcon(Icon):
     def children(self):
         return [arg for arg in (self.topArg, self.bottomArg) if arg is not None]
 
-    def snapLists(self):
+    def snapLists(self, atTop=False):
         x, y = self.rect[:2]
         y += self.outSiteOffset[1]
-        outOffsets = [(x + self.outSiteOffset[0], y)]
+        outOffsets = [(self, x + self.outSiteOffset[0], y)]
         topArgX = x + self.topArgSiteOffset[0]
         topArgY = y + self.topArgSiteOffset[1]
         bottomArgX = x + self.bottomArgSiteOffset[0]
         bottomArgY = y + self.bottomArgSiteOffset[1]
-        inOffsets = [(topArgX, topArgY), (bottomArgX, bottomArgY)]
+        inOffsets = [(giveInputSiteToBinOpChild(self, self.topArg), topArgX, topArgY),
+          (giveInputSiteToBinOpChild(self, self.bottomArg), bottomArgX, bottomArgY)]
         return {"output":outOffsets, "input":inOffsets}
 
     def detach(self, child):
@@ -767,10 +826,11 @@ class DivideIcon(Icon):
                 print("DivOpIcon: Could not add child to full icon")
                 return
         else:
+            posX, posY = pos
             snapPositions = self.snapLists()["input"]
-            if snapPositions[0] == pos:
+            if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
                 self.topArg = child
-            elif snapPositions[1] == pos:
+            elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
                 self.bottomArg = child
             else:
                 print("DivpIcon: Failed to add child icon, not found at site position")
@@ -788,9 +848,10 @@ class DivideIcon(Icon):
 
     def childAt(self, pos):
         snapPositions = self.snapLists()["input"]
-        if snapPositions[0] == pos:
+        posX, posY = pos
+        if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
             return self.topArg
-        elif snapPositions[1] == pos:
+        elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
             return self.bottomArg
         return None
 
@@ -887,7 +948,7 @@ class ImageIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.image, self.selected),
          location, clip)
 
-    def snapLists(self):
+    def snapLists(self, atTop=False):
         return {}
 
     def layout(self, location=None):
@@ -966,7 +1027,7 @@ def findLeftOuterIcon(targetIcon, fromIcon):
         return targetIcon
     # Only binary operations are candidates, and only when the expression directly below
     # has claimed itself to be the leftmost operand of an expression
-    if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None:
+    if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None and not fromIcon.hasParens:
         left = findLeftOuterIcon(targetIcon, fromIcon.leftArg)
         if left is fromIcon.leftArg and targetIcon.__class__ is not BinOpIcon:
             return fromIcon  # Claim outermost status for this icon
@@ -984,6 +1045,17 @@ def findLeftOuterIcon(targetIcon, fromIcon):
             if result is not None:
                 return result
     return None
+
+def giveInputSiteToBinOpChild(parent, child):
+    if child is None or child.__class__ is not BinOpIcon or child.hasParens:
+        # child is empty or pick-able on the left
+        return parent
+    childLeft = child.leftArg
+    if childLeft is None or childLeft.__class__ is not BinOpIcon:
+        # Give the site to the child, but can't go further
+        return child
+    # Try to pass the site even further down
+    return giveInputSiteToBinOpChild(child, childLeft)
 
 def containingRect(icons):
     maxRect = AccumRects()
