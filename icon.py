@@ -1,5 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
-from python_g import msTime, AccumRects, offsetRect
+from python_g import rectsTouch, AccumRects
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
@@ -228,6 +228,9 @@ class Icon:
         pixel = self.cachedImage.getpixel((x-l, y-t))
         return pixel[3] > 128
 
+    def touchesRect(self, rect):
+        return rectsTouch(self.rect, rect)
+
     def hierRect(self):
         """Return a rectangle covering this icon and its children"""
         return containingRect(self.traverse())
@@ -373,6 +376,14 @@ class FnIcon(Icon):
             inOffsets.append((giveInputSiteToBinOpChild(self, child), x + xOff, y))
         inOffsets.append((self, x + self.inOffsets[-1], y))
         return {"output":outOffsets, "input":inOffsets}
+
+    def touchesRect(self, rect):
+        if not rectsTouch(self.rect, rect):
+            return False
+        # If the rectangle is entirely contained within the argument space (ignoring
+        # commas), then we will call it not touching
+        bodyRight = self.rect[0] + self.bodySize[0]
+        return not rectWithinXBounds(rect, bodyRight, bodyRight + self.inOffsets[-1])
 
     def detach(self, child):
         """Remove a child icon"""
@@ -546,6 +557,32 @@ class BinOpIcon(Icon):
          location, clip)
         if not temporaryOutputSite:
             self.cachedImage = cachedImage
+
+    def touchesRect(self, rect):
+        if not rectsTouch(self.rect, rect):
+            return False
+        leftArgLeft = self.rect[0] + self.outSiteOffset[0] + outSiteImage.width - 1
+        opWidth = self.opSize[0] + self.depthWidth
+        if self.hasParens:
+            # If rectangle passes vertically within one of the argument slots, it is
+            # considered to not be touching
+            leftArgLeft += lParenImage.width
+            leftArgRight = leftArgLeft + self.leftArgWidth - 1
+            if rectWithinXBounds(rect, leftArgLeft, leftArgRight):
+                return False
+            rightArgLeft = leftArgRight + opWidth
+            rightArgRight = rightArgLeft + self.rightArgWidth - 1
+            if rectWithinXBounds(rect, rightArgLeft, rightArgRight):
+                return False
+        else:
+            # If the rectangle is entirely left of or right of the icon body, it is
+            # considered not touching
+            bodyLeft = leftArgLeft + self.leftArgWidth - 1
+            bodyRight = bodyLeft + opWidth
+            rectLeft, rectTop, rectRight, rectBottom = rect
+            if rectRight < bodyLeft or rectLeft > bodyRight:
+                return False
+        return True
 
     def becomeTopLevel(self):
         # When a BinOpIcon is dropped it can become a top level icon, which may mean it
@@ -797,6 +834,19 @@ class DivideIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)  # ... try w/o mask
 
+    def touchesRect(self, rect):
+        if not rectsTouch(self.rect, rect):
+            return False
+        # If rectangle passes horizontally above or below the central body of the icon,
+        # it is considered to not be touching
+        rectLeft, rectTop, rectRight, rectBottom = rect
+        centerY = self.rect[1] + self.outSiteOffset[1]
+        iconTop = centerY - 5
+        iconBottom = centerY + 5
+        if rectBottom < iconTop or rectTop > iconBottom:
+            return False
+        return True
+
     def children(self):
         return [arg for arg in (self.topArg, self.bottomArg) if arg is not None]
 
@@ -936,7 +986,6 @@ class DivideIcon(Icon):
         ic = DivideIcon(window, (addPoints(location, offset)))
         ic.leftArg, ic.rightArg = clipboardDataToIcons(children, window, offset)
         return ic
-
 
 class ImageIcon(Icon):
     def __init__(self, image, window=None, location=None):
@@ -1105,3 +1154,7 @@ def addPoints(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
     return x1 + x2, y1 + y2
+
+def rectWithinXBounds(rect, leftBound, rightBound):
+    left, top, right, bottom = rect
+    return left > leftBound and right < rightBound

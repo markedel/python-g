@@ -398,7 +398,7 @@ class Window:
         redrawRegion = AccumRects()
         changedIcons = []
         for ic in self.findIconsInRegion(combinedRegion):
-            if rectsTouch(newRect, ic.rect):
+            if ic.touchesRect(newRect):
                 newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
             else:
                 newSelect = self.rectSelectInitialStates[ic]
