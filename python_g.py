@@ -299,7 +299,7 @@ class Window:
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
                 isTopIcon = winIcon is topIcon
-                for ic, xi, yi in winIcon.snapLists(isTopIcon).get("input", []):
+                for ic, xi, yi in winIcon.snapLists(atTop=isTopIcon).get("input", []):
                     stationaryInputs.append(((xi, yi), ic))
         self.snapList = []
         for si in stationaryInputs:
@@ -349,16 +349,17 @@ class Window:
         topDraggedIcons = findTopIcons(self.dragging)
         for ic in topDraggedIcons:
             ic.becomeTopLevel()
+        redrawRegion = AccumRects()
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
-            ic.draw()
+            redrawRegion.add(ic.rect)
         self.topIcons += topDraggedIcons
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             parentIcon, childIcon, pos = self.snapped
             self.topIcons.remove(childIcon)
             toDelete = parentIcon.childAt(pos)
-            redrawRegion = AccumRects(parentIcon.hierRect())
+            redrawRegion.add(parentIcon.hierRect())
             if toDelete is not None:
                 parentIcon.replaceChild(toDelete, childIcon)
                 redrawRegion.add(childIcon.hierRect())
@@ -372,8 +373,8 @@ class Window:
                     redrawRegion.add(ic.hierRect())
             # Redraw the areas affected by the updated layouts
             self.clearBgRect(redrawRegion.get())
-            for ic in self.findIconsInRegion(redrawRegion.get()):
-                ic.draw(clip=redrawRegion.get())
+        for ic in self.findIconsInRegion(redrawRegion.get()):
+            ic.draw(clip=redrawRegion.get())
         self.dragging = None
         self.snapped = None
         self.snapList = None

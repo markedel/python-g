@@ -96,9 +96,9 @@ binLParenPixmap = (
  "..o 1%  o",
  "..o 32  o",
  "..o %   o",
- ".o 1%   o",
- "o  2%   o",
- ".o 1%   o",
+ ".o 1%  o.",
+ "o  2% o..",
+ ".o 1%  o.",
  "..o %   o",
  "..o 32  o",
  "..o 1%  o",
@@ -371,7 +371,7 @@ class FnIcon(Icon):
         for i, child in enumerate(self.children()):
             xOff = self.inOffsets[i]
             inOffsets.append((giveInputSiteToBinOpChild(self, child), x + xOff, y))
-        inOffsets.append((self, self.inOffsets[-1], y))
+        inOffsets.append((self, x + self.inOffsets[-1], y))
         return {"output":outOffsets, "input":inOffsets}
 
     def detach(self, child):
@@ -553,6 +553,7 @@ class BinOpIcon(Icon):
         if not self.leftSiteDrawn:
             self.leftSiteDrawn = True
             self.cachedImage = None
+        self.hasParens = False
 
     def children(self):
         return [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
@@ -641,6 +642,7 @@ class BinOpIcon(Icon):
         else:
             x, y = location
         self._doLayout(x, y + self.opSize[1] // 2, self._calcLayout())
+        # Layout is called only on the top-level icon.  Ensure left site is drawn
         self.leftSiteDrawn = True
 
     def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
