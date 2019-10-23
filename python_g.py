@@ -162,8 +162,13 @@ class Window:
             if abs(evt.x - btnX) + abs(evt.y - btnY) > dragThreshold:
                 ic = self.findIconAt(btnX, btnY)
                 if ic is None:
+                    # If nothing was clicked, start a rectangular selection
                     self._startRectSelect(evt)
+                elif ic.selected:
+                    # If a selected icon was clicked, drag all of the selected icons
+                    self._startDrag(evt, self.selectedIcons())
                 else:
+                    # Otherwise, drag the icon that was clicked
                     self._startDrag(evt, list(self.findLeftOuterIcon(ic).traverse()))
         else:
             if self.dragging is not None:
@@ -257,14 +262,7 @@ class Window:
         self.removeIcons(self.selectedIcons())
 
     def _startDrag(self, evt, icons):
-        # Determine what icons to drag: if a selected icon was clicked, drag all of
-        # the selected icons.  Otherwise, drag anything that was clicked
-        for ic in icons:
-            if ic.selected:
-                self.dragging = self.selectedIcons()
-                break
-        else:
-            self.dragging = icons
+        self.dragging = icons
         # Remove the icons from the window image and handle the resulting detachments
         # re-layouts, and redrawing.
         self.removeIcons(self.dragging)
@@ -272,9 +270,9 @@ class Window:
         # (moving) parent icons
         topDraggingIcons = findTopIcons(self.dragging)
         for ic in topDraggingIcons:
+            ic.becomeTopLevel()
             if ic.needsLayout():
                 ic.layout()
-            ic.becomeTopLevel()
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
         moveRegion = AccumRects()
@@ -508,7 +506,7 @@ class Window:
     def findLeftOuterIcon(self, ic):
         """Selection method for execution and dragging:  See description in icon.py"""
         for topIcon in self.topIcons:
-            leftIcon = icon.findLeftOuterIcon(ic, topIcon)
+            leftIcon = icon.findLeftOuterIcon(ic, topIcon, btnPressLoc=self.buttonDownLoc)
             if leftIcon is not None:
                 return leftIcon
         return None

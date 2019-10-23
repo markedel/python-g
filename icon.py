@@ -553,7 +553,9 @@ class BinOpIcon(Icon):
         if not self.leftSiteDrawn:
             self.leftSiteDrawn = True
             self.cachedImage = None
-        self.hasParens = False
+        if self.hasParens:
+            self.hasParens = False
+            self.layoutDirty = True
 
     def children(self):
         return [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
@@ -733,6 +735,10 @@ class BinOpIcon(Icon):
         ic = BinOpIcon(op, window, (addPoints(location, offset)))
         ic.leftArg, ic.rightArg = clipboardDataToIcons(children, window, offset)
         return ic
+
+    def locIsOnLeftParen(self, btnPressLoc):
+        iconLeft = self.rect[0]
+        return iconLeft < btnPressLoc[0] < iconLeft + lParenImage.width
 
 class DivideIcon(Icon):
     def __init__(self, window=None, location=None):
@@ -1019,31 +1025,41 @@ def tintSelectedImage(image, selected):
     selImg = Image.blend(image, colorImg, .15)
     return selImg
 
-def findLeftOuterIcon(targetIcon, fromIcon):
+def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc=None):
     """Because we have icons with no pickable structure left of their arguments (binary
     operations), we have to make rules about what it means to click or drag the leftmost
     icon in an expression.  For the purpose of selection, that is simply the icon that was
-    clicked.  For dragging and double clicking (execution), this function is used to
-    find the outermost operation that claims the picked icon as its leftmost operand."""
-    if targetIcon is fromIcon:
-        return targetIcon
+    clicked.  For dragging and double clicking (execution), this function finds the
+    outermost operation that claims the clicked icon as its leftmost operand."""
+    if btnPressLoc is not None:
+        # One idiotic case we have to distinguish, is when the clicked icon is a BinOpIcon
+        # with automatic parens visible: only if the user clicked on the left paren, can
+        # the icon be the leftmost object in an expression.  Clicking on the body or the
+        # right paren does not count.
+        if clickedIcon.__class__ is BinOpIcon and clickedIcon.hasParens:
+            if not clickedIcon.locIsOnLeftParen(btnPressLoc):
+                return clickedIcon
+    if clickedIcon is fromIcon:
+        return clickedIcon
     # Only binary operations are candidates, and only when the expression directly below
     # has claimed itself to be the leftmost operand of an expression
     if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None and not fromIcon.hasParens:
-        left = findLeftOuterIcon(targetIcon, fromIcon.leftArg)
-        if left is fromIcon.leftArg and targetIcon.__class__ is not BinOpIcon:
-            return fromIcon  # Claim outermost status for this icon
+        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg)
+        if left is fromIcon.leftArg:
+            targetIsBinOpIcon = clickedIcon.__class__ is BinOpIcon
+            if not targetIsBinOpIcon or targetIsBinOpIcon and clickedIcon.hasParens:
+                return fromIcon  # Claim outermost status for this icon
         # Pass on status from non-contiguous expressions below fromIcon in the hierarchy
         if left is not None:
             return left
         if fromIcon.rightArg is None:
             return None
-        return findLeftOuterIcon(targetIcon, fromIcon.rightArg)
+        return findLeftOuterIcon(clickedIcon, fromIcon.rightArg)
     # Pass on any results from below fromIcon in the hierarchy
     children = fromIcon.children()
     if children is not None:
         for child in fromIcon.children():
-            result = findLeftOuterIcon(targetIcon, child)
+            result = findLeftOuterIcon(clickedIcon, child)
             if result is not None:
                 return result
     return None
