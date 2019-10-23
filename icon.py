@@ -59,16 +59,6 @@ commaPixmap = (
  "ooooo",
 )
 
-floatInPixmap = (
- "oooo",
- "o  o",
- "o o.",
- "oo..",
- "o o.",
- "o  o",
- "oooo",
-)
-
 binOutPixmap = (
  "..ooo",
  ".o  o",
@@ -77,7 +67,7 @@ binOutPixmap = (
  "..ooo",
 )
 
-binInPixmap = (
+floatInPixmap = (
  "ooo",
  "o o",
  "oo.",
@@ -183,10 +173,9 @@ outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
 leftInSiteImage = asciiToImage(leftInSitePixmap)
 commaImage = asciiToImage(commaPixmap)
-floatInImage = asciiToImage(floatInPixmap)
 parenImage = iconBoxedText(')')
 binOutImage = asciiToImage(binOutPixmap)
-binInImage = asciiToImage(binInPixmap)
+floatInImage = asciiToImage(floatInPixmap)
 lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
 
@@ -529,8 +518,8 @@ class BinOpIcon(Icon):
                 outSiteY = siteY - binOutImage.height // 2
                 cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
             elif self.leftSiteDrawn:
-                outSiteY = siteY - binInImage.height // 2
-                cachedImage.paste(binInImage, (outSiteX, outSiteY), mask=binInImage)
+                outSiteY = siteY - floatInImage.height // 2
+                cachedImage.paste(floatInImage, (outSiteX, outSiteY), mask=floatInImage)
             # Body
             txtImg = iconBoxedText(self.operator)
             opX = leftArgX + self.leftArgWidth - 1
@@ -783,9 +772,8 @@ class DivideIcon(Icon):
         self.precedence = 11
         self.topArg = None
         self.bottomArg = None
-        emptyArgWidth, emptyArgHeight = globalFont.getsize("5")
-        emptyArgWidth += 2*TEXT_MARGIN
-        emptyArgHeight += 2*TEXT_MARGIN
+        emptyArgWidth = 11
+        emptyArgHeight = 14
         self.emptyArgSize = (emptyArgWidth, emptyArgHeight)
         self.topArgSize = self.emptyArgSize
         self.topArgSiteOffset = (2, -emptyArgHeight // 2 - 2)
@@ -799,7 +787,7 @@ class DivideIcon(Icon):
     def _size(self):
         topWidth, topHeight = self.topArgSize
         bottomWidth, bottomHeight = self.bottomArgSize
-        width = max(topWidth, bottomWidth) + 4 + outSiteImage.width
+        width = max(topWidth, bottomWidth) + 3 + outSiteImage.width
         height = topHeight + bottomHeight + 3
         return width, height
 
@@ -814,11 +802,11 @@ class DivideIcon(Icon):
             # Input sites
             leftX, cntrY = self.outSiteOffset
             topArgX, topArgY = self.topArgSiteOffset
-            topArgX += leftX - 1
+            topArgX += leftX
             topArgY += cntrY - floatInImage.height // 2
             self.cachedImage.paste(floatInImage, (topArgX, topArgY))
             bottomArgX, bottomArgY = self.bottomArgSiteOffset
-            bottomArgX += leftX - 1
+            bottomArgX += leftX
             bottomArgY += cntrY - floatInImage.height // 2
             self.cachedImage.paste(floatInImage, (bottomArgX, bottomArgY))
             # Body
@@ -829,7 +817,7 @@ class DivideIcon(Icon):
             draw = ImageDraw.Draw(self.cachedImage)
             draw.rectangle((bodyLeft, bodyTop, bodyRight, bodyBottom),
              outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
-            draw.line((bodyLeft + 3, cntrY, bodyRight - 2, cntrY), fill=BLACK)
+            draw.line((bodyLeft + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
             self.cachedImage.paste(outSiteImage, (leftX, cntrY - outSiteImage.height//2))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)  # ... try w/o mask
@@ -930,14 +918,14 @@ class DivideIcon(Icon):
             self.topArgSiteOffset = ((width-emptyArgWidth)//2, -emptyArgHeight//2 - 2)
         else:
              self.topArgSize = (tArgLayout.width, tArgLayout.height)
-             self.topArgSiteOffset = (1 + (width - 2 - tArgLayout.width)//2,
+             self.topArgSiteOffset = ((width - 2 - tArgLayout.width)//2,
               - tArgLayout.height + tArgLayout.siteOffset - 1)
         if bArgLayout is None:
             self.bottomArgSize = self.emptyArgSize
             self.bottomArgSiteOffset = ((width-emptyArgWidth)//2, emptyArgHeight//2 + 2)
         else:
             self.bottomArgSize = (bArgLayout.width, bArgLayout.height)
-            self.bottomArgSiteOffset = (1 + (width - 2 - bArgLayout.width)//2,
+            self.bottomArgSiteOffset = ((width - 2 - bArgLayout.width)//2,
              bArgLayout.siteOffset + 2)
         self.outSiteOffset = (0, self.topArgSize[1] + 2)
         width, height = self._size()
@@ -970,7 +958,7 @@ class DivideIcon(Icon):
             bArgLayout = self.bottomArg._calcLayout()
             bArgWidth = bArgLayout.width
             bArgHeight = bArgLayout.height
-        width = max(tArgWidth, bArgWidth) + 5
+        width = max(tArgWidth, bArgWidth) + 4
         height = tArgHeight + bArgHeight + 2
         return Layout(self, width, height, tArgHeight + 1, (tArgLayout, bArgLayout))
 
