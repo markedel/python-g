@@ -14,6 +14,7 @@ SHIFT_MASK = 0x001
 CTRL_MASK = 0x004
 LEFT_MOUSE_MASK = 0x100
 RIGHT_MOUSE_MASK = 0x300
+DOUBLE_CLICK_TIME = 300
 
 SNAP_DIST = 8
 
@@ -36,7 +37,7 @@ def combineRects(rect1, rect2):
 
 def msTime():
     """Return a millisecond-resolution timestamp"""
-    return int(time.process_time() * 1000)
+    return int(time.monotonic() * 1000)
 
 def makeRect(pos1, pos2):
     """Make a rectangle tuple from two points (our rectangles are ordered)"""
@@ -107,6 +108,7 @@ class Window:
         self.buttonDownTime = None
         self.buttonDownLoc = None
         self.buttonDownState = None
+        self.doubleClickFlag = False
         self.dragging = None
         self.dragImageOffset = None
         self.dragImage = None
@@ -169,7 +171,10 @@ class Window:
                     self._startDrag(evt, self.selectedIcons())
                 else:
                     # Otherwise, drag the icon that was clicked
-                    self._startDrag(evt, list(self.findLeftOuterIcon(ic).traverse()))
+                    if self.doubleClickFlag:
+                        self._startDrag(evt, [ic])  # double-click drag single icon
+                    else:
+                        self._startDrag(evt, list(self.findLeftOuterIcon(ic).traverse()))
         else:
             if self.dragging is not None:
                 self._updateDrag(evt)
@@ -177,9 +182,14 @@ class Window:
                 self._updateRectSelect(evt)
 
     def _buttonPressCb(self, evt):
+        if self.buttonDownTime is not None:
+            if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
+                self.doubleClickFlag = True
+                return
         self.buttonDownTime = msTime()
         self.buttonDownLoc = evt.x, evt.y
         self.buttonDownState = evt.state
+        self.doubleClickFlag = False
         ic = self.findIconAt(evt.x, evt.y)
         if ic is None or not ic.selected and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
             self.unselectAll()
@@ -189,9 +199,28 @@ class Window:
             return
         if self.dragging is not None:
             self._endDrag()
+            self.buttonDownTime = None
         elif self.inRectSelect:
             self._endRectSelect()
-        elif self.buttonDownState & SHIFT_MASK:
+            self.buttonDownTime = None
+        elif self.doubleClickFlag:
+            if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
+                self._execute()
+            self.buttonDownTime = None
+        elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
+            # In order to handle double-click, button release actions are run not done
+            # until we know that a double-click can't still happen (_delayedBtnUpActions).
+            delay = DOUBLE_CLICK_TIME - (msTime() - self.buttonDownTime)
+            self.frame.after(delay, self._delayedBtnUpActions, evt)
+        else:
+            # Do the button-release actions immediately, double-click wait has passed.
+            self._delayedBtnUpActions(evt)
+
+    def _delayedBtnUpActions(self, evt):
+        """Button-up actions (which may be delayed to wait for possible double-click)."""
+        if self.doubleClickFlag:
+            return  # Second click occurred, don't do the delayed action
+        if self.buttonDownState & SHIFT_MASK:
             self._select(evt, 'add')
         elif self.buttonDownState & CTRL_MASK:
             self._select(evt, 'toggle')
@@ -428,6 +457,9 @@ class Window:
     def _endRectSelect(self):
         self._eraseRectSelect()
         self.inRectSelect = False
+
+    def _execute(self):
+        print("execute")
 
     def _select(self, evt, op='select'):
         """Select or toggle the top icon being pointed at, and bring it to the top.
