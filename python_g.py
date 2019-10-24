@@ -483,9 +483,14 @@ class Window:
             return
         iconToExecute = self.findLeftOuterIcon(iconToExecute)
         result = iconToExecute.execute()
-        resultIcons = compile_eval.parsePasted(repr(result), self, (evt.x, evt.y))
+        resultIcons = compile_eval.parsePasted(repr(result), self, (0, 0))
         if resultIcons is None:
-            resultIcons = [icon.IdentIcon(repr(result), self, (evt.x, evt.y))]
+            resultIcons = [icon.IdentIcon(repr(result), self, (0, 0))]
+        left, top, right, bottom = resultIcons[0].hierRect()
+        ctrXOff = (right - left) // 2
+        ctrYOff = (bottom - top) // 2
+        for ic in resultIcons:
+            ic.rect = offsetRect(ic.rect, evt.x - ctrXOff, evt.y - ctrYOff)
         self._startDrag(evt, resultIcons, needRemove=False)
 
     def _select(self, evt, op='select'):
