@@ -1,11 +1,17 @@
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from python_g import rectsTouch, AccumRects
+import math
+import operator
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
-
 binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
-        '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'not':4, 'and':3, 'or':2}
+ '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'and':3, 'or':2}
+
+binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.truediv,
+ '//':operator.floordiv, '%':operator.mod, '**':operator.pow, '<<':operator.lshift,
+ '>>':operator.rshift, '|':operator.or_, '^':operator.xor, '&':operator.and_,
+ '@':lambda x,y:x@y, 'and':lambda x,y:x and y, 'or':lambda x,y:x or y}
 
 TEXT_MARGIN = 2
 SPINE_THICKNESS = 3
@@ -297,6 +303,10 @@ class IdentIcon(Icon):
         name, location = clipData
         return IdentIcon(name, window, (addPoints(location, locationOffset)))
 
+    def execute(self):
+        # Until this icon gets more specific about what it holds
+        return eval(self.name)
+
 class FnIcon(Icon):
     def __init__(self, name, window=None, location=None):
         Icon.__init__(self, window)
@@ -461,6 +471,10 @@ class FnIcon(Icon):
         ic = FnIcon(name, window, (addPoints(location, offset)))
         ic.argIcons = clipboardDataToIcons(children, window, offset)
         return ic
+
+    def execute(self):
+        argValues = [c.execute() for c in self.children()]
+        return getattr(math, self.name)(*argValues)
 
 class BinOpIcon(Icon):
     def __init__(self, operator, window=None, location=None):
@@ -766,12 +780,18 @@ class BinOpIcon(Icon):
         iconLeft = self.rect[0]
         return iconLeft < btnPressLoc[0] < iconLeft + lParenImage.width
 
+    def execute(self):
+        leftValue = self.leftArg.execute()
+        rightValue = self.rightArg.execute()
+        return binOpFn[self.operator](leftValue, rightValue)
+
 class DivideIcon(Icon):
-    def __init__(self, window=None, location=None):
+    def __init__(self, window=None, location=None, floorDiv=False):
         Icon.__init__(self, window)
         self.precedence = 11
         self.topArg = None
         self.bottomArg = None
+        self.floorDiv = floorDiv
         emptyArgWidth = 11
         emptyArgHeight = 14
         self.emptyArgSize = (emptyArgWidth, emptyArgHeight)
@@ -975,6 +995,14 @@ class DivideIcon(Icon):
         ic.leftArg, ic.rightArg = clipboardDataToIcons(children, window, offset)
         return ic
 
+    def execute(self):
+        topValue = self.topArg.execute()
+        bottomValue = self.bottomArg.execute()
+        if self.floorDiv:
+            return operator.floordiv(topValue, bottomValue)
+        else:
+            return operator.truediv(topValue, bottomValue)
+
 class ImageIcon(Icon):
     def __init__(self, image, window=None, location=None):
         Icon.__init__(self, window)
@@ -1015,6 +1043,9 @@ class ImageIcon(Icon):
     def fromClipboard(_clipData, _window, _locationOffset):
         # ... base64 decode a jpeg
         # image, location = clipData
+        return None
+
+    def execute(self):
         return None
 
 class Layout:

@@ -96,6 +96,7 @@ class Window:
         self.top.bind("<Control-c>", self._copyCb)
         self.top.bind("<Control-v>", self._pasteCb)
         self.top.bind("<Delete>", self._deleteCb)
+        self.top.bind("<Escape>", self._cancelCb)
         self.imgFrame.pack(fill=tk.BOTH, expand=True)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
@@ -157,6 +158,9 @@ class Window:
         self.refresh()
 
     def _motionCb(self, evt):
+        if self.dragging is not None:
+            self._updateDrag(evt)
+            return
         if self.buttonDownTime is None or not (evt.state & LEFT_MOUSE_MASK):
             return
         if self.dragging is None and not self.inRectSelect:
@@ -175,13 +179,13 @@ class Window:
                         self._startDrag(evt, [ic])  # double-click drag single icon
                     else:
                         self._startDrag(evt, list(self.findLeftOuterIcon(ic).traverse()))
-        else:
-            if self.dragging is not None:
-                self._updateDrag(evt)
-            elif self.inRectSelect:
-                self._updateRectSelect(evt)
+        elif self.inRectSelect:
+            self._updateRectSelect(evt)
 
     def _buttonPressCb(self, evt):
+        if self.dragging:
+            self._endDrag()
+            return
         if self.buttonDownTime is not None:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
                 self.doubleClickFlag = True
@@ -205,7 +209,7 @@ class Window:
             self.buttonDownTime = None
         elif self.doubleClickFlag:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
-                self._execute()
+                self._execute(self.findIconAt(*self.buttonDownLoc), evt)
             self.buttonDownTime = None
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
             # In order to handle double-click, button release actions are run not done
@@ -290,11 +294,15 @@ class Window:
     def _deleteCb(self, _evt=None):
         self.removeIcons(self.selectedIcons())
 
-    def _startDrag(self, evt, icons):
+    def _cancelCb(self, _evt=None):
+        self._cancelDrag()
+
+    def _startDrag(self, evt, icons, needRemove=True):
         self.dragging = icons
         # Remove the icons from the window image and handle the resulting detachments
         # re-layouts, and redrawing.
-        self.removeIcons(self.dragging)
+        if needRemove:
+            self.removeIcons(self.dragging)
         # Dragging parent icons away from their children may require re-layout of the
         # (moving) parent icons
         topDraggingIcons = findTopIcons(self.dragging)
@@ -338,7 +346,7 @@ class Window:
         self._updateDrag(evt)
 
     def _updateDrag(self, evt):
-        if self.buttonDownTime is None or not self.dragging:
+        if not self.dragging:
             return
         x = self.dragImageOffset[0] + evt.x - self.buttonDownLoc[0]
         y = self.dragImageOffset[1] + evt.y - self.buttonDownLoc[1]
@@ -405,10 +413,22 @@ class Window:
         self.dragging = None
         self.snapped = None
         self.snapList = None
+        self.buttonDownTime = None
         # Refresh the entire display.  While refreshing a smaller area is technically
         # possible, after all the dragging and drawing, it's prudent to ensure that the
         # display remains in sync with the image pixmap
         self.refresh()
+
+    def _cancelDrag(self):
+        # Not properly cancelling drag, yet, just dropping the icons being dragged
+        self.clearBgRect(self.lastDragImageRegion)
+        for ic in self.findIconsInRegion(self.lastDragImageRegion):
+            ic.draw(clip=self.lastDragImageRegion)
+        self.refresh(self.lastDragImageRegion)
+        self.dragging = None
+        self.snapped = None
+        self.snapList = None
+        self.buttonDownTime = None
 
     def _startRectSelect(self, evt):
         self.inRectSelect = True
@@ -458,8 +478,15 @@ class Window:
         self._eraseRectSelect()
         self.inRectSelect = False
 
-    def _execute(self):
-        print("execute")
+    def _execute(self, iconToExecute, evt):
+        if iconToExecute is None:
+            return
+        iconToExecute = self.findLeftOuterIcon(iconToExecute)
+        result = iconToExecute.execute()
+        resultIcons = compile_eval.parsePasted(repr(result), self, (evt.x, evt.y))
+        if resultIcons is None:
+            resultIcons = [icon.IdentIcon(repr(result), self, (evt.x, evt.y))]
+        self._startDrag(evt, resultIcons, needRemove=False)
 
     def _select(self, evt, op='select'):
         """Select or toggle the top icon being pointed at, and bring it to the top.
