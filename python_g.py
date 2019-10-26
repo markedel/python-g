@@ -1,5 +1,7 @@
+# Copyright Mark Edel  All rights reserved
 # Python-g main module
 import tkinter as tk
+import typing
 import icon
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
@@ -10,13 +12,19 @@ windowBgColor = (128, 128, 128)
 defaultWindowSize = (800, 800)
 dragThreshold = 2
 
+# Tkinter event modifiers
 SHIFT_MASK = 0x001
 CTRL_MASK = 0x004
+LEFT_ALT_MASK = 0x008
+RIGHT_ALT_MASK = 0x080
 LEFT_MOUSE_MASK = 0x100
 RIGHT_MOUSE_MASK = 0x300
+
 DOUBLE_CLICK_TIME = 300
 
 SNAP_DIST = 8
+
+startUpTime = time.monotonic()
 
 # Notes on window drawing:
 #
@@ -37,7 +45,7 @@ def combineRects(rect1, rect2):
 
 def msTime():
     """Return a millisecond-resolution timestamp"""
-    return int(time.monotonic() * 1000)
+    return int(time.monotonic() - startUpTime * 1000)
 
 def makeRect(pos1, pos2):
     """Make a rectangle tuple from two points (our rectangles are ordered)"""
@@ -96,7 +104,10 @@ class Window:
         self.top.bind("<Control-c>", self._copyCb)
         self.top.bind("<Control-v>", self._pasteCb)
         self.top.bind("<Delete>", self._deleteCb)
+        self.top.bind("<BackSpace>", self._backspaceCb)
         self.top.bind("<Escape>", self._cancelCb)
+        self.top.bind("<Return>", self._enterCb)
+        self.top.bind("<Key>", self._keyCb)
         self.imgFrame.pack(fill=tk.BOTH, expand=True)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
@@ -122,6 +133,8 @@ class Window:
         self.image = Image.new('RGB', (width, height), color=windowBgColor)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
+        self.entryIcon = None
+        self.entryIconOnMouse = False
 
     def allIcons(self, order="draw"):
         """Iterate over of all icons in the window, in drawing order, "draw", by default,
@@ -157,6 +170,67 @@ class Window:
         """Called when a new part of the window is exposed and needs to be redrawn"""
         self.refresh()
 
+    def _keyCb(self, evt):
+        if evt.state & (CTRL_MASK | LEFT_ALT_MASK | RIGHT_ALT_MASK):
+            return
+        char = typing.tkCharFromEvt(evt)
+        if char is None:
+             return
+        if self.entryIcon is not None:
+            # There's already an entry icon.  Feed it the character
+            self.entryIcon.addChar(char)
+            self._redisplayChangedEntryIcon(evt)
+            return
+        selectedIcons = findTopIcons(self.selectedIcons())
+        self.entryIcon = typing.EntryIcon(window=self, location=(0, 0),
+            initialString=char)
+        if len(selectedIcons) == 1:
+            # A single icon was selected.  Replace it and its children
+            self.entryIconOnMouse = False
+            replaceIcon = selectedIcons[0]
+            iconParent = self.parentOf(replaceIcon)
+            iconParent.replaceChild(replaceIcon, self.entryIcon)
+            self._redisplayChangedEntryIcon()
+        else:
+            # Either no icons were selected, or multiple icons were selected (so
+            # we don't know what to replace).  Put the entry icon on the pointer.
+            # Below is temporary code until the "empty cursor" is implemented.
+            # It is unlikely we will ever summon a complete entry icon to the mouse.
+            self.entryIconOnMouse = True
+            x = evt.x - 6
+            y = evt.y - self.entryIcon.outSiteOffset[1]
+            self.entryIcon.rect = offsetRect(self.entryIcon.rect, x, y)
+            self.buttonDownLoc = (evt.x, evt.y)  # drag needs starting location
+            self._startDrag(evt, [self.entryIcon], needRemove=False)
+
+    def _redisplayChangedEntryIcon(self, evt=None):
+        # If the size of the entry icon changes it requests re-layout of parent.  Figure
+        # out if layout needs to change and do so, otherwise just redraw the entry icon
+        if self.entryIconOnMouse:
+            if self.entryIcon.layoutDirty:
+                self.entryIcon.layout()
+                self._cancelDrag()
+                self._startDrag(evt, [self.entryIcon], needRemove=False)
+            else:
+                self.entryIcon.draw(self.dragImage)
+            return
+        layoutNeeded = False
+        redrawRegion = AccumRects(self.entryIcon.rect)
+        for ic in self.topIcons:
+            if ic.needsLayout():
+                layoutNeeded = True
+                redrawRegion.add(ic.hierRect())
+                ic.layout()
+                redrawRegion.add(ic.hierRect())
+        # Redraw the areas affected by the updated layouts
+        if layoutNeeded:
+            self.clearBgRect(redrawRegion.get())
+            for ic in self.findIconsInRegion(redrawRegion.get()):
+                ic.draw(clip=redrawRegion.get())
+            self.refresh(redrawRegion.get())
+        else:
+            self.entryIcon.draw()
+
     def _motionCb(self, evt):
         if self.dragging is not None:
             self._updateDrag(evt)
@@ -185,6 +259,7 @@ class Window:
     def _buttonPressCb(self, evt):
         if self.dragging:
             self._endDrag()
+            self.entryIconOnMouse = False
             return
         if self.buttonDownTime is not None:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
@@ -294,8 +369,29 @@ class Window:
     def _deleteCb(self, _evt=None):
         self.removeIcons(self.selectedIcons())
 
+    def _backspaceCb(self, _evt=None):
+        if self.entryIcon is None:
+            self.removeIcons(self.selectedIcons())
+        else:
+            self.entryIcon.backspace()
+            self._redisplayChangedEntryIcon()
+
     def _cancelCb(self, _evt=None):
+        if self.entryIcon is not None:
+            self.removeIcons([self.entryIcon])
+            self.entryIcon = None
         self._cancelDrag()
+
+    def _enterCb(self, _evt=None):
+        if self.entryIcon is not None:
+            enteredIcons = compile_eval.parsePasted(self.entryIcon.text, self, (0, 0))
+            if enteredIcons is None:
+                self.removeIcons([self.entryIcon])
+            else:
+                self.replaceIcons(self.entryIcon, enteredIcons[0])
+            self.entryIcon = None
+            self.entryIconOnMouse = False
+            self._cancelDrag()
 
     def _startDrag(self, evt, icons, needRemove=True):
         self.dragging = icons
@@ -421,6 +517,8 @@ class Window:
 
     def _cancelDrag(self):
         # Not properly cancelling drag, yet, just dropping the icons being dragged
+        if self.dragging is None:
+            return
         self.clearBgRect(self.lastDragImageRegion)
         for ic in self.findIconsInRegion(self.lastDragImageRegion):
             ic.draw(clip=self.lastDragImageRegion)
@@ -616,11 +714,48 @@ class Window:
             ic.draw(clip=redrawRegion.get())
         self.refresh(redrawRegion.get())
 
+    def replaceIcons(self, toReplace, replaceWith):
+        iconParent = self.parentOf(toReplace)
+        if iconParent is None:
+            self.removeIcons([toReplace])
+            replaceWith.rect = offsetRect(replaceWith.rect, toReplace.rect[0], toReplace.rect[1])
+            replaceWith.layoutDirty = True
+            self.topIcons.append(replaceWith)
+            redrawRegion = AccumRects(replaceWith.rect)
+        else:
+            iconParent.replaceChild(toReplace, replaceWith)
+            redrawRegion = AccumRects(toReplace.rect)
+        for ic in self.topIcons:
+            if ic.needsLayout():
+                redrawRegion.add(ic.hierRect())
+                ic.layout()
+                redrawRegion.add(ic.hierRect())
+        # Redraw the areas affected by the updated layouts
+        self.clearBgRect(redrawRegion.get())
+        for ic in self.findIconsInRegion(redrawRegion.get()):
+            ic.draw(clip=redrawRegion.get())
+        self.refresh(redrawRegion.get())
+
     def clearBgRect(self, rect):
         """Clear but don't refresh a rectangle of the window"""
         # Fill rectangle seems to go one beyond
         l, t, r, b = rect
         self.draw.rectangle((l, t, r-1, b-1), fill=windowBgColor)
+
+    def parentOf(self, child, fromIcon=None):
+        """Find the parent of a given icon.  Don't use this casually.  Because we don't
+        have a parent link, this is an exhaustive search of the hierarchy."""
+        if fromIcon is None:
+            icons = self.topIcons
+        else:
+            icons = fromIcon.children()
+        for ic in icons:
+            if ic == child:
+                return fromIcon
+            result = self.parentOf(child, fromIcon=ic)
+            if result is not None:
+                return result
+        return None
 
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""
@@ -683,7 +818,6 @@ class App:
     def newWindow(self):
         window = Window(self.root)
         self.windows.append(window)
-
 
 def findTopIcons(icons):
     iconDir = {ic:True for ic in icons}

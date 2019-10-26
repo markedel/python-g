@@ -1,3 +1,4 @@
+# Copyright Mark Edel  All rights reserved
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from python_g import rectsTouch, AccumRects
 import math
