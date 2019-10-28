@@ -189,7 +189,7 @@ class Window:
             self.entryIconOnMouse = False
             replaceIcon = selectedIcons[0]
             iconParent = self.parentOf(replaceIcon)
-            iconParent.replaceChild(replaceIcon, self.entryIcon)
+            iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
             self._redisplayChangedEntryIcon()
         else:
             # Either no icons were selected, or multiple icons were selected (so
@@ -424,20 +424,23 @@ class Window:
         # dragged icons
         draggingOutputs = []
         for dragIcon in topDraggingIcons:
-            for ic, x, y in dragIcon.snapLists().get("output", []):
+            for ic, (x, y), siteIdx in dragIcon.snapLists().get("output", []):
                 draggingOutputs.append(((x-xOff, y-yOff), ic))
         stationaryInputs = []
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
                 isTopIcon = winIcon is topIcon
-                for ic, xi, yi in winIcon.snapLists(atTop=isTopIcon).get("input", []):
-                    stationaryInputs.append(((xi, yi), ic))
+                snapLists = winIcon.snapLists(atTop=isTopIcon)
+                for ic, pos, idx in snapLists.get("input", []):
+                    stationaryInputs.append((pos, ic, ("input", idx)))
+                for ic, pos, idx in snapLists.get("insertInput", []):
+                    stationaryInputs.append((pos, ic, ("insertInput", idx)))
         self.snapList = []
         for si in stationaryInputs:
-            sx, sy = si[0]
+            (sx, sy), sIcon, sSite = si
             for do in draggingOutputs:
-                dx, dy = do[0]
-                self.snapList.append((sx-dx, sy-dy, si[1], do[1], si[0]))
+                (dx, dy), dIcon = do
+                self.snapList.append((sx-dx, sy-dy, sIcon, dIcon, sSite))
         self.snapped = None
         self._updateDrag(evt)
 
@@ -450,13 +453,13 @@ class Window:
         # drag position to mate them exactly (snap them together)
         self.snapped = None
         nearest = SNAP_DIST + 1
-        for sx, sy, inIcon, outIcon, pos in self.snapList:
+        for sx, sy, inIcon, outIcon, site in self.snapList:
             dist = abs(x-sx) + abs(y-sy)
             if dist < nearest:
                 nearest = dist
                 x = sx
                 y = sy
-                self.snapped = (inIcon, outIcon, pos)
+                self.snapped = (inIcon, outIcon, site)
         # Erase the old drag image
         width = self.dragImage.width
         height = self.dragImage.height
@@ -487,15 +490,16 @@ class Window:
         self.topIcons += topDraggedIcons
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
-            parentIcon, childIcon, pos = self.snapped
-            self.topIcons.remove(childIcon)
-            toDelete = parentIcon.childAt(pos)
+            parentIcon, childIcon, site = self.snapped
+            self.topIcons.remove(childIcon)  # Added above in case there were others
+            toDelete = parentIcon.childAt(site)
             redrawRegion.add(parentIcon.hierRect())
             if toDelete is not None:
-                parentIcon.replaceChild(toDelete, childIcon)
                 redrawRegion.add(childIcon.hierRect())
-            else:
-                parentIcon.addChild(childIcon, pos)
+            if site[0] in ("input", "attrOut"):
+                parentIcon.replaceChild(childIcon, site)
+            elif site[0] == "insertInput":
+                parentIcon.insertChildren([childIcon], site)
             # Redo layouts for all affected (all the way to the top)
             for ic in self.topIcons:
                 if ic.needsLayout():
@@ -694,7 +698,7 @@ class Window:
                 elif ic not in deletedDict and child in deletedDict:
                     detachList.append((ic, child))
         for ic, child in detachList:
-            ic.detach(child)
+            ic.replaceChild(None, ic.siteOf(child))
         # Update the window's top-icon list to remove deleted icons and add those that
         # have become top icons via deletion of their parents (bring those to the front)
         newTopIcons = []
@@ -723,7 +727,7 @@ class Window:
             self.topIcons.append(replaceWith)
             redrawRegion = AccumRects(replaceWith.rect)
         else:
-            iconParent.replaceChild(toReplace, replaceWith)
+            iconParent.replaceChild(replaceWith, iconParent.siteOf(toReplace))
             redrawRegion = AccumRects(toReplace.rect)
         for ic in self.topIcons:
             if ic.needsLayout():

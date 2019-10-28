@@ -7,6 +7,18 @@ BLINK_RATE = 500
 PEN_BG_COLOR = (235, 255, 235, 255)
 RIGHT_LAYOUT_MARGIN = 3
 
+operators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '^', '~', '<',
+ '>', '<=', '>=', '==', '!=']
+delimiters = ['(', ')', '[', ']', '{', '},', ':', '.', ';', '@', '=', '->', '+=', '-=',
+ '*=', '/=', '//=', '%=', '@=', '&=', '|=', '^=', '>>=', '<<=', '**=']
+delimitChars = list(dict.fromkeys("".join(operators + delimiters)))
+keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
+ 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
+ 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
+ 'return', 'try', 'while', 'with', 'yield']
+
+
+
 penPixmap = (
     "....oooo    ",
     "...o%%%%oo  ",
@@ -23,6 +35,22 @@ penPixmap = (
 penOffset = 6
 penImage = icon.asciiToImage(penPixmap)
 
+attrPenPixmap = (
+    "....oooo...",
+    "...o%%%%o..",
+    "..o%%%%%%o.",
+    ".o%%%%%%%%o",
+    ".o%%%33%%%o",
+    ".o%%%33%%%o",
+    ".o%%3%%%%%o",
+    "o%%3%%%%%o.",
+    "o%3%%%%%o..",
+    "o3%%oooo...",
+    "oooo......."
+)
+attrPenOffset = 5
+attrPenImage = icon.asciiToImage(attrPenPixmap)
+
 class EntryIcon(icon.Icon):
     def __init__(self, initialString="", window=None, location=None):
         icon.Icon.__init__(self, window)
@@ -34,6 +62,8 @@ class EntryIcon(icon.Icon):
         x, y = location if location is not None else (0, 0)
         self.rect = (x, y, x + self._width(), y + self.height)
         self.outSiteOffset = (0, self.height // 2)
+        self.attrSiteOffset = (0, self.height - 3)
+        self.attachedToAttrSite = False
         self.layoutDirty = True
 
     def _width(self, text=None, boxOnly=False):
@@ -76,8 +106,12 @@ class EntryIcon(icon.Icon):
         textLeft = x + penImage.width + icon.TEXT_MARGIN
         draw.text((textLeft, y + icon.TEXT_MARGIN), self.text, font=icon.globalFont,
          fill=(0, 0, 0, 255))
-        nibTop = y + self.outSiteOffset[1] - penImage.height // 2
-        image.paste(penImage, box=(x, nibTop), mask=penImage)
+        if self.attachedToAttrSite:
+            nibTop = y + self.attrSiteOffset - attrPenImage.height
+            image.paste(attrPenImage, box=(x, nibTop), mask=attrPenImage)
+        else:
+            nibTop = y + self.outSiteOffset[1] - penImage.height // 2
+            image.paste(penImage, box=(x, nibTop), mask=penImage)
 
     def blinkCursor(self):
         erase = (python_g.msTime() % BLINK_RATE*2) > BLINK_RATE
@@ -100,7 +134,7 @@ class EntryIcon(icon.Icon):
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
-        return {"output":[(self, x + self.outSiteOffset[0], y + self.outSiteOffset[1])]}
+        return {"output":[(self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)]}
 
     def layout(self, location=None):
         if location is None:

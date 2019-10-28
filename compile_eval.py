@@ -64,20 +64,18 @@ def makeIcons(parsedExpr, window, x, y):
         return icon.IdentIcon(parsedExpr[1], window, (x, y))
     if parsedExpr[0] == 'functionIcon':
         topIcon = icon.FnIcon(parsedExpr[1], window, (x, y))
-        for pe in parsedExpr[2:]:
-            childIcon = makeIcons(pe, window, x, y)
-            topIcon.addChild(childIcon)
+        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[2:]]
+        topIcon.insertChildren(childIcons, ("insertInput", 0))
         return topIcon
     if parsedExpr[0] == 'binOpIcon':
         topIcon = icon.BinOpIcon(parsedExpr[1], window, (x, y))
-        # ... Have to fix positional attachment after getting everything else working
-        topIcon.addChild(makeIcons(parsedExpr[2], window, x, y))
-        topIcon.addChild(makeIcons(parsedExpr[3], window, x, y))
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
+        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
         return topIcon
     if parsedExpr[0] == 'divideIcon':
         topIcon = icon.DivideIcon(window, (x, y))
-        topIcon.addChild(makeIcons(parsedExpr[1], window, x, y))
-        topIcon.addChild(makeIcons(parsedExpr[2], window, x, y))
+        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), ("input", 0))
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 1))
         return topIcon
     else:
         return icon.IdentIcon("**Internal Parse Error**", window, (x,y))

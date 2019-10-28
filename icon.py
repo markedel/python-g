@@ -15,7 +15,7 @@ binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.tr
  '@':lambda x,y:x@y, 'and':lambda x,y:x and y, 'or':lambda x,y:x or y}
 
 TEXT_MARGIN = 2
-SPINE_THICKNESS = 3
+INSERT_SITE_Y_OFFSET = 6
 OUTLINE_COLOR = (220, 220, 220, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
 SELECT_TINT = (0, 0, 255, 0)
@@ -260,6 +260,8 @@ class IdentIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
         self.outSiteOffset = (0, bodyHeight // 2)
+        self.attrSiteOffset = (bodyWidth, bodyHeight - 3)
+        self.attrIcon = None
 
     def draw(self, image=None, location=None, clip=None):
         if image is None:
@@ -277,9 +279,16 @@ class IdentIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)
 
+    def children(self):
+        if self.attrIcon:
+            return [self.attrIcon]
+        return []
+
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
-        return {"output":[(self, x + self.outSiteOffset[0], y + self.outSiteOffset[1])]}
+        outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
+        attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
+        return {"output":[outSite], "attrOut":[attrOutSite]}
 
     def layout(self, location=None):
         if location is not None:
@@ -325,6 +334,8 @@ class FnIcon(Icon):
         x, y = (0, 0) if location is None else location
         width, height = self._size()
         self.rect = (x, y, x + width, y + height)
+        self.attrSiteOffset = (width-1, height - 3)
+        self.attrIcon = None
 
     def _size(self):
         width, height = self.bodySize
@@ -362,20 +373,30 @@ class FnIcon(Icon):
          location, clip)  # ... try w/o mask
 
     def children(self):
+        if self.attrIcon:
+            return self.argIcons + [self.attrIcon]
         return self.argIcons
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
-        outOffsets = [(self, x + self.outSiteOffset[0], y + self.outSiteOffset[1])]
+        outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
         width, height = self.bodySize
         x += width + outSiteImage.width - 1 - inSiteImage.width
         y += height // 2
-        inOffsets = []
-        for i, child in enumerate(self.children()):
+        inSites = []
+        for i, child in enumerate(self.argIcons):
             xOff = self.inOffsets[i]
-            inOffsets.append((giveInputSiteToBinOpChild(self, child), x + xOff, y))
-        inOffsets.append((self, x + self.inOffsets[-1], y))
-        return {"output":outOffsets, "input":inOffsets}
+            snapListEntry = (self, (x + xOff, y), i)
+            inSites.append(giveInputSiteToBinOpChild(child, snapListEntry))
+        insertSites = []
+        if len(self.argIcons) == 0:
+            insertSites.append((self, (x, y), 0))
+        else:
+            for i, inOff in enumerate(self.inOffsets):
+                insertSites.append((self, (x + inOff, y + INSERT_SITE_Y_OFFSET), i))
+        attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
+        return {"output":[outSite], "input":inSites, "attrOut":[attrOutSite],
+         "insertInput":insertSites}
 
     def touchesRect(self, rect):
         if not rectsTouch(self.rect, rect):
@@ -385,38 +406,36 @@ class FnIcon(Icon):
         bodyRight = self.rect[0] + self.bodySize[0]
         return not rectWithinXBounds(rect, bodyRight, bodyRight + self.inOffsets[-1])
 
-    def detach(self, child):
-        """Remove a child icon"""
-        self.argIcons.remove(child)
+    def insertChildren(self, children, site):
+        """Insert one or more child icons at the specified site"""
+        siteType, siteIndex = site
+        if siteType in ("input", "insertInput"):
+            self.argIcons[siteIndex:siteIndex] = children
         self.layoutDirty = True
 
-    def addChild(self, child, pos=None):
-        """Add a child icon at the end of the child list"""
-        if pos is None:
-            self.argIcons.append(child)
-        else:
-            posX, posY = pos
-            for index, sitePos in enumerate(self.snapLists().get("input", [])):
-                if sitePos[1] == posX and sitePos[2] == posY:
-                    self.argIcons.insert(index, child)
-                    break
-            else:
-                print("Failed to add child icon.  Icon not found at site position")
-                return
+    def replaceChild(self, newChild, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            self.argIcons[siteIndex] = newChild
+        elif siteType == "attrOut":
+            self.attrIcon = newChild
         self.layoutDirty = True
 
-    def replaceChild(self, childToRemove, childToInsert):
-        index = self.argIcons.index(childToRemove)
-        self.argIcons[index] = childToInsert
-        self.layoutDirty = True
+    def childAt(self, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            if siteIndex < len(self.argIcons):
+                return self.argIcons[siteIndex]
+        elif siteType == "attrOut" and siteIndex == 0:
+            return self.attrIcon
+        return None
 
-    def childAt(self, pos):
-        posX, posY = pos
-        for index, sitePos in enumerate(self.snapLists().get("input", [])):
-            if sitePos[1] == posX and sitePos[2] == posY:
-                if len(self.argIcons) <= index:
-                    return None
-                return self.argIcons[index]
+    def siteOf(self, child):
+        for i, a in enumerate(self.argIcons):
+            if a is child:
+                return ("input", i)
+        if child is self.attrIcon:
+            return ("attrOut", 0)
         return None
 
     def layout(self, location=None):
@@ -601,10 +620,10 @@ class BinOpIcon(Icon):
     def children(self):
         return [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
 
-    def snapLists(self, allAllowed=False, atTop=False):
+    def snapLists(self, atTop=False):
         x, y = self.rect[:2]
         y += self.outSiteOffset[1]
-        outOffsets = [(self, x + self.outSiteOffset[0], y)]
+        outSite = (self, (x + self.outSiteOffset[0], y), 0)
         bodyX = x + self.leftArgWidth - 1
         if self.hasParens:
             lArgX = x + lParenImage.width - inSiteImage.width
@@ -613,70 +632,37 @@ class BinOpIcon(Icon):
             lArgX = x
             bodyX += 1
         rArgX = bodyX + self.opSize[0] + self.depthWidth
-        inOffsets = []
-        if allAllowed:
-            inOffsets.append((self, lArgX, y))
-            inOffsets.append((self, rArgX, y))
-            #inOffsets.append((self, bodyX, y))
-        else:
-            if self.hasParens or self.leftArg is None or atTop:
-                inOffsets.append((giveInputSiteToBinOpChild(self, self.leftArg), lArgX, y))
-            inOffsets.append((giveInputSiteToBinOpChild(self, self.rightArg), rArgX, y))
-            # include body site: 1) how to know if top (do we care) 2) how to refer site to parent
-        return {"output":outOffsets, "input":inOffsets}
+        inSites = []
+        if self.hasParens or self.leftArg is None or atTop:
+            snapEntry = (self, (lArgX, y), 0)
+            inSites.append(giveInputSiteToBinOpChild(self.leftArg, snapEntry))
+        snapEntry = (self, (rArgX, y), 1)
+        inSites.append(giveInputSiteToBinOpChild(self.rightArg, snapEntry))
+        return {"output":[outSite], "input":inSites}
 
-    def detach(self, child):
-        """Remove a child icon"""
+    def replaceChild(self, newChild, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            if siteIndex == 0:
+                self.leftArg = newChild
+            else:
+                self.rightArg = newChild
+        self.layoutDirty = True
+
+    def childAt(self, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            if siteIndex == 0:
+                return self.leftArg
+            elif siteIndex == 1:
+                return self.rightArg
+        return None
+
+    def siteOf(self, child):
         if child is self.leftArg:
-            self.leftArg = None
+           return ("input", 0)
         elif child is self.rightArg:
-            self.rightArg = None
-        else:
-            print("BinOpIcon: attempt to detach child that is not attached")
-        self.layoutDirty = True
-
-    def addChild(self, child, pos=None):
-        """Add a child icon"""
-        if pos is None:
-            print("BinOpIcon: Should not add child without position (fix)")
-            if self.leftArg is None:
-                self.leftArg = child
-            elif self.rightArg is None:
-                self.rightArg = child
-            else:
-                print("BinOpIcon: Could not add child to full icon")
-                return
-        else:
-            posX, posY = pos
-            snapPositions = self.snapLists(allAllowed=True)["input"]
-            if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
-                self.leftArg = child
-            elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
-                self.rightArg = child
-            else:
-                print("BinOpIcon: Failed to add child icon, not found at site position")
-                print("   icon", self.operator)
-                print("   snapPositions", snapPositions)
-                print("   pos", pos)
-                return
-        self.layoutDirty = True
-
-    def replaceChild(self, childToRemove, childToInsert):
-        if childToRemove is self.leftArg:
-            self.leftArg = childToInsert
-        elif childToRemove is self.rightArg:
-            self.rightArg = childToInsert
-        else:
-            print("BinOpIcon: Attempt to replace child that is not attached")
-        self.layoutDirty = True
-
-    def childAt(self, pos):
-        posX, posY = pos
-        snapPositions = self.snapLists(allAllowed=True)["input"]
-        if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
-            return self.leftArg
-        elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
-            return self.rightArg
+            return ("input", 1)
         return None
 
     def layout(self, location=None):
@@ -804,6 +790,8 @@ class DivideIcon(Icon):
         x, y = location
         self.rect = (x, y, x + width, y + height)
         self.outSiteOffset = (0, self.topArgSize[1] + 2)
+        self.attrSiteOffset = (width-1, height - 3)
+        self.attrIcon = None
 
     def _size(self):
         topWidth, topHeight = self.topArgSize
@@ -857,69 +845,53 @@ class DivideIcon(Icon):
         return True
 
     def children(self):
-        return [arg for arg in (self.topArg, self.bottomArg) if arg is not None]
+        return [arg for arg in (self.topArg, self.bottomArg, self.attrIcon) if arg is not None]
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
         y += self.outSiteOffset[1]
-        outOffsets = [(self, x + self.outSiteOffset[0], y)]
+        outSite = (self, (x + self.outSiteOffset[0], y), 0)
         topArgX = x + self.topArgSiteOffset[0]
         topArgY = y + self.topArgSiteOffset[1]
+        topArgSnapEntry = (self, (topArgX, topArgY), 0)
         bottomArgX = x + self.bottomArgSiteOffset[0]
         bottomArgY = y + self.bottomArgSiteOffset[1]
-        inOffsets = [(giveInputSiteToBinOpChild(self, self.topArg), topArgX, topArgY),
-          (giveInputSiteToBinOpChild(self, self.bottomArg), bottomArgX, bottomArgY)]
-        return {"output":outOffsets, "input":inOffsets}
+        bottomArgSnapEntry = (self, (bottomArgX, bottomArgY), 1)
+        inSites = [giveInputSiteToBinOpChild(self.topArg, topArgSnapEntry),
+          giveInputSiteToBinOpChild(self.bottomArg, bottomArgSnapEntry)]
+        attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
+        return {"output":[outSite], "input":inSites, "attrOut":[attrOutSite]}
 
-    def detach(self, child):
-        """Remove a child icon"""
+    def replaceChild(self, newChild, site):
+        "Add or replace a child icon"
+        siteType, siteIndex = site
+        if siteType == "input":
+            if siteIndex == 0:
+                self.topArg = newChild
+            else:
+                self.bottomArg = newChild
+        elif siteType == "attrOut":
+            self.attrIcon = newChild
+        self.layoutDirty = True
+
+    def childAt(self, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            if siteIndex == 0:
+                return self.topArg
+            elif siteIndex == 1:
+                return self.bottomArg
+        elif siteType == "attrOut" and siteIndex == 0:
+            return self.attrIcon
+        return None
+
+    def siteOf(self, child):
         if child is self.topArg:
-            self.topArg = None
+           return ("input", 0)
         elif child is self.bottomArg:
-            self.bottomArg = None
-        else:
-            print("BinOpIcon: attempt to detach child that is not attached")
-        self.layoutDirty = True
-
-    def addChild(self, child, pos=None):
-        """Add a child icon"""
-        if pos is None:
-            print("DivOpIcon: Should not add child without position (fix)")
-            if self.topArg is None:
-                self.topArg = child
-            elif self.bottomArg is None:
-                self.bottomArg = child
-            else:
-                print("DivOpIcon: Could not add child to full icon")
-                return
-        else:
-            posX, posY = pos
-            snapPositions = self.snapLists()["input"]
-            if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
-                self.topArg = child
-            elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
-                self.bottomArg = child
-            else:
-                print("DivpIcon: Failed to add child icon, not found at site position")
-                return
-        self.layoutDirty = True
-
-    def replaceChild(self, childToRemove, childToInsert):
-        if childToRemove is self.topArg:
-            self.topArg = childToInsert
-        elif childToRemove is self.bottomArg:
-            self.bottomArg = childToInsert
-        else:
-            print("DivOpIcon: Attempt to replace child that is not attached")
-        self.layoutDirty = True
-
-    def childAt(self, pos):
-        snapPositions = self.snapLists()["input"]
-        posX, posY = pos
-        if snapPositions[0][1] == posX and snapPositions[0][2] == posY:
-            return self.topArg
-        elif snapPositions[1][1] == posX and snapPositions[1][2] == posY:
-            return self.bottomArg
+            return ("input", 1)
+        elif child is self.attrIcon:
+            return ("attrOut", 0)
         return None
 
     # ... not sure using old top left is the best way to determine where to place
@@ -1133,16 +1105,17 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc=None):
                 return result
     return None
 
-def giveInputSiteToBinOpChild(parent, child):
+def giveInputSiteToBinOpChild(child, snapListEntry):
+    parent, pos, site = snapListEntry
     if child is None or child.__class__ is not BinOpIcon or child.hasParens:
         # child is empty or pick-able on the left
-        return parent
+        return snapListEntry
     childLeft = child.leftArg
     if childLeft is None or childLeft.__class__ is not BinOpIcon:
         # Give the site to the child, but can't go further
-        return child
+        return (child, pos, 0)
     # Try to pass the site even further down
-    return giveInputSiteToBinOpChild(child, childLeft)
+    return giveInputSiteToBinOpChild(childLeft, (child, pos, 0))
 
 def containingRect(icons):
     maxRect = AccumRects()
