@@ -25,9 +25,9 @@ def parsePasted(text, window, location):
     icons = []
     for expr in exprList:
         topIcon = makeIcons(parseExpr(expr), window, x, y)
-        topIcon.layout(location)
+        topIcon.layout((x, y))
         icons.append(topIcon)
-        y += 10 # Figure out how to space multiple expressions, later
+        y += 30 # Figure out how to space multiple expressions, later
     return icons
 
 def parseExpr(expr):
@@ -39,7 +39,9 @@ def parseExpr(expr):
         return (fn, unaryOps[expr.op.__class__], parseExpr(expr.operand))
     elif expr.__class__ == ast.BinOp:
         if expr.op.__class__ is ast.Div:
-            return (div, parseExpr(expr.left), parseExpr(expr.right))
+            return (div, False, parseExpr(expr.left), parseExpr(expr.right))
+        elif expr.op.__class__ is ast.FloorDiv:
+            return (div, True, parseExpr(expr.left), parseExpr(expr.right))
         return (bin, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
     elif expr.__class__ == ast.BoolOp:
         return (bin, boolOps[expr.op.__class__], *(parseExpr(e) for e in expr.values))
@@ -73,9 +75,9 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
         return topIcon
     if parsedExpr[0] == 'divideIcon':
-        topIcon = icon.DivideIcon(window, (x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), ("input", 0))
-        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 1))
+        topIcon = icon.DivideIcon(window, (x, y), floorDiv=parsedExpr[1])
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
+        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
         return topIcon
     else:
         return icon.IdentIcon("**Internal Parse Error**", window, (x,y))

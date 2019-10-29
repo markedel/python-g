@@ -15,7 +15,6 @@ binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.tr
  '@':lambda x,y:x@y, 'and':lambda x,y:x and y, 'or':lambda x,y:x or y}
 
 TEXT_MARGIN = 2
-INSERT_SITE_Y_OFFSET = 6
 OUTLINE_COLOR = (220, 220, 220, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
 SELECT_TINT = (0, 0, 255, 0)
@@ -25,6 +24,13 @@ GRAY_25 = (64, 64, 64, 255)
 BLACK = (0, 0, 0, 255)
 
 DEPTH_EXPAND = 4
+
+# Pixels below input/output site to place function/list/tuple icons insertion site
+INSERT_SITE_Y_OFFSET = sum(globalFont.getmetrics()) // 2
+
+# Pixels below input/output site to place attribute site
+# This should be based on font metrics, but for the moment, we have a hard-coded cursor
+ATTR_SITE_OFFSET = 4
 
 outSitePixmap = (
  "..o",
@@ -193,6 +199,7 @@ class Icon:
         self.selected = False
         self.layoutDirty = False
         self.cachedImage = None
+        self.outSiteOffset = None
 
     def draw(self, image=None, location=None, clip=None):
         """Draw the icon.  The image to which it is drawn and the location at which it is
@@ -211,6 +218,8 @@ class Icon:
         # For "pick" order to be the true opposite of "draw", this loop should run in
         # reverse, but child icons are not intended to overlap in a detectable way.
         for child in self.children():
+            if child is None:
+                print('icon has null child',self)
             yield from child.traverse(order)
         if includeSelf and order is "pick":
             yield self
@@ -246,6 +255,19 @@ class Icon:
     def becomeTopLevel(self):
         pass  # Most icons look exactly the same at the top level
 
+    def posOfSite(self, site):
+        """Return the window position of a given site of the icon"""
+        # Unless this needs to be more efficient, the common code, below is able to
+        # answer the question using the snapLists() method and avoid per-icon-type code.
+        siteType, siteIdx = site
+        snapLists = self.snapLists(atTop=True)  # atTop gives most sites
+        if siteType in snapLists:
+            for snapEntry in snapLists[siteType]:
+                ic, pos, idx = snapEntry
+                if siteIdx == idx:
+                    return pos
+        return None
+
 class IdentIcon(Icon):
     def __init__(self, name, window=None, location=None):
         Icon.__init__(self, window)
@@ -260,7 +282,7 @@ class IdentIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
         self.outSiteOffset = (0, bodyHeight // 2)
-        self.attrSiteOffset = (bodyWidth, bodyHeight - 3)
+        self.attrSiteOffset = (bodyWidth, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
         self.attrIcon = None
 
     def draw(self, image=None, location=None, clip=None):
@@ -334,12 +356,12 @@ class FnIcon(Icon):
         x, y = (0, 0) if location is None else location
         width, height = self._size()
         self.rect = (x, y, x + width, y + height)
-        self.attrSiteOffset = (width-1, height - 3)
+        self.attrSiteOffset = (width-1, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
         self.attrIcon = None
 
     def _size(self):
         width, height = self.bodySize
-        width += self.inOffsets[-1] + parenImage.width
+        width += self.inOffsets[-1] + parenImage.width + 1
         return width, height
 
     def draw(self, image=None, location=None, clip=None):
@@ -380,6 +402,7 @@ class FnIcon(Icon):
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
         outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
+        attrOutSite = (self, addPoints((x, y), self.attrSiteOffset), 0)
         width, height = self.bodySize
         x += width + outSiteImage.width - 1 - inSiteImage.width
         y += height // 2
@@ -394,7 +417,6 @@ class FnIcon(Icon):
         else:
             for i, inOff in enumerate(self.inOffsets):
                 insertSites.append((self, (x + inOff, y + INSERT_SITE_Y_OFFSET), i))
-        attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
         return {"output":[outSite], "input":inSites, "attrOut":[attrOutSite],
          "insertInput":insertSites}
 
@@ -416,7 +438,10 @@ class FnIcon(Icon):
     def replaceChild(self, newChild, site):
         siteType, siteIndex = site
         if siteType == "input":
-            self.argIcons[siteIndex] = newChild
+            if newChild is None:
+                del self.argIcons[siteIndex]
+            else:
+                self.argIcons[siteIndex] = newChild
         elif siteType == "attrOut":
             self.attrIcon = newChild
         self.layoutDirty = True
@@ -460,6 +485,7 @@ class FnIcon(Icon):
             self.inOffsets.append(childX - (commaImage.width-1))
         width, height = self._size()
         self.outSiteOffset = (0, bodyHeight // 2)
+        self.attrSiteOffset = (width-2, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
         x = outSiteX
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
@@ -474,7 +500,7 @@ class FnIcon(Icon):
             height = bodyHeight
         else:
             numCommas = len(childLayouts) - 2
-            commaParenWidth = numCommas*(commaImage.width-1) + parenImage.width-1
+            commaParenWidth = numCommas*(commaImage.width-1) + parenImage.width
             childWidth = sum((c.width-1 for c in childLayouts)) + commaParenWidth
             height = max(bodyHeight, max((c.height for c in childLayouts)))
         width = self.bodySize[0] + outSiteImage.width + childWidth
@@ -514,6 +540,7 @@ class BinOpIcon(Icon):
         self.depthWidth = 0
         self.rect = (0, 0, *self._size())
         self.outSiteOffset = (0, opHeight // 2)
+        self.attrSiteOffset = None
         self.leftSiteDrawn = False
 
     def _size(self):
@@ -638,7 +665,11 @@ class BinOpIcon(Icon):
             inSites.append(giveInputSiteToBinOpChild(self.leftArg, snapEntry))
         snapEntry = (self, (rArgX, y), 1)
         inSites.append(giveInputSiteToBinOpChild(self.rightArg, snapEntry))
-        return {"output":[outSite], "input":inSites}
+        snapSites = {"output":[outSite], "input":inSites}
+        if self.attrSiteOffset:
+            attrOutSite = (self, (x+self.attrSiteOffset[0], y+ATTR_SITE_OFFSET), 0)
+            snapSites["attrOut"] = [attrOutSite]
+        return snapSites
 
     def replaceChild(self, newChild, site):
         siteType, siteIndex = site
@@ -703,6 +734,10 @@ class BinOpIcon(Icon):
              parentPrecedence=self.precedence)
         width, height = self._size()
         self.outSiteOffset = (0, height // 2)
+        if self.hasParens:
+            self.attrSiteOffset = (width-2, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
+        else:
+            self.attrSiteOffset = None
         x = outSiteX
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
@@ -790,7 +825,7 @@ class DivideIcon(Icon):
         x, y = location
         self.rect = (x, y, x + width, y + height)
         self.outSiteOffset = (0, self.topArgSize[1] + 2)
-        self.attrSiteOffset = (width-1, height - 3)
+        self.attrSiteOffset = (width-1, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
         self.attrIcon = None
 
     def _size(self):
@@ -826,7 +861,12 @@ class DivideIcon(Icon):
             draw = ImageDraw.Draw(self.cachedImage)
             draw.rectangle((bodyLeft, bodyTop, bodyRight, bodyBottom),
              outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
-            draw.line((bodyLeft + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
+            if self.floorDiv:
+                cntrX = (bodyLeft + bodyRight) // 2
+                draw.line((bodyLeft + 2, cntrY, cntrX - 1, cntrY), fill=BLACK)
+                draw.line((cntrX + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
+            else:
+                draw.line((bodyLeft + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
             self.cachedImage.paste(outSiteImage, (leftX, cntrY - outSiteImage.height//2))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
          location, clip)  # ... try w/o mask
@@ -859,7 +899,7 @@ class DivideIcon(Icon):
         bottomArgSnapEntry = (self, (bottomArgX, bottomArgY), 1)
         inSites = [giveInputSiteToBinOpChild(self.topArg, topArgSnapEntry),
           giveInputSiteToBinOpChild(self.bottomArg, bottomArgSnapEntry)]
-        attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
+        attrOutSite = (self, (x + self.attrSiteOffset[0], y + ATTR_SITE_OFFSET), 0)
         return {"output":[outSite], "input":inSites, "attrOut":[attrOutSite]}
 
     def replaceChild(self, newChild, site):
@@ -894,7 +934,6 @@ class DivideIcon(Icon):
             return ("attrOut", 0)
         return None
 
-    # ... not sure using old top left is the best way to determine where to place
     def layout(self, location=None):
         if location is None:
             x, y = self.rect[:2]
@@ -925,7 +964,6 @@ class DivideIcon(Icon):
         x = outSiteX
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
-        cntrX = outSiteX + (width - outSiteImage.width) // 2 + outSiteImage.width
         if tArgLayout is not None:
             topArgX, topArgY = self.topArgSiteOffset
             tArgLayout.icon._doLayout(outSiteX + topArgX, outSiteY + topArgY, tArgLayout)
@@ -933,6 +971,7 @@ class DivideIcon(Icon):
             bottomArgX, bottomArgY = self.bottomArgSiteOffset
             bArgLayout.icon._doLayout(outSiteX + bottomArgX, outSiteY + bottomArgY,
              bArgLayout)
+        self.attrSiteOffset = (width - 2, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
         self.cachedImage = None
         self.layoutDirty = False
 

@@ -22,7 +22,11 @@ RIGHT_MOUSE_MASK = 0x300
 
 DOUBLE_CLICK_TIME = 300
 
+CURSOR_BLINK_RATE = 500
+
 SNAP_DIST = 8
+
+SITE_SELECT_DIST = 4
 
 startUpTime = time.monotonic()
 
@@ -100,6 +104,8 @@ class Window:
         self.imgFrame.bind('<Button-3>', self._btn3Cb)
         self.imgFrame.bind('<ButtonRelease-3>', self._btn3ReleaseCb)
         self.imgFrame.bind("<Motion>", self._motionCb)
+        self.top.bind("<FocusIn>", self._focusInCb)
+        self.top.bind("<FocusOut>", self._focusOutCb)
         self.top.bind("<Control-x>", self._cutCb)
         self.top.bind("<Control-c>", self._copyCb)
         self.top.bind("<Control-v>", self._pasteCb)
@@ -135,6 +141,7 @@ class Window:
         self.dc = None
         self.entryIcon = None
         self.entryIconOnMouse = False
+        self.cursor = typing.Cursor(self, None)
 
     def allIcons(self, order="draw"):
         """Iterate over of all icons in the window, in drawing order, "draw", by default,
@@ -150,7 +157,7 @@ class Window:
     def _btn3Cb(self, evt):
         ic = self.findIconAt(evt.x, evt.y)
         if ic is not None and ic.selected is False:
-            self._select(evt)
+            self._select(evt, self.findIconAt(evt.x, evt.y))
 
     def _btn3ReleaseCb(self, evt):
         self.popup.tk_popup(evt.x_root, evt.y_root, 0)
@@ -176,14 +183,29 @@ class Window:
         char = typing.tkCharFromEvt(evt)
         if char is None:
              return
-        if self.entryIcon is not None:
-            # There's already an entry icon.  Feed it the character
+        # If there's a cursor displayed somewhere, use it
+        if self.cursor.type == "text":
+            # If it's an active entry icon, feed it the character
             self.entryIcon.addChar(char)
             self._redisplayChangedEntryIcon(evt)
             return
+        elif self.cursor.type == "icon":
+            self._insertEntryIconAtCursor()
+            self._redisplayChangedEntryIcon(evt)
+            return
+        elif self.cursor.type == "window":
+            self.entryIcon = typing.EntryIcon(window=self, location=self.cursor.pos,
+             initialString=char)
+            self.topIcons.append(self.entryIcon)
+            self.entryIcon.draw()
+            self.refresh(self.entryIcon.rect)
+            self.cursor.setToEntryIcon()
+            return
+        # If there's an appropriate selection, use that, otherwise float it on the mouse
         selectedIcons = findTopIcons(self.selectedIcons())
         self.entryIcon = typing.EntryIcon(window=self, location=(0, 0),
             initialString=char)
+        self.cursor.setToEntryIcon()
         if len(selectedIcons) == 1:
             # A single icon was selected.  Replace it and its children
             self.entryIconOnMouse = False
@@ -256,6 +278,12 @@ class Window:
         elif self.inRectSelect:
             self._updateRectSelect(evt)
 
+    def _focusInCb(self, evt):
+        pass
+
+    def _focusOutCb(self, evt):
+        self.cursor.erase()
+
     def _buttonPressCb(self, evt):
         if self.dragging:
             self._endDrag()
@@ -299,12 +327,30 @@ class Window:
         """Button-up actions (which may be delayed to wait for possible double-click)."""
         if self.doubleClickFlag:
             return  # Second click occurred, don't do the delayed action
+        siteIcon, site = self.siteSelected(evt)
+        clickedIcon = self.findIconAt(evt.x, evt.y)
+        clickedIconSelected = clickedIcon is not None and clickedIcon.selected
+        # The horrible logic below implements the combination of
+        clickedIconCanMultiSelect = clickedIconSelected and \
+         (len(clickedIcon.children()) > 0 and not clickedIcon.children()[0].selected)
         if self.buttonDownState & SHIFT_MASK:
-            self._select(evt, 'add')
+            self._select(evt, clickedIcon, 'add')
         elif self.buttonDownState & CTRL_MASK:
-            self._select(evt, 'toggle')
+            self._select(evt, clickedIcon, 'toggle')
+        elif clickedIconCanMultiSelect:
+            self._select(evt, clickedIcon, hier=True)
+        elif siteIcon is not None and not self.cursor.cursorAtIconSite(siteIcon, site):
+            self.unselectAll()
+            self.cursor.setToIconSite(siteIcon, site)
+        elif clickedIconSelected:
+            self.unselectAll()
+        elif clickedIcon is None:
+            self.unselectAll()
+            if self.entryIcon is None:
+                self.unselectAll()
+                self.cursor.setToWindowPos((evt.x, evt.y))
         else:
-            self._select(evt, 'select')
+            self._select(evt, clickedIcon, 'select', hier=False)
         self.buttonDownTime = None
 
     def _destroyCb(self, evt):
@@ -328,14 +374,17 @@ class Window:
         self.top.clipboard_append(clipTxt, type='STRING')
 
     def _pasteCb(self, evt=None):
-        selectedRect = icon.containingRect(self.selectedIcons())
-        if selectedRect is not None:
-            px, py = selectedRect[:2]
-            self.removeIcons(self.selectedIcons())
-        elif evt is not None:
-            px, py = evt.x, evt.y
+        if self.cursor.type == "window":
+            px, py = self.cursor.pos
         else:
-            px, py = 10, 10
+            selectedRect = icon.containingRect(self.selectedIcons())
+            if selectedRect is not None:
+                px, py = selectedRect[:2]
+                self.removeIcons(self.selectedIcons())
+            elif evt is not None:
+                px, py = evt.x, evt.y
+            else:
+                px, py = 10, 10
         try:
             iconString = self.top.clipboard_get(type="ICONS")
         except:
@@ -358,6 +407,12 @@ class Window:
                 if clipImage is None:
                     return
                 pastedIcons = [icon.ImageIcon(clipImage, self, (px, py))]
+        if len(pastedIcons) > 0 and pastedIcons[0].outSiteOffset is not None:
+            # If the top icon has an output site, line it up on the paste point
+            xOff, yOff = pastedIcons[0].outSiteOffset
+            for topIcon in pastedIcons:
+                for ic in topIcon.traverse():
+                    ic.rect = offsetRect(ic.rect, -xOff, -yOff)
         redrawRect = AccumRects()
         for pastedTopIcon in pastedIcons:
             self.topIcons.append(pastedTopIcon)
@@ -365,6 +420,11 @@ class Window:
                 ic.draw()  # No need to clip or erase, all drawn on top
                 redrawRect.add(ic.rect)
         self.refresh(redrawRect.get())
+        if self.cursor.type == "window":
+            if len(pastedIcons) > 0 and pastedIcons[0].outSiteOffset is not None:
+                self.cursor.setToIconSite(pastedIcons[0], ("output", 0))
+            else:
+                self.cursor.removeCursor()
 
     def _deleteCb(self, _evt=None):
         self.removeIcons(self.selectedIcons())
@@ -381,6 +441,7 @@ class Window:
             self.removeIcons([self.entryIcon])
             self.entryIcon = None
         self._cancelDrag()
+        self.cursor.removeCursor()
 
     def _enterCb(self, _evt=None):
         if self.entryIcon is not None:
@@ -392,8 +453,10 @@ class Window:
             self.entryIcon = None
             self.entryIconOnMouse = False
             self._cancelDrag()
+            self.cursor.removeCursor()
 
     def _startDrag(self, evt, icons, needRemove=True):
+        self.cursor.removeCursor()
         self.dragging = icons
         # Remove the icons from the window image and handle the resulting detachments
         # re-layouts, and redrawing.
@@ -533,6 +596,7 @@ class Window:
         self.buttonDownTime = None
 
     def _startRectSelect(self, evt):
+        self.cursor.removeCursor()
         self.inRectSelect = True
         self.lastRectSelect = None
         self.rectSelectInitialStates = {ic:ic.selected for ic in self.allIcons()}
@@ -595,16 +659,18 @@ class Window:
             ic.rect = offsetRect(ic.rect, evt.x - ctrXOff, evt.y - ctrYOff)
         self._startDrag(evt, resultIcons, needRemove=False)
 
-    def _select(self, evt, op='select'):
+    def _select(self, evt, ic, op='select', hier=True):
         """Select or toggle the top icon being pointed at, and bring it to the top.
            Options are 'select', 'toggle' and 'add'"""
         if op is 'select':
             self.unselectAll()
-        refreshRegion = AccumRects()
-        ic = self.findIconAt(evt.x, evt.y)
         if ic is None:
             return
-        changedIcons = list(ic.traverse())
+        refreshRegion = AccumRects()
+        if hier:
+            changedIcons = list(ic.traverse())
+        else:
+            changedIcons = [ic]
         for ic in changedIcons:
             refreshRegion.add(ic.rect)
             if op is 'toggle':
@@ -614,6 +680,7 @@ class Window:
         for ic in self.findIconsInRegion(refreshRegion.get()):
             ic.draw(clip=refreshRegion.get())
         self.refresh(refreshRegion.get())
+        self.cursor.removeCursor()
 
     def unselectAll(self):
         refreshRegion = AccumRects()
@@ -761,6 +828,33 @@ class Window:
                 return result
         return None
 
+    def siteSelected(self, evt):
+        """Look for icon sites near button press, if found return icon and site"""
+        left = evt.x - SITE_SELECT_DIST
+        right = evt.x + SITE_SELECT_DIST
+        top = evt.y - SITE_SELECT_DIST
+        bottom = evt.y + SITE_SELECT_DIST
+        minDist = SITE_SELECT_DIST + 1
+        minSite = None
+        for ic in self.findIconsInRegion((left, top, right, bottom)):
+            iconSites = ic.snapLists(atTop=True)
+            for siteType, siteList in iconSites.items():
+                for siteIcon, (x, y), siteIdx in siteList:
+                    if siteType in ("input", "output"):
+                        x += 2
+                    elif siteType in ("attrIn", "attrOut"):
+                        y -= icon.ATTR_SITE_OFFSET
+                        x += 1
+                    else:
+                        continue  # not a visible site type
+                    dist = (abs(evt.x - x) + abs(evt.y - y)) // 2
+                    if dist < minDist:
+                        minDist = dist
+                        minSite = siteIcon, (siteType, siteIdx)
+        if minDist < SITE_SELECT_DIST + 1:
+            return minSite
+        return None, None
+
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""
     def __init__(self, initRect=None):
@@ -807,6 +901,7 @@ class App:
 
     def mainLoop(self):
         # self.root.after(2000, self.animate)
+        self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
         self.root.mainloop()
 
     def animate(self):
@@ -822,6 +917,14 @@ class App:
     def newWindow(self):
         window = Window(self.root)
         self.windows.append(window)
+
+    def _blinkCursor(self):
+        focusWidget = self.root.focus_get()
+        for window in self.windows:
+            if window.top == focusWidget:
+                window.cursor.blink()
+                break
+        self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
 
 def findTopIcons(icons):
     iconDir = {ic:True for ic in icons}
