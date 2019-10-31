@@ -312,19 +312,52 @@ class IdentIcon(Icon):
         attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
         return {"output":[outSite], "attrOut":[attrOutSite]}
 
-    def layout(self, location=None):
-        if location is not None:
-            self.rect = moveRect(self.rect, location)
+    def replaceChild(self, newChild, site):
+        siteType, siteIndex = site
+        if siteType == "attrOut":
+            self.attrIcon = newChild
+            self.layoutDirty = True
 
-    def _doLayout(self, outSiteX, outSiteY, _layouts, parentPrecedence=None):
+    def siteOf(self, child):
+        if child is self.attrIcon:
+            return ("attrOut", 0)
+        return None
+
+    def childAt(self, site):
+        siteType, siteIndex = site
+        if siteType == "attrOut" and siteIndex == 0:
+            return self.attrIcon
+        return None
+
+    def layout(self, location=None):
+        if location is None:
+            x, y = self.rect[:2]
+        else:
+            x, y = location
+        self._doLayout(x, y+self.outSiteOffset[1], self._calcLayout())
+
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
         width, height = self.bodySize
         width += outSiteImage.width - 1
         top = outSiteY - height//2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
+        if self.attrIcon:
+            self.attrIcon._doLayout(outSiteX + width, outSiteY + ATTR_SITE_OFFSET,
+             layout.subLayouts[0])
 
     def _calcLayout(self, parentPrecedence=None):
         width, height = self.bodySize
-        return Layout(self, width, height, height//2, [])
+        mySiteOffset = height // 2
+        if self.attrIcon is None:
+            return Layout(self, width, height, mySiteOffset, [])
+        attrLayout = self.attrIcon._calcLayout()
+        heightAbove = max(mySiteOffset, attrLayout.siteOffset - ATTR_SITE_OFFSET)
+        attrHeightBelow = ATTR_SITE_OFFSET + attrLayout.height - attrLayout.siteOffset
+        myHeightBelow = height - mySiteOffset
+        heightBelow = max(myHeightBelow, attrHeightBelow)
+        height = heightAbove + heightBelow
+        width += attrLayout.width
+        return Layout(self, width, height, heightAbove, [attrLayout])
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -413,7 +446,7 @@ class FnIcon(Icon):
             inSites.append(giveInputSiteToBinOpChild(child, snapListEntry))
         insertSites = []
         if len(self.argIcons) == 0:
-            insertSites.append((self, (x, y), 0))
+            inSites.append((self, (x, y), 0))
         else:
             for i, inOff in enumerate(self.inOffsets):
                 insertSites.append((self, (x + inOff, y + INSERT_SITE_Y_OFFSET), i))
@@ -478,7 +511,8 @@ class FnIcon(Icon):
             self.inOffsets = []
             childXOffset = outSiteX + bodyWidth + outSiteImage.width-1 - inSiteImage.width
             childX = 0
-            for childLayout in layout.subLayouts:
+            for i in range(len(self.argIcons)):
+                childLayout = layout.subLayouts[i]
                 self.inOffsets.append(childX)
                 childLayout.icon._doLayout(childXOffset + childX, outSiteY, childLayout)
                 childX += childLayout.width-1 + commaImage.width-1
@@ -489,6 +523,9 @@ class FnIcon(Icon):
         x = outSiteX
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
+        if self.attrIcon:
+            self.attrIcon._doLayout(outSiteX + width, outSiteY + ATTR_SITE_OFFSET,
+             layout.subLayouts[-1])
         self.cachedImage = None
         self.layoutDirty = False
 
@@ -504,7 +541,17 @@ class FnIcon(Icon):
             childWidth = sum((c.width-1 for c in childLayouts)) + commaParenWidth
             height = max(bodyHeight, max((c.height for c in childLayouts)))
         width = self.bodySize[0] + outSiteImage.width + childWidth
-        return Layout(self, width, height, height//2, childLayouts)
+        siteOffset = height // 2
+        if self.attrIcon:
+            attrLayout = self.attrIcon._calcLayout()
+            childLayouts.append(attrLayout)
+            heightAbove = max(siteOffset, attrLayout.siteOffset - ATTR_SITE_OFFSET)
+            siteOffset = heightAbove
+            attrHeightBelow = ATTR_SITE_OFFSET + attrLayout.height - attrLayout.siteOffset
+            heightBelow = max(height - siteOffset, attrHeightBelow)
+            height = heightAbove + heightBelow
+            width += attrLayout.width
+        return Layout(self, width, height, siteOffset, childLayouts)
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -542,6 +589,7 @@ class BinOpIcon(Icon):
         self.outSiteOffset = (0, opHeight // 2)
         self.attrSiteOffset = None
         self.leftSiteDrawn = False
+        self.attrIcon = None
 
     def _size(self):
         opWidth, opHeight = self.opSize
@@ -645,7 +693,10 @@ class BinOpIcon(Icon):
             self.layoutDirty = True
 
     def children(self):
-        return [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
+        childList = [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
+        if self.attrIcon:
+            childList.append(self.attrIcon)
+        return childList
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
@@ -678,6 +729,8 @@ class BinOpIcon(Icon):
                 self.leftArg = newChild
             else:
                 self.rightArg = newChild
+        elif siteType == "attrOut":
+            self.attrIcon = newChild
         self.layoutDirty = True
 
     def childAt(self, site):
@@ -687,6 +740,8 @@ class BinOpIcon(Icon):
                 return self.leftArg
             elif siteIndex == 1:
                 return self.rightArg
+        elif siteType == "attrOut" and siteIndex == 0:
+            return self.attrIcon
         return None
 
     def siteOf(self, child):
@@ -694,6 +749,8 @@ class BinOpIcon(Icon):
            return ("input", 0)
         elif child is self.rightArg:
             return ("input", 1)
+        elif child is self.attrIcon:
+            return ("attrOut", 0)
         return None
 
     def layout(self, location=None):
@@ -710,7 +767,7 @@ class BinOpIcon(Icon):
             self.hasParens = False
         else:
             self.hasParens = self.precedence < parentPrecedence
-        lArgLayout, rArgLayout = layout.subLayouts
+        lArgLayout, rArgLayout, attrLayout = layout.subLayouts
         if self.hasParens:
             lArgX = outSiteX + lParenImage.width - outSiteImage.width
         else:
@@ -741,6 +798,9 @@ class BinOpIcon(Icon):
         x = outSiteX
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
+        if self.attrIcon:
+            self.attrIcon._doLayout(outSiteX + width, outSiteY + ATTR_SITE_OFFSET,
+             attrLayout)
         self.leftSiteDrawn = False # self.layout will reset on top-level icon
         self.cachedImage = None
         self.layoutDirty = False
@@ -783,7 +843,18 @@ class BinOpIcon(Icon):
         depth += 1
         height = max(lArgHeight, rArgHeight, opHeight)
         siteYOff = max(lArgYSiteOff, rArgYSiteOff)
-        return Layout(self, width, height, siteYOff, (lArgLayout, rArgLayout), depth)
+        if self.attrIcon:
+            attrLayout = self.attrIcon._calcLayout()
+            heightAbove = max(siteYOff, attrLayout.siteOffset - ATTR_SITE_OFFSET)
+            siteYOff = heightAbove
+            attrHeightBelow = ATTR_SITE_OFFSET + attrLayout.height - attrLayout.siteOffset
+            heightBelow = max(height - siteYOff, attrHeightBelow)
+            height = heightAbove + heightBelow
+            width += attrLayout.width
+        else:
+            attrLayout = None
+        return Layout(self, width, height, siteYOff, (lArgLayout, rArgLayout, attrLayout),
+         depth)
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]

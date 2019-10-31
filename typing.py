@@ -1,6 +1,7 @@
 # Copyright Mark Edel  All rights reserved
 import icon
 import python_g
+import winsound
 from PIL import Image, ImageDraw
 
 PEN_BG_COLOR = (235, 255, 235, 255)
@@ -69,9 +70,7 @@ attrSiteCursorOffset = 11
 attrSiteCursorImage = icon.asciiToImage(attrSiteCursorPixmap)
 
 textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
-textCursorImage = Image.new('RGBA', (3, textCursorHeight), color=(255, 255, 255, 255))
-textCursorImageDraw = ImageDraw.Draw(textCursorImage)
-textCursorImageDraw.line((1, 1, 1, textCursorHeight-2), fill=(0, 0, 0, 255))
+textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
 penPixmap = (
     "....oooo    ",
@@ -106,7 +105,8 @@ attrPenOffset = 5
 attrPenImage = icon.asciiToImage(attrPenPixmap)
 
 class EntryIcon(icon.Icon):
-    def __init__(self, initialString="", window=None, location=None):
+    def __init__(self, attachedIcon, attachedSite, initialString="", window=None,
+     location=None):
         icon.Icon.__init__(self, window)
         self.text = initialString
         ascent, descent = icon.globalFont.getmetrics()
@@ -117,14 +117,15 @@ class EntryIcon(icon.Icon):
         self.rect = (x, y, x + self._width(), y + self.height)
         self.outSiteOffset = (0, self.height // 2)
         self.attrSiteOffset = (0, self.height - 3)
-        self.attachedToAttrSite = False
+        self.attachedIcon = attachedIcon
+        self.attachedSite = attachedSite
         self.layoutDirty = True
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)
+        self.pendingArgument = None   # Icons that hang off the right
+        self.pendingAttribute = None  # "
 
-    def _width(self, text=None, boxOnly=False):
-        if text is None:
-            text = self.text
+    def _width(self, boxOnly=False):
         textWidth = icon.globalFont.getsize(self.text)[0]
         if textWidth > self.initTxtWidth:
             nIncrements = (textWidth - self.initTxtWidth) // self.initTxtWidth + 1
@@ -162,32 +163,57 @@ class EntryIcon(icon.Icon):
         textLeft = x + self.textOffset
         draw.text((textLeft, y + icon.TEXT_MARGIN), self.text, font=icon.globalFont,
          fill=(0, 0, 0, 255))
-        if self.attachedToAttrSite:
-            nibTop = y + self.attrSiteOffset - attrPenImage.height
+        if self.attachedSite is not None and self.attachedSite[0] in ("attrIn", "attrOut"):
+            nibTop = y + self.attrSiteOffset[1] - attrPenImage.height
             image.paste(attrPenImage, box=(x, nibTop), mask=attrPenImage)
         else:
             nibTop = y + self.outSiteOffset[1] - penImage.height // 2
             image.paste(penImage, box=(x, nibTop), mask=penImage)
 
     def addChar(self, char):
-        oldWidth = self._width()
-        self.text = self.text + char
-        self.cursorPos += len(char)
-        if self._width() != oldWidth:
-            self.layoutDirty = True
+        newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
+        self._setText(newText, self.cursorPos + len(char))
 
     def backspace(self):
-        self._setText(self.text[:-1])
+        newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
+        self._setText(newText, self.cursorPos-1)
 
-    def _setText(self, newText):
+    def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
         self.text = newText
+        self.window.cursor.erase()
+        self.cursorPos = newCursorPos
+        self.window.cursor.draw()
         if self._width() != oldWidth:
             self.layoutDirty = True
+
+    def children(self):
+        if self.pendingArgument:
+            return [self.pendingArgument]
+        elif self.pendingAttribute:
+            return [self.pendingAttribute]
+        return []
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
         return {"output":[(self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)]}
+
+    def replaceChild(self, newChild, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            self.pendingArgument = newChild
+            self.pendingAttribute = None
+        elif siteType == "attrOut":
+            self.pendingAttribute = newChild
+            self.pendingArgument = None
+        self.layoutDirty = True
+
+    def siteOf(self, child):
+        if child is self.pendingArgument:
+            return ("input", 0)
+        elif child is self.pendingAttribute:
+            return ("attrOut", 0)
+        return None
 
     def layout(self, location=None):
         if location is None:
@@ -196,14 +222,52 @@ class EntryIcon(icon.Icon):
             x, y = location
         self._doLayout(x, y+self.outSiteOffset[1], self._calcLayout())
 
-    def _doLayout(self, outSiteX, outSiteY, _layouts, parentPrecedence=None):
+    def click(self, evt):
+        self.window.cursor.erase()
+        self.cursorPos = findTextOffset(self.text, evt.x - self.rect[0] - self.textOffset)
+        self.window.cursor.draw()
+
+    def pointInTextArea(self, x, y):
+        left, top, right, bottom = self.rect
+        left += penImage.width
+        top += 2
+        bottom -= 2
+        right -= 2
+        return left < x < right and top < y < bottom
+
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
         width = self._width() + icon.outSiteImage.width - 1
         top = outSiteY - self.height//2
+        if self.attachedSite and self.attachedSite[0] == "attrOut":
+            top -= icon.ATTR_SITE_OFFSET
         self.rect = (outSiteX, top, outSiteX + width, top + self.height)
+        if self.pendingArgument is not None:
+            self.pendingArgument._doLayout(outSiteX + width - 5, # Should be lower #???
+             outSiteY, layout.subLayouts[0])
+        elif self.pendingAttribute is not None:
+            self.pendingAttribute._doLayout(outSiteX + width - 5,
+             outSiteY + icon.ATTR_SITE_OFFSET, layout.subLayouts[0])
 
     def _calcLayout(self, parentPrecedence=None):
         width = self._width() - icon.outSiteImage.width + 1 + RIGHT_LAYOUT_MARGIN
-        return icon.Layout(self, width, self.height, self.height//2, [])
+        siteOffset = self.height // 2
+        if self.attachedSite and self.attachedSite[0] == "attrOut":
+            siteOffset += icon.ATTR_SITE_OFFSET
+        if self.pendingArgument is None and self.pendingAttribute is None:
+            return icon.Layout(self, width, self.height, siteOffset, [])
+        if self.pendingArgument:
+            pendingLayout = self.pendingArgument._calcLayout()
+            heightAbove = max(siteOffset, pendingLayout.siteOffset)
+            pendingHeightBelow = pendingLayout.height - pendingLayout.siteOffset
+            heightBelow = max(self.height - siteOffset, pendingHeightBelow)
+        else:
+            pendingLayout = self.pendingAttribute._calcLayout()
+            heightAbove = max(siteOffset, pendingLayout.siteOffset - icon.ATTR_SITE_OFFSET)
+            pendingHeightBelow = icon.ATTR_SITE_OFFSET + pendingLayout.height - pendingLayout.siteOffset
+            heightBelow = max(self.height - siteOffset, pendingHeightBelow)
+        height = heightAbove + heightBelow
+        width += pendingLayout.width
+        return icon.Layout(self, width, height, heightAbove, [pendingLayout])
 
     def clipboardRepr(self, offset):
         return None
@@ -301,3 +365,46 @@ def tkCharFromEvt(evt):
     if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 191 or 220 <= evt.keycode <= 222:
         return chr(evt.keysym_num)
     return None
+
+def beep():
+    # Another platform dependent bit.  tkinter has a .bell() method, but it generates
+    # an elaborate sound that's supposed to alert the user of a dialog popping up, which
+    # is not appropriate for the tiny nudge for your keystroke being rejected.
+    winsound.Beep(1500, 120)
+
+def findTextOffset(text, pixelOffset):
+    # We use a proportionally-spaced font, but don't have full access to the font
+    # rendering code, so the only tool we have to see how it got laid out is the
+    # font.getsize method, which can only answer the question: "how many pixels long is
+    # this entire string".  Rather than try to measure individual characters and adjust
+    # for kerning and other oddness, this code makes a statistical starting guess and
+    # brutally iterates until it finds the right place.
+    textLength = icon.globalFont.getsize(text)[0]
+    nChars = len(text)
+    guessedPos = (nChars * pixelOffset) // textLength
+    lastGuess = None
+    lastGuessDist = textLength
+    while True:
+        pixelOfGuess = icon.globalFont.getsize(text[:guessedPos])[0]
+        guessDist = abs(pixelOfGuess - pixelOffset)
+        if pixelOfGuess > pixelOffset:
+            if lastGuess == '<':
+                return guessedPos if guessDist < lastGuessDist else lastGuessedPos
+            lastGuess = '>'
+            lastGuessDist = guessDist
+            lastGuessedPos = guessedPos
+            guessedPos -= 1
+            if guessedPos <= 0:
+                return 0 if pixelOffset < guessDist else lastGuessedPos
+        elif pixelOfGuess < pixelOffset:
+            if lastGuess == '>':
+                return guessedPos if guessDist < lastGuessDist else lastGuessedPos
+            lastGuess = '<'
+            lastGuessDist = guessDist
+            lastGuessedPos = guessedPos
+            guessedPos += 1
+            if guessedPos >= nChars:
+                return nChars if textLength - pixelOffset < guessDist else lastGuessedPos
+        else:
+            return guessedPos
+

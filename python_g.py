@@ -190,11 +190,10 @@ class Window:
             self._redisplayChangedEntryIcon(evt)
             return
         elif self.cursor.type == "icon":
-            self._insertEntryIconAtCursor()
-            self._redisplayChangedEntryIcon(evt)
+            self._insertEntryIconAtCursor(char)
             return
         elif self.cursor.type == "window":
-            self.entryIcon = typing.EntryIcon(window=self, location=self.cursor.pos,
+            self.entryIcon = typing.EntryIcon(None, None, window=self, location=self.cursor.pos,
              initialString=char)
             self.topIcons.append(self.entryIcon)
             self.entryIcon.draw()
@@ -203,27 +202,38 @@ class Window:
             return
         # If there's an appropriate selection, use that, otherwise float it on the mouse
         selectedIcons = findTopIcons(self.selectedIcons())
-        self.entryIcon = typing.EntryIcon(window=self, location=(0, 0),
-            initialString=char)
-        self.cursor.setToEntryIcon()
         if len(selectedIcons) == 1:
             # A single icon was selected.  Replace it and its children
             self.entryIconOnMouse = False
             replaceIcon = selectedIcons[0]
             iconParent = self.parentOf(replaceIcon)
+            self.entryIcon = typing.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
+             window=self,  initialString=char)
+            self.cursor.setToEntryIcon()
             iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
             self._redisplayChangedEntryIcon()
         else:
             # Either no icons were selected, or multiple icons were selected (so
             # we don't know what to replace).  Put the entry icon on the pointer.
-            # Below is temporary code until the "empty cursor" is implemented.
-            # It is unlikely we will ever summon a complete entry icon to the mouse.
+            # ... Probably don't want to keep this behavior, but it's fun to see.
             self.entryIconOnMouse = True
+            self.entryIcon = typing.EntryIcon(window=self, location=(0, 0),
+                initialString=char)
+            self.cursor.setToEntryIcon()
             x = evt.x - 6
             y = evt.y - self.entryIcon.outSiteOffset[1]
             self.entryIcon.rect = offsetRect(self.entryIcon.rect, x, y)
             self.buttonDownLoc = (evt.x, evt.y)  # drag needs starting location
             self._startDrag(evt, [self.entryIcon], needRemove=False)
+
+    def _insertEntryIconAtCursor(self, initialChar):
+        self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
+         initialString=initialChar, window=self)
+        pendingArgs = self.cursor.icon.childAt(self.cursor.site)
+        self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
+        self.entryIcon.replaceChild(pendingArgs, (self.cursor.site[0], 0))
+        self.cursor.setToEntryIcon()
+        self._redisplayChangedEntryIcon()
 
     def _redisplayChangedEntryIcon(self, evt=None):
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
@@ -293,6 +303,9 @@ class Window:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
                 self.doubleClickFlag = True
                 return
+        if self.entryIcon and self.entryIcon.pointInTextArea(evt.x, evt.y):
+            self.entryIcon.click(evt)
+            return
         self.buttonDownTime = msTime()
         self.buttonDownLoc = evt.x, evt.y
         self.buttonDownState = evt.state
@@ -341,14 +354,14 @@ class Window:
             self._select(evt, clickedIcon, hier=True)
         elif siteIcon is not None and not self.cursor.cursorAtIconSite(siteIcon, site):
             self.unselectAll()
-            self.cursor.setToIconSite(siteIcon, site)
+            if self.entryIcon is None:  # Might want to flash entry icon, here
+                self.cursor.setToIconSite(siteIcon, site)
         elif clickedIconSelected:
             self.unselectAll()
         elif clickedIcon is None:
             self.unselectAll()
-            if self.entryIcon is None:
-                self.unselectAll()
-                self.cursor.setToWindowPos((evt.x, evt.y))
+            if self.entryIcon is None:  # Might want to flash entry icon, here
+                 self.cursor.setToWindowPos((evt.x, evt.y))
         else:
             self._select(evt, clickedIcon, 'select', hier=False)
         self.buttonDownTime = None
@@ -664,7 +677,7 @@ class Window:
            Options are 'select', 'toggle' and 'add'"""
         if op is 'select':
             self.unselectAll()
-        if ic is None:
+        if ic is None or ic is self.entryIcon:
             return
         refreshRegion = AccumRects()
         if hier:
@@ -835,20 +848,21 @@ class Window:
         top = evt.y - SITE_SELECT_DIST
         bottom = evt.y + SITE_SELECT_DIST
         minDist = SITE_SELECT_DIST + 1
-        minSite = None
+        minSite = (None, None)
         for ic in self.findIconsInRegion((left, top, right, bottom)):
             iconSites = ic.snapLists(atTop=True)
             for siteType, siteList in iconSites.items():
                 for siteIcon, (x, y), siteIdx in siteList:
                     if siteType in ("input", "output"):
                         x += 2
-                    elif siteType in ("attrIn", "attrOut"):
+                    elif siteType in ("attrOut", "attrIn"):
                         y -= icon.ATTR_SITE_OFFSET
                         x += 1
                     else:
                         continue  # not a visible site type
                     dist = (abs(evt.x - x) + abs(evt.y - y)) // 2
-                    if dist < minDist:
+                    if dist < minDist or (dist == minDist and \
+                     minSite[0] in ("output", "attrIn")):  # Prefer inputs, for now
                         minDist = dist
                         minSite = siteIcon, (siteType, siteIdx)
         if minDist < SITE_SELECT_DIST + 1:
