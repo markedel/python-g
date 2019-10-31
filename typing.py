@@ -4,8 +4,10 @@ import python_g
 import winsound
 from PIL import Image, ImageDraw
 
-PEN_BG_COLOR = (235, 255, 235, 255)
+PEN_BG_COLOR = (255, 245, 245, 255)
+PEN_OUTLINE_COLOR = (255, 97, 120, 255)
 RIGHT_LAYOUT_MARGIN = 3
+PEN_MARGIN = 6
 
 operators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '^', '~', '<',
  '>', '<=', '>=', '==', '!=']
@@ -85,7 +87,6 @@ penPixmap = (
     "...o%%%%oo  ",
     "....oooo    "
 )
-penOffset = 6
 penImage = icon.asciiToImage(penPixmap)
 
 attrPenPixmap = (
@@ -101,7 +102,6 @@ attrPenPixmap = (
     "o3%%oooo...",
     "oooo......."
 )
-attrPenOffset = 5
 attrPenImage = icon.asciiToImage(attrPenPixmap)
 
 class EntryIcon(icon.Icon):
@@ -111,14 +111,14 @@ class EntryIcon(icon.Icon):
         self.text = initialString
         ascent, descent = icon.globalFont.getmetrics()
         self.height = ascent + descent + 2 * icon.TEXT_MARGIN + 1
-        self.initTxtWidth = icon.globalFont.getsize("abcDef")[0]
+        self.initTxtWidth = icon.globalFont.getsize("i")[0]
         self.txtWidthIncr = self.initTxtWidth
         x, y = location if location is not None else (0, 0)
+        self.attachedIcon = attachedIcon
+        self.attachedSite = attachedSite
         self.rect = (x, y, x + self._width(), y + self.height)
         self.outSiteOffset = (0, self.height // 2)
         self.attrSiteOffset = (0, self.height - 3)
-        self.attachedIcon = attachedIcon
-        self.attachedSite = attachedSite
         self.layoutDirty = True
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)
@@ -132,19 +132,23 @@ class EntryIcon(icon.Icon):
         else:
             nIncrements = 0
         adjWidth = self.initTxtWidth + nIncrements*self.txtWidthIncr
-        boxWidth = adjWidth + 2 * icon.TEXT_MARGIN + 1 + penImage.width - penOffset
+        boxWidth = adjWidth + 2 * icon.TEXT_MARGIN + 1 + PEN_MARGIN
         if boxOnly:
             return boxWidth
-        return boxWidth + penOffset
+        return boxWidth + self.penOffset()
 
     def touchesPosition(self, x, y):
         if not icon.pointInRect((x, y), self.rect):
             return False
         rectLeft, rectTop = self.rect[:2]
-        if x > rectLeft + penOffset:
+        if x > rectLeft + self.penOffset():
             return True
-        penImgYOff = self.outSiteOffset[1] - penImage.height // 2
-        pixel = penImage.getpixel((x - rectLeft, y-rectTop - penImgYOff))
+        if self.attachedToAttribute():
+            penImgYOff = self.attrSiteOffset[1] - attrPenImage.height
+            pixel = attrPenImage.getpixel((x - rectLeft, y - rectTop - penImgYOff))
+        else:
+            penImgYOff = self.outSiteOffset[1] - penImage.height // 2
+            pixel = penImage.getpixel((x - rectLeft, y-rectTop - penImgYOff))
         return pixel[3] > 128
 
     def draw(self, image=None, location=None, clip=None):
@@ -158,12 +162,12 @@ class EntryIcon(icon.Icon):
         else:
             x, y = location
         boxWidth = self._width(boxOnly=True) - 1
-        draw.rectangle((x + penOffset, y, x + penOffset + boxWidth, y + self.height-1),
-         fill=PEN_BG_COLOR, outline=icon.OUTLINE_COLOR)
+        draw.rectangle((x + self.penOffset(), y, x + self.penOffset() + boxWidth,
+         y + self.height-1), fill=PEN_BG_COLOR, outline=PEN_OUTLINE_COLOR)
         textLeft = x + self.textOffset
         draw.text((textLeft, y + icon.TEXT_MARGIN), self.text, font=icon.globalFont,
          fill=(0, 0, 0, 255))
-        if self.attachedSite is not None and self.attachedSite[0] in ("attrIn", "attrOut"):
+        if self.attachedToAttribute():
             nibTop = y + self.attrSiteOffset[1] - attrPenImage.height
             image.paste(attrPenImage, box=(x, nibTop), mask=attrPenImage)
         else:
@@ -240,6 +244,9 @@ class EntryIcon(icon.Icon):
         top = outSiteY - self.height//2
         if self.attachedSite and self.attachedSite[0] == "attrOut":
             top -= icon.ATTR_SITE_OFFSET
+            self.textOffset = attrPenImage.width + icon.TEXT_MARGIN
+        else:
+            self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.rect = (outSiteX, top, outSiteX + width, top + self.height)
         if self.pendingArgument is not None:
             self.pendingArgument._doLayout(outSiteX + width - 5, # Should be lower #???
@@ -249,7 +256,10 @@ class EntryIcon(icon.Icon):
              outSiteY + icon.ATTR_SITE_OFFSET, layout.subLayouts[0])
 
     def _calcLayout(self, parentPrecedence=None):
-        width = self._width() - icon.outSiteImage.width + 1 + RIGHT_LAYOUT_MARGIN
+        if self.attachedToAttribute():
+            width = self._width() - 1 + RIGHT_LAYOUT_MARGIN
+        else:
+            width = self._width() - 2 + RIGHT_LAYOUT_MARGIN
         siteOffset = self.height // 2
         if self.attachedSite and self.attachedSite[0] == "attrOut":
             siteOffset += icon.ATTR_SITE_OFFSET
@@ -272,6 +282,13 @@ class EntryIcon(icon.Icon):
     def clipboardRepr(self, offset):
         return None
 
+    def attachedToAttribute(self):
+        return self.attachedSite is not None and \
+         self.attachedSite[0] in ("attrIn", "attrOut")
+
+    def penOffset(self):
+        penImgWidth = attrPenImage.width if self.attachedToAttribute() else penImage.width
+        return penImgWidth - PEN_MARGIN
 
 class Cursor:
     def __init__(self, window, cursorType):

@@ -342,7 +342,7 @@ class IdentIcon(Icon):
         top = outSiteY - height//2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         if self.attrIcon:
-            self.attrIcon._doLayout(outSiteX + width, outSiteY + ATTR_SITE_OFFSET,
+            self.attrIcon._doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
              layout.subLayouts[0])
 
     def _calcLayout(self, parentPrecedence=None):
@@ -524,7 +524,7 @@ class FnIcon(Icon):
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
         if self.attrIcon:
-            self.attrIcon._doLayout(outSiteX + width, outSiteY + ATTR_SITE_OFFSET,
+            self.attrIcon._doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
              layout.subLayouts[-1])
         self.cachedImage = None
         self.layoutDirty = False
@@ -799,7 +799,7 @@ class BinOpIcon(Icon):
         y = outSiteY - self.outSiteOffset[1]
         self.rect = (x, y, x+width, y+height)
         if self.attrIcon:
-            self.attrIcon._doLayout(outSiteX + width, outSiteY + ATTR_SITE_OFFSET,
+            self.attrIcon._doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
              attrLayout)
         self.leftSiteDrawn = False # self.layout will reset on top-level icon
         self.cachedImage = None
@@ -1013,24 +1013,28 @@ class DivideIcon(Icon):
         self._doLayout(x, y + self.topArgSize[1] + 2, self._calcLayout())
 
     def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
-        width = layout.width + 2
-        tArgLayout, bArgLayout = layout.subLayouts
+        tArgLayout, bArgLayout, attrLayout = layout.subLayouts
         emptyArgWidth, emptyArgHeight = self.emptyArgSize
         if tArgLayout is None:
-            self.topArgSize = self.emptyArgSize
-            self.topArgSiteOffset = ((width-emptyArgWidth)//2, -emptyArgHeight//2 - 2)
+            tArgWidth, tArgHeight = self.emptyArgSize
+            tArgSiteOffset = self.emptyArgSize[1] // 2
         else:
-             self.topArgSize = (tArgLayout.width, tArgLayout.height)
-             self.topArgSiteOffset = ((width - 2 - tArgLayout.width)//2,
-              - tArgLayout.height + tArgLayout.siteOffset - 1)
+            tArgWidth, tArgHeight = tArgLayout.width, tArgLayout.height
+            tArgSiteOffset = tArgLayout.siteOffset
         if bArgLayout is None:
-            self.bottomArgSize = self.emptyArgSize
-            self.bottomArgSiteOffset = ((width-emptyArgWidth)//2, emptyArgHeight//2 + 2)
+            bArgWidth, bArgHeight = self.emptyArgSize
+            bArgSiteOffset = self.emptyArgSize[1] // 2
         else:
-            self.bottomArgSize = (bArgLayout.width, bArgLayout.height)
-            self.bottomArgSiteOffset = ((width - 2 - bArgLayout.width)//2,
-             bArgLayout.siteOffset + 2)
-        self.outSiteOffset = (0, self.topArgSize[1] + 2)
+            bArgWidth, bArgHeight = bArgLayout.width, bArgLayout.height
+            bArgSiteOffset = bArgLayout.siteOffset
+        self.topArgSize = tArgWidth, tArgHeight
+        self.bottomArgSize = bArgWidth, bArgHeight
+        width = max(tArgWidth, bArgWidth) + 6
+        self.topArgSiteOffset = ((width - 2 - tArgWidth) // 2,
+         - tArgHeight + tArgSiteOffset - 1)
+        self.bottomArgSiteOffset = ((width - 2 - bArgWidth) // 2,
+         bArgSiteOffset + 2)
+        self.outSiteOffset = (0, tArgHeight + 2)
         width, height = self._size()
         x = outSiteX
         y = outSiteY - self.outSiteOffset[1]
@@ -1043,6 +1047,9 @@ class DivideIcon(Icon):
             bArgLayout.icon._doLayout(outSiteX + bottomArgX, outSiteY + bottomArgY,
              bArgLayout)
         self.attrSiteOffset = (width - 2, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
+        if self.attrIcon:
+            self.attrIcon._doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
+             attrLayout)
         self.cachedImage = None
         self.layoutDirty = False
 
@@ -1063,7 +1070,18 @@ class DivideIcon(Icon):
             bArgHeight = bArgLayout.height
         width = max(tArgWidth, bArgWidth) + 4
         height = tArgHeight + bArgHeight + 2
-        return Layout(self, width, height, tArgHeight + 1, (tArgLayout, bArgLayout))
+        siteYOff = tArgHeight + 1
+        if self.attrIcon:
+            attrLayout = self.attrIcon._calcLayout()
+            heightAbove = max(siteYOff, attrLayout.siteOffset - ATTR_SITE_OFFSET)
+            siteYOff = heightAbove
+            attrHeightBelow = ATTR_SITE_OFFSET + attrLayout.height - attrLayout.siteOffset
+            heightBelow = max(height - siteYOff, attrHeightBelow)
+            height = heightAbove + heightBelow
+            width += attrLayout.width
+        else:
+            attrLayout = None
+        return Layout(self, width, height,siteYOff, (tArgLayout, bArgLayout, attrLayout))
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
