@@ -1,23 +1,35 @@
 # Copyright Mark Edel  All rights reserved
 import icon
+import compile_eval
 import python_g
 import winsound
+import ast
 from PIL import Image, ImageDraw
+import re
 
 PEN_BG_COLOR = (255, 245, 245, 255)
 PEN_OUTLINE_COLOR = (255, 97, 120, 255)
 RIGHT_LAYOUT_MARGIN = 3
 PEN_MARGIN = 6
 
-operators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '^', '~', '<',
+binaryOperators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '^', '<',
  '>', '<=', '>=', '==', '!=']
-delimiters = ['(', ')', '[', ']', '{', '},', ':', '.', ';', '@', '=', '->', '+=', '-=',
- '*=', '/=', '//=', '%=', '@=', '&=', '|=', '^=', '>>=', '<<=', '**=']
-delimitChars = list(dict.fromkeys("".join(operators + delimiters)))
+unaryOperators = ['+', '-', '~']
+emptyDelimiters = [' ', '\t', '\n', '\r', '\f', '\v']
+delimiters = emptyDelimiters + ['(', ')', '[', ']', '{', '},', ':', '.', ';', '@', '=',
+ '->', '+=', '-=', '*=', '/=', '//=', '%=', '@=', '&=', '|=', '^=', '>>=', '<<=', '**=']
+delimitChars = list(dict.fromkeys("".join(binaryOperators + unaryOperators + delimiters)))
 keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
  'return', 'try', 'while', 'with', 'yield']
+
+identPattern = re.compile('^[a-zA-z_][a-zA-z_\\d]*$')
+numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
+ '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
+attrPattern = re.compile('^\\.[a-zA-z_][a-zA-z_\\d]*$')
+# Characters that can legally follow a binary operator
+opDelimPattern = re.compile('[a-zA-z\\d_.\\(\\[\\{\\s]')
 
 inputSiteCursorPixmap = (
     "..   ",
@@ -184,12 +196,172 @@ class EntryIcon(icon.Icon):
 
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
-        self.text = newText
-        self.window.cursor.erase()
-        self.cursorPos = newCursorPos
-        self.window.cursor.draw()
-        if self._width() != oldWidth:
-            self.layoutDirty = True
+        parseResult = parseEntryText(newText, self.attachedToAttribute())
+        print('parse result', parseResult)
+        if parseResult == "reject":
+            beep()
+            return
+        cursor = self.window.cursor
+        if parseResult == "accept":
+            self.text = newText
+            cursor.erase()
+            self.cursorPos = newCursorPos
+            cursor.draw()
+            if self._width() != oldWidth:
+                self.layoutDirty = True
+            return
+        if parseResult == "comma":
+            if not self.commaEntered(self.attachedIcon):
+                beep()
+            return
+        if parseResult == "endParen":
+            print('connect to end paren')
+            return
+        if parseResult == "makeFunction":
+            if not self.makeFunction(self.attachedIcon):
+                beep()
+            return
+        # Parser emitted an icon.  Splice it in to the hierarchy
+        ic, remainingText = parseResult
+        if remainingText is None or remainingText in emptyDelimiters:
+            remainingText = ""
+        ic.window = self.window
+        snapLists = ic.snapLists()
+        if self.attachedIcon is None:
+            ic.rect = python_g.offsetRect(ic.rect, self.rect[0], self.rect[1])
+            self.window.topIcons.append(ic)
+            self.window.topIcons.remove(self)
+            ic.layoutDirty = True
+            cursor.setToIconSite(ic, ("attrOut", 0))
+        elif self.attachedToAttribute():
+            # Entry icon is attached to an attribute site (ic is operator or attribute)
+            self.appendOperator(ic)
+        elif self.attachedSite[0] == "input":
+            # Entry icon is attached to an input site
+            parentIc, parentSite = self.findVisibleSite()
+            parentIc.replaceChild(ic, parentSite)
+            if "input" in snapLists:
+                cursor.setToIconSite(ic, ("input", 0))
+            elif "attrOut in snapLists":
+                cursor.setToIconSite(ic, ("attrOut", 0))
+            else:
+                cursor.removeCursor()
+        # If entry icon has pending arguments, try to place them.  Code does its best
+        # to place the cursor at the most reasonable spot.  If vacant, place pending
+        # args there
+        if self.pendingArgument is not None and remainingText == "":
+            if cursor.type is "icon" and cursor.site[0] == "input" and \
+             cursor.icon.childAt(cursor.site) is None:
+                cursor.icon.replaceChild(self.pendingArgument, cursor.site)
+                self.pendingArgument = None
+        # If the pending text needs no further input, process it, now
+        if remainingText == ')':
+            print('connect with nearest open paren')
+            remainingText = ""
+        elif remainingText == '(' and ic.__class__ is icon.IdentIcon:
+            if not self.makeFunction(ic):
+                beep()
+            remainingText = ""
+        elif remainingText == ',':
+            if not self.commaEntered(ic):
+                beep()
+            remainingText = ""
+        # If the entry icon can go away, remove it and we're done
+        if self.pendingArgument is None and remainingText == "":
+            self.window.entryIcon = None
+            return
+        # The entry icon needs to remain (cursor was set above to appropriate destination)
+        if cursor.type is not "icon":
+            return
+        self.attachedIcon = cursor.icon
+        self.attachedSite = cursor.site
+        self.text = remainingText
+        self.attachedIcon.replaceChild(self, self.attachedSite)
+        self.cursorPos = len(remainingText)
+        cursor.setToEntryIcon()
+        cursor.draw()
+        self.layoutDirty = True
+
+    def commaEntered(self, onIcon):
+        if onIcon.__class__ is icon.FnIcon:
+            onIcon.insertChildren([self], ("input", len(onIcon.argIcons)))
+        child = onIcon
+        for parent in self.window.parentage(onIcon):
+            if parent.__class__ is icon.FnIcon:
+                onIcon.layoutDirty = True
+                siteType, siteIdx = parent.siteOf(child)
+                insertSite = (siteType, siteIdx + 1)
+                parent.insertChildren([None], insertSite)
+                self.window.cursor.setToIconSite(parent, insertSite)
+                return True
+        return False
+
+    def findVisibleSite(self):
+        """Entry icon is attached to an input site, but binary operations can have
+        overlapping sites.  Find the one the user can actually see."""
+        ic = self.attachedIcon
+        if ic.__class__ is not icon.BinOpIcon or ic.rightArg == self:
+            # Save the work of finding icon parentage if site is already correct
+            return ic, self.attachedSite
+        parents = self.window.parentage(ic)
+        for parent in parents:
+            if parent.__class__ is not icon.BinOpIcon or parent.rightArg == self:
+                return ic, parent.siteOf(ic)
+            ic = parent
+        print("failed to find visible site for", self.attachedIcon, self.attachedSite)
+        return self.attachedIcon, self.attachedSite
+
+    def makeFunction(self, ic):
+        if ic.__class__ is not icon.IdentIcon or not identPattern.fullmatch(ic.name):
+            return False
+        parent = self.window.parentOf(ic)
+        fnIcon = icon.FnIcon(ic.name, window=self.window)
+        fnIcon.layoutDirty = True
+        if parent is None:
+            self.window.topIcons.remove(ic)
+            self.window.topIcons.append(fnIcon)
+            fnIcon.rect = python_g.offsetRect(fnIcon.rect, ic.rect[0], ic.rect[1])
+        else:
+            parent.replaceChild(fnIcon, parent.siteOf(ic))
+        self.window.cursor.setToIconSite(fnIcon, ("input", 0))
+        return True
+
+    def appendOperator(self, newOpIcon):
+        """The entry icon is attached to an attribute site and a binary operator has been
+        entered.  Stitch the operator in to the correct level with respect to the
+        surrounding binary operators, and move the cursor to the empty operand slot."""
+        argIcon = self.attachedIcon
+        entryIconParents = self.window.parentage(self)
+        argIcon.replaceChild(None, self.attachedSite)
+        leftArg = argIcon
+        rightArg = None
+        childOp = argIcon
+        # Walk up the hierarchy of binary operations, breaking each one in to left and
+        # right operands for the new operation.  Stop when the parent operation has
+        # equal or lesser precedence, or is not a binary operation.
+        for op in reversed(entryIconParents[:-1]):
+            if op.__class__ != icon.BinOpIcon or newOpIcon.precedence >= op.precedence:
+                op.replaceChild(newOpIcon, op.siteOf(childOp))
+                break
+            if op.leftArg is childOp:  # Insertion was on left side of operation
+                op.leftArg = rightArg
+                if op.leftArg is None:
+                    self.window.cursor.setToIconSite(op, ("input", 0))
+                rightArg = op
+            else:                      # Insertion was on right side of operation
+                op.rightArg = leftArg
+                leftArg = op
+            childOp = op
+        else:  # Reached the top level without finding a parent for newOpIcon
+            self.window.topIcons.remove(childOp)
+            self.window.topIcons.append(newOpIcon)
+            newOpIcon.rect = python_g.offsetRect(newOpIcon.rect, leftArg.rect[0],
+                argIcon.rect[1])
+        if rightArg is None:
+            self.window.cursor.setToIconSite(newOpIcon, ("input", 1))
+        newOpIcon.layoutDirty = True
+        newOpIcon.replaceChild(leftArg, ("input", 0))
+        newOpIcon.replaceChild(rightArg, ("input", 1))
 
     def children(self):
         if self.pendingArgument:
@@ -239,20 +411,23 @@ class EntryIcon(icon.Icon):
         right -= 2
         return left < x < right and top < y < bottom
 
-    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+    def _doLayout(self, siteX, siteY, layout, parentPrecedence=None):
         width = self._width() + icon.outSiteImage.width - 1
-        top = outSiteY - self.height//2
         if self.attachedSite and self.attachedSite[0] == "attrOut":
-            top -= icon.ATTR_SITE_OFFSET
+            outSiteY = siteY - icon.ATTR_SITE_OFFSET
+            outSiteX = siteX - 1
             self.textOffset = attrPenImage.width + icon.TEXT_MARGIN
         else:
+            outSiteY = siteY
+            outSiteX = siteX
             self.textOffset = penImage.width + icon.TEXT_MARGIN
+        top = outSiteY - self.height//2
         self.rect = (outSiteX, top, outSiteX + width, top + self.height)
         if self.pendingArgument is not None:
-            self.pendingArgument._doLayout(outSiteX + width - 5, # Should be lower #???
+            self.pendingArgument._doLayout(outSiteX + width - 4,
              outSiteY, layout.subLayouts[0])
         elif self.pendingAttribute is not None:
-            self.pendingAttribute._doLayout(outSiteX + width - 5,
+            self.pendingAttribute._doLayout(outSiteX + width - 4,
              outSiteY + icon.ATTR_SITE_OFFSET, layout.subLayouts[0])
 
     def _calcLayout(self, parentPrecedence=None):
@@ -378,6 +553,74 @@ class Cursor:
         """Returns True if the cursor is already at a given icon site"""
         return self.type == "icon" and self.icon == ic and self.site == site
 
+def parseEntryText(text, forAttrSite):
+    if len(text) == 0:
+        return "accept"
+    if forAttrSite:
+        if attrPattern.fullmatch(text):
+            return "accept"  # Legal attribute pattern
+        if text in ("i", "a", "o", "an"):
+            return "accept"  # Legal precursor characters to binary keyword operation
+        if text in ("and", "is", "in", "or"):
+            return icon.BinOpIcon(text)  # Binary keyword operation
+        if text in ("*", "/", "@", "<", ">", "=", "!"):
+            return "accept"  # Legal precursor characters to binary operation
+        if text in binaryOperators:
+            if text == '/':
+                return icon.DivideIcon(floorDiv=False), None
+            elif text == '//':
+                return icon.DivideIcon(floorDiv=True), None
+            return icon.BinOpIcon(text), None
+        if text == '(':
+            return "makeFunction"  # Make a function from the attached icon
+        if text == ',':
+            return "comma"
+        op = text[:-1]
+        delim = text[-1]
+        print ('op in binop', op in binaryOperators, 'delim', delim, 'pat match', opDelimPattern.match(delim))
+        if op in binaryOperators and opDelimPattern.match(delim):
+            # Valid binary operator followed by allowable operand character
+            if op == '/':
+                return icon.DivideIcon(floorDiv=False), delim
+            elif op == '//':
+                return icon.DivideIcon(floorDiv=True), delim
+            return icon.BinOpIcon(op), delim
+        return "reject"
+    else:
+        # input site
+        if text in ('+', '-'):
+            # Unary +/- operator
+            return icon.FnIcon('+'), None
+        if text == '(':
+            return icon.FnIcon('('), None  # Temporary stand-in for cursor-paren
+        if text == ')':
+            return "endParen"
+        if text == ',':
+            return "comma"
+        if identPattern.fullmatch(text) or numPattern.fullmatch(text):
+            return "accept"  # Nothing but legal identifier and numeric
+        if not (identPattern.fullmatch(text[:-1]) or numPattern.fullmatch(text[:-1])):
+            return "reject"  # Precursor characters do not form valid identifier or number
+        if len(text) == 1 or text[-1] not in delimitChars:
+            return "reject"  # No legal text or not followed by a legal delimiter
+        # All but the last character is ok and the last character is a valid delimiter
+        delim = text[-1]
+        text = text[:-1]
+        if text in ('False', 'None', 'True'):
+            return icon.IdIcon(text), delim
+        if text == "not":
+            return icon.FnIcon(text), delim
+        if text in keywords:
+            return "reject"
+        exprAst = compile_eval.parseExprToAst(text)
+        if exprAst is None:
+            return "reject"
+        if exprAst.__class__ == ast.Name:
+            return icon.IdentIcon(exprAst.id), delim
+        if exprAst.__class__ == ast.Num:
+            return icon.IdentIcon(str(exprAst.n)), delim
+        return "reject"
+
 def tkCharFromEvt(evt):
     if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 191 or 220 <= evt.keycode <= 222:
         return chr(evt.keysym_num)
@@ -396,8 +639,10 @@ def findTextOffset(text, pixelOffset):
     # this entire string".  Rather than try to measure individual characters and adjust
     # for kerning and other oddness, this code makes a statistical starting guess and
     # brutally iterates until it finds the right place.
-    textLength = icon.globalFont.getsize(text)[0]
     nChars = len(text)
+    if nChars == 0:
+        return 0
+    textLength = icon.globalFont.getsize(text)[0]
     guessedPos = (nChars * pixelOffset) // textLength
     lastGuess = None
     lastGuessDist = textLength

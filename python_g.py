@@ -186,15 +186,17 @@ class Window:
         # If there's a cursor displayed somewhere, use it
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
+            oldLoc = self.entryIcon.rect
             self.entryIcon.addChar(char)
-            self._redisplayChangedEntryIcon(evt)
+            self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             return
         elif self.cursor.type == "icon":
             self._insertEntryIconAtCursor(char)
             return
         elif self.cursor.type == "window":
-            self.entryIcon = typing.EntryIcon(None, None, window=self, location=self.cursor.pos,
-             initialString=char)
+            self.entryIcon = typing.EntryIcon(None, None, window=self,
+             location=self.cursor.pos)
+            self.entryIcon.addChar(char)
             self.topIcons.append(self.entryIcon)
             self.entryIcon.draw()
             self.refresh(self.entryIcon.rect)
@@ -208,7 +210,8 @@ class Window:
             replaceIcon = selectedIcons[0]
             iconParent = self.parentOf(replaceIcon)
             self.entryIcon = typing.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
-             window=self,  initialString=char)
+             window=self)
+            self.entryIcon.addChar(char)
             self.cursor.setToEntryIcon()
             iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
             self._redisplayChangedEntryIcon()
@@ -217,8 +220,8 @@ class Window:
             # we don't know what to replace).  Put the entry icon on the pointer.
             # ... Probably don't want to keep this behavior, but it's fun to see.
             self.entryIconOnMouse = True
-            self.entryIcon = typing.EntryIcon(window=self, location=(0, 0),
-                initialString=char)
+            self.entryIcon = typing.EntryIcon(None, None, window=self, location=(0, 0))
+            self.entryIcon.addChar(char)
             self.cursor.setToEntryIcon()
             x = evt.x - 6
             y = evt.y - self.entryIcon.outSiteOffset[1]
@@ -228,14 +231,19 @@ class Window:
 
     def _insertEntryIconAtCursor(self, initialChar):
         self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
-         initialString=initialChar, window=self)
+         window=self)
         pendingArgs = self.cursor.icon.childAt(self.cursor.site)
         self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
         self.entryIcon.replaceChild(pendingArgs, (self.cursor.site[0], 0))
         self.cursor.setToEntryIcon()
+        self.entryIcon.addChar(initialChar)
         self._redisplayChangedEntryIcon()
 
-    def _redisplayChangedEntryIcon(self, evt=None):
+    def _redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
+        if self.entryIcon is None:
+            redrawRegion = AccumRects(oldLoc)
+        else:
+            redrawRegion = AccumRects(self.entryIcon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
         if self.entryIconOnMouse:
@@ -247,7 +255,6 @@ class Window:
                 self.entryIcon.draw(self.dragImage)
             return
         layoutNeeded = False
-        redrawRegion = AccumRects(self.entryIcon.rect)
         for ic in self.topIcons:
             if ic.needsLayout():
                 layoutNeeded = True
@@ -826,19 +833,42 @@ class Window:
         l, t, r, b = rect
         self.draw.rectangle((l, t, r-1, b-1), fill=windowBgColor)
 
-    def parentOf(self, child, fromIcon=None):
+    def parentOf(self, ic):
         """Find the parent of a given icon.  Don't use this casually.  Because we don't
         have a parent link, this is an exhaustive search of the hierarchy."""
+        parents = self.parentage(ic)
+        if parents is None or parents == ():
+            return None
+        return parents[-1]
+
+        # if fromIcon is None:
+        #     icons = self.topIcons
+        # else:
+        #     icons = fromIcon.children()
+        # for ic in icons:
+        #     if ic == child:
+        #         return fromIcon
+        #     result = self.parentOf(child, fromIcon=ic)
+        #     if result is not None:
+        #         return result
+        # return None
+
+    def parentage(self, child, fromIcon=None):
+        """Returns a tuple containing the lineage of the given icon, from window.topIcons
+        down to the direct parent of the icon.  Don't use this casually.  Because we don't
+        have a parent link, this is an exhaustive search of the hierarchy.  For an icon at
+        the top of the hierarchy, returns an empty tuple.  If the icon is not found at all
+        in the hierarchy, returns None."""
         if fromIcon is None:
             icons = self.topIcons
         else:
             icons = fromIcon.children()
         for ic in icons:
             if ic == child:
-                return fromIcon
-            result = self.parentOf(child, fromIcon=ic)
+                return ()
+            result = self.parentage(child, fromIcon=ic)
             if result is not None:
-                return result
+                return (ic, *result)
         return None
 
     def siteSelected(self, evt):

@@ -30,6 +30,19 @@ def parsePasted(text, window, location):
         y += 30 # Figure out how to space multiple expressions, later
     return icons
 
+def parseExprToAst(text):
+    try:
+        modAst = ast.parse(text, "Pasted text")
+    except:
+        return None
+    if not isinstance(modAst, ast.Module):
+        return None
+    if len(modAst.body) != 1:
+        return None
+    if not isinstance(modAst.body[0], ast.Expr):
+        return None
+    return modAst.body[0].value
+
 def parseExpr(expr):
     fn = 'functionIcon'
     id = 'identIcon'

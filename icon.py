@@ -377,7 +377,8 @@ class FnIcon(Icon):
         Icon.__init__(self, window)
         self.name = name
         self.argIcons = []
-        self.emptyInOffsets = (0, 6)
+        self.emptyArgWidth = 6
+        self.emptyInOffsets = (0, self.emptyArgWidth)
         self.inOffsets = self.emptyInOffsets
         bodyWidth, bodyHeight = globalFont.getsize(self.name + '(')
         bodyWidth += 2 * TEXT_MARGIN + 1
@@ -430,7 +431,7 @@ class FnIcon(Icon):
     def children(self):
         if self.attrIcon:
             return self.argIcons + [self.attrIcon]
-        return self.argIcons
+        return [ic for ic in self.argIcons if ic is not None]
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
@@ -474,7 +475,10 @@ class FnIcon(Icon):
             if newChild is None:
                 del self.argIcons[siteIndex]
             else:
-                self.argIcons[siteIndex] = newChild
+                if siteIndex == len(self.argIcons):
+                    self.argIcons.append(newChild)
+                else:
+                    self.argIcons[siteIndex] = newChild
         elif siteType == "attrOut":
             self.attrIcon = newChild
         self.layoutDirty = True
@@ -514,8 +518,11 @@ class FnIcon(Icon):
             for i in range(len(self.argIcons)):
                 childLayout = layout.subLayouts[i]
                 self.inOffsets.append(childX)
-                childLayout.icon._doLayout(childXOffset + childX, outSiteY, childLayout)
-                childX += childLayout.width-1 + commaImage.width-1
+                if childLayout is None:
+                    childX += self.emptyArgWidth + commaImage.width -1
+                else:
+                    childLayout.icon._doLayout(childXOffset + childX, outSiteY, childLayout)
+                    childX += childLayout.width-1 + commaImage.width-1
             self.inOffsets.append(childX - (commaImage.width-1))
         width, height = self._size()
         self.outSiteOffset = (0, bodyHeight // 2)
@@ -530,16 +537,16 @@ class FnIcon(Icon):
         self.layoutDirty = False
 
     def _calcLayout(self, parentPrecedence=None):
-        childLayouts = [c._calcLayout() for c in self.argIcons]
+        childLayouts = [None if c is None else c._calcLayout() for c in self.argIcons]
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
             childWidth = self.emptyInOffsets[-1] + parenImage.width
             height = bodyHeight
         else:
             numCommas = len(childLayouts) - 2
-            commaParenWidth = numCommas*(commaImage.width-1) + parenImage.width
-            childWidth = sum((c.width-1 for c in childLayouts)) + commaParenWidth
-            height = max(bodyHeight, max((c.height for c in childLayouts)))
+            childWidth = sum((c.width-1 for c in childLayouts if c is not None))
+            childWidth += numCommas*(commaImage.width-1) + parenImage.width
+            height = max(bodyHeight, max((c.height for c in childLayouts if c is not None)))
         width = self.bodySize[0] + outSiteImage.width + childWidth
         siteOffset = height // 2
         if self.attrIcon:
@@ -893,7 +900,10 @@ class DivideIcon(Icon):
         self.bottomArgSize = self.emptyArgSize
         self.bottomArgSiteOffset = (2, emptyArgHeight // 2 + 2)
         width, height = self._size()
-        x, y = location
+        if location is None:
+            x, y = 0, 0
+        else:
+            x, y = location
         self.rect = (x, y, x + width, y + height)
         self.outSiteOffset = (0, self.topArgSize[1] + 2)
         self.attrSiteOffset = (width-1, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
