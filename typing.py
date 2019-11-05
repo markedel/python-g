@@ -326,9 +326,14 @@ class EntryIcon(icon.Icon):
         childOp = argIcon
         # Walk up the hierarchy of binary operations, breaking each one in to left and
         # right operands for the new operation.  Stop when the parent operation has
-        # equal or lesser precedence, or is not a binary operation.
+        # lower precedence, or is not a binary operation.  Also stop if the parent
+        # operation has equal precedence, and the associativity of the operation matches
+        # the side of the operation on which the insertion is being made.
         for op in reversed(entryIconParents[:-1]):
-            if op.__class__ != icon.BinOpIcon or newOpIcon.precedence >= op.precedence:
+            if op.__class__ != icon.BinOpIcon or newOpIcon.precedence > op.precedence or \
+                    newOpIcon.precedence == op.precedence and (
+                     op.leftAssoc() and op.leftArg is childOp or
+                     op.rightAssoc() and op.rightArg is childOp):
                 op.replaceChild(newOpIcon, op.siteOf(childOp))
                 break
             if op.leftArg is childOp:  # Insertion was on left side of operation

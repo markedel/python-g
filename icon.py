@@ -1002,6 +1002,12 @@ class BinOpIcon(Icon):
         iconLeft = self.rect[0]
         return iconLeft < btnPressLoc[0] < iconLeft + lParenImage.width
 
+    def leftAssoc(self):
+        return self.operator != "**"
+
+    def rightAssoc(self):
+        return self.operator == "**"
+
     def execute(self):
         leftValue = self.leftArg.execute()
         rightValue = self.rightArg.execute()
