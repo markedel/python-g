@@ -199,8 +199,6 @@ class Window:
             self.entryIcon.addChar(char)
             if self.entryIcon is not None:
                 self.topIcons.append(self.entryIcon)
-            #self.entryIcon.draw()
-            #self.refresh(self.entryIcon.rect)
                 self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon()
             return
@@ -291,10 +289,11 @@ class Window:
                 else:
                     # Otherwise, drag the icon that was clicked
                     if self.doubleClickFlag:
-                        #self._startDrag(evt, [ic])  # double-click drag single icon
-                        self._startDrag(evt, list(ic.traverse()))  # double-click drag
+                        # double-click drag
+                        self._startDrag(evt, list(self.assocGrouping(ic).traverse()))
                     else:
-                        self._startDrag(evt, list(self.findLeftOuterIcon(ic).traverse()))
+                        self._startDrag(evt, list(self.findLeftOuterIcon(
+                         self.assocGrouping(ic)).traverse()))
         elif self.inRectSelect:
             self._updateRectSelect(evt)
 
@@ -691,7 +690,7 @@ class Window:
             return
         refreshRegion = AccumRects()
         if hier:
-            changedIcons = list(ic.traverse())
+            changedIcons = list(self.assocGrouping(ic).traverse())
         else:
             changedIcons = [ic]
         for ic in changedIcons:
@@ -844,18 +843,6 @@ class Window:
             return None
         return parents[-1]
 
-        # if fromIcon is None:
-        #     icons = self.topIcons
-        # else:
-        #     icons = fromIcon.children()
-        # for ic in icons:
-        #     if ic == child:
-        #         return fromIcon
-        #     result = self.parentOf(child, fromIcon=ic)
-        #     if result is not None:
-        #         return result
-        # return None
-
     def parentage(self, child, fromIcon=None):
         """Returns a tuple containing the lineage of the given icon, from window.topIcons
         down to the direct parent of the icon.  Don't use this casually.  Because we don't
@@ -873,6 +860,18 @@ class Window:
             if result is not None:
                 return (ic, *result)
         return None
+
+    def assocGrouping(self, ic):
+        """Find the root binary operation associated with a group of equal precedence
+        operations"""
+        child = ic
+        if ic.__class__ is not icon.BinOpIcon:
+            return ic
+        for parent in reversed(self.parentage(ic)):
+            if parent.__class__ is not icon.BinOpIcon or parent.precedence != ic.precedence:
+                return child
+            child = parent
+        return child
 
     def siteSelected(self, evt):
         """Look for icon sites near button press, if found return icon and site"""

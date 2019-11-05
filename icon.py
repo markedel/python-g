@@ -969,7 +969,8 @@ class BinOpIcon(Icon):
         depth = max(lDepth, rDepth)
         depthWidth = depth * DEPTH_EXPAND
         width = parenWidth + lArgWidth + rArgWidth + opWidth + depthWidth
-        depth += 1
+        if self.precedence != parentPrecedence:
+            depth += 1
         height = max(lArgHeight, rArgHeight, opHeight)
         siteYOff = max(lArgYSiteOff, rArgYSiteOff)
         if self.attrIcon:
