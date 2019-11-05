@@ -197,10 +197,12 @@ class Window:
             self.entryIcon = typing.EntryIcon(None, None, window=self,
              location=self.cursor.pos)
             self.entryIcon.addChar(char)
-            self.topIcons.append(self.entryIcon)
-            self.entryIcon.draw()
-            self.refresh(self.entryIcon.rect)
-            self.cursor.setToEntryIcon()
+            if self.entryIcon is not None:
+                self.topIcons.append(self.entryIcon)
+            #self.entryIcon.draw()
+            #self.refresh(self.entryIcon.rect)
+                self.cursor.setToEntryIcon()
+            self._redisplayChangedEntryIcon()
             return
         # If there's an appropriate selection, use that, otherwise float it on the mouse
         selectedIcons = findTopIcons(self.selectedIcons())
@@ -289,7 +291,8 @@ class Window:
                 else:
                     # Otherwise, drag the icon that was clicked
                     if self.doubleClickFlag:
-                        self._startDrag(evt, [ic])  # double-click drag single icon
+                        #self._startDrag(evt, [ic])  # double-click drag single icon
+                        self._startDrag(evt, list(ic.traverse()))  # double-click drag
                     else:
                         self._startDrag(evt, list(self.findLeftOuterIcon(ic).traverse()))
         elif self.inRectSelect:

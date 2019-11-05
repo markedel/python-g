@@ -29,7 +29,7 @@ numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
  '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
 attrPattern = re.compile('^\\.[a-zA-z_][a-zA-z_\\d]*$')
 # Characters that can legally follow a binary operator
-opDelimPattern = re.compile('[a-zA-z\\d_.\\(\\[\\{\\s]')
+opDelimPattern = re.compile('[a-zA-z\\d_.\\(\\[\\{\\s+-~]')
 
 inputSiteCursorPixmap = (
     "..   ",
@@ -230,16 +230,19 @@ class EntryIcon(icon.Icon):
         if self.attachedIcon is None:
             ic.rect = python_g.offsetRect(ic.rect, self.rect[0], self.rect[1])
             self.window.topIcons.append(ic)
-            self.window.topIcons.remove(self)
+            if self in self.window.topIcons:
+                self.window.topIcons.remove(self)
             ic.layoutDirty = True
-            cursor.setToIconSite(ic, ("attrOut", 0))
+            if "input" in snapLists:
+                cursor.setToIconSite(ic, ("input", 0))
+            else:
+                cursor.setToIconSite(ic, ("attrOut", 0))
         elif self.attachedToAttribute():
             # Entry icon is attached to an attribute site (ic is operator or attribute)
             self.appendOperator(ic)
         elif self.attachedSite[0] == "input":
             # Entry icon is attached to an input site
-            parentIc, parentSite = self.findVisibleSite()
-            parentIc.replaceChild(ic, parentSite)
+            self.attachedIcon.replaceChild(ic, self.attachedSite)
             if "input" in snapLists:
                 cursor.setToIconSite(ic, ("input", 0))
             elif "attrOut in snapLists":
@@ -295,21 +298,6 @@ class EntryIcon(icon.Icon):
                 self.window.cursor.setToIconSite(parent, insertSite)
                 return True
         return False
-
-    def findVisibleSite(self):
-        """Entry icon is attached to an input site, but binary operations can have
-        overlapping sites.  Find the one the user can actually see."""
-        ic = self.attachedIcon
-        if ic.__class__ is not icon.BinOpIcon or ic.rightArg == self:
-            # Save the work of finding icon parentage if site is already correct
-            return ic, self.attachedSite
-        parents = self.window.parentage(ic)
-        for parent in parents:
-            if parent.__class__ is not icon.BinOpIcon or parent.rightArg == self:
-                return ic, parent.siteOf(ic)
-            ic = parent
-        print("failed to find visible site for", self.attachedIcon, self.attachedSite)
-        return self.attachedIcon, self.attachedSite
 
     def makeFunction(self, ic):
         if ic.__class__ is not icon.IdentIcon or not identPattern.fullmatch(ic.name):
@@ -562,7 +550,7 @@ def parseEntryText(text, forAttrSite):
         if text in ("i", "a", "o", "an"):
             return "accept"  # Legal precursor characters to binary keyword operation
         if text in ("and", "is", "in", "or"):
-            return icon.BinOpIcon(text)  # Binary keyword operation
+            return icon.BinOpIcon(text), None # Binary keyword operation
         if text in ("*", "/", "@", "<", ">", "=", "!"):
             return "accept"  # Legal precursor characters to binary operation
         if text in binaryOperators:
@@ -588,9 +576,9 @@ def parseEntryText(text, forAttrSite):
         return "reject"
     else:
         # input site
-        if text in ('+', '-'):
-            # Unary +/- operator
-            return icon.FnIcon('+'), None
+        if text in ('+', '-', '~', "not"):
+            # Unary operator
+            return icon.UnaryOpIcon(text), None
         if text == '(':
             return icon.FnIcon('('), None  # Temporary stand-in for cursor-paren
         if text == ')':
@@ -599,17 +587,17 @@ def parseEntryText(text, forAttrSite):
             return "comma"
         if identPattern.fullmatch(text) or numPattern.fullmatch(text):
             return "accept"  # Nothing but legal identifier and numeric
-        if not (identPattern.fullmatch(text[:-1]) or numPattern.fullmatch(text[:-1])):
-            return "reject"  # Precursor characters do not form valid identifier or number
-        if len(text) == 1 or text[-1] not in delimitChars:
-            return "reject"  # No legal text or not followed by a legal delimiter
-        # All but the last character is ok and the last character is a valid delimiter
         delim = text[-1]
         text = text[:-1]
+        if text in ('+', '-', '~', "not") and opDelimPattern.match(delim):
+            return icon.UnaryOpIcon(text), delim
+        if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
+            return "reject"  # Precursor characters do not form valid identifier or number
+        if len(text) == 0 or delim not in delimitChars:
+            return "reject"  # No legal text or not followed by a legal delimiter
+        # All but the last character is ok and the last character is a valid delimiter
         if text in ('False', 'None', 'True'):
             return icon.IdIcon(text), delim
-        if text == "not":
-            return icon.FnIcon(text), delim
         if text in keywords:
             return "reject"
         exprAst = compile_eval.parseExprToAst(text)
@@ -622,7 +610,7 @@ def parseEntryText(text, forAttrSite):
         return "reject"
 
 def tkCharFromEvt(evt):
-    if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 191 or 220 <= evt.keycode <= 222:
+    if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 192 or 220 <= evt.keycode <= 222:
         return chr(evt.keysym_num)
     return None
 

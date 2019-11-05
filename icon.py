@@ -14,6 +14,8 @@ binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.tr
  '>>':operator.rshift, '|':operator.or_, '^':operator.xor, '&':operator.and_,
  '@':lambda x,y:x@y, 'and':lambda x,y:x and y, 'or':lambda x,y:x or y}
 
+unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_}
+
 TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
@@ -371,6 +373,126 @@ class IdentIcon(Icon):
     def execute(self):
         # Until this icon gets more specific about what it holds
         return eval(self.name)
+
+
+class UnaryOpIcon(Icon):
+    def __init__(self, operator, window=None, location=None):
+        Icon.__init__(self, window)
+        self.operator = operator
+        self.argIcon = None
+        bodyWidth, bodyHeight = globalFont.getsize(self.operator)
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        if location is None:
+            x, y = 0, 0
+        else:
+            x, y = location
+        self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
+        self.outSiteOffset = (0, bodyHeight // 2)
+        self.inSiteOffset = (bodyWidth - 1, self.outSiteOffset[1])
+
+    def draw(self, image=None, location=None, clip=None):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        if self.cachedImage is None:
+            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            width, height = globalFont.getsize(self.operator)
+            bodyLeft = outSiteImage.width - 1
+            draw = ImageDraw.Draw(self.cachedImage)
+            draw.rectangle((bodyLeft, 0, bodyLeft + width + 2 * TEXT_MARGIN,
+             height + 2 * TEXT_MARGIN), fill=ICON_BG_COLOR, outline=OUTLINE_COLOR)
+            outSiteX, outSiteY = self.outSiteOffset
+            outImageY = outSiteY - outSiteImage.height // 2
+            self.cachedImage.paste(outSiteImage, (outSiteX, outImageY), mask=outSiteImage)
+            inSiteX, inSiteY = self.inSiteOffset
+            inImageY = inSiteY - inSiteImage.height // 2
+            self.cachedImage.paste(inSiteImage, (inSiteX, inImageY))
+            if self.operator == "not":
+                textTop = TEXT_MARGIN
+                textLeft = bodyLeft + TEXT_MARGIN + 1
+            else:
+                # Raise unary operators up and move then to the left.  Not sure if this
+                # is safe for all fonts, but the Ariel font we're using pads on top.
+                textTop = -1 if self.operator == '+' else -2
+                textLeft = bodyLeft + 2 * TEXT_MARGIN
+            draw.text((textLeft, textTop), self.operator, font=globalFont,
+             fill=(0, 0, 0, 255))
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
+         location, clip)
+
+    def children(self):
+        if self.argIcon:
+            return [self.argIcon]
+        return []
+
+    def snapLists(self, atTop=False):
+        x, y = self.rect[:2]
+        outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
+        inSite = (self, (x + self.inSiteOffset[0], y + self.inSiteOffset[1]), 0)
+        return {"output":[outSite], "input":[inSite]}
+
+    def replaceChild(self, newChild, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            self.argIcon = newChild
+            self.layoutDirty = True
+
+    def siteOf(self, child):
+        if child is self.argIcon:
+            return ("input", 0)
+        return None
+
+    def childAt(self, site):
+        siteType, siteIndex = site
+        if siteType == "input" and siteIndex == 0:
+            return self.argIcon
+        return None
+
+    def layout(self, location=None):
+        if location is None:
+            x, y = self.rect[:2]
+        else:
+            x, y = location
+        self._doLayout(x, y+self.outSiteOffset[1], self._calcLayout())
+
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+        width, height = self.bodySize
+        width += outSiteImage.width - 1
+        top = outSiteY - height//2
+        self.rect = (outSiteX, top, outSiteX + width, top + height)
+        if self.argIcon:
+            self.argIcon._doLayout(outSiteX + width - 3, outSiteY, layout.subLayouts[0])
+
+    def _calcLayout(self, parentPrecedence=None):
+        width, height = self.bodySize
+        mySiteOffset = height // 2
+        if self.argIcon is None:
+            return Layout(self, width, height, mySiteOffset, [])
+        argLayout = self.argIcon._calcLayout()
+        heightAbove = max(mySiteOffset, argLayout.siteOffset)
+        argHeightBelow = argLayout.height - argLayout.siteOffset
+        myHeightBelow = height - mySiteOffset
+        heightBelow = max(myHeightBelow, argHeightBelow)
+        height = heightAbove + heightBelow
+        width += argLayout.width
+        return Layout(self, width, height, heightAbove, [argLayout])
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return self.__class__.__name__, (self.operator, addPoints(location, offset))
+
+    @staticmethod
+    def fromClipboard(clipData, window, locationOffset):
+        name, location = clipData
+        return UnaryOpIcon(name, window, (addPoints(location, locationOffset)))
+
+    def execute(self):
+        argValue = self.argIcon.execute()
+        return unaryOpFn[self.operator](argValue)
 
 class FnIcon(Icon):
     def __init__(self, name, window=None, location=None):
