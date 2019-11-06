@@ -334,7 +334,16 @@ class Window:
             self.buttonDownTime = None
         elif self.doubleClickFlag:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
-                self._execute(self.findIconAt(*self.buttonDownLoc), evt)
+                iconToExecute = self.findIconAt(*self.buttonDownLoc)
+                if iconToExecute is None:
+                    return
+                iconToExecute = self.findLeftOuterIcon(self.assocGrouping(iconToExecute))
+                if iconToExecute not in self.topIcons:
+                    self.doubleClickFlag = False
+                    self._delayedBtnUpActions(evt)
+                    return
+                self._execute(iconToExecute, evt)
+
             self.buttonDownTime = None
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
             # In order to handle double-click, button release actions are run not done
@@ -667,9 +676,6 @@ class Window:
         self.inRectSelect = False
 
     def _execute(self, iconToExecute, evt):
-        if iconToExecute is None:
-            return
-        iconToExecute = self.findLeftOuterIcon(iconToExecute)
         result = iconToExecute.execute()
         resultIcons = compile_eval.parsePasted(repr(result), self, (0, 0))
         if resultIcons is None:
