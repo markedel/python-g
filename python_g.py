@@ -6,6 +6,7 @@ import icon
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import compile_eval
+import tkinter.messagebox
 
 #windowBgColor = (255, 255,255)
 windowBgColor = (128, 128, 128)
@@ -15,8 +16,8 @@ dragThreshold = 2
 # Tkinter event modifiers
 SHIFT_MASK = 0x001
 CTRL_MASK = 0x004
-LEFT_ALT_MASK = 0x008
-RIGHT_ALT_MASK = 0x080
+LEFT_ALT_MASK = 0x20000
+RIGHT_ALT_MASK = 0x40000 # Note that numeric keypad divide comes up with this on mine
 LEFT_MOUSE_MASK = 0x100
 RIGHT_MOUSE_MASK = 0x300
 
@@ -27,6 +28,9 @@ CURSOR_BLINK_RATE = 500
 SNAP_DIST = 8
 
 SITE_SELECT_DIST = 4
+
+# How far to the right of icons to deposit the result of executing them
+RESULT_X_OFFSET = 5
 
 startUpTime = time.monotonic()
 
@@ -140,8 +144,8 @@ class Window:
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
         self.entryIcon = None
-        self.entryIconOnMouse = False
         self.cursor = typing.Cursor(self, None)
+        self.execResultPositions = {}
 
     def allIcons(self, order="draw"):
         """Iterate over of all icons in the window, in drawing order, "draw", by default,
@@ -178,7 +182,7 @@ class Window:
         self.refresh()
 
     def _keyCb(self, evt):
-        if evt.state & (CTRL_MASK | LEFT_ALT_MASK | RIGHT_ALT_MASK):
+        if evt.state & (CTRL_MASK | LEFT_ALT_MASK):
             return
         char = typing.tkCharFromEvt(evt)
         if char is None:
@@ -202,32 +206,22 @@ class Window:
                 self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon()
             return
-        # If there's an appropriate selection, use that, otherwise float it on the mouse
+        # If there's an appropriate selection, use that
         selectedIcons = findTopIcons(self.selectedIcons())
         if len(selectedIcons) == 1:
             # A single icon was selected.  Replace it and its children
-            self.entryIconOnMouse = False
             replaceIcon = selectedIcons[0]
             iconParent = self.parentOf(replaceIcon)
             self.entryIcon = typing.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
              window=self)
-            self.entryIcon.addChar(char)
-            self.cursor.setToEntryIcon()
             iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
+            self.cursor.setToEntryIcon()
+            self.entryIcon.addChar(char)
             self._redisplayChangedEntryIcon()
         else:
             # Either no icons were selected, or multiple icons were selected (so
-            # we don't know what to replace).  Put the entry icon on the pointer.
-            # ... Probably don't want to keep this behavior, but it's fun to see.
-            self.entryIconOnMouse = True
-            self.entryIcon = typing.EntryIcon(None, None, window=self, location=(0, 0))
-            self.entryIcon.addChar(char)
-            self.cursor.setToEntryIcon()
-            x = evt.x - 6
-            y = evt.y - self.entryIcon.outSiteOffset[1]
-            self.entryIcon.rect = offsetRect(self.entryIcon.rect, x, y)
-            self.buttonDownLoc = (evt.x, evt.y)  # drag needs starting location
-            self._startDrag(evt, [self.entryIcon], needRemove=False)
+            # we don't know what to replace).
+            typing.beep()
 
     def _insertEntryIconAtCursor(self, initialChar):
         self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
@@ -246,14 +240,6 @@ class Window:
             redrawRegion = AccumRects(self.entryIcon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
-        if self.entryIconOnMouse:
-            if self.entryIcon.layoutDirty:
-                self.entryIcon.layout()
-                self._cancelDrag()
-                self._startDrag(evt, [self.entryIcon], needRemove=False)
-            else:
-                self.entryIcon.draw(self.dragImage)
-            return
         layoutNeeded = False
         for ic in self.topIcons:
             if ic.needsLayout():
@@ -306,7 +292,6 @@ class Window:
     def _buttonPressCb(self, evt):
         if self.dragging:
             self._endDrag()
-            self.entryIconOnMouse = False
             return
         if self.buttonDownTime is not None:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
@@ -342,7 +327,7 @@ class Window:
                     self.doubleClickFlag = False
                     self._delayedBtnUpActions(evt)
                     return
-                self._execute(iconToExecute, evt)
+                self._execute(iconToExecute)
 
             self.buttonDownTime = None
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
@@ -474,17 +459,37 @@ class Window:
         self._cancelDrag()
         self.cursor.removeCursor()
 
-    def _enterCb(self, _evt=None):
+    def _enterCb(self, evt=None):
+        """Execute the top level icon at the entry or icon cursor"""
+        # Find the icon at the cursor.  If there's still an entry icon, try to process
+        # its content before executing.
         if self.entryIcon is not None:
-            enteredIcons = compile_eval.parsePasted(self.entryIcon.text, self, (0, 0))
-            if enteredIcons is None:
-                self.removeIcons([self.entryIcon])
-            else:
-                self.replaceIcons(self.entryIcon, enteredIcons[0])
-            self.entryIcon = None
-            self.entryIconOnMouse = False
-            self._cancelDrag()
-            self.cursor.removeCursor()
+            iconToExecute = self.entryIcon.attachedIcon
+            # Add a delimiter character to force completion
+            oldLoc = self.entryIcon.rect
+            self.entryIcon.addChar(" ")
+            self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
+            # If the entry icon is still there, check if it's empty, and if so, remove
+            # Otherwise, just give up trying to execute
+            if self.entryIcon is not None:
+                if len(self.entryIcon.text) == 0 and \
+                 self.entryIcon.pendingAttribute is None and \
+                 self.entryIcon.pendingArgument is None:
+                    self.cursor.setToIconSite(self.entryIcon.attachedIcon, self.entryIcon.attachedSite)
+                    self.removeIcons([self.entryIcon])
+                    self.entryIcon = None
+                else:
+                    return
+        if self.cursor.type == "icon":
+            iconToExecute = self.cursor.icon
+        else:
+            return  # Nothing to execute
+        # Find and execute the top level icon associated with the icon at the cursor
+        iconToExecute = self.topLevelParent(iconToExecute)
+        if iconToExecute is None:
+            print("Could not find top level icon to execute")
+            return
+        self._execute(iconToExecute)
 
     def _startDrag(self, evt, icons, needRemove=True):
         self.cursor.removeCursor()
@@ -675,17 +680,65 @@ class Window:
         self._eraseRectSelect()
         self.inRectSelect = False
 
-    def _execute(self, iconToExecute, evt):
-        result = iconToExecute.execute()
+    def _execute(self, iconToExecute):
+        # Execute the requested icon.  Icon execution methods will throw exception
+        # IconExecException which provides the icon where things went bad so it can
+        # be shown in self._handleExecErr
+        try:
+            result = iconToExecute.execute()
+        except icon.IconExecException as excep:
+            self._handleExecErr(excep)
+            return
+        # If the last execution result of the same icon is still laying where it was
+        # placed, remove it so that results don't pile up
+        outSitePos = iconToExecute.posOfSite(("output", 0))
+        if outSitePos in self.execResultPositions:
+            lastResultIcon, lastResultPos = self.execResultPositions[outSitePos]
+            if lastResultIcon is not None and lastResultIcon in self.topIcons and \
+             lastResultPos == lastResultIcon.rect[:2]:
+                self.removeIcons([lastResultIcon])
+            del self.execResultPositions[outSitePos]
+        # Convert results to icon form
         resultIcons = compile_eval.parsePasted(repr(result), self, (0, 0))
         if resultIcons is None:
             resultIcons = [icon.IdentIcon(repr(result), self, (0, 0))]
-        left, top, right, bottom = resultIcons[0].hierRect()
-        ctrXOff = (right - left) // 2
-        ctrYOff = (bottom - top) // 2
-        for ic in resultIcons:
-            ic.rect = offsetRect(ic.rect, evt.x - ctrXOff, evt.y - ctrYOff)
-        self._startDrag(evt, resultIcons, needRemove=False)
+        resultIcon = resultIcons[0]
+        # Place the results to the left of the icon being executed
+        if outSitePos is None:
+            outSiteX, top, right, bottom = iconToExecute.rect
+            outSiteY = (bottom + top) // 2
+        else:
+            outSiteX, outSiteY = outSitePos
+        resultRect = resultIcon.hierRect()
+        resultOutSitePos = resultIcon.posOfSite(("output", 0))
+        if resultOutSitePos is None:
+            resultOutSiteX, top, right, bottom = resultIcon.rect
+            resultOutSiteY = (bottom + top) // 2
+        else:
+            resultOutSiteX, resultOutSiteY = resultOutSitePos
+        resultX = outSiteX - RESULT_X_OFFSET - icon.rectWidth(resultRect)
+        resultY = outSiteY - resultOutSiteY - resultIcon.rect[1]
+        resultIcon.rect = offsetRect(resultIcon.rect, resultX, resultY)
+        self.topIcons.append(resultIcon)
+        resultIcon.layout()
+        resultRect = resultIcon.hierRect()
+        for ic in resultIcon.traverse():
+            ic.selected = True
+            ic.draw(clip=resultRect)
+        self.refresh(resultRect)
+        # Remember where the last result was drawn, so it can be erased if it is still
+        # there the next time the same icon is executed
+        self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
+
+    def _handleExecErr(self, excep):
+        iconRect = excep.icon.hierRect()
+        for ic in excep.icon.traverse():
+            ic.draw(clip=iconRect, colorErr=ic==excep.icon)
+        self.refresh(iconRect)
+        tkinter.messagebox.showerror("Error Executing", message=excep.message)
+        for ic in excep.icon.traverse():
+            ic.draw(clip=iconRect, colorErr=False)
+        self.refresh(iconRect)
 
     def _select(self, evt, ic, op='select', hier=True):
         """Select or toggle the top icon being pointed at, and bring it to the top.
@@ -848,6 +901,14 @@ class Window:
         if parents is None or parents == ():
             return None
         return parents[-1]
+
+    def topLevelParent(self, ic):
+        parents = self.parentage(ic)
+        if parents is None:
+            return None
+        if parents == ():
+            return ic
+        return parents[0]
 
     def parentage(self, child, fromIcon=None):
         """Returns a tuple containing the lineage of the given icon, from window.topIcons

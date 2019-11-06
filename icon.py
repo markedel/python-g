@@ -20,6 +20,7 @@ TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
 SELECT_TINT = (0, 0, 255, 0)
+ERR_TINT = (255, 0, 0, 0)
 GRAY_75 = (192, 192, 192, 255)
 GRAY_50 = (128, 128, 128, 255)
 GRAY_25 = (64, 64, 64, 255)
@@ -194,6 +195,11 @@ floatInImage = asciiToImage(floatInPixmap)
 lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
 
+class IconExecException(Exception):
+    def __init__(self, ic, exceptionText):
+        self.icon = ic
+        self.message = exceptionText
+
 class Icon:
     def __init__(self, window=None):
         self.window = window
@@ -287,7 +293,7 @@ class IdentIcon(Icon):
         self.attrSiteOffset = (bodyWidth, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
         self.attrIcon = None
 
-    def draw(self, image=None, location=None, clip=None):
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
             image = self.window.image
         if location is None:
@@ -300,8 +306,8 @@ class IdentIcon(Icon):
             outSiteX, outSiteY = self.outSiteOffset
             outSiteY -= outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
-         location, clip)
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
+         colorErr), location, clip)
 
     def children(self):
         if self.attrIcon:
@@ -372,7 +378,11 @@ class IdentIcon(Icon):
 
     def execute(self):
         # Until this icon gets more specific about what it holds
-        return eval(self.name)
+        try:
+            result = eval(self.name)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
 
 
 class UnaryOpIcon(Icon):
@@ -392,7 +402,7 @@ class UnaryOpIcon(Icon):
         self.outSiteOffset = (0, bodyHeight // 2)
         self.inSiteOffset = (bodyWidth - 1, self.outSiteOffset[1])
 
-    def draw(self, image=None, location=None, clip=None):
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
             image = self.window.image
         if location is None:
@@ -421,8 +431,8 @@ class UnaryOpIcon(Icon):
                 textLeft = bodyLeft + 2 * TEXT_MARGIN
             draw.text((textLeft, textTop), self.operator, font=globalFont,
              fill=(0, 0, 0, 255))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
-         location, clip)
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
+         colorErr), location, clip)
 
     def children(self):
         if self.argIcon:
@@ -492,7 +502,11 @@ class UnaryOpIcon(Icon):
 
     def execute(self):
         argValue = self.argIcon.execute()
-        return unaryOpFn[self.operator](argValue)
+        try:
+            result = unaryOpFn[self.operator](argValue)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
 
 class FnIcon(Icon):
     def __init__(self, name, window=None, location=None):
@@ -520,7 +534,7 @@ class FnIcon(Icon):
         width += self.inOffsets[-1] + parenImage.width + 1
         return width, height
 
-    def draw(self, image=None, location=None, clip=None):
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
             image = self.window.image
         if location is None:
@@ -547,8 +561,8 @@ class FnIcon(Icon):
             parenY = siteY - parenImage.height//2
             parenX = inSiteX + self.inOffsets[-1] + inSiteImage.width - 1
             self.cachedImage.paste(parenImage, (parenX, parenY))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
-         location, clip)  # ... try w/o mask
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
+         colorErr), location, clip)
 
     def children(self):
         if self.attrIcon:
@@ -696,7 +710,11 @@ class FnIcon(Icon):
 
     def execute(self):
         argValues = [c.execute() for c in self.children()]
-        return getattr(math, self.name)(*argValues)
+        try:
+            result = getattr(math, self.name)(*argValues)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
 
 class BinOpIcon(Icon):
     def __init__(self, operator, window=None, location=None):
@@ -730,7 +748,7 @@ class BinOpIcon(Icon):
         width = parenWidth + self.leftArgWidth + self.rightArgWidth + opWidth
         return width, opHeight
 
-    def draw(self, image=None, location=None, clip=None):
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
         cachedImage = self.cachedImage
         temporaryOutputSite = False
         if image is not None and self.leftSiteDrawn:
@@ -780,8 +798,8 @@ class BinOpIcon(Icon):
                 rParenX = opX + opWidth - 1 + self.rightArgWidth - 1
                 rParenY = siteY - rParenImage.height//2
                 cachedImage.paste(rParenImage, (rParenX, rParenY))
-        pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected),
-         location, clip)
+        pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected,
+         colorErr), location, clip)
         if not temporaryOutputSite:
             self.cachedImage = cachedImage
 
@@ -1012,7 +1030,11 @@ class BinOpIcon(Icon):
     def execute(self):
         leftValue = self.leftArg.execute()
         rightValue = self.rightArg.execute()
-        return binOpFn[self.operator](leftValue, rightValue)
+        try:
+            result = binOpFn[self.operator](leftValue, rightValue)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
 
 class DivideIcon(Icon):
     def __init__(self, window=None, location=None, floorDiv=False):
@@ -1045,7 +1067,7 @@ class DivideIcon(Icon):
         height = topHeight + bottomHeight + 3
         return width, height
 
-    def draw(self, image=None, location=None, clip=None):
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
             image = self.window.image
         if location is None:
@@ -1078,8 +1100,8 @@ class DivideIcon(Icon):
             else:
                 draw.line((bodyLeft + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
             self.cachedImage.paste(outSiteImage, (leftX, cntrY - outSiteImage.height//2))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected),
-         location, clip)  # ... try w/o mask
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
+         colorErr), location, clip)
 
     def touchesRect(self, rect):
         if not rectsTouch(self.rect, rect):
@@ -1238,10 +1260,14 @@ class DivideIcon(Icon):
     def execute(self):
         topValue = self.topArg.execute()
         bottomValue = self.bottomArg.execute()
-        if self.floorDiv:
-            return operator.floordiv(topValue, bottomValue)
-        else:
-            return operator.truediv(topValue, bottomValue)
+        try:
+            if self.floorDiv:
+                result = operator.floordiv(topValue, bottomValue)
+            else:
+                result = operator.truediv(topValue, bottomValue)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
 
 class ImageIcon(Icon):
     def __init__(self, image, window=None, location=None):
@@ -1253,13 +1279,13 @@ class ImageIcon(Icon):
             x, y = location
         self.rect = (x, y, x + image.width, y + image.height)
 
-    def draw(self, image=None, location=None, clip=None):
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
             image = self.window.image
         if location is None:
             location = self.rect[:2]
-        pasteImageWithClip(image, tintSelectedImage(self.image, self.selected),
-         location, clip)
+        pasteImageWithClip(image, tintSelectedImage(self.image, self.selected,
+         colorErr), location, clip)
 
     def snapLists(self, atTop=False):
         return {}
@@ -1322,13 +1348,17 @@ def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
     # Paste the cropped image in the drawn area
     dstImage.paste(croppedImage, box=(dl, dt), mask=croppedImage)
 
-def tintSelectedImage(image, selected):
-    if not selected:
+def tintSelectedImage(image, selected, colorErr):
+    if not selected and not colorErr:
         return image
     # ... This is wasteful and should be an image filter if I can figure out how to
     # make one properly
+    if colorErr:
+        color = ERR_TINT
+    else:
+        color = SELECT_TINT
     alphaImg = image.getchannel('A')
-    colorImg = Image.new('RGBA', (image.width, image.height), color=SELECT_TINT)
+    colorImg = Image.new('RGBA', (image.width, image.height), color=color)
     colorImg.putalpha(alphaImg)
     selImg = Image.blend(image, colorImg, .15)
     return selImg
