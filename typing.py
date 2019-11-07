@@ -204,7 +204,7 @@ class EntryIcon(icon.Icon):
             nibTop = y + self.outSiteOffset[1] - penImage.height // 2
             image.paste(penImage, box=(x, nibTop), mask=penImage)
 
-    def addChar(self, char):
+    def addText(self, char):
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
 
@@ -487,6 +487,13 @@ class EntryIcon(icon.Icon):
     def penOffset(self):
         penImgWidth = attrPenImage.width if self.attachedToAttribute() else penImage.width
         return penImgWidth - PEN_MARGIN
+
+class CursorParenIcon(icon.UnaryOpIcon):
+    def __init__(self, window=None, location=None):
+        icon.UnaryOpIcon.__init__(self, "(", window=window, location=location)
+
+    def clipboardRepr(self, offset):
+        pass
 
 class Cursor:
     def __init__(self, window, cursorType):

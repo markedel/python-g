@@ -277,6 +277,9 @@ class Icon:
                     return pos
         return None
 
+    def textRepr(self):
+        return repr(self)
+
 class IdentIcon(Icon):
     def __init__(self, name, window=None, location=None):
         Icon.__init__(self, window)
@@ -368,6 +371,9 @@ class IdentIcon(Icon):
         width += attrLayout.width
         return Layout(self, width, height, heightAbove, [attrLayout])
 
+    def textRepr(self):
+        return self.name
+
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return self.__class__.__name__, (self.name, addPoints(location, offset))
@@ -422,14 +428,14 @@ class UnaryOpIcon(Icon):
             inSiteX, inSiteY = self.inSiteOffset
             inImageY = inSiteY - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (inSiteX, inImageY))
-            if self.operator == "not":
-                textTop = TEXT_MARGIN
-                textLeft = bodyLeft + TEXT_MARGIN + 1
-            else:
+            if self.operator in ('+', '-', '~'):
                 # Raise unary operators up and move then to the left.  Not sure if this
                 # is safe for all fonts, but the Ariel font we're using pads on top.
                 textTop = -1 if self.operator == '+' else -2
                 textLeft = bodyLeft + 2 * TEXT_MARGIN
+            else:
+                textTop = TEXT_MARGIN
+                textLeft = bodyLeft + TEXT_MARGIN + 1
             draw.text((textLeft, textTop), self.operator, font=globalFont,
              fill=(0, 0, 0, 255))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
@@ -492,14 +498,20 @@ class UnaryOpIcon(Icon):
         width += argLayout.width
         return Layout(self, width, height, heightAbove, [argLayout])
 
+    def textRepr(self):
+        argText = "None" if self.argIcon is None else self.argIcon.textRepr()
+        return self.operator + " " + argText
+
     def clipboardRepr(self, offset):
         location = self.rect[:2]
-        return self.__class__.__name__, (self.operator, addPoints(location, offset))
+        return (self.__class__.__name__, (self.operator, addPoints(location, offset),
+         None if self.argIcon is None else self.argIcon.clipboardRepr(offset)))
 
     @staticmethod
-    def fromClipboard(clipData, window, locationOffset):
-        name, location = clipData
-        return UnaryOpIcon(name, window, (addPoints(location, locationOffset)))
+    def fromClipboard(clipData, window, offset):
+        op, location, arg = clipData
+        ic = UnaryOpIcon(op, window, (addPoints(location, offset)))
+        ic.argIcon = clipboardDataToIcons([arg], window, offset)
 
     def execute(self):
         argValue = self.argIcon.execute()
@@ -697,6 +709,17 @@ class FnIcon(Icon):
             width += attrLayout.width
         return Layout(self, width, height, siteOffset, childLayouts)
 
+    def textRepr(self):
+        argText = ""
+        for arg in self.argIcons:
+            if arg is None:
+                argText = argText + "None, "
+            else:
+                argText = argText + arg.textRepr() + ", "
+        if len(argText) > 0:
+            argText = argText[:-2]
+        return self.name + "(" + argText
+
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (self.name, addPoints(location, offset),
@@ -733,7 +756,9 @@ class BinOpIcon(Icon):
         opWidth += 2*TEXT_MARGIN - 1
         self.opSize = (opWidth, opHeight)
         self.depthWidth = 0
-        self.rect = (0, 0, *self._size())
+        x, y = (0, 0) if location is None else location
+        width, height = self._size()
+        self.rect = (x, y, x + width, y + height)
         self.outSiteOffset = (0, opHeight // 2)
         self.attrSiteOffset = None
         self.leftSiteDrawn = False
@@ -1005,6 +1030,14 @@ class BinOpIcon(Icon):
         return Layout(self, width, height, siteYOff, (lArgLayout, rArgLayout, attrLayout),
          depth)
 
+    def textRepr(self):
+        leftArgText = "None" if self.leftArg is None else self.leftArg.textRepr()
+        rightArgText = "None" if self.rightArg is None else self.rightArg.textRepr()
+        text = leftArgText + " " + self.operator + " " + rightArgText
+        if self.hasParens:
+            return "(" + text + ")"
+        return text
+
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (self.operator, addPoints(location, offset),
@@ -1060,6 +1093,7 @@ class DivideIcon(Icon):
         self.outSiteOffset = (0, self.topArgSize[1] + 2)
         self.attrSiteOffset = (width-1, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
         self.attrIcon = None
+        self.textHasParens = False  # Like BinOpIcon.hasParens, but only affects text repr
 
     def _size(self):
         topWidth, topHeight = self.topArgSize
@@ -1175,8 +1209,11 @@ class DivideIcon(Icon):
         self._doLayout(x, y + self.topArgSize[1] + 2, self._calcLayout())
 
     def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+        if parentPrecedence is None:
+            self.textHasParens = False
+        else:
+            self.textHasParens = self.precedence < parentPrecedence
         tArgLayout, bArgLayout, attrLayout = layout.subLayouts
-        emptyArgWidth, emptyArgHeight = self.emptyArgSize
         if tArgLayout is None:
             tArgWidth, tArgHeight = self.emptyArgSize
             tArgSiteOffset = self.emptyArgSize[1] // 2
@@ -1245,6 +1282,15 @@ class DivideIcon(Icon):
             attrLayout = None
         return Layout(self, width, height,siteYOff, (tArgLayout, bArgLayout, attrLayout))
 
+    def textRepr(self):
+        topArgText = "None" if self.topArg is None else self.topArg.textRepr()
+        bottomArgText = "None" if self.bottomArg is None else self.bottomArg.textRepr()
+        operator = '//' if self.floorDiv else '/'
+        text = topArgText + " " + operator + " " + bottomArgText
+        if self.textHasParens:
+            return "(" + text + ")"
+        return text
+
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (addPoints(location, offset),
@@ -1255,7 +1301,7 @@ class DivideIcon(Icon):
     def fromClipboard(clipData, window, offset):
         location, children = clipData
         ic = DivideIcon(window, (addPoints(location, offset)))
-        ic.leftArg, ic.rightArg = clipboardDataToIcons(children, window, offset)
+        ic.topArg, ic.bottomArg = clipboardDataToIcons(children, window, offset)
         return ic
 
     def execute(self):

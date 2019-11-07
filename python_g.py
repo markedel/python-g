@@ -195,7 +195,7 @@ class Window:
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
             oldLoc = self.entryIcon.rect
-            self.entryIcon.addChar(char)
+            self.entryIcon.addText(char)
             self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             return
         elif self.cursor.type == "icon":
@@ -204,7 +204,7 @@ class Window:
         elif self.cursor.type == "window":
             self.entryIcon = typing.EntryIcon(None, None, window=self,
              location=self.cursor.pos)
-            self.entryIcon.addChar(char)
+            self.entryIcon.addText(char)
             if self.entryIcon is not None:
                 self.topIcons.append(self.entryIcon)
                 self.cursor.setToEntryIcon()
@@ -220,7 +220,7 @@ class Window:
              window=self)
             iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
             self.cursor.setToEntryIcon()
-            self.entryIcon.addChar(char)
+            self.entryIcon.addText(char)
             self._redisplayChangedEntryIcon()
         else:
             # Either no icons were selected, or multiple icons were selected (so
@@ -234,7 +234,7 @@ class Window:
         self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
         self.entryIcon.replaceChild(pendingArgs, (self.cursor.site[0], 0))
         self.cursor.setToEntryIcon()
-        self.entryIcon.addChar(initialChar)
+        self.entryIcon.addText(initialChar)
         self._redisplayChangedEntryIcon()
 
     def _redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
@@ -388,64 +388,112 @@ class Window:
         if selectedRect is None:
             return
         xOff, yOff = selectedRect[:2]
-        clipIcons = icon.clipboardRepr(findTopIcons(selectedIcons), (-xOff, -yOff))
-        clipTxt = " ".join([ic.name for ic in selectedIcons])
+        topIcons = findTopIcons(selectedIcons)
+        clipIcons = icon.clipboardRepr(topIcons, (-xOff, -yOff))
+        clipTxt = "\n".join([ic.textRepr() for ic in topIcons])
         self.top.clipboard_clear()
         self.top.clipboard_append(clipIcons, type='ICONS')
         self.top.clipboard_append(clipTxt, type='STRING')
 
     def _pasteCb(self, evt=None):
-        if self.cursor.type == "window":
-            px, py = self.cursor.pos
-        else:
-            selectedRect = icon.containingRect(self.selectedIcons())
-            if selectedRect is not None:
-                px, py = selectedRect[:2]
-                self.removeIcons(self.selectedIcons())
-            elif evt is not None:
-                px, py = evt.x, evt.y
-            else:
-                px, py = 10, 10
+        if self.cursor.type == "text":
+            # If the user is pasting in to the entry icon use clipboard text, only
+            try:
+                text = self.top.clipboard_get(type="STRING")
+            except:
+                return
+            oldLoc = self.entryIcon.rect
+            self.entryIcon.addText(text)
+            self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
+            return
+        # Look at what is on the clipboard and make the best possible conversion to icons
         try:
             iconString = self.top.clipboard_get(type="ICONS")
         except:
             iconString = None
         if iconString is not None:
-            pastedIcons = icon.iconsFromClipboardString(iconString, self, (px, py))
+            pastedIcons = icon.iconsFromClipboardString(iconString, self, (0, 0))
         else:
-            # Couldn't get icon data.  Use string on clipboard
+            # Couldn't get our icon data format.  Try string as python code
             try:
                 text = self.top.clipboard_get(type="STRING")
             except:
                 text = None
             # Try to parse the string as Python code
             if text is not None:
-                pastedIcons = compile_eval.parsePasted(text, self, (px, py))
+                pastedIcons = compile_eval.parsePasted(text, self, (0, 0))
+                # Not usable python code, put in to single icon as string
                 if pastedIcons is None:
-                    pastedIcons = [icon.IdentIcon(repr(text), self, (px, py))]
+                    pastedIcons = [icon.IdentIcon(repr(text), self, (0, 0))]
             else:
+                # No text available in a form we can use.  Try for image
                 clipImage = ImageGrab.grabclipboard()
                 if clipImage is None:
                     return
-                pastedIcons = [icon.ImageIcon(clipImage, self, (px, py))]
-        if len(pastedIcons) > 0 and pastedIcons[0].outSiteOffset is not None:
-            # If the top icon has an output site, line it up on the paste point
-            xOff, yOff = pastedIcons[0].outSiteOffset
+                pastedIcons = [icon.ImageIcon(clipImage, self, (0, 0))]
+        if len(pastedIcons) == 0:
+            return  # Nothing usable on the clipboard
+        # Clipboard had something, figure out where to put it
+        iconOutputSite = pastedIcons[0].outSiteOffset
+        replaceParent = None
+        replaceSite = None
+        pastePos = None
+        if self.cursor.type == "window":
+            x, y = self.cursor.pos
+            if iconOutputSite is not None:
+                xOff, yOff = iconOutputSite
+                x -= xOff
+                y -= yOff
+            pastePos = x, y
+        elif self.cursor.type == "icon":
+            if self.cursor.site[0] is not "input" or len(pastedIcons) != 1:
+                typing.beep()
+                return
+            replaceParent = self.cursor.icon
+            replaceSite = self.cursor.site
+        else:
+            # There's no cursor.  See if there's a selection
+            selectedIcons = self.selectedIcons()
+            if len(selectedIcons) == 0:
+                typing.beep()
+                return
+            selectedIcons = findTopIcons(self.selectedIcons())
+            if len(selectedIcons) == 1 and len(pastedIcons) == 1:
+                replaceParent = self.parentOf(selectedIcons[0])
+                replaceSite = replaceParent.siteOf(selectedIcons[0])
+            else:
+                selectedRect = icon.containingRect(self.selectedIcons())
+                pastePos = selectedRect[:2]
+                self.removeIcons(self.selectedIcons())
+        # We now know where to put it if replaceIcon is True, use it to replace that
+        # otherwise put it at replacePos
+        if replaceParent is not None:
+            topIcon = self.topLevelParent(replaceParent)
+            redrawRegion = AccumRects(topIcon.hierRect())
+            replaceParent.replaceChild(pastedIcons[0], replaceSite)
+            topIcon.layout()
+            redrawRegion.add(topIcon.hierRect())
+            self.clearBgRect(redrawRegion.get())
+            for ic in self.findIconsInRegion(redrawRegion.get()):
+                ic.draw(clip=redrawRegion.get())
+            self.refresh(redrawRegion.get())
+            self.cursor.setToIconSite(replaceParent, replaceSite)
+        else:
+            x, y = pastePos
             for topIcon in pastedIcons:
                 for ic in topIcon.traverse():
-                    ic.rect = offsetRect(ic.rect, -xOff, -yOff)
-        redrawRect = AccumRects()
-        for pastedTopIcon in pastedIcons:
-            self.topIcons.append(pastedTopIcon)
-            for ic in pastedTopIcon.traverse():
-                ic.draw()  # No need to clip or erase, all drawn on top
-                redrawRect.add(ic.rect)
-        self.refresh(redrawRect.get())
-        if self.cursor.type == "window":
-            if len(pastedIcons) > 0 and pastedIcons[0].outSiteOffset is not None:
-                self.cursor.setToIconSite(pastedIcons[0], ("output", 0))
-            else:
+                    ic.rect = offsetRect(ic.rect, x, y)
+            redrawRect = AccumRects()
+            for pastedTopIcon in pastedIcons:
+                self.topIcons.append(pastedTopIcon)
+                for ic in pastedTopIcon.traverse():
+                    ic.draw()  # No need to clip or erase, all drawn on top
+                    redrawRect.add(ic.rect)
+            self.refresh(redrawRect.get())
+            if iconOutputSite is None:
                 self.cursor.removeCursor()
+            else:
+                self.cursor.setToIconSite(pastedIcons[0], ("output", 0))
 
     def _deleteCb(self, _evt=None):
         self.removeIcons(self.selectedIcons())
@@ -478,7 +526,7 @@ class Window:
             iconToExecute = self.entryIcon.attachedIcon
             # Add a delimiter character to force completion
             oldLoc = self.entryIcon.rect
-            self.entryIcon.addChar(" ")
+            self.entryIcon.addText(" ")
             self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             # If the entry icon is still there, check if it's empty, and if so, remove
             # Otherwise, just give up trying to execute
