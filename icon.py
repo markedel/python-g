@@ -7,7 +7,8 @@ import operator
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
 binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
- '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'and':3, 'or':2}
+ '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
+ 'is':5, 'is not':5}
 
 binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.truediv,
  '//':operator.floordiv, '%':operator.mod, '**':operator.pow, '<<':operator.lshift,

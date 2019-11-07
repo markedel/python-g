@@ -117,6 +117,10 @@ class Window:
         self.top.bind("<BackSpace>", self._backspaceCb)
         self.top.bind("<Escape>", self._cancelCb)
         self.top.bind("<Return>", self._enterCb)
+        self.top.bind("<Up>", self._arrowCb)
+        self.top.bind("<Down>", self._arrowCb)
+        self.top.bind("<Left>", self._arrowCb)
+        self.top.bind("<Right>", self._arrowCb)
         self.top.bind("<Key>", self._keyCb)
         self.imgFrame.pack(fill=tk.BOTH, expand=True)
         self.frame.pack(fill=tk.BOTH, expand=True)
@@ -305,7 +309,7 @@ class Window:
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
         ic = self.findIconAt(evt.x, evt.y)
-        if ic is None or not ic.selected and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
+        if (ic is None or not ic.selected) and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
             self.unselectAll()
 
     def _buttonReleaseCb(self, evt):
@@ -346,7 +350,8 @@ class Window:
         siteIcon, site = self.siteSelected(evt)
         clickedIcon = self.findIconAt(evt.x, evt.y)
         clickedIconSelected = clickedIcon is not None and clickedIcon.selected
-        # The horrible logic below implements the combination of
+        # The horrible logic below implements the combination of progressive selection
+        # and cursor placement
         clickedIconCanMultiSelect = clickedIconSelected and \
          (len(clickedIcon.children()) > 0 and not clickedIcon.children()[0].selected)
         if self.buttonDownState & SHIFT_MASK:
@@ -451,6 +456,12 @@ class Window:
         else:
             self.entryIcon.backspace()
             self._redisplayChangedEntryIcon()
+
+    def _arrowCb(self, evt):
+        print('arrow', evt.keysym, evt.keycode, evt.keysym_num)
+        if self.cursor.type is None:
+            return
+        self.cursor.processArrowKey(evt.keysym)
 
     def _cancelCb(self, _evt=None):
         if self.entryIcon is not None:

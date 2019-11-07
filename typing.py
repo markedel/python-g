@@ -6,11 +6,29 @@ import winsound
 import ast
 from PIL import Image, ImageDraw
 import re
+from operator import itemgetter
 
 PEN_BG_COLOR = (255, 245, 245, 255)
 PEN_OUTLINE_COLOR = (255, 97, 120, 255)
 RIGHT_LAYOUT_MARGIN = 3
 PEN_MARGIN = 6
+
+# How far to move the cursor per arrow keystroke on the window background
+WINDOW_CURSOR_INCREMENT = 20
+
+# How far away from the edges of the window to keep the window background cursor
+WINDOW_CURSOR_MARGIN = 5
+
+# Max allowable cursor y movement for left and right arrow movement over icons
+HORIZ_ARROW_Y_JUMP_MAX = 12
+
+# Minimum threshold for y cursor movement on up/down arrow (to prevent minor alignment
+# issues from dominating the destination site choice
+VERT_ARROW_Y_JUMP_MIN = 5
+
+# Allowable variance in y site positions for two sites to be considered the same y
+# distance during up/down arrow cursor movement
+VERT_ARROW_Y_EQUIVALENCE_DIST = 4
 
 binaryOperators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '^', '<',
  '>', '<=', '>=', '==', '!=']
@@ -193,6 +211,18 @@ class EntryIcon(icon.Icon):
     def backspace(self):
         newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos-1)
+
+    def arrowAction(self, direction):
+        newCursorPos = self.cursorPos
+        if direction == "Left":
+            newCursorPos = max(0, self.cursorPos - 1)
+        elif direction == "Right":
+            newCursorPos = min(self.cursorPos + 1, len(self.text))
+        if newCursorPos == self.cursorPos:
+            return
+        self.window.cursor.erase()
+        self.cursorPos = newCursorPos
+        self.window.cursor.draw()
 
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
@@ -536,6 +566,89 @@ class Cursor:
         cursorDrawImg.paste(cursorImg, mask=cursorImg)
         self.window.drawImage(cursorDrawImg, (x, y))
         self.lastDrawRect = cursorRegion
+
+    def processArrowKey(self, direction):
+        if self.type is None:
+            return
+        elif self.type == "text":
+            self.window.entryIcon.arrowAction(direction)
+            return
+        if self.type == "window":
+            x, y = self.pos
+            directions = {"Up":(0,-1), "Down":(0,1), "Left":(-1,0), "Right":(1,0)}
+            xOff, yOff = directions[direction]
+            x += xOff * WINDOW_CURSOR_INCREMENT
+            y += yOff * WINDOW_CURSOR_INCREMENT
+            windowWidth, windowHeight = self.window.image.size
+            if  WINDOW_CURSOR_MARGIN < x < windowWidth - WINDOW_CURSOR_MARGIN and \
+             WINDOW_CURSOR_MARGIN < y < windowHeight - WINDOW_CURSOR_MARGIN:
+                self.erase()
+                self.pos = x, y
+                self.draw()
+            return
+        elif self.type == "icon":
+            self._processIconArrowKey(direction)
+
+    def _processIconArrowKey(self, direction):
+        """For cursor on icon site, set new site based on arrow direction"""
+        # Build a list of possible destination cursor positions, normalizing attribute
+        # site positions to the center of the cursor (in/out site position).  For the
+        # moment, limit to icons with the same top level parent
+        topIcon = self.window.topLevelParent(self.icon)
+        cursorSites = []
+        for winIcon in topIcon.traverse():
+            snapLists = winIcon.snapLists(atTop=winIcon is topIcon)
+            for ic, (x, y), idx in snapLists.get("input", []):
+                cursorSites.append((x, y, ic, ("input", idx)))
+            for ic, (x, y), idx in snapLists.get("attrOut", []):
+                cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, ("attrOut", idx)))
+            if winIcon is topIcon:
+                outSites = snapLists.get("output", [])
+                if len(outSites) > 0:
+                    cursorSites.append((*outSites[0][1], winIcon, ("output", 0)))
+        cursorX, cursorY = self.icon.posOfSite(self.site)
+        # Rank the destination positions by nearness to the current cursor position
+        # in the cursor movement direction, and cull those in the wrong direction
+        if self.site[0] == "attrOut":
+            cursorY -= icon.ATTR_SITE_OFFSET  # Normalize to input/output site y
+        choices = []
+        for x, y, ic, site in cursorSites:
+            if direction == "Left":
+                dist = cursorX - x
+            elif direction == "Right":
+                dist = x - cursorX
+            elif direction == "Up":
+                dist = cursorY - y
+            elif direction == "Down":
+                dist = y - cursorY
+            if dist > 0:
+                choices.append((dist, x, y, ic, site))
+        if len(choices) == 0:
+            return
+        choices.sort(key=itemgetter(0))
+        if direction in ("Left", "Right"):
+            # For horizontal movement, just use a simple vertical threshold to decide
+            # if the movement is appropriate
+            for xDist, x, y, ic, site in choices:
+                if abs(y - cursorY) < HORIZ_ARROW_Y_JUMP_MAX:
+                    self.setToIconSite(ic, site)
+                    return
+        else:  # Up, Down
+            # For vertical movement, do a second round of culling and ranking.  This time
+            # cull to only nearest equivalent y distance and re-rank by x distance
+            nearestYDist = None
+            newRanking = []
+            for yDist, x, y, ic, site in choices:
+                if yDist > VERT_ARROW_Y_JUMP_MIN:
+                    if nearestYDist is None:
+                        nearestYDist = yDist
+                    if yDist - nearestYDist < VERT_ARROW_Y_EQUIVALENCE_DIST:
+                        newRanking.append((abs(x-cursorX), ic, site))
+            if len(newRanking) == 0:
+                return
+            newRanking.sort(key=itemgetter(0))
+            xDist, ic, site = newRanking[0]
+            self.setToIconSite(ic, site)
 
     def erase(self):
         if self.lastDrawRect is not None and self.window.dragging is None:
