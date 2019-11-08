@@ -1410,41 +1410,45 @@ def tintSelectedImage(image, selected, colorErr):
     selImg = Image.blend(image, colorImg, .15)
     return selImg
 
-def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc=None):
+def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
     """Because we have icons with no pickable structure left of their arguments (binary
     operations), we have to make rules about what it means to click or drag the leftmost
     icon in an expression.  For the purpose of selection, that is simply the icon that was
     clicked.  For dragging and double clicking (execution), this function finds the
     outermost operation that claims the clicked icon as its leftmost operand."""
-    if btnPressLoc is not None:
-        # One idiotic case we have to distinguish, is when the clicked icon is a BinOpIcon
-        # with automatic parens visible: only if the user clicked on the left paren, can
-        # the icon be the leftmost object in an expression.  Clicking on the body or the
-        # right paren does not count.
-        if clickedIcon.__class__ is BinOpIcon and clickedIcon.hasParens:
-            if not clickedIcon.locIsOnLeftParen(btnPressLoc):
-                return clickedIcon
+    # One idiotic case we have to distinguish, is when the clicked icon is a BinOpIcon
+    # with automatic parens visible: only if the user clicked on the left paren can
+    # the icon be the leftmost object in an expression.  Clicking on the body or the
+    # right paren does not count.
+    if clickedIcon.__class__ is BinOpIcon and clickedIcon.hasParens:
+        if not clickedIcon.locIsOnLeftParen(btnPressLoc):
+            return clickedIcon
     if clickedIcon is fromIcon:
         return clickedIcon
     # Only binary operations are candidates, and only when the expression directly below
     # has claimed itself to be the leftmost operand of an expression
-    if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None and not fromIcon.hasParens:
-        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg)
+    if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None:
+        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg, btnPressLoc)
         if left is fromIcon.leftArg:
             targetIsBinOpIcon = clickedIcon.__class__ is BinOpIcon
             if not targetIsBinOpIcon or targetIsBinOpIcon and clickedIcon.hasParens:
-                return fromIcon  # Claim outermost status for this icon
+                # Again, we have to check before claiming outermost status for fromIcon,
+                # if its left argument has parens, whether its status as outermost icon
+                # was earned by promotion or by a direct click on its parens.
+                if left.__class__ is not BinOpIcon or not left.hasParens or \
+                 left.locIsOnLeftParen(btnPressLoc):
+                    return fromIcon  # Claim outermost status for this icon
         # Pass on status from non-contiguous expressions below fromIcon in the hierarchy
         if left is not None:
             return left
         if fromIcon.rightArg is None:
             return None
-        return findLeftOuterIcon(clickedIcon, fromIcon.rightArg)
+        return findLeftOuterIcon(clickedIcon, fromIcon.rightArg, btnPressLoc)
     # Pass on any results from below fromIcon in the hierarchy
     children = fromIcon.children()
     if children is not None:
         for child in fromIcon.children():
-            result = findLeftOuterIcon(clickedIcon, child)
+            result = findLeftOuterIcon(clickedIcon, child, btnPressLoc)
             if result is not None:
                 return result
     return None

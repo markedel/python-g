@@ -165,7 +165,7 @@ class Window:
     def _btn3Cb(self, evt):
         ic = self.findIconAt(evt.x, evt.y)
         if ic is not None and ic.selected is False:
-            self._select(evt, self.findIconAt(evt.x, evt.y))
+            self._select(self.findIconAt(evt.x, evt.y))
 
     def _btn3ReleaseCb(self, evt):
         self.popup.tk_popup(evt.x_root, evt.y_root, 0)
@@ -347,32 +347,57 @@ class Window:
         """Button-up actions (which may be delayed to wait for possible double-click)."""
         if self.doubleClickFlag:
             return  # Second click occurred, don't do the delayed action
-        siteIcon, site = self.siteSelected(evt)
-        clickedIcon = self.findIconAt(evt.x, evt.y)
-        clickedIconSelected = clickedIcon is not None and clickedIcon.selected
-        # The horrible logic below implements the combination of progressive selection
-        # and cursor placement
-        clickedIconCanMultiSelect = clickedIconSelected and \
-         (len(clickedIcon.children()) > 0 and not clickedIcon.children()[0].selected)
-        if self.buttonDownState & SHIFT_MASK:
-            self._select(evt, clickedIcon, 'add')
-        elif self.buttonDownState & CTRL_MASK:
-            self._select(evt, clickedIcon, 'toggle')
-        elif clickedIconCanMultiSelect:
-            self._select(evt, clickedIcon, hier=True)
-        elif siteIcon is not None and not self.cursor.cursorAtIconSite(siteIcon, site):
-            self.unselectAll()
-            if self.entryIcon is None:  # Might want to flash entry icon, here
-                self.cursor.setToIconSite(siteIcon, site)
-        elif clickedIconSelected:
-            self.unselectAll()
-        elif clickedIcon is None:
-            self.unselectAll()
-            if self.entryIcon is None:  # Might want to flash entry icon, here
-                 self.cursor.setToWindowPos((evt.x, evt.y))
-        else:
-            self._select(evt, clickedIcon, 'select', hier=False)
         self.buttonDownTime = None
+        clickedIcon = self.findIconAt(evt.x, evt.y)
+        if clickedIcon is None:
+            self.unselectAll()
+            if self.entryIcon is None:  # Might want to flash entry icon, here
+                self.cursor.setToWindowPos((evt.x, evt.y))
+            return
+        if self.buttonDownState & SHIFT_MASK:
+            self._select(clickedIcon, 'add')
+        elif self.buttonDownState & CTRL_MASK:
+            self._select(clickedIcon, 'toggle')
+        action = self._nextProgressiveClickAction(clickedIcon, evt)
+        if action == "moveCursor":
+            self.unselectAll()
+            if self.entryIcon is None:  # Might want to flash entry icon, here
+                siteIcon, site = self.siteSelected(evt)
+                if siteIcon is not None:
+                    self.cursor.setToIconSite(siteIcon, site)
+            return
+        self._select(clickedIcon, action)
+
+    def _nextProgressiveClickAction(self, clickedIcon, evt):
+        """If an icon was clicked, determine the action to be taken: one of either
+        'moveCursor', which implies unselect and (if possible) move the cursor to the
+        nearest cursor site; or a selection operation.  Selection operations are
+        compatible with the self._select function: 'select': select just the icon,
+        'hier': select the icon and its arguments, and 'left': select the expression of
+        which the icon is the leftmost argument."""
+        siteIcon, site = self.siteSelected(evt)
+        siteSelected = self.cursor.type == "icon" and self.cursor.icon is siteIcon
+        currentSel = self.selectedIcons()
+        singleSel = [clickedIcon]
+        hierSel = list(self.assocGrouping(clickedIcon).traverse())
+        leftSel = list(self.findLeftOuterIcon(self.assocGrouping(clickedIcon)).traverse())
+        if not currentSel:
+            if siteIcon is not None and not siteSelected:
+                return "moveCursor"
+            return "select"
+        if currentSel == singleSel:
+            if hierSel == currentSel:
+                if leftSel == currentSel:
+                    return "moveCursor"
+                return "left"
+            return "hier"
+        if currentSel == hierSel:
+            if leftSel == currentSel:
+                return "moveCursor"
+            return "left"
+        if currentSel == leftSel:
+            return "moveCursor"
+        return "moveCursor"
 
     def _destroyCb(self, evt):
         if evt.widget == self.top:
@@ -799,16 +824,21 @@ class Window:
             ic.draw(clip=iconRect, colorErr=False)
         self.refresh(iconRect)
 
-    def _select(self, evt, ic, op='select', hier=True):
-        """Select or toggle the top icon being pointed at, and bring it to the top.
-           Options are 'select', 'toggle' and 'add'"""
-        if op is 'select':
+    def _select(self, ic, op='select'):
+        """Change the selection.  Options are 'select': selects single icon, 'toggle':
+        changes the state of a single icon, 'add': adds a single icon to the selection,
+        'hier': changes the selection to the icon and it's children, 'left': changes
+        the selection to the icon and associated expression for which it is the
+        leftmost component"""
+        if op in ('select', 'hier', 'left'):
             self.unselectAll()
         if ic is None or ic is self.entryIcon:
             return
         refreshRegion = AccumRects()
-        if hier:
+        if op =='hier':
             changedIcons = list(self.assocGrouping(ic).traverse())
+        elif op == 'left':
+            changedIcons = list(self.findLeftOuterIcon(self.assocGrouping(ic)).traverse())
         else:
             changedIcons = [ic]
         for ic in changedIcons:
