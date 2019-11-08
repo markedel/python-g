@@ -29,6 +29,8 @@ BLACK = (0, 0, 0, 255)
 
 DEPTH_EXPAND = 4
 
+EMPTY_ARG_WIDTH = 11
+
 # Pixels below input/output site to place function/list/tuple icons insertion site
 INSERT_SITE_Y_OFFSET = sum(globalFont.getmetrics()) // 2
 
@@ -488,7 +490,7 @@ class UnaryOpIcon(Icon):
         width, height = self.bodySize
         mySiteOffset = height // 2
         if self.argIcon is None:
-            return Layout(self, width, height, mySiteOffset, [])
+            return Layout(self, width + EMPTY_ARG_WIDTH, height, mySiteOffset, [])
         argLayout = self.argIcon._calcLayout()
         heightAbove = max(mySiteOffset, argLayout.siteOffset)
         argHeightBelow = argLayout.height - argLayout.siteOffset
@@ -526,8 +528,7 @@ class FnIcon(Icon):
         Icon.__init__(self, window)
         self.name = name
         self.argIcons = []
-        self.emptyArgWidth = 6
-        self.emptyInOffsets = (0, self.emptyArgWidth)
+        self.emptyInOffsets = (0, EMPTY_ARG_WIDTH)
         self.inOffsets = self.emptyInOffsets
         bodyWidth, bodyHeight = globalFont.getsize(self.name + '(')
         bodyWidth += 2 * TEXT_MARGIN + 1
@@ -668,7 +669,7 @@ class FnIcon(Icon):
                 childLayout = layout.subLayouts[i]
                 self.inOffsets.append(childX)
                 if childLayout is None:
-                    childX += self.emptyArgWidth + commaImage.width -1
+                    childX += EMPTY_ARG_WIDTH + commaImage.width -1
                 else:
                     childLayout.icon._doLayout(childXOffset + childX, outSiteY, childLayout)
                     childX += childLayout.width-1 + commaImage.width-1
@@ -748,9 +749,8 @@ class BinOpIcon(Icon):
         self.hasParens = False  # Filled in by layout methods
         self.leftArg = None
         self.rightArg = None
-        self.emptyArgWidth = 11
-        self.leftArgWidth = self.emptyArgWidth
-        self.rightArgWidth = self.emptyArgWidth
+        self.leftArgWidth = EMPTY_ARG_WIDTH
+        self.rightArgWidth = EMPTY_ARG_WIDTH
         opWidth, opHeight = globalFont.getsize(self.operator)
         opHeight = max(opHeight + 2*TEXT_MARGIN + 1, lParenImage.height)
         opWidth += 2*TEXT_MARGIN - 1
@@ -946,7 +946,7 @@ class BinOpIcon(Icon):
         else:
             lArgX = outSiteX
         if lArgLayout is None:
-            self.leftArgWidth = self.emptyArgWidth
+            self.leftArgWidth = EMPTY_ARG_WIDTH
             lDepth = 0
         else:
             self.leftArgWidth = lArgLayout.width
@@ -954,7 +954,7 @@ class BinOpIcon(Icon):
              parentPrecedence=self.precedence)
             lDepth = lArgLayout.exprDepth
         if rArgLayout is None:
-            self.rightArgWidth = self.emptyArgWidth
+            self.rightArgWidth = EMPTY_ARG_WIDTH
             self.depthWidth = lDepth * DEPTH_EXPAND
         else:
             self.depthWidth = max(lDepth, rArgLayout.exprDepth) * DEPTH_EXPAND
@@ -985,7 +985,7 @@ class BinOpIcon(Icon):
             hasParens = self.precedence < parentPrecedence
         if self.leftArg is None:
             lArgLayout = None
-            lArgWidth, lArgHeight = (self.emptyArgWidth, 0)
+            lArgWidth, lArgHeight = (EMPTY_ARG_WIDTH, 0)
             lArgYSiteOff = self.opSize[1] // 2
             lDepth = 0
         else:
@@ -996,7 +996,7 @@ class BinOpIcon(Icon):
             lDepth = lArgLayout.exprDepth
         if self.rightArg is None:
             rArgLayout = None
-            rArgWidth, rArgHeight = (self.emptyArgWidth, 0)
+            rArgWidth, rArgHeight = (EMPTY_ARG_WIDTH, 0)
             rArgYSiteOff = self.opSize[1] // 2
             rDepth = 0
         else:
@@ -1077,9 +1077,8 @@ class DivideIcon(Icon):
         self.topArg = None
         self.bottomArg = None
         self.floorDiv = floorDiv
-        emptyArgWidth = 11
         emptyArgHeight = 14
-        self.emptyArgSize = (emptyArgWidth, emptyArgHeight)
+        self.emptyArgSize = (EMPTY_ARG_WIDTH, emptyArgHeight)
         self.topArgSize = self.emptyArgSize
         self.topArgSiteOffset = (2, -emptyArgHeight // 2 - 2)
         self.bottomArgSize = self.emptyArgSize
