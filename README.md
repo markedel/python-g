@@ -1,2 +1,2 @@
 # python-g
-The future of programming ...hopefully
+A fully graphical syntax for Python ...hopefully
