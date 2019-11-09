@@ -354,26 +354,36 @@ class EntryIcon(icon.Icon):
         leftArg = argIcon
         rightArg = None
         childOp = argIcon
+        stopAtParens = False
         # Walk up the hierarchy of binary operations, breaking each one in to left and
         # right operands for the new operation.  Stop when the parent operation has
         # lower precedence, or is not a binary operation.  Also stop if the parent
         # operation has equal precedence, and the associativity of the operation matches
         # the side of the operation on which the insertion is being made.
         for op in reversed(entryIconParents[:-1]):
-            if op.__class__ != icon.BinOpIcon or newOpIcon.precedence > op.precedence or \
+            if stopAtParens or op.__class__ not in (icon.BinOpIcon, icon.UnaryOpIcon) or \
+                    newOpIcon.precedence > op.precedence or \
                     newOpIcon.precedence == op.precedence and (
                      op.leftAssoc() and op.leftArg is childOp or
                      op.rightAssoc() and op.rightArg is childOp):
                 op.replaceChild(newOpIcon, op.siteOf(childOp))
                 break
-            if op.leftArg is childOp:  # Insertion was on left side of operation
-                op.leftArg = rightArg
-                if op.leftArg is None:
-                    self.window.cursor.setToIconSite(op, ("input", 0))
-                rightArg = op
-            else:                      # Insertion was on right side of operation
-                op.rightArg = leftArg
+            if op.__class__ is icon.UnaryOpIcon:
+                op.argIcon = leftArg
                 leftArg = op
+            else:  # BinaryOp
+                if op.leftArg is childOp:  # Insertion was on left side of operation
+                    op.leftArg = rightArg
+                    if op.leftArg is None:
+                        self.window.cursor.setToIconSite(op, ("input", 0))
+                    rightArg = op
+                else:                      # Insertion was on right side of operation
+                    op.rightArg = leftArg
+                    leftArg = op
+                if op.hasParens:
+                    # If the op has parens and the new op has been inserted within them,
+                    # do not go beyond the parent operation
+                    stopAtParens = True
             childOp = op
         else:  # Reached the top level without finding a parent for newOpIcon
             self.window.topIcons.remove(childOp)
@@ -434,7 +444,7 @@ class EntryIcon(icon.Icon):
         right -= 2
         return left < x < right and top < y < bottom
 
-    def _doLayout(self, siteX, siteY, layout, parentPrecedence=None):
+    def _doLayout(self, siteX, siteY, layout, parentPrecedence=None, assocOk=False):
         width = self._width() + icon.outSiteImage.width - 1
         if self.attachedSite and self.attachedSite[0] == "attrOut":
             outSiteY = siteY - icon.ATTR_SITE_OFFSET
@@ -453,7 +463,7 @@ class EntryIcon(icon.Icon):
             self.pendingAttribute._doLayout(outSiteX + width - 4,
              outSiteY + icon.ATTR_SITE_OFFSET, layout.subLayouts[0])
 
-    def _calcLayout(self, parentPrecedence=None):
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
         if self.attachedToAttribute():
             width = self._width() - 1 + RIGHT_LAYOUT_MARGIN
         else:

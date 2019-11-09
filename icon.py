@@ -10,6 +10,8 @@ binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
  'is':5, 'is not':5}
 
+unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4}
+
 binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.truediv,
  '//':operator.floordiv, '%':operator.mod, '**':operator.pow, '<<':operator.lshift,
  '>>':operator.rshift, '|':operator.or_, '^':operator.xor, '&':operator.and_,
@@ -350,7 +352,7 @@ class IdentIcon(Icon):
             x, y = location
         self._doLayout(x, y+self.outSiteOffset[1], self._calcLayout())
 
-    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         width += outSiteImage.width - 1
         top = outSiteY - height//2
@@ -359,7 +361,7 @@ class IdentIcon(Icon):
             self.attrIcon._doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
              layout.subLayouts[0])
 
-    def _calcLayout(self, parentPrecedence=None):
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         mySiteOffset = height // 2
         if self.attrIcon is None:
@@ -398,6 +400,7 @@ class UnaryOpIcon(Icon):
     def __init__(self, operator, window=None, location=None):
         Icon.__init__(self, window)
         self.operator = operator
+        self.precedence = unaryOpPrecedence[operator]
         self.argIcon = None
         bodyWidth, bodyHeight = globalFont.getsize(self.operator)
         bodyWidth += 2 * TEXT_MARGIN + 1
@@ -478,20 +481,21 @@ class UnaryOpIcon(Icon):
             x, y = location
         self._doLayout(x, y+self.outSiteOffset[1], self._calcLayout())
 
-    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         width += outSiteImage.width - 1
         top = outSiteY - height//2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         if self.argIcon:
-            self.argIcon._doLayout(outSiteX + width - 3, outSiteY, layout.subLayouts[0])
+            self.argIcon._doLayout(outSiteX + width - 3, outSiteY, layout.subLayouts[0],
+             parentPrecedence=self.precedence)
 
-    def _calcLayout(self, parentPrecedence=None):
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         mySiteOffset = height // 2
         if self.argIcon is None:
             return Layout(self, width + EMPTY_ARG_WIDTH, height, mySiteOffset, [])
-        argLayout = self.argIcon._calcLayout()
+        argLayout = self.argIcon._calcLayout(parentPrecedence=self.precedence)
         heightAbove = max(mySiteOffset, argLayout.siteOffset)
         argHeightBelow = argLayout.height - argLayout.siteOffset
         myHeightBelow = height - mySiteOffset
@@ -657,7 +661,7 @@ class FnIcon(Icon):
             x, y = location
         self._doLayout(x, y+self.bodySize[1] // 2, self._calcLayout())
 
-    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         bodyWidth, bodyHeight = self.bodySize
         if len(layout.subLayouts) == 0:
             self.inOffsets = self.emptyInOffsets
@@ -686,7 +690,7 @@ class FnIcon(Icon):
         self.cachedImage = None
         self.layoutDirty = False
 
-    def _calcLayout(self, parentPrecedence=None):
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
         childLayouts = [None if c is None else c._calcLayout() for c in self.argIcons]
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
@@ -935,9 +939,11 @@ class BinOpIcon(Icon):
         # Layout is called only on the top-level icon.  Ensure left site is drawn
         self.leftSiteDrawn = True
 
-    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         if parentPrecedence is None:
             self.hasParens = False
+        elif self.precedence == parentPrecedence:
+            self.hasParens = assocOk
         else:
             self.hasParens = self.precedence < parentPrecedence
         lArgLayout, rArgLayout, attrLayout = layout.subLayouts
@@ -951,7 +957,7 @@ class BinOpIcon(Icon):
         else:
             self.leftArgWidth = lArgLayout.width
             lArgLayout.icon._doLayout(lArgX, outSiteY, lArgLayout,
-             parentPrecedence=self.precedence)
+             parentPrecedence=self.precedence, assocOk=self.rightAssoc())
             lDepth = lArgLayout.exprDepth
         if rArgLayout is None:
             self.rightArgWidth = EMPTY_ARG_WIDTH
@@ -961,7 +967,7 @@ class BinOpIcon(Icon):
             self.rightArgWidth = rArgLayout.width
             rArgX = lArgX + self.leftArgWidth + self.opSize[0] + self.depthWidth
             rArgLayout.icon._doLayout(rArgX, outSiteY, rArgLayout,
-             parentPrecedence=self.precedence)
+             parentPrecedence=self.precedence, assocOk=self.leftAssoc())
         width, height = self._size()
         self.outSiteOffset = (0, height // 2)
         if self.hasParens:
@@ -978,9 +984,11 @@ class BinOpIcon(Icon):
         self.cachedImage = None
         self.layoutDirty = False
 
-    def _calcLayout(self, parentPrecedence=None):
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
         if parentPrecedence is None:
             hasParens = False
+        elif self.precedence == parentPrecedence:
+            hasParens = assocOk
         else:
             hasParens = self.precedence < parentPrecedence
         if self.leftArg is None:
@@ -989,7 +997,8 @@ class BinOpIcon(Icon):
             lArgYSiteOff = self.opSize[1] // 2
             lDepth = 0
         else:
-            lArgLayout = self.leftArg._calcLayout(parentPrecedence=self.precedence)
+            lArgLayout = self.leftArg._calcLayout(parentPrecedence=self.precedence,
+             assocOk=self.rightAssoc())
             lArgWidth = lArgLayout.width
             lArgHeight = lArgLayout.height
             lArgYSiteOff = lArgLayout.siteOffset
@@ -1000,7 +1009,8 @@ class BinOpIcon(Icon):
             rArgYSiteOff = self.opSize[1] // 2
             rDepth = 0
         else:
-            rArgLayout = self.rightArg._calcLayout(parentPrecedence=self.precedence)
+            rArgLayout = self.rightArg._calcLayout(parentPrecedence=self.precedence,
+             assocOk=self.leftAssoc())
             rArgWidth = rArgLayout.width
             rArgHeight = rArgLayout.height
             rArgYSiteOff = rArgLayout.siteOffset
@@ -1207,9 +1217,11 @@ class DivideIcon(Icon):
             x, y = location
         self._doLayout(x, y + self.topArgSize[1] + 2, self._calcLayout())
 
-    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None):
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         if parentPrecedence is None:
             self.textHasParens = False
+        elif self.precedence == parentPrecedence:
+            self.textHasParens = assocOk
         else:
             self.textHasParens = self.precedence < parentPrecedence
         tArgLayout, bArgLayout, attrLayout = layout.subLayouts
@@ -1251,7 +1263,7 @@ class DivideIcon(Icon):
         self.cachedImage = None
         self.layoutDirty = False
 
-    def _calcLayout(self, parentPrecedence=None):
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
         if self.topArg is None:
             tArgLayout = None
             tArgWidth, tArgHeight = self.emptyArgSize
@@ -1340,10 +1352,10 @@ class ImageIcon(Icon):
         if location is not None:
             self.rect = moveRect(self.rect, location)
 
-    def _doLayout(self, x, bottom, _layout, parentPrecedence=None):
+    def _doLayout(self, x, bottom, _layout, parentPrecedence=None, assocOk=False):
         self.rect = (x, bottom-self.image.height, x + self.image.width, bottom)
 
-    def _calcLayout(self, parentPrecedence=None):
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
         return Layout(self, self.image.width, self.image.height, 0, [])
 
     def clipboardRepr(self, offset):

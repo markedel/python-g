@@ -279,8 +279,8 @@ class Window:
                 else:
                     # Otherwise, drag the icon that was clicked
                     if self.doubleClickFlag:
-                        # double-click drag
-                        self._startDrag(evt, list(self.assocGrouping(ic).traverse()))
+                        # double-click drag, ignores associativity and outer icon
+                        self._startDrag(evt, list(ic.traverse()))
                     else:
                         self._startDrag(evt, list(self.findLeftOuterIcon(
                          self.assocGrouping(ic)).traverse()))
@@ -379,7 +379,7 @@ class Window:
         siteSelected = self.cursor.type == "icon" and self.cursor.icon is siteIcon
         currentSel = self.selectedIcons()
         singleSel = [clickedIcon]
-        hierSel = list(self.assocGrouping(clickedIcon).traverse())
+        hierSel = list(clickedIcon.traverse())
         leftSel = list(self.findLeftOuterIcon(self.assocGrouping(clickedIcon)).traverse())
         if not currentSel:
             if siteIcon is not None and not siteSelected:
@@ -836,7 +836,7 @@ class Window:
             return
         refreshRegion = AccumRects()
         if op =='hier':
-            changedIcons = list(self.assocGrouping(ic).traverse())
+            changedIcons = list(ic.traverse())
         elif op == 'left':
             changedIcons = list(self.findLeftOuterIcon(self.assocGrouping(ic)).traverse())
         else:
