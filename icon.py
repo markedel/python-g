@@ -520,6 +520,8 @@ class UnaryOpIcon(Icon):
         ic.argIcon = clipboardDataToIcons([arg], window, offset)
 
     def execute(self):
+        if self.argIcon is None:
+            raise IconExecException(self, "Missing argument")
         argValue = self.argIcon.execute()
         try:
             result = unaryOpFn[self.operator](argValue)
@@ -738,7 +740,10 @@ class FnIcon(Icon):
         return ic
 
     def execute(self):
-        argValues = [c.execute() for c in self.children()]
+        for c in self.argIcons:
+            if c is None:
+                raise IconExecException(self, "Missing argument(s)")
+        argValues = [c.execute() for c in self.argIcons]
         try:
             result = getattr(math, self.name)(*argValues)
         except Exception as err:
@@ -1072,6 +1077,10 @@ class BinOpIcon(Icon):
         return self.operator == "**"
 
     def execute(self):
+        if self.leftArg is None:
+            raise IconExecException(self, "Missing left operand")
+        if self.rightArg is None:
+            raise IconExecException(self, "Missing right operand")
         leftValue = self.leftArg.execute()
         rightValue = self.rightArg.execute()
         try:
@@ -1316,6 +1325,10 @@ class DivideIcon(Icon):
         return ic
 
     def execute(self):
+        if self.topArg is None:
+            raise IconExecException(self, "Missing numerator")
+        if self.bottomArg is None:
+            raise IconExecException(self, "Missing denominator")
         topValue = self.topArg.execute()
         bottomValue = self.bottomArg.execute()
         try:

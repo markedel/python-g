@@ -36,14 +36,17 @@ startUpTime = time.monotonic()
 
 # Notes on window drawing:
 #
-# Tkinter canvas can't handle individual images for each icon.  After about
-# 4000 pixmaps, it breaks and dies.  Drawing directly to the screen is also
-# problematic.  Here, we have a Windows-only solution, provided by ImageWin
-# module of pillow.  This is a kind-of messed up module which gets very little
-# use due to bugs and poor documentation.  While it doesn't give us direct
-# access to the windows framebuffer, it does allow us to copy data there from
-# a PIL image in a two-step process that is sufficiently fast for the purposes
-# of this program.
+# Tkinter canvas can't handle individual images for each icon.  After about 4000
+# pixmaps, it breaks and dies.  Drawing directly to the screen is also problematic.
+# Here, we have a Windows-only solution, provided by ImageWin module of pillow.  This
+# is a kind-of messed up module which gets very little use due to bugs and poor
+# documentation.  While it doesn't give us direct access to the windows framebuffer,
+# it does allow us to copy data there from a PIL image in a two-step process that is
+# sufficiently fast for the purposes of this program.
+#
+# Presumably for a cross platform version, it should be possible to get the equivalent
+# of a window handle from tkinter to allow us to write pixmaps to the display within a
+# tkinter window.
 
 def combineRects(rect1, rect2):
     """Find the minimum rectangle enclosing rect1 and rect2"""
@@ -190,7 +193,7 @@ class Window:
             return
         char = typing.tkCharFromEvt(evt)
         if char is None:
-             return
+            return
         # If there's a cursor displayed somewhere, use it
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
@@ -458,7 +461,8 @@ class Window:
                 pastedIcons = [icon.ImageIcon(clipImage, self, (0, 0))]
         if len(pastedIcons) == 0:
             return  # Nothing usable on the clipboard
-        # Clipboard had something, figure out where to put it
+        # There was something clipboard that could be converted to icon form.  Figure out
+        # where to put it
         iconOutputSite = pastedIcons[0].outSiteOffset
         replaceParent = None
         replaceSite = None
@@ -490,8 +494,9 @@ class Window:
                 selectedRect = icon.containingRect(self.selectedIcons())
                 pastePos = selectedRect[:2]
                 self.removeIcons(self.selectedIcons())
-        # We now know where to put it if replaceIcon is True, use it to replace that
-        # otherwise put it at replacePos
+        # We now know where to put the pasted icons: If replaceParent is True, replace
+        # the icon at replaceSite.  Otherwise place the icons at the top level of the
+        # window at position given by pastePos
         if replaceParent is not None:
             topIcon = self.topLevelParent(replaceParent)
             redrawRegion = AccumRects(topIcon.hierRect())
@@ -503,7 +508,7 @@ class Window:
                 ic.draw(clip=redrawRegion.get())
             self.refresh(redrawRegion.get())
             self.cursor.setToIconSite(replaceParent, replaceSite)
-        else:
+        else:  # Put
             x, y = pastePos
             for topIcon in pastedIcons:
                 for ic in topIcon.traverse():
@@ -1134,11 +1139,6 @@ def findTopIcons(icons):
         for child in ic.children():
             iconDir[child] = False
     return [ic for ic, isTop in iconDir.items() if isTop]
-
-def dumpHier(ic, indent=""):
-    print(indent + ic.name)
-    for child in ic.children():
-        dumpHier(child, indent+"  ")
 
 if __name__ == '__main__':
     appData = App()

@@ -181,7 +181,7 @@ class EntryIcon(icon.Icon):
             pixel = penImage.getpixel((x - rectLeft, y-rectTop - penImgYOff))
         return pixel[3] > 128
 
-    def draw(self, image=None, location=None, clip=None):
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
             image = self.window.image
             draw = self.window.draw
@@ -192,8 +192,9 @@ class EntryIcon(icon.Icon):
         else:
             x, y = location
         boxWidth = self._width(boxOnly=True) - 1
+        bgColor = PEN_OUTLINE_COLOR if colorErr else PEN_BG_COLOR
         draw.rectangle((x + self.penOffset(), y, x + self.penOffset() + boxWidth,
-         y + self.height-1), fill=PEN_BG_COLOR, outline=PEN_OUTLINE_COLOR)
+         y + self.height-1), fill=bgColor, outline=PEN_OUTLINE_COLOR)
         textLeft = x + self.textOffset
         draw.text((textLeft, y + icon.TEXT_MARGIN), self.text, font=icon.globalFont,
          fill=(0, 0, 0, 255))
@@ -489,6 +490,9 @@ class EntryIcon(icon.Icon):
 
     def clipboardRepr(self, offset):
         return None
+
+    def execute(self):
+        raise icon.IconExecException(self, "Can't execute text-entry field")
 
     def attachedToAttribute(self):
         return self.attachedSite is not None and \
