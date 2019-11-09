@@ -353,8 +353,14 @@ class Window:
         self.buttonDownTime = None
         clickedIcon = self.findIconAt(evt.x, evt.y)
         if clickedIcon is None:
-            self.unselectAll()
-            if self.entryIcon is None:  # Might want to flash entry icon, here
+            # Clicked on window background, move cursor
+            if self.entryIcon is not None:  # Might want to flash entry icon, here
+                return
+            siteIcon, site = self.siteSelected(evt)
+            if siteIcon:
+                self.cursor.setToIconSite(siteIcon, site)
+            else:
+                self.unselectAll()
                 self.cursor.setToWindowPos((evt.x, evt.y))
             return
         if self.buttonDownState & SHIFT_MASK:
