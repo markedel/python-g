@@ -25,26 +25,46 @@ def parsePasted(text, window, location):
     icons = []
     for expr in exprList:
         topIcon = makeIcons(parseExpr(expr), window, x, y)
-        topIcon.layout(location)
+        topIcon.layout((x, y))
         icons.append(topIcon)
-        y += 10 # Figure out how to space multiple expressions, later
+        y += 30 # Figure out how to space multiple expressions, later
     return icons
+
+def parseExprToAst(text):
+    try:
+        modAst = ast.parse(text, "Pasted text")
+    except:
+        return None
+    if not isinstance(modAst, ast.Module):
+        return None
+    if len(modAst.body) != 1:
+        return None
+    if not isinstance(modAst.body[0], ast.Expr):
+        return None
+    return modAst.body[0].value
 
 def parseExpr(expr):
     fn = 'functionIcon'
     id = 'identIcon'
+    bin = 'binOpIcon'
+    unary = 'unaryOpIcon'
+    div = 'divideIcon'
     if expr.__class__ == ast.UnaryOp:
-        return (fn, unaryOps[expr.op.__class__], parseExpr(expr.operand))
+        return (unary, unaryOps[expr.op.__class__], parseExpr(expr.operand))
     elif expr.__class__ == ast.BinOp:
-        return (fn, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
+        if expr.op.__class__ is ast.Div:
+            return (div, False, parseExpr(expr.left), parseExpr(expr.right))
+        elif expr.op.__class__ is ast.FloorDiv:
+            return (div, True, parseExpr(expr.left), parseExpr(expr.right))
+        return (bin, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
     elif expr.__class__ == ast.BoolOp:
-        return (fn, boolOps[expr.op.__class__], [parseExpr(e) for e in expr.values])
+        return (bin, boolOps[expr.op.__class__], *(parseExpr(e) for e in expr.values))
     elif expr.__class__ == ast.Compare:
         # Note: this does not handle multi-comparison types
         return (fn, compareOps[expr.ops[0].__class__], parseExpr(expr.left), parseExpr(expr.comparators[0]))
     elif expr.__class__ == ast.Call:
         # No keywords or other cool stuff, yet
-        return (fn, expr.func.id, [parseExpr(e) for e in expr.args])
+        return (fn, expr.func.id, *(parseExpr(e) for e in expr.args))
     elif expr.__class__ == ast.Num:
         return (id, str(expr.n))
     elif expr.__class__ == ast.Str:
@@ -60,7 +80,22 @@ def makeIcons(parsedExpr, window, x, y):
         return icon.IdentIcon(parsedExpr[1], window, (x, y))
     if parsedExpr[0] == 'functionIcon':
         topIcon = icon.FnIcon(parsedExpr[1], window, (x, y))
-        for pe in parsedExpr[2:]:
-            childIcon = makeIcons(pe, window, x, y)
-            topIcon.addChild(childIcon)
+        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[2:]]
+        topIcon.insertChildren(childIcons, ("insertInput", 0))
         return topIcon
+    if parsedExpr[0] == 'unaryOpIcon':
+        topIcon = icon.UnaryOpIcon(parsedExpr[1], window, (x, y))
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
+        return topIcon
+    if parsedExpr[0] == 'binOpIcon':
+        topIcon = icon.BinOpIcon(parsedExpr[1], window, (x, y))
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
+        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
+        return topIcon
+    if parsedExpr[0] == 'divideIcon':
+        topIcon = icon.DivideIcon(window, (x, y), floorDiv=parsedExpr[1])
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
+        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
+        return topIcon
+    else:
+        return icon.IdentIcon("**Internal Parse Error**", window, (x,y))
