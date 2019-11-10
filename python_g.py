@@ -231,12 +231,20 @@ class Window:
             typing.beep()
 
     def _insertEntryIconAtCursor(self, initialChar):
-        self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
-         window=self)
-        pendingArgs = self.cursor.icon.childAt(self.cursor.site)
-        self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
-        self.entryIcon.replaceChild(pendingArgs, (self.cursor.site[0], 0))
-        self.cursor.setToEntryIcon()
+        if self.cursor.site[0] == "output":
+            self.entryIcon = typing.EntryIcon(None, None, window=self,
+             location=self.cursor.icon.rect[:2])
+            self.entryIcon.replaceChild(self.cursor.icon, ("input", 0))
+            self.topIcons.remove(self.cursor.icon)
+            self.cursor.setToEntryIcon()
+            self.topIcons.append(self.entryIcon)
+        else:
+            self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
+             window=self)
+            pendingArgs = self.cursor.icon.childAt(self.cursor.site)
+            self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
+            self.entryIcon.replaceChild(pendingArgs, (self.cursor.site[0], 0))
+            self.cursor.setToEntryIcon()
         self.entryIcon.addText(initialChar)
         self._redisplayChangedEntryIcon()
 
@@ -1047,7 +1055,7 @@ class Window:
                         continue  # not a visible site type
                     dist = (abs(evt.x - x) + abs(evt.y - y)) // 2
                     if dist < minDist or (dist == minDist and \
-                     minSite[0] in ("output", "attrIn")):  # Prefer inputs, for now
+                     minSite[0] not in ("output", "attrIn")):  # Prefer inputs, for now
                         minDist = dist
                         minSite = siteIcon, (siteType, siteIdx)
         if minDist < SITE_SELECT_DIST + 1:
