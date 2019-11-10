@@ -369,8 +369,10 @@ class Window:
             return
         if self.buttonDownState & SHIFT_MASK:
             self._select(clickedIcon, 'add')
+            return
         elif self.buttonDownState & CTRL_MASK:
             self._select(clickedIcon, 'toggle')
+            return
         action = self._nextProgressiveClickAction(clickedIcon, evt)
         if action == "moveCursor":
             self.unselectAll()
