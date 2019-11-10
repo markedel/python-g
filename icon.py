@@ -875,10 +875,7 @@ class BinOpIcon(Icon):
             self.layoutDirty = True
 
     def children(self):
-        childList = [arg for arg in (self.rightArg, self.leftArg) if arg is not None]
-        if self.attrIcon:
-            childList.append(self.attrIcon)
-        return childList
+        return [a for a in (self.rightArg, self.leftArg, self.attrIcon) if a is not None]
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
@@ -1075,6 +1072,20 @@ class BinOpIcon(Icon):
 
     def rightAssoc(self):
         return self.operator == "**"
+
+    def needsParens(self, parent):
+        if parent is None or parent.__class__ is not BinOpIcon:
+            return False
+        if self.precedence > parent.precedence:
+            return False
+        if self.precedence < parent.precedence:
+            return True
+        # Precedence is equal to parent.  Look at associativity
+        if self is parent.leftArg and self.rightAssoc():
+            return True
+        if self is parent.rightArg and self.leftAssoc():
+            return True
+        return False
 
     def execute(self):
         if self.leftArg is None:

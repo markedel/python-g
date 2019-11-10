@@ -228,7 +228,7 @@ class EntryIcon(icon.Icon):
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
         parseResult = parseEntryText(newText, self.attachedToAttribute())
-        print('parse result', parseResult)
+        # print('parse result', parseResult)
         if parseResult == "reject":
             beep()
             return
@@ -246,7 +246,20 @@ class EntryIcon(icon.Icon):
                 beep()
             return
         if parseResult == "endParen":
-            print('connect to end paren')
+            matchingParen = self.findOpenParen(self.attachedIcon)
+            if matchingParen is None:
+                # Maybe user was just trying to move past an existing paren by typing it
+                if not cursor.movePastEndParen():
+                    beep()
+            else:
+                matchingParen.close()
+                if self.pendingArgument:
+                    self.attachedIcon.replaceChild(None, self.attachedSite)
+                    matchingParen.replaceChild(self, ("attrOut", 0))
+                else:
+                    self.attachedIcon.replaceChild(None, self.attachedSite)
+                    self.window.entryIcon = None
+                    cursor.setToIconSite(matchingParen, ("attrOut", 0))
             return
         if parseResult == "makeFunction":
             if not self.makeFunction(self.attachedIcon):
@@ -290,11 +303,23 @@ class EntryIcon(icon.Icon):
                 self.pendingArgument = None
         # If the pending text needs no further input, process it, now
         if remainingText == ')':
-            print('connect with nearest open paren')
+            matchingParen = self.findOpenParen(cursor.icon)
+            if matchingParen is None:
+                # Maybe user was just trying to move past an existing paren by typing it
+                if not cursor.movePastEndParen():
+                    beep()
+            else:
+                matchingParen.close()
+                cursor.setToIconSite(matchingParen, ("attrOut", 0))
             remainingText = ""
         elif remainingText == '(' and ic.__class__ is icon.IdentIcon:
             if not self.makeFunction(ic):
                 beep()
+            remainingText = ""
+        elif remainingText == '(':
+            parenIcon = CursorParenIcon(self.window)
+            cursor.icon.replaceChild(parenIcon, cursor.site)
+            cursor.setToIconSite(parenIcon, ("input", 0))
             remainingText = ""
         elif remainingText == ',':
             if not self.commaEntered(ic):
@@ -320,7 +345,7 @@ class EntryIcon(icon.Icon):
         if onIcon.__class__ is icon.FnIcon:
             onIcon.insertChildren([self], ("input", len(onIcon.argIcons)))
         child = onIcon
-        for parent in self.window.parentage(onIcon):
+        for parent in self.window.parentage(onIcon):  # should this be reversed()
             if parent.__class__ is icon.FnIcon:
                 onIcon.layoutDirty = True
                 siteType, siteIdx = parent.siteOf(child)
@@ -329,6 +354,12 @@ class EntryIcon(icon.Icon):
                 self.window.cursor.setToIconSite(parent, insertSite)
                 return True
         return False
+
+    def findOpenParen(self, fromIcon):
+        for parent in reversed(self.window.parentage(fromIcon)):  # should this be reversed()
+            if parent.__class__ is CursorParenIcon:
+                return parent
+        return None
 
     def makeFunction(self, ic):
         if ic.__class__ is not icon.IdentIcon or not identPattern.fullmatch(ic.name):
@@ -502,12 +533,178 @@ class EntryIcon(icon.Icon):
         penImgWidth = attrPenImage.width if self.attachedToAttribute() else penImage.width
         return penImgWidth - PEN_MARGIN
 
-class CursorParenIcon(icon.UnaryOpIcon):
+class CursorParenIcon(icon.Icon):
     def __init__(self, window=None, location=None):
-        icon.UnaryOpIcon.__init__(self, "(", window=window, location=location)
+        icon.Icon.__init__(self, window)
+        self.argIcon = None
+        self.attrIcon = None
+        self.closed = False
+        bodyWidth, bodyHeight = icon.globalFont.getsize("(")
+        bodyWidth += 2 * icon.TEXT_MARGIN + 1
+        bodyHeight += 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        if location is None:
+            x, y = 0, 0
+        else:
+            x, y = location
+        self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width, y + bodyHeight)
+        self.outSiteOffset = (0, bodyHeight // 2)
+        self.inSiteOffset = (bodyWidth - 1, self.outSiteOffset[1])
+        self.attrSiteOffset = None
+
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        if self.cachedImage is None:
+            self.cachedImage = Image.new('RGBA', (icon.rectWidth(self.rect),
+            icon.rectHeight(self.rect)), color=(0, 0, 0, 0))
+            textWidth, textHeight = icon.globalFont.getsize("(")
+            bodyLeft = icon.outSiteImage.width - 1
+            draw = ImageDraw.Draw(self.cachedImage)
+            draw.rectangle((bodyLeft, 0, bodyLeft + textWidth + 2 * icon.TEXT_MARGIN,
+             textHeight + 2 * icon.TEXT_MARGIN), fill=icon.ICON_BG_COLOR,
+             outline=icon.OUTLINE_COLOR)
+            outSiteX, outSiteY = self.outSiteOffset
+            outImageY = outSiteY - icon.outSiteImage.height // 2
+            self.cachedImage.paste(icon.outSiteImage, (outSiteX, outImageY),
+                mask=icon.outSiteImage)
+            inSiteX, inSiteY = self.inSiteOffset
+            inImageY = inSiteY - icon.inSiteImage.height // 2
+            self.cachedImage.paste(icon.inSiteImage, (inSiteX, inImageY))
+            textLeft = bodyLeft + icon.TEXT_MARGIN + 1
+            draw.text((textLeft, icon.TEXT_MARGIN), "(",
+             font=icon.globalFont, fill=(180, 180, 180, 255))
+            if self.closed:
+                bodyWidth, bodyHeight = self.bodySize
+                endParenLeft = self.cachedImage.width - bodyWidth - 1
+                draw.rectangle((endParenLeft, 0, endParenLeft + bodyWidth,
+                 bodyHeight-1), fill=icon.ICON_BG_COLOR, outline=icon.OUTLINE_COLOR)
+                textLeft = endParenLeft + icon.TEXT_MARGIN + 1
+                draw.text((textLeft, icon.TEXT_MARGIN), ")",
+                    font=icon.globalFont, fill=(180, 180, 180, 255))
+            else:
+                draw.line((bodyLeft, outSiteY, inSiteX, outSiteY),
+                 fill=icon.ICON_BG_COLOR, width=3)
+        icon.pasteImageWithClip(image, icon.tintSelectedImage(self.cachedImage,
+         self.selected, colorErr), location, clip)
+
+    def children(self):
+        return [arg for arg in (self.argIcon, self.attrIcon) if arg is not None]
+
+    def snapLists(self, atTop=False):
+        x, y = self.rect[:2]
+        outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
+        inSite = (self, (x + self.inSiteOffset[0], y + self.inSiteOffset[1]), 0)
+        snapSites = {"output": [outSite], "input": [inSite]}
+        if self.attrSiteOffset:
+            attrOutSite = (self, (x+self.attrSiteOffset[0], y+self.attrSiteOffset[1]), 0)
+            snapSites["attrOut"] = [attrOutSite]
+        return snapSites
+
+    def replaceChild(self, newChild, site):
+        siteType, siteIndex = site
+        if siteType == "input":
+            self.argIcon = newChild
+            self.layoutDirty = True
+        elif siteType == "attrOut":
+            self.attrIcon = newChild
+
+    def siteOf(self, child):
+        if child is self.argIcon:
+            return ("input", 0)
+        elif child is self.attrIcon:
+            return ("attrOut", 0)
+        return None
+
+    def childAt(self, site):
+        siteType, siteIndex = site
+        if siteType == "input" and siteIndex == 0:
+            return self.argIcon
+        elif siteType == "attrOut" and siteIndex == 0:
+            return self.attrIcon
+        return None
+
+    def layout(self, location=None):
+        if location is None:
+            x, y = self.rect[:2]
+        else:
+            x, y = location
+        self._doLayout(x, y + self.outSiteOffset[1], self._calcLayout())
+
+    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None,
+            assocOk=False):
+        bodyWidth, height = self.bodySize
+        argLayout, attrLayout = layout.subLayouts
+        if self.closed:
+            if argLayout is None:
+                argWidth = icon.EMPTY_ARG_WIDTH
+            else:
+                argWidth = argLayout.width
+            width = 2*bodyWidth + argWidth + icon.outSiteImage.width - 3
+        else:
+            width = bodyWidth + icon.outSiteImage.width - 1
+        top = outSiteY - height // 2
+        self.rect = (outSiteX, top, outSiteX + width, top + height)
+        self.cachedImage = None
+        if self.argIcon:
+            self.argIcon._doLayout(outSiteX + bodyWidth - 1, outSiteY, argLayout)
+        if self.closed:
+            self.attrSiteOffset = (width-2, self.outSiteOffset[1] + icon.ATTR_SITE_OFFSET)
+        else:
+            self.attrSiteOffset = None
+        if self.closed and self.attrIcon:
+            self.attrIcon._doLayout(outSiteX + width-2, outSiteY + icon.ATTR_SITE_OFFSET,
+             attrLayout)
+
+    def _calcLayout(self, parentPrecedence=None, assocOk=False):
+        singleParenWidth, height = self.bodySize
+        siteYOff = height // 2
+        argLayouts = [None, None]
+        if self.argIcon is None:
+            width = singleParenWidth + icon.EMPTY_ARG_WIDTH
+            siteOffset = siteYOff
+        else:
+            argLayout = self.argIcon._calcLayout()
+            heightAbove = max(siteYOff, argLayout.siteOffset)
+            argHeightBelow = argLayout.height - argLayout.siteOffset
+            myHeightBelow = height - siteYOff
+            heightBelow = max(myHeightBelow, argHeightBelow)
+            height = heightAbove + heightBelow
+            width = singleParenWidth + argLayout.width - 1
+            argLayouts[0] = argLayout
+            siteOffset = heightAbove
+        if self.closed:
+            width += singleParenWidth
+        if self.attrIcon:
+            attrLayout = self.attrIcon._calcLayout()
+            heightAbove = max(siteYOff, attrLayout.siteOffset - icon.ATTR_SITE_OFFSET)
+            siteYOff = heightAbove
+            attrHeightBelow = icon.ATTR_SITE_OFFSET + attrLayout.height - \
+             attrLayout.siteOffset
+            heightBelow = max(height - siteYOff, attrHeightBelow)
+            height = heightAbove + heightBelow
+            width += attrLayout.width
+        return icon.Layout(self, width, height, siteOffset, argLayouts)
+
+    def textRepr(self):
+        return "None" if self.argIcon is None else self.argIcon.textRepr()
 
     def clipboardRepr(self, offset):
-        pass
+        return "" if self.argIcon is None else self.argIcon.clipboardRepr(offset)
+
+    def execute(self):
+        if self.argIcon is None:
+            raise icon.IconExecException(self, "Missing argument")
+        return self.argIcon.execute()
+
+    def close(self):
+        self.closed = True
+        self.layoutDirty = True
+        # Allow cursor to be set to the end paren before layout knows where it goes
+        self.attrSiteOffset = (icon.rectWidth(self.rect),
+         icon.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
 
 class Cursor:
     def __init__(self, window, cursorType):
@@ -671,6 +868,33 @@ class Cursor:
             xDist, ic, site = newRanking[0]
             self.setToIconSite(ic, site)
 
+    def movePastEndParen(self):
+        if self.type is not "icon":
+            return False
+        child = self.icon
+        moveTo = False
+        for parent in reversed(self.window.parentage(self.icon)):
+            if parent.__class__ is icon.BinOpIcon:
+                if child is parent.leftArg:
+                    return False
+                if parent.hasParens:
+                    moveTo = True
+            elif parent.__class__ is CursorParenIcon:
+                moveTo = True
+            elif parent.__class__ is icon.FnIcon:
+                if child is not parent.argIcons[-1]:
+                    return False
+                moveTo = True
+            # If a parenthesized icon was found with cursor preceding its left paren,
+            # move the cursor after that paren
+            if moveTo:
+                self.setToIconSite(parent, ("attrOut", 0))
+                return True
+            # At this point, the cursor is still on the right side of all of the parent
+            # icons, but no parens have been found yet.  Check further up the tree
+            child = parent
+        return False
+
     def erase(self):
         if self.lastDrawRect is not None and self.window.dragging is None:
             self.window.refresh(self.lastDrawRect)
@@ -700,6 +924,8 @@ def parseEntryText(text, forAttrSite):
             return icon.BinOpIcon(text), None
         if text == '(':
             return "makeFunction"  # Make a function from the attached icon
+        if text == ')':
+            return "endParen"
         if text == ',':
             return "comma"
         op = text[:-1]
@@ -719,7 +945,7 @@ def parseEntryText(text, forAttrSite):
             # Unary operator
             return icon.UnaryOpIcon(text), None
         if text == '(':
-            return icon.FnIcon('('), None  # Temporary stand-in for cursor-paren
+            return CursorParenIcon(), None
         if text == ')':
             return "endParen"
         if text == ',':
@@ -796,4 +1022,3 @@ def findTextOffset(text, pixelOffset):
                 return nChars if textLength - pixelOffset < guessDist else lastGuessedPos
         else:
             return guessedPos
-

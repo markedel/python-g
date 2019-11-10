@@ -241,6 +241,8 @@ class Window:
         self._redisplayChangedEntryIcon()
 
     def _redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
+        # ... This currently operates on all of the icons in the window, and needs to be
+        #      narrowed to just the top icon that held the cursor
         if self.entryIcon is None:
             redrawRegion = AccumRects(oldLoc)
         else:
@@ -248,6 +250,8 @@ class Window:
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
         layoutNeeded = False
+        for ic in self.topIcons.copy():  # Copy because function can change list
+            self.filterRedundantParens(ic)
         for ic in self.topIcons:
             if ic.needsLayout():
                 layoutNeeded = True
@@ -507,6 +511,7 @@ class Window:
             topIcon = self.topLevelParent(replaceParent)
             redrawRegion = AccumRects(topIcon.hierRect())
             replaceParent.replaceChild(pastedIcons[0], replaceSite)
+            topIcon = self.filterRedundantParens(topIcon)
             topIcon.layout()
             redrawRegion.add(topIcon.hierRect())
             self.clearBgRect(redrawRegion.get())
@@ -542,7 +547,6 @@ class Window:
             self._redisplayChangedEntryIcon()
 
     def _arrowCb(self, evt):
-        print('arrow', evt.keysym, evt.keycode, evt.keysym_num)
         if self.cursor.type is None:
             return
         self.cursor.processArrowKey(evt.keysym)
@@ -694,6 +698,8 @@ class Window:
                 parentIcon.replaceChild(childIcon, site)
             elif site[0] == "insertInput":
                 parentIcon.insertChildren([childIcon], site)
+            for ic in self.topIcons:
+                self.filterRedundantParens(ic)
             # Redo layouts for all affected (all the way to the top)
             for ic in self.topIcons:
                 if ic.needsLayout():
@@ -966,28 +972,6 @@ class Window:
             ic.draw(clip=redrawRegion.get())
         self.refresh(redrawRegion.get())
 
-    def replaceIcons(self, toReplace, replaceWith):
-        iconParent = self.parentOf(toReplace)
-        if iconParent is None:
-            self.removeIcons([toReplace])
-            replaceWith.rect = offsetRect(replaceWith.rect, toReplace.rect[0], toReplace.rect[1])
-            replaceWith.layoutDirty = True
-            self.topIcons.append(replaceWith)
-            redrawRegion = AccumRects(replaceWith.rect)
-        else:
-            iconParent.replaceChild(replaceWith, iconParent.siteOf(toReplace))
-            redrawRegion = AccumRects(toReplace.rect)
-        for ic in self.topIcons:
-            if ic.needsLayout():
-                redrawRegion.add(ic.hierRect())
-                ic.layout()
-                redrawRegion.add(ic.hierRect())
-        # Redraw the areas affected by the updated layouts
-        self.clearBgRect(redrawRegion.get())
-        for ic in self.findIconsInRegion(redrawRegion.get()):
-            ic.draw(clip=redrawRegion.get())
-        self.refresh(redrawRegion.get())
-
     def clearBgRect(self, rect):
         """Clear but don't refresh a rectangle of the window"""
         # Fill rectangle seems to go one beyond
@@ -1067,6 +1051,38 @@ class Window:
         if minDist < SITE_SELECT_DIST + 1:
             return minSite
         return None, None
+
+    def filterRedundantParens(self, ic, parentIcon=None, parentSite=None):
+        """Remove parenthesis whose arguments now have their own parenthesis"""
+        if ic.__class__ is not typing.CursorParenIcon or not ic.closed:
+            for c in ic.children():
+                self.filterRedundantParens(c, ic, ic.siteOf(c))
+            return ic
+        if ic.argIcon is None:
+            return ic
+        if not (ic.argIcon.__class__ is typing.CursorParenIcon or
+         ic.argIcon.__class__ is icon.BinOpIcon and ic.argIcon.needsParens(parentIcon)):
+            self.filterRedundantParens(ic.argIcon, ic, ("input", 0))
+            return ic
+        # Redundant parens found: remove them
+        if parentIcon is None:
+            self.topIcons.remove(ic)
+            self.topIcons.append(ic.argIcon)
+        else:
+            parentIcon.replaceChild(ic.argIcon, parentSite)
+            ic.argIcon.layoutDirty = True
+        # If the cursor was on the paren being removed, move it to the icon that has
+        # taken its place (BinOp or CursorParen)
+        if self.cursor.type == "icon" and self.cursor.icon is ic and \
+         self.cursor.site[0] == "attrOut":
+            if "attrOut" not in ic.argIcon.snapLists():
+                # If it's a binary operation that *will have* parens once we remove the
+                # prop ones, it may not yet have a site on which to put the cursor.
+                # Call layout prematurely to make the site appear
+                self.topLevelParent(ic.argIcon).layout()
+            self.cursor.setToIconSite(ic.argIcon, ("attrOut", 0))
+
+        return ic.argIcon
 
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""
