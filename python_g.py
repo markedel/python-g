@@ -1041,7 +1041,7 @@ class Window:
         top = evt.y - SITE_SELECT_DIST
         bottom = evt.y + SITE_SELECT_DIST
         minDist = SITE_SELECT_DIST + 1
-        minSite = (None, None)
+        minSite = (None, (None, None))
         for ic in self.findIconsInRegion((left, top, right, bottom)):
             iconSites = ic.snapLists(atTop=True)
             for siteType, siteList in iconSites.items():
@@ -1055,7 +1055,7 @@ class Window:
                         continue  # not a visible site type
                     dist = (abs(evt.x - x) + abs(evt.y - y)) // 2
                     if dist < minDist or (dist == minDist and \
-                     minSite[0] not in ("output", "attrIn")):  # Prefer inputs, for now
+                     minSite[1][0] in ("attrIn", "output")):  # Prefer inputs, for now
                         minDist = dist
                         minSite = siteIcon, (siteType, siteIdx)
         if minDist < SITE_SELECT_DIST + 1:
