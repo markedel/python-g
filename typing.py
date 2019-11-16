@@ -242,7 +242,9 @@ class EntryIcon(icon.Icon):
                 self.layoutDirty = True
             return
         if parseResult == "comma":
-            if not self.commaEntered(self.attachedIcon):
+            if self.commaEntered(self.attachedIcon):
+                self.attachedIcon.replaceChild(None, self.attachedSite)
+            else:
                 beep()
             return
         if parseResult == "endParen":
@@ -283,7 +285,12 @@ class EntryIcon(icon.Icon):
                 cursor.setToIconSite(ic, ("attrOut", 0))
         elif self.attachedToAttribute():
             # Entry icon is attached to an attribute site (ic is operator or attribute)
-            self.appendOperator(ic)
+            if ic.__class__ is icon.AssignIcon:
+                if not self.insertAssign(ic):
+                    beep()
+                    return
+            else:
+                self.appendOperator(ic)
         elif self.attachedSite[0] == "input":
             # Entry icon is attached to an input site
             self.attachedIcon.replaceChild(ic, self.attachedSite)
@@ -345,7 +352,7 @@ class EntryIcon(icon.Icon):
         if onIcon.__class__ is icon.FnIcon:
             onIcon.insertChildren([self], ("input", len(onIcon.argIcons)))
         child = onIcon
-        for parent in self.window.parentage(onIcon):  # should this be reversed()
+        for parent in reversed(self.window.parentage(onIcon)):
             if parent.__class__ is icon.FnIcon:
                 onIcon.layoutDirty = True
                 siteType, siteIdx = parent.siteOf(child)
@@ -427,6 +434,24 @@ class EntryIcon(icon.Icon):
         newOpIcon.layoutDirty = True
         newOpIcon.replaceChild(leftArg, ("input", 0))
         newOpIcon.replaceChild(rightArg, ("input", 1))
+
+    def insertAssign(self, assignIcon):
+        # Here is where we should test for proper assignment targets: names (but not
+        # numbers), tuples, slices; and appropriate spot in the hierarchy.  At the moment,
+        # only assignment to top level IdentIcons is allowed.  Also, temporarily, the
+        # assignment operator is attached to the input site, not the attribute site of
+        # the assignment target
+        if self.attachedIcon.__class__ is not icon.IdentIcon or \
+         self.attachedIcon not in self.window.topIcons:
+            return False
+        self.attachedIcon.replaceChild(None, self.attachedSite)
+        assignIcon.replaceChild(self.attachedIcon, ("input", 0))
+        self.window.topIcons.remove(self.attachedIcon)
+        self.window.topIcons.append(assignIcon)
+        assignIcon.rect = python_g.offsetRect(assignIcon.rect, self.attachedIcon.rect[0],
+            self.attachedIcon.rect[1])
+        self.window.cursor.setToIconSite(assignIcon, ("input", 1))
+        return True
 
     def children(self):
         if self.pendingArgument:
@@ -938,6 +963,8 @@ def parseEntryText(text, forAttrSite):
             elif op == '//':
                 return icon.DivideIcon(floorDiv=True), delim
             return icon.BinOpIcon(op), delim
+        if op == '=':
+            return icon.AssignIcon(), delim
         return "reject"
     else:
         # input site

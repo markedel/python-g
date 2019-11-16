@@ -2,13 +2,14 @@
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from python_g import rectsTouch, AccumRects
 import math
+import re
 import operator
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
 binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
- 'is':5, 'is not':5}
+ 'is':5, 'is not':5, '=':-1}
 
 unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4}
 
@@ -1100,6 +1101,27 @@ class BinOpIcon(Icon):
             raise IconExecException(self, err)
         return result
 
+class AssignIcon(BinOpIcon):
+    identPattern = re.compile('^[a-zA-z_][a-zA-z_\\d]*$') # Temporary
+    def __init__(self, window=None, location=None):
+        BinOpIcon.__init__(self, "=", window, location)
+
+    def execute(self):
+        if self.leftArg is None:
+            raise IconExecException(self, "Missing assignment target")
+        if self.rightArg is None:
+            raise IconExecException(self, "Missing value")
+        # how to know if we have a valid assignment target?
+        if self.leftArg.__class__ is not IdentIcon or \
+         not self.identPattern.fullmatch(self.leftArg.name):
+            raise IconExecException(self.leftArg, "Not a valid assignment target")
+        value = self.rightArg.execute()
+        try:
+            globals()[self.leftArg.name] =  value
+        except Exception as err:
+            raise IconExecException(self, err)
+        return value
+
 class DivideIcon(Icon):
     def __init__(self, window=None, location=None, floorDiv=False):
         Icon.__init__(self, window)
@@ -1462,6 +1484,11 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
         return clickedIcon
     # Only binary operations are candidates, and only when the expression directly below
     # has claimed itself to be the leftmost operand of an expression
+    if fromIcon.__class__ is AssignIcon and fromIcon.leftArg is not None:
+        # This is temporary for calculator app, until real python assignment is supported
+        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg, btnPressLoc)
+        if left is fromIcon.leftArg:
+            return fromIcon  # Claim outermost status for this icon
     if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None:
         left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg, btnPressLoc)
         if left is fromIcon.leftArg:
