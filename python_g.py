@@ -48,6 +48,16 @@ startUpTime = time.monotonic()
 # of a window handle from tkinter to allow us to write pixmaps to the display within a
 # tkinter window.
 
+# UI Notes:
+#
+# Generally we don't want both the selection and cursor to exist at the same time, since
+# that makes the destination for typing and pasting, ambiguous.  It is allowed in the case
+# of execution results, so that the user can easily delete them but resume typing at the
+# same spot.  Therefore, rules for what takes priority when both are present are guided
+# by that particular use case.  It is also important that the interface does not remain
+# very long in the state where both are present, so take any reasonable opportunity to
+# remove the selection.
+
 def combineRects(rect1, rect2):
     """Find the minimum rectangle enclosing rect1 and rect2"""
     l1, t1, r1, b1 = rect1
@@ -559,6 +569,7 @@ class Window:
     def _arrowCb(self, evt):
         if self.cursor.type is None:
             return
+        self.unselectAll()
         self.cursor.processArrowKey(evt.keysym)
 
     def _cancelCb(self, _evt=None):
@@ -601,7 +612,6 @@ class Window:
         self._execute(iconToExecute)
 
     def _startDrag(self, evt, icons, needRemove=True):
-        self.cursor.removeCursor()
         self.dragging = icons
         # Remove the icons from the window image and handle the resulting detachments
         # re-layouts, and redrawing.
