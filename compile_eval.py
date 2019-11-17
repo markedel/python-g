@@ -74,6 +74,8 @@ def parseExpr(expr):
     # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
     elif expr.__class__ == ast.Name:
         return (id, expr.id)
+    elif expr.__class__ == ast.NameConstant:
+        return (val, expr.value)  # True and False as number is a bit weird
     else:
         return (id, "**Couldn't Parse**")
 

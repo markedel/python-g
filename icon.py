@@ -8,14 +8,17 @@ globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
 binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
- 'is':5, 'is not':5, '=':-1}
+ 'is':5, 'is not':5, '<':5, '<=':5, '>':5, '>=':5, '==':5, '!=':5, '=':-1}
 
 unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4}
 
 binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.truediv,
  '//':operator.floordiv, '%':operator.mod, '**':operator.pow, '<<':operator.lshift,
  '>>':operator.rshift, '|':operator.or_, '^':operator.xor, '&':operator.and_,
- '@':lambda x,y:x@y, 'and':lambda x,y:x and y, 'or':lambda x,y:x or y}
+ '@':lambda x,y:x@y, 'and':lambda x,y:x and y, 'or':lambda x,y:x or y,
+ 'in':lambda x,y:x in y, 'not in':lambda x,y:x not in y, 'is':operator.is_,
+ 'is not':operator.is_not, '<':operator.lt, '<=':operator.le, '>':operator.gt,
+ '>=':operator.ge, '==':operator.eq, '!=':operator.ne}
 
 unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_}
 
