@@ -472,7 +472,7 @@ class Window:
                 pastedIcons = compile_eval.parsePasted(text, self, (0, 0))
                 # Not usable python code, put in to single icon as string
                 if pastedIcons is None:
-                    pastedIcons = [icon.IdentIcon(repr(text), self, (0, 0))]
+                    pastedIcons = [icon.TextIcon(repr(text), self, (0, 0))]
             else:
                 # No text available in a form we can use.  Try for image
                 clipImage = ImageGrab.grabclipboard()
@@ -812,7 +812,7 @@ class Window:
         # Convert results to icon form
         resultIcons = compile_eval.parsePasted(repr(result), self, (0, 0))
         if resultIcons is None:
-            resultIcons = [icon.IdentIcon(repr(result), self, (0, 0))]
+            resultIcons = [icon.TextIcon(repr(result), self, (0, 0))]
         resultIcon = resultIcons[0]
         # Place the results to the left of the icon being executed
         if outSitePos is None:
@@ -1130,13 +1130,6 @@ class App:
         self.root.withdraw()
         self.newWindow()
         self.frameCount = 0
-
-        # window = self.windows[0]
-        # for x in range(40):
-        #     for y in range(90):
-        #         loc = (x*60, y*20)
-        #         iconType = icon.FnIcon if x % 2 else  icon.IdentIcon
-        #         window.topIcons.append(iconType("Icon %d" % (x*14+y), window, loc))
 
     def mainLoop(self):
         # self.root.after(2000, self.animate)

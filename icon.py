@@ -2,7 +2,6 @@
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from python_g import rectsTouch, AccumRects
 import math
-import re
 import operator
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
@@ -285,11 +284,11 @@ class Icon:
     def textRepr(self):
         return repr(self)
 
-class IdentIcon(Icon):
-    def __init__(self, name, window=None, location=None):
+class TextIcon(Icon):
+    def __init__(self, text, window=None, location=None):
         Icon.__init__(self, window)
-        self.name = name
-        bodyWidth, bodyHeight = globalFont.getsize(self.name)
+        self.text = text
+        bodyWidth, bodyHeight = globalFont.getsize(self.text)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -310,7 +309,7 @@ class IdentIcon(Icon):
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.name)
+            txtImg = iconBoxedText(self.text)
             self.cachedImage.paste(txtImg, (outSiteImage.width-1, 0))
             outSiteX, outSiteY = self.outSiteOffset
             outSiteY -= outSiteImage.height // 2
@@ -377,7 +376,27 @@ class IdentIcon(Icon):
         return Layout(self, width, height, heightAbove, [attrLayout])
 
     def textRepr(self):
-        return self.name
+        return self.text
+
+    def execute(self):
+        # This execution method is a remnant from when the IdentIcon did numbers, strings,
+        # and identifiers, and is probably no longer appropriate.  Not sure if the current
+        # uses of naked text icons should even be executed at all
+        try:
+            result = eval(self.text)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
+
+class IdentifierIcon(TextIcon):
+    def __init__(self, name, window=None, location=None):
+        TextIcon.__init__(self, name, window, location)
+        self.name = name
+
+    def execute(self):
+        if self.name not in globals():
+            raise IconExecException(self, self.name + " is not defined")
+        return globals()[self.name]
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -386,16 +405,46 @@ class IdentIcon(Icon):
     @staticmethod
     def fromClipboard(clipData, window, locationOffset):
         name, location = clipData
-        return IdentIcon(name, window, (addPoints(location, locationOffset)))
+        return IdentifierIcon(name, window, (addPoints(location, locationOffset)))
+
+class NumericIcon(TextIcon):
+    def __init__(self, value, window=None, location=None):
+        if type(value) == type(""):
+            try:
+                value = int(value)
+            except ValueError:
+                value = float(value)
+        TextIcon.__init__(self, repr(value), window, location)
+        self.value = value
 
     def execute(self):
-        # Until this icon gets more specific about what it holds
-        try:
-            result = eval(self.name)
-        except Exception as err:
-            raise IconExecException(self, err)
-        return result
+        return self.value
 
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return self.__class__.__name__, (self.text, addPoints(location, offset))
+
+    @staticmethod
+    def fromClipboard(clipData, window, locationOffset):
+        valueStr, location = clipData
+        return NumericIcon(valueStr, window, (addPoints(location, locationOffset)))
+
+class StringIcon(TextIcon):
+    def __init__(self, string, window=None, location=None):
+        TextIcon.__init__(self, repr(string), window, location)
+        self.string = string
+
+    def execute(self):
+        return self.string
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return self.__class__.__name__, (self.string, addPoints(location, offset))
+
+    @staticmethod
+    def fromClipboard(clipData, window, locationOffset):
+        text, location = clipData
+        return StringIcon(text, window, (addPoints(location, locationOffset)))
 
 class UnaryOpIcon(Icon):
     def __init__(self, operator, window=None, location=None):
@@ -1102,7 +1151,6 @@ class BinOpIcon(Icon):
         return result
 
 class AssignIcon(BinOpIcon):
-    identPattern = re.compile('^[a-zA-z_][a-zA-z_\\d]*$') # Temporary
     def __init__(self, window=None, location=None):
         BinOpIcon.__init__(self, "=", window, location)
 
@@ -1112,8 +1160,7 @@ class AssignIcon(BinOpIcon):
         if self.rightArg is None:
             raise IconExecException(self, "Missing value")
         # how to know if we have a valid assignment target?
-        if self.leftArg.__class__ is not IdentIcon or \
-         not self.identPattern.fullmatch(self.leftArg.name):
+        if self.leftArg.__class__ is not IdentifierIcon:
             raise IconExecException(self.leftArg, "Not a valid assignment target")
         value = self.rightArg.execute()
         try:
@@ -1407,7 +1454,7 @@ class ImageIcon(Icon):
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         # ... base64 encode a jpeg
-        return "IdentIcon", ("TODO", addPoints(location, offset))
+        return "TextIcon", ("TODO", addPoints(location, offset))
 
     @staticmethod
     def fromClipboard(_clipData, _window, _locationOffset):

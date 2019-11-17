@@ -45,7 +45,9 @@ def parseExprToAst(text):
 
 def parseExpr(expr):
     fn = 'functionIcon'
-    id = 'identIcon'
+    id = 'identifierIcon'
+    val = 'numericIcon'
+    st = 'stringIcon'
     bin = 'binOpIcon'
     unary = 'unaryOpIcon'
     div = 'divideIcon'
@@ -66,9 +68,9 @@ def parseExpr(expr):
         # No keywords or other cool stuff, yet
         return (fn, expr.func.id, *(parseExpr(e) for e in expr.args))
     elif expr.__class__ == ast.Num:
-        return (id, str(expr.n))
+        return (val, expr.n)
     elif expr.__class__ == ast.Str:
-        return (id, '"' + expr.s + '"')
+        return (st, expr.s)
     # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
     elif expr.__class__ == ast.Name:
         return (id, expr.id)
@@ -76,8 +78,12 @@ def parseExpr(expr):
         return (id, "**Couldn't Parse**")
 
 def makeIcons(parsedExpr, window, x, y):
-    if parsedExpr[0] == 'identIcon':
-        return icon.IdentIcon(parsedExpr[1], window, (x, y))
+    if parsedExpr[0] == 'identifierIcon':
+        return icon.IdentifierIcon(parsedExpr[1], window, (x, y))
+    if parsedExpr[0] == 'numericIcon':
+        return icon.NumericIcon(parsedExpr[1], window, (x, y))
+    if parsedExpr[0] == 'stringIcon':
+        return icon.StringIcon(parsedExpr[1], window, (x, y))
     if parsedExpr[0] == 'functionIcon':
         topIcon = icon.FnIcon(parsedExpr[1], window, (x, y))
         childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[2:]]
@@ -98,4 +104,4 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
         return topIcon
     else:
-        return icon.IdentIcon("**Internal Parse Error**", window, (x,y))
+        return icon.TextIcon("**Internal Parse Error**", window, (x,y))

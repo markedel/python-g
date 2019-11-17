@@ -319,7 +319,7 @@ class EntryIcon(icon.Icon):
                 matchingParen.close()
                 cursor.setToIconSite(matchingParen, ("attrOut", 0))
             remainingText = ""
-        elif remainingText == '(' and ic.__class__ is icon.IdentIcon:
+        elif remainingText == '(' and ic.__class__ is icon.IdentifierIcon:
             if not self.makeFunction(ic):
                 beep()
             remainingText = ""
@@ -369,7 +369,7 @@ class EntryIcon(icon.Icon):
         return None
 
     def makeFunction(self, ic):
-        if ic.__class__ is not icon.IdentIcon or not identPattern.fullmatch(ic.name):
+        if ic.__class__ is not icon.IdentifierIcon:
             return False
         parent = self.window.parentOf(ic)
         fnIcon = icon.FnIcon(ic.name, window=self.window)
@@ -438,10 +438,10 @@ class EntryIcon(icon.Icon):
     def insertAssign(self, assignIcon):
         # Here is where we should test for proper assignment targets: names (but not
         # numbers), tuples, slices; and appropriate spot in the hierarchy.  At the moment,
-        # only assignment to top level IdentIcons is allowed.  Also, temporarily, the
+        # only assignment to top level IdentifierIcons is allowed.  Also, temporarily, the
         # assignment operator is attached to the input site, not the attribute site of
         # the assignment target
-        if self.attachedIcon.__class__ is not icon.IdentIcon or \
+        if self.attachedIcon.__class__ is not icon.IdentifierIcon or \
          self.attachedIcon not in self.window.topIcons:
             return False
         self.attachedIcon.replaceChild(None, self.attachedSite)
@@ -996,9 +996,9 @@ def parseEntryText(text, forAttrSite):
         if exprAst is None:
             return "reject"
         if exprAst.__class__ == ast.Name:
-            return icon.IdentIcon(exprAst.id), delim
+            return icon.IdentifierIcon(exprAst.id), delim
         if exprAst.__class__ == ast.Num:
-            return icon.IdentIcon(str(exprAst.n)), delim
+            return icon.NumericIcon(exprAst.n), delim
         return "reject"
 
 def tkCharFromEvt(evt):
