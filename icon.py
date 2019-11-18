@@ -197,7 +197,6 @@ outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
 leftInSiteImage = asciiToImage(leftInSitePixmap)
 commaImage = asciiToImage(commaPixmap)
-parenImage = iconBoxedText(')')
 binOutImage = asciiToImage(binOutPixmap)
 floatInImage = asciiToImage(floatInPixmap)
 lParenImage = asciiToImage(binLParenPixmap)
@@ -582,20 +581,21 @@ class UnaryOpIcon(Icon):
             raise IconExecException(self, err)
         return result
 
-class FnIcon(Icon):
-    def __init__(self, name, window=None, location=None):
+class ListTypeIcon(Icon):
+    def __init__(self, leftText, rightText, window=None, location=None):
         Icon.__init__(self, window)
-        self.name = name
+        self.leftText = leftText
+        self.rightText = rightText
         self.argIcons = []
         self.emptyInOffsets = (0, EMPTY_ARG_WIDTH)
         self.inOffsets = self.emptyInOffsets
-        bodyWidth, bodyHeight = globalFont.getsize(self.name + '(')
-        bodyWidth += 2 * TEXT_MARGIN + 1
-        bodyHeight += 2 * TEXT_MARGIN + 1
-        self.bodySize = (bodyWidth, bodyHeight)
-        closeWidth, closeHeight = globalFont.getsize(')')
-        self.closeParenWidth = closeWidth + 2 * TEXT_MARGIN + 1
-        self.outSiteOffset = (0, bodyHeight // 2)
+        leftTextWidth, leftTextHeight = globalFont.getsize(leftText)
+        leftTextWidth += 2 * TEXT_MARGIN + 1
+        leftTextHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (leftTextWidth, leftTextHeight)
+        rightTextWidth, rightTextHeight = globalFont.getsize(rightText)
+        self.rightTextWidth = rightTextWidth + 2 * TEXT_MARGIN + 1
+        self.outSiteOffset = (0, leftTextHeight // 2)
         x, y = (0, 0) if location is None else location
         width, height = self._size()
         self.rect = (x, y, x + width, y + height)
@@ -604,7 +604,7 @@ class FnIcon(Icon):
 
     def _size(self):
         width, height = self.bodySize
-        width += self.inOffsets[-1] + parenImage.width + 1
+        width += self.inOffsets[-1] + self.rightTextWidth + 1
         return width, height
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
@@ -615,25 +615,26 @@ class FnIcon(Icon):
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
             # Body
-            txtImg = iconBoxedText(self.name + '(')
-            self.cachedImage.paste(txtImg, (outSiteImage.width-1, 0))
+            leftTxtImg = iconBoxedText(self.leftText)
+            self.cachedImage.paste(leftTxtImg, (outSiteImage.width-1, 0))
             # Output site
             outSiteX, siteY = self.outSiteOffset
             outSiteY = siteY - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
             # Body input site
-            inSiteX = outSiteImage.width-1 + txtImg.width - inSiteImage.width
+            inSiteX = outSiteImage.width-1 + leftTxtImg.width - inSiteImage.width
             inSiteY = siteY - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
             # Commas
             commaXOffset = inSiteX + inSiteImage.width - commaImage.width
-            commaY = siteY + txtImg.height//2 - commaImage.height
+            commaY = siteY + leftTxtImg.height//2 - commaImage.height
             for inOff in self.inOffsets[1:-1]:
                 self.cachedImage.paste(commaImage, (inOff + commaXOffset, commaY))
-            # End paren
-            parenY = siteY - parenImage.height//2
+            # End paren/brace
+            rightTxtImg = iconBoxedText(self.rightText)
+            parenY = siteY - rightTxtImg.height//2
             parenX = inSiteX + self.inOffsets[-1] + inSiteImage.width - 1
-            self.cachedImage.paste(parenImage, (parenX, parenY))
+            self.cachedImage.paste(rightTxtImg, (parenX, parenY))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
@@ -749,12 +750,12 @@ class FnIcon(Icon):
         childLayouts = [None if c is None else c._calcLayout() for c in self.argIcons]
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
-            childWidth = self.emptyInOffsets[-1] + parenImage.width
+            childWidth = self.emptyInOffsets[-1] + self.rightTextWidth
             height = bodyHeight
         else:
             numCommas = len(childLayouts) - 2
             childWidth = sum((c.width-1 for c in childLayouts if c is not None))
-            childWidth += numCommas*(commaImage.width-1) + parenImage.width
+            childWidth += numCommas*(commaImage.width-1) + self.rightTextWidth
             height = max(bodyHeight, max((c.height for c in childLayouts if c is not None)))
         width = self.bodySize[0] + outSiteImage.width + childWidth
         siteOffset = height // 2
@@ -778,7 +779,23 @@ class FnIcon(Icon):
                 argText = argText + arg.textRepr() + ", "
         if len(argText) > 0:
             argText = argText[:-2]
-        return self.name + "(" + argText
+        return self.leftText + argText + self.rightText
+
+class FnIcon(ListTypeIcon):
+    def __init__(self, name, window=None, location=None):
+        self.name = name
+        ListTypeIcon.__init__(self, name + '(', ')', window, location)
+
+    def execute(self):
+        for c in self.argIcons:
+            if c is None:
+                raise IconExecException(self, "Missing argument(s)")
+        argValues = [c.execute() for c in self.argIcons]
+        try:
+            result = getattr(math, self.name)(*argValues)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -792,16 +809,49 @@ class FnIcon(Icon):
         ic.argIcons = clipboardDataToIcons(children, window, offset)
         return ic
 
+class ListIcon(ListTypeIcon):
+    def __init__(self, window=None, location=None):
+        ListTypeIcon.__init__(self, '[', ']', window, location)
+
     def execute(self):
         for c in self.argIcons:
             if c is None:
                 raise IconExecException(self, "Missing argument(s)")
-        argValues = [c.execute() for c in self.argIcons]
-        try:
-            result = getattr(math, self.name)(*argValues)
-        except Exception as err:
-            raise IconExecException(self, err)
-        return result
+        return [c.execute() for c in self.argIcons]
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return (self.__class__.__name__, (addPoints(location, offset),
+         [c.clipboardRepr(offset) for c in self.argIcons]))
+
+    @staticmethod
+    def fromClipboard(clipData, window, offset):
+        name, location, children = clipData
+        ic = ListIcon(window, (addPoints(location, offset)))
+        ic.argIcons = clipboardDataToIcons(children, window, offset)
+        return ic
+
+class TupleIcon(ListTypeIcon):
+    def __init__(self, window=None, location=None):
+        ListTypeIcon.__init__(self, '(', ')', window, location)
+
+    def execute(self):
+        for c in self.argIcons:
+            if c is None:
+                raise IconExecException(self, "Missing argument(s)")
+        return tuple((c.execute() for c in self.argIcons))
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return (self.__class__.__name__, (addPoints(location, offset),
+         [c.clipboardRepr(offset) for c in self.argIcons]))
+
+    @staticmethod
+    def fromClipboard(clipData, window, offset):
+        name, location, children = clipData
+        ic = TupleIcon(window, (addPoints(location, offset)))
+        ic.argIcons = clipboardDataToIcons(children, window, offset)
+        return ic
 
 class BinOpIcon(Icon):
     def __init__(self, operator, window=None, location=None):

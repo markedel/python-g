@@ -51,6 +51,8 @@ def parseExpr(expr):
     bin = 'binOpIcon'
     unary = 'unaryOpIcon'
     div = 'divideIcon'
+    lis = 'listIcon'
+    tup = 'tupleIcon'
     if expr.__class__ == ast.UnaryOp:
         return (unary, unaryOps[expr.op.__class__], parseExpr(expr.operand))
     elif expr.__class__ == ast.BinOp:
@@ -76,6 +78,10 @@ def parseExpr(expr):
         return (id, expr.id)
     elif expr.__class__ == ast.NameConstant:
         return (val, expr.value)  # True and False as number is a bit weird
+    elif expr.__class__ == ast.List:
+        return (lis, *(parseExpr(e) for e in expr.elts))
+    elif expr.__class__ == ast.Tuple:
+        return (tup, *(parseExpr(e) for e in expr.elts))
     else:
         return (id, "**Couldn't Parse**")
 
@@ -104,6 +110,16 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = icon.DivideIcon(window, (x, y), floorDiv=parsedExpr[1])
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
         topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
+        return topIcon
+    if parsedExpr[0] == 'listIcon':
+        topIcon = icon.ListIcon(window, (x, y))
+        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
+        topIcon.insertChildren(childIcons, ("insertInput", 0))
+        return topIcon
+    if parsedExpr[0] == 'tupleIcon':
+        topIcon = icon.TupleIcon(window, (x, y))
+        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
+        topIcon.insertChildren(childIcons, ("insertInput", 0))
         return topIcon
     else:
         return icon.TextIcon("**Internal Parse Error**", window, (x,y))

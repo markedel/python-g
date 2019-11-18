@@ -241,13 +241,20 @@ class EntryIcon(icon.Icon):
             if self._width() != oldWidth:
                 self.layoutDirty = True
             return
-        if parseResult == "comma":
+        elif parseResult == "comma":
             if self.commaEntered(self.attachedIcon):
                 self.attachedIcon.replaceChild(None, self.attachedSite)
             else:
                 beep()
             return
-        if parseResult == "endParen":
+        elif parseResult == "endBracket":
+            self.attachedIcon.replaceChild(None, self.attachedSite)
+            self.window.entryIcon = None
+            cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+            if not cursor.movePastEndBracket():
+                beep()
+            return
+        elif parseResult == "endParen":
             matchingParen = self.findOpenParen(self.attachedIcon)
             if matchingParen is None:
                 # Maybe user was just trying to move past an existing paren by typing it
@@ -263,7 +270,7 @@ class EntryIcon(icon.Icon):
                     self.window.entryIcon = None
                     cursor.setToIconSite(matchingParen, ("attrOut", 0))
             return
-        if parseResult == "makeFunction":
+        elif parseResult == "makeFunction":
             if not self.makeFunction(self.attachedIcon):
                 beep()
             return
@@ -328,6 +335,10 @@ class EntryIcon(icon.Icon):
             cursor.icon.replaceChild(parenIcon, cursor.site)
             cursor.setToIconSite(parenIcon, ("input", 0))
             remainingText = ""
+        elif remainingText == ']':
+            if not cursor.movePastEndBracket():
+                beep()
+            remainingText = ""
         elif remainingText == ',':
             if not self.commaEntered(ic):
                 beep()
@@ -353,7 +364,7 @@ class EntryIcon(icon.Icon):
             onIcon.insertChildren([self], ("input", len(onIcon.argIcons)))
         child = onIcon
         for parent in reversed(self.window.parentage(onIcon)):
-            if parent.__class__ is icon.FnIcon:
+            if parent.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon):
                 onIcon.layoutDirty = True
                 siteType, siteIdx = parent.siteOf(child)
                 insertSite = (siteType, siteIdx + 1)
@@ -920,6 +931,16 @@ class Cursor:
             child = parent
         return False
 
+    def movePastEndBracket(self):
+        if self.type is not "icon":
+            return False
+        # Just tear intervening icons to the end bracket (was this right?)
+        for parent in reversed(self.window.parentage(self.icon)):
+            if parent.__class__ is icon.ListIcon:
+                self.setToIconSite(parent, ("attrOut", 0))
+                return True
+        return False
+
     def erase(self):
         if self.lastDrawRect is not None and self.window.dragging is None:
             self.window.refresh(self.lastDrawRect)
@@ -951,6 +972,8 @@ def parseEntryText(text, forAttrSite):
             return "makeFunction"  # Make a function from the attached icon
         if text == ')':
             return "endParen"
+        if text == ']':
+            return "endBracket"
         if text == ',':
             return "comma"
         op = text[:-1]
@@ -975,6 +998,10 @@ def parseEntryText(text, forAttrSite):
             return CursorParenIcon(), None
         if text == ')':
             return "endParen"
+        if text == '[':
+            return icon.ListIcon(), None
+        if text == ']':
+            return "endBracket"
         if text == ',':
             return "comma"
         if identPattern.fullmatch(text) or numPattern.fullmatch(text):
@@ -1002,7 +1029,7 @@ def parseEntryText(text, forAttrSite):
         return "reject"
 
 def tkCharFromEvt(evt):
-    if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 192 or 220 <= evt.keycode <= 222:
+    if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 192 or 219 <= evt.keycode <= 222:
         return chr(evt.keysym_num)
     return None
 
