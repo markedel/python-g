@@ -242,8 +242,19 @@ class EntryIcon(icon.Icon):
                 self.layoutDirty = True
             return
         elif parseResult == "comma":
-            if self.commaEntered(self.attachedIcon):
-                self.attachedIcon.replaceChild(None, self.attachedSite)
+            if self.commaEntered(self.attachedIcon, self.attachedSite):
+                if self.pendingArgument is None:
+                    if self.attachedIcon is not None:
+                        self.attachedIcon.replaceChild(None, self.attachedSite)
+                    self.window.entryIcon = None
+                else:
+                    if cursor.type is "icon" and cursor.site[0] == "input" and \
+                            cursor.icon.childAt(cursor.site) is None:
+                        cursor.icon.replaceChild(self.pendingArgument, cursor.site)
+                        if self.attachedIcon is not None:
+                            self.attachedIcon.replaceChild(None, self.attachedSite)
+                        self.pendingArgument = None
+                        self.window.entryIcon = None
             else:
                 beep()
             return
@@ -340,7 +351,14 @@ class EntryIcon(icon.Icon):
                 beep()
             remainingText = ""
         elif remainingText == ',':
-            if not self.commaEntered(ic):
+            if self.commaEntered(cursor.icon, cursor.site):
+                if self.pendingArgument:
+                    if cursor.type is "icon" and cursor.site[0] == "input" and \
+                            cursor.icon.childAt(cursor.site) is None:
+                        cursor.icon.replaceChild(self.pendingArgument, cursor.site)
+                        self.pendingArgument = None
+                        self.window.entryIcon = None
+            else:
                 beep()
             remainingText = ""
         # If the entry icon can go away, remove it and we're done
@@ -359,19 +377,126 @@ class EntryIcon(icon.Icon):
         cursor.draw()
         self.layoutDirty = True
 
-    def commaEntered(self, onIcon):
-        if onIcon.__class__ is icon.FnIcon:
-            onIcon.insertChildren([self], ("input", len(onIcon.argIcons)))
+    def commaEntered(self, onIcon, site):
+        """A comma has been entered.  Search up the hierarchy to find a list, tuple,
+        cursor-paren, or parameter list, parting every expression about the newly inserted
+        comma.  If no comma-separated type is found, part the expression up to either an
+        assignment, or the top level.  Return False if user tries to place comma within
+        unary or binary op auto-parens, or on an icon that interrupts horizontal sequence
+        of icons (divide)."""
+        # This allows a comma to be typed anywhere in an expression, which is probably
+        # massive overkill.  Probably just beeping to say "no, you can't put a comma
+        # there", would be just as reasonable as ripping apart the enclosing expression
+        # and leaving a hole somewhere.
+        cursorPlaced = False
+        if onIcon.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon) and \
+         site[0] == "input":
+            # This is essentially ",,", which means leave a new space for an arg
+            # Entry icon holds pending arguments
+            siteIdx = site[1]
+            onIcon.insertChildren([None], ("input", siteIdx))
+            if onIcon.childAt(("input", siteIdx+1)) == self:
+                onIcon.replaceChild(self.pendingArgument, ("input", siteIdx+1))
+                self.pendingArgument = None
+                self.attachedIcon = None
+            self.window.cursor.setToIconSite(onIcon, ("input", siteIdx))
+            return True
+        elif onIcon.__class__ in (icon.UnaryOpIcon, icon.DivideIcon) and site[0] == "input":
+            return False
+        if onIcon.__class__ is icon.AssignIcon and site == ("input", 1):
+            tupleIcon = icon.TupleIcon(window=self.window)
+            tupleIcon.insertChildren([None, onIcon.rightArg], ("input", 0))
+            self.window.cursor.setToIconSite(tupleIcon, ("input", 0))
+            onIcon.replaceChild(tupleIcon, ("input", 1))
+            return True
+        if onIcon.__class__ is icon.BinOpIcon and site == ("input", 0):
+            leftArg = None
+            rightArg = onIcon
+            if onIcon.leftArg is self:
+                onIcon.leftArg = self.pendingArgument
+                self.pendingArgument = None
+                self.attachedIcon = None
+        elif onIcon.__class__ is icon.BinOpIcon and site == ("input", 1):
+            leftArg = onIcon
+            rightArg = onIcon.rightArg
+            if rightArg is self:
+                rightArg = self.pendingArgument
+                self.pendingArgument = None
+                self.attachedIcon = None
+            onIcon.rightArg = None
+            self.window.cursor.setToIconSite(onIcon, ("input", 1))
+            cursorPlaced = True
+        else:
+            leftArg = onIcon
+            rightArg = None
         child = onIcon
         for parent in reversed(self.window.parentage(onIcon)):
             if parent.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon):
                 onIcon.layoutDirty = True
-                siteType, siteIdx = parent.siteOf(child)
+                childSite = parent.siteOf(child)
+                parent.replaceChild(leftArg, childSite)
+                siteType, siteIdx = childSite
                 insertSite = (siteType, siteIdx + 1)
-                parent.insertChildren([None], insertSite)
-                self.window.cursor.setToIconSite(parent, insertSite)
+                parent.insertChildren([rightArg], insertSite)
+                if not cursorPlaced:
+                    cursorIdx = siteIdx if leftArg is None else siteIdx + 1
+                    self.window.cursor.setToIconSite(parent, (siteType, cursorIdx))
                 return True
-        return False
+            if parent.__class__ is CursorParenIcon:
+                tupleIcon = icon.TupleIcon(window=self.window)
+                tupleIcon.insertChildren([leftArg, rightArg], ("input", 0))
+                if not cursorPlaced:
+                    cursorSite = ("input", 0 if leftArg is None else 1)
+                    self.window.cursor.setToIconSite(tupleIcon, cursorSite)
+                parentParent = self.window.parentOf(parent)
+                if parentParent is None:
+                    self.window.topIcons.remove(parent)
+                    self.window.topIcons.append(tupleIcon)
+                    tupleIcon.rect = python_g.offsetRect(tupleIcon.rect, parent.rect[0],
+                     parent.rect[1])
+                else:
+                    parentParent.replaceChild(tupleIcon, parentParent.siteOf(parent))
+                return True
+            if parent.__class__ is icon.AssignIcon:
+                tupleIcon = icon.TupleIcon(window=self.window)
+                tupleIcon.insertChildren([leftArg, rightArg], ("input", 0))
+                if not cursorPlaced:
+                    cursorSite = ("input", 0 if leftArg is None else 1)
+                    self.window.cursor.setToIconSite(tupleIcon, cursorSite)
+                parent.replaceChild(tupleIcon, parent.siteOf(child))
+                return True
+            if parent.__class__ is not icon.BinOpIcon:
+                return False
+            if parent.hasParens:
+                return False
+            # Parent is a binary op icon without parens, and site is one of the two
+            # input sites
+            if parent.leftArg is child:  # Insertion was on left side of operator
+                parent.leftArg = rightArg
+                if parent.leftArg is None:
+                    self.window.cursor.setToIconSite(parent, ("input", 0))
+                    cursorPlaced = True
+                rightArg = parent
+            elif parent.rightArg is child:   # Insertion was on right side of operator
+                parent.rightArg = leftArg
+                if parent.rightArg is None:
+                    self.window.cursor.setToIconSite(parent, ("input", 1))
+                    cursorPlaced = True
+                leftArg = parent
+            else:
+                print('Unexpected site attachment in "commaEntered" function')
+                return False
+            child = parent
+        # Reached top level.  Create Tuple
+        tupleIcon = icon.TupleIcon(window=self.window)
+        tupleIcon.insertChildren([leftArg, rightArg], ("input", 0))
+        if not cursorPlaced:
+            self.window.cursor.setToIconSite(tupleIcon, ("input", 1))  # May want to check and put in whichever is empty
+        self.window.topIcons.remove(child)
+        self.window.topIcons.append(tupleIcon)
+        tupleIcon.rect = python_g.offsetRect(tupleIcon.rect, child.rect[0],
+         child.rect[1])
+        return True
 
     def findOpenParen(self, fromIcon):
         for parent in reversed(self.window.parentage(fromIcon)):  # should this be reversed()
@@ -797,7 +922,10 @@ class Cursor:
             y -= inputSiteCursorOffset
         elif self.type == "icon":
             siteType, siteIdx = self.site
-            x, y = self.icon.posOfSite(self.site)
+            sitePos = self.icon.posOfSite(self.site)
+            if sitePos is None:
+                return # Cursor can be moved before site fully exists, so fail softly
+            x, y = sitePos
             if siteType in ("input", "output"):
                 cursorImg = inputSiteCursorImage
                 y -= inputSiteCursorOffset
