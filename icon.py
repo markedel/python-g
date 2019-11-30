@@ -22,6 +22,8 @@ binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.tr
 
 unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_}
 
+namedConsts = {'True':True, 'False':False, 'None':None}
+
 TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
@@ -35,6 +37,7 @@ BLACK = (0, 0, 0, 255)
 DEPTH_EXPAND = 4
 
 EMPTY_ARG_WIDTH = 11
+LIST_EMPTY_ARG_WIDTH = 4
 
 # Pixels below input/output site to place function/list/tuple icons insertion site
 INSERT_SITE_Y_OFFSET = sum(globalFont.getmetrics()) // 2
@@ -330,7 +333,7 @@ class TextIcon(Icon):
         attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
         return {"output":[outSite], "attrOut":[attrOutSite]}
 
-    def replaceChild(self, newChild, site):
+    def replaceChild(self, newChild, site, leavePlace=False):
         siteType, siteIndex = site
         if siteType == "attrOut":
             self.attrIcon = newChild
@@ -396,9 +399,11 @@ class IdentifierIcon(TextIcon):
         self.name = name
 
     def execute(self):
-        if self.name not in globals():
-            raise IconExecException(self, self.name + " is not defined")
-        return globals()[self.name]
+        if self.name in namedConsts:
+            return namedConsts[self.name]
+        elif self.name in globals():
+            return globals()[self.name]
+        raise IconExecException(self, self.name + " is not defined")
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
@@ -509,7 +514,7 @@ class UnaryOpIcon(Icon):
         inSite = (self, (x + self.inSiteOffset[0], y + self.inSiteOffset[1]), 0)
         return {"output":[outSite], "input":[inSite]}
 
-    def replaceChild(self, newChild, site):
+    def replaceChild(self, newChild, site, leavePlace=False):
         siteType, siteIndex = site
         if siteType == "input":
             self.argIcon = newChild
@@ -587,7 +592,7 @@ class ListTypeIcon(Icon):
         self.leftText = leftText
         self.rightText = rightText
         self.argIcons = []
-        self.emptyInOffsets = (0, EMPTY_ARG_WIDTH)
+        self.emptyInOffsets = (0, LIST_EMPTY_ARG_WIDTH)
         self.inOffsets = self.emptyInOffsets
         leftTextWidth, leftTextHeight = globalFont.getsize(leftText)
         leftTextWidth += 2 * TEXT_MARGIN + 1
@@ -639,9 +644,7 @@ class ListTypeIcon(Icon):
          colorErr), location, clip)
 
     def children(self):
-        if self.attrIcon:
-            return self.argIcons + [self.attrIcon]
-        return [ic for ic in self.argIcons if ic is not None]
+        return [ic for ic in self.argIcons + [self.attrIcon] if ic is not None]
 
     def snapLists(self, atTop=False):
         x, y = self.rect[:2]
@@ -679,11 +682,12 @@ class ListTypeIcon(Icon):
             self.argIcons[siteIndex:siteIndex] = children
         self.layoutDirty = True
 
-    def replaceChild(self, newChild, site):
+    def replaceChild(self, newChild, site, leavePlace=False):
         siteType, siteIndex = site
         if siteType == "input":
-            if newChild is None:
-                del self.argIcons[siteIndex]
+            if newChild is None and not leavePlace:
+                if siteIndex < len(self.argIcons):
+                    del self.argIcons[siteIndex]
             else:
                 if siteIndex == len(self.argIcons):
                     self.argIcons.append(newChild)
@@ -719,7 +723,7 @@ class ListTypeIcon(Icon):
 
     def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         bodyWidth, bodyHeight = self.bodySize
-        if len(layout.subLayouts) == 0:
+        if not self.argIcons:
             self.inOffsets = self.emptyInOffsets
         else:
             self.inOffsets = []
@@ -729,7 +733,7 @@ class ListTypeIcon(Icon):
                 childLayout = layout.subLayouts[i]
                 self.inOffsets.append(childX)
                 if childLayout is None:
-                    childX += EMPTY_ARG_WIDTH + commaImage.width -1
+                    childX += LIST_EMPTY_ARG_WIDTH + commaImage.width -1
                 else:
                     childLayout.icon._doLayout(childXOffset + childX, outSiteY, childLayout)
                     childX += childLayout.width-1 + commaImage.width-1
@@ -750,14 +754,14 @@ class ListTypeIcon(Icon):
         childLayouts = [None if c is None else c._calcLayout() for c in self.argIcons]
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
-            childWidth = self.emptyInOffsets[-1] + self.rightTextWidth
+            childWidth = LIST_EMPTY_ARG_WIDTH
             height = bodyHeight
         else:
-            numCommas = len(childLayouts) - 2
-            childWidth = sum((c.width-1 for c in childLayouts if c is not None))
-            childWidth += numCommas*(commaImage.width-1) + self.rightTextWidth
-            height = max(bodyHeight, max((c.height for c in childLayouts if c is not None)))
-        width = self.bodySize[0] + outSiteImage.width + childWidth
+            numCommas = len(childLayouts) - 1
+            childWidth = sum((LIST_EMPTY_ARG_WIDTH if c is None else c.width-1 for c in childLayouts))
+            childWidth += numCommas*(commaImage.width-1)
+            height = max((bodyHeight, *(c.height for c in childLayouts if c is not None)))
+        width = bodyWidth + outSiteImage.width + childWidth + self.rightTextWidth - 4
         siteOffset = height // 2
         if self.attrIcon:
             attrLayout = self.attrIcon._calcLayout()
@@ -835,7 +839,25 @@ class TupleIcon(ListTypeIcon):
     def __init__(self, window=None, location=None):
         ListTypeIcon.__init__(self, '(', ')', window, location)
 
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
+        # Modify parens to have lines through them to distinguish tuple from normal paren
+        redrawingCachedImage = self.cachedImage is None
+        ListTypeIcon.draw(self, image, location, clip, colorErr)
+        if redrawingCachedImage:
+            draw = ImageDraw.Draw(self.cachedImage)
+            outSiteX, outSiteY = self.outSiteOffset
+            y = outSiteY
+            x = outSiteX + 5  # This is font-dependent and could cause trouble later
+            draw.line((x, y, x+2, y), BLACK)
+            # End paren
+            x = self.attrSiteOffset[0] - 3
+            draw.line((x, y, x-2, y), BLACK)
+            ListTypeIcon.draw(self, image, location, clip, colorErr)
+
     def execute(self):
+        if len(self.argIcons) == 2 and self.argIcons[0] and not self.argIcons[1]:
+            # Special case of single item tuple allowed to have missing arg
+            return self.argIcons[0].execute(),
         for c in self.argIcons:
             if c is None:
                 raise IconExecException(self, "Missing argument(s)")
@@ -1004,7 +1026,7 @@ class BinOpIcon(Icon):
             snapSites["attrOut"] = [attrOutSite]
         return snapSites
 
-    def replaceChild(self, newChild, site):
+    def replaceChild(self, newChild, site, leavePlace=False):
         siteType, siteIndex = site
         if siteType == "input":
             if siteIndex == 0:
@@ -1213,14 +1235,21 @@ class AssignIcon(BinOpIcon):
         if self.rightArg is None:
             raise IconExecException(self, "Missing value")
         # how to know if we have a valid assignment target?
-        if self.leftArg.__class__ is not IdentifierIcon:
+        self.assignValues(self.leftArg, self.rightArg.execute())
+
+    def assignValues(self, leftIcon, values):
+        if leftIcon.__class__ is IdentifierIcon:
+            try:
+                globals()[leftIcon.name] = values
+            except Exception as err:
+                raise IconExecException(self, err)
+        elif leftIcon.__class__ in (TupleIcon, ListIcon):
+            if not hasattr(values, "__len__") or len(leftIcon.argIcons) != len(values):
+                raise IconExecException(self, "Could not unpack" )
+            for target, value in zip(leftIcon.argIcons, values):
+                self.assignValues(target, value)
+        else:
             raise IconExecException(self.leftArg, "Not a valid assignment target")
-        value = self.rightArg.execute()
-        try:
-            globals()[self.leftArg.name] =  value
-        except Exception as err:
-            raise IconExecException(self, err)
-        return value
 
 class DivideIcon(Icon):
     def __init__(self, window=None, location=None, floorDiv=False):
@@ -1320,7 +1349,7 @@ class DivideIcon(Icon):
         attrOutSite = (self, (x + self.attrSiteOffset[0], y + ATTR_SITE_OFFSET), 0)
         return {"output":[outSite], "input":inSites, "attrOut":[attrOutSite]}
 
-    def replaceChild(self, newChild, site):
+    def replaceChild(self, newChild, site, leavePlace=False):
         "Add or replace a child icon"
         siteType, siteIndex = site
         if siteType == "input":

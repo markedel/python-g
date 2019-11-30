@@ -283,7 +283,8 @@ class Window:
                 ic.draw(clip=redrawRegion.get())
             self.refresh(redrawRegion.get())
         else:
-            self.entryIcon.draw()
+            if self.entryIcon is not None:
+                self.entryIcon.draw()
 
     def _motionCb(self, evt):
         if self.dragging is not None:
@@ -557,7 +558,14 @@ class Window:
                 self.cursor.setToIconSite(pastedIcons[0], ("output", 0))
 
     def _deleteCb(self, _evt=None):
-        self.removeIcons(self.selectedIcons())
+        selected = self.selectedIcons()
+        if selected:
+            self.removeIcons(selected)
+        elif self.cursor.type == "icon":
+            # Not using removeIcons here, to take advantage or replaceChild operation
+            # on listType icons and remove an empty argument spot.
+            self.cursor.icon.replaceChild(None, self.cursor.site)
+            self.redoLayout(self.topLevelParent(self.cursor.icon))
 
     def _backspaceCb(self, _evt=None):
         if self.entryIcon is None:
@@ -847,9 +855,14 @@ class Window:
             ic.selected = True
             ic.draw(clip=resultRect)
         self.refresh(resultRect)
-        # Remember where the last result was drawn, so it can be erased if it is still
-        # there the next time the same icon is executed
-        self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
+        # For expressions that yield "None", show it, then automatically erase
+        if result is None:
+            time.sleep(0.4)
+            self.removeIcons([resultIcon])
+        else:
+            # Remember where the last result was drawn, so it can be erased if it is still
+            # there the next time the same icon is executed
+            self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
 
     def _handleExecErr(self, excep):
         iconRect = excep.icon.hierRect()
@@ -1103,6 +1116,16 @@ class Window:
             self.cursor.setToIconSite(ic.argIcon, ("attrOut", 0))
 
         return ic.argIcon
+
+    def redoLayout(self, topIcon):
+        """Recompute layout for a top-level icon and redraw all affected icons"""
+        redrawRegion = AccumRects(topIcon.hierRect())
+        topIcon.layout()
+        redrawRegion.add(topIcon.hierRect())
+        self.clearBgRect(redrawRegion.get())
+        for ic in self.findIconsInRegion(redrawRegion.get()):
+            ic.draw(clip=redrawRegion.get())
+        self.refresh(redrawRegion.get())
 
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""
