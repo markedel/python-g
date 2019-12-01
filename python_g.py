@@ -576,6 +576,10 @@ class Window:
 
     def _arrowCb(self, evt):
         if self.cursor.type is None:
+            selected = self.selectedIcons()
+            if selected:
+                self.unselectAll()
+                self.cursor.arrowKeyWithSelection(evt.keysym, selected)
             return
         self.unselectAll()
         self.cursor.processArrowKey(evt.keysym)

@@ -830,7 +830,7 @@ class ListIcon(ListTypeIcon):
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
-        name, location, children = clipData
+        location, children = clipData
         ic = ListIcon(window, (addPoints(location, offset)))
         ic.argIcons = clipboardDataToIcons(children, window, offset)
         return ic
@@ -870,7 +870,7 @@ class TupleIcon(ListTypeIcon):
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
-        name, location, children = clipData
+        location, children = clipData
         ic = TupleIcon(window, (addPoints(location, offset)))
         ic.argIcons = clipboardDataToIcons(children, window, offset)
         return ic
