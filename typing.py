@@ -1041,6 +1041,37 @@ class Cursor:
         elif self.type == "icon":
             self._processIconArrowKey(direction)
 
+    def arrowKeyWithSelection(self, direction, selectedIcons):
+        """Process arrow key pressed with no cursor but selected icons.  Icons have been
+        unselected before this is called, but passed in via the selectedIcons parameter"""
+        cursorSites = []
+        for ic in selectedIcons:
+            snapLists = ic.snapLists(atTop=True)
+            for ic, (x, y), idx in snapLists.get("input", []):
+                cursorSites.append((x, y, ic, ("input", idx)))
+            for ic, (x, y), idx in snapLists.get("attrOut", []):
+                cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, ("attrOut", idx)))
+            outSites = snapLists.get("output", [])
+            if len(outSites) > 0:
+                cursorSites.append((*outSites[0][1], ic, ("output", 0)))
+        if len(cursorSites) == 0:
+            return  # It is possible to have icons with no viable cursor sites
+        if direction == "Left":
+            cursorSites.sort(key=itemgetter(0))
+        elif direction == "Right":
+            cursorSites.sort(key=itemgetter(0), reverse=True)
+        elif direction == "Up":
+            cursorSites.sort(key=itemgetter(1))
+        elif direction == "Down":
+            cursorSites.sort(key=itemgetter(1), reverse=True)
+        x, y, ic, site = cursorSites[0]
+        if site[0] == "output":
+            parent = self.window.parentOf(ic)
+            if parent is not None:
+                self.setToIconSite(parent, parent.siteOf(ic))
+                return
+        self.setToIconSite(ic, site)
+
     def _processIconArrowKey(self, direction):
         """For cursor on icon site, set new site based on arrow direction"""
         # Build a list of possible destination cursor positions, normalizing attribute
