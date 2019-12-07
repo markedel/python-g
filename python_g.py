@@ -207,7 +207,7 @@ class Window:
         # If there's a cursor displayed somewhere, use it
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
-            oldLoc = self.entryIcon.rect
+            oldLoc = self.entryIcon.hierRect()
             self.entryIcon.addText(char)
             self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             return
@@ -461,7 +461,7 @@ class Window:
                 text = self.top.clipboard_get(type="STRING")
             except:
                 return
-            oldLoc = self.entryIcon.rect
+            oldLoc = self.entryIcon.hierRect()
             self.entryIcon.addText(text)
             self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             return
@@ -584,12 +584,14 @@ class Window:
         self.unselectAll()
         self.cursor.processArrowKey(evt.keysym)
 
-    def _cancelCb(self, _evt=None):
+    def _cancelCb(self, evt=None):
         if self.entryIcon is not None:
-            self.removeIcons([self.entryIcon])
-            self.entryIcon = None
+            oldLoc = self.entryIcon.hierRect()
+            self.entryIcon.remove()
+            self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
+        else:
+            self.cursor.removeCursor()
         self._cancelDrag()
-        self.cursor.removeCursor()
 
     def _enterCb(self, evt=None):
         """Execute the top level icon at the entry or icon cursor"""

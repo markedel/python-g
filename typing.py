@@ -225,6 +225,35 @@ class EntryIcon(icon.Icon):
         self.cursorPos = newCursorPos
         self.window.cursor.draw()
 
+    def remove(self):
+        """Get rid of entry icon, and restore pending arguments/attributes if possible"""
+        if self.attachedIcon:
+            if self.pendingArgument and self.attachedSite[0] == "input":
+                self.attachedIcon.replaceChild(self.pendingArgument, self.attachedSite)
+            elif self.pendingAttribute and self.attachedSite[0] == "attrOut":
+                self.attachedIcon.replaceChild(self.pendingAttribute, self.attachedSite)
+            else:
+                self.attachedIcon.replaceChild(None, self.attachedSite)
+            self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+        else:  # Entry icon is not attached to icon (independent in window)
+            if self in self.window.topIcons:
+                self.window.topIcons.remove(self)
+            if self.pendingArgument:
+                self.pendingArgument.rect = icon.moveRect(self.pendingArgument.rect,
+                 (self.rect[0], self.rect[1]))
+                self.window.topIcons.append(self.pendingArgument)
+                self.pendingArgument.layoutDirty = True
+                self.window.cursor.setToIconSite(self.pendingArgument, ("output", 0))
+            elif self.pendingAttribute:
+                self.pendingAttribute.rect = icon.moveRect(self.pendingAttribute.rect,
+                 (self.rect[0], self.rect[1]))
+                self.window.topIcons.append(self.pendingAttribute)
+                self.pendingAttribute.layoutDirty = True
+                self.window.cursor.setToIconSite(self.pendingAttribute, ("attrIn", 0))
+            else:
+                self.window.cursor.setToWindowPos((self.rect[0], self.rect[1]))
+        self.window.entryIcon = None
+
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
         parseResult = parseEntryText(newText, self.attachedToAttribute())
