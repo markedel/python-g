@@ -454,7 +454,7 @@ class StringIcon(TextIcon):
         return StringIcon(text, window, (addPoints(location, locationOffset)))
 
 class UnaryOpIcon(Icon):
-    def __init__(self, operator, window=None, location=None):
+    def __init__(self, operator, window, location=None):
         Icon.__init__(self, window)
         self.operator = operator
         self.precedence = unaryOpPrecedence[operator]
@@ -587,7 +587,7 @@ class UnaryOpIcon(Icon):
         return result
 
 class ListTypeIcon(Icon):
-    def __init__(self, leftText, rightText, window=None, location=None):
+    def __init__(self, leftText, rightText, window, location=None):
         Icon.__init__(self, window)
         self.leftText = leftText
         self.rightText = rightText
@@ -786,7 +786,7 @@ class ListTypeIcon(Icon):
         return self.leftText + argText + self.rightText
 
 class FnIcon(ListTypeIcon):
-    def __init__(self, name, window=None, location=None):
+    def __init__(self, name, window, location=None):
         self.name = name
         ListTypeIcon.__init__(self, name + '(', ')', window, location)
 
@@ -804,7 +804,7 @@ class FnIcon(ListTypeIcon):
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (self.name, addPoints(location, offset),
-         [c.clipboardRepr(offset) for c in self.argIcons]))
+         [None if c is None else c.clipboardRepr(offset) for c in self.argIcons]))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
@@ -814,7 +814,7 @@ class FnIcon(ListTypeIcon):
         return ic
 
 class ListIcon(ListTypeIcon):
-    def __init__(self, window=None, location=None):
+    def __init__(self, window, location=None):
         ListTypeIcon.__init__(self, '[', ']', window, location)
 
     def execute(self):
@@ -826,7 +826,7 @@ class ListIcon(ListTypeIcon):
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (addPoints(location, offset),
-         [c.clipboardRepr(offset) for c in self.argIcons]))
+         [None if c is None else c.clipboardRepr(offset) for c in self.argIcons]))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
@@ -836,7 +836,7 @@ class ListIcon(ListTypeIcon):
         return ic
 
 class TupleIcon(ListTypeIcon):
-    def __init__(self, window=None, location=None):
+    def __init__(self, window, location=None):
         ListTypeIcon.__init__(self, '(', ')', window, location)
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
@@ -848,10 +848,10 @@ class TupleIcon(ListTypeIcon):
             outSiteX, outSiteY = self.outSiteOffset
             y = outSiteY
             x = outSiteX + 5  # This is font-dependent and could cause trouble later
-            draw.line((x, y, x+2, y), BLACK)
+            draw.line((x, y, x+2, y), GRAY_75)
             # End paren
             x = self.attrSiteOffset[0] - 3
-            draw.line((x, y, x-2, y), BLACK)
+            draw.line((x, y, x-2, y), GRAY_75)
             ListTypeIcon.draw(self, image, location, clip, colorErr)
 
     def execute(self):
@@ -866,7 +866,7 @@ class TupleIcon(ListTypeIcon):
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (addPoints(location, offset),
-         [c.clipboardRepr(offset) for c in self.argIcons]))
+         [None if c is None else c.clipboardRepr(offset) for c in self.argIcons]))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
@@ -876,7 +876,7 @@ class TupleIcon(ListTypeIcon):
         return ic
 
 class BinOpIcon(Icon):
-    def __init__(self, operator, window=None, location=None):
+    def __init__(self, operator, window, location=None):
         Icon.__init__(self, window)
         self.operator = operator
         self.precedence = binOpPrecedence[operator]
@@ -1226,7 +1226,7 @@ class BinOpIcon(Icon):
         return result
 
 class AssignIcon(BinOpIcon):
-    def __init__(self, window=None, location=None):
+    def __init__(self, window, location=None):
         BinOpIcon.__init__(self, "=", window, location)
 
     def execute(self):
@@ -1252,7 +1252,7 @@ class AssignIcon(BinOpIcon):
             raise IconExecException(self.leftArg, "Not a valid assignment target")
 
 class DivideIcon(Icon):
-    def __init__(self, window=None, location=None, floorDiv=False):
+    def __init__(self, window, location=None, floorDiv=False):
         Icon.__init__(self, window)
         self.precedence = 11
         self.topArg = None
@@ -1503,7 +1503,7 @@ class DivideIcon(Icon):
         return result
 
 class ImageIcon(Icon):
-    def __init__(self, image, window=None, location=None):
+    def __init__(self, image, window, location=None):
         Icon.__init__(self, window)
         self.cachedImage = self.image = image.convert('RGBA')
         if location is None:

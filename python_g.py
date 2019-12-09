@@ -219,7 +219,7 @@ class Window:
              location=self.cursor.pos)
             self.entryIcon.addText(char)
             if self.entryIcon is not None:
-                self.topIcons.append(self.entryIcon)
+                self.addTop(self.entryIcon)
                 self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon()
             return
@@ -229,9 +229,13 @@ class Window:
             # A single icon was selected.  Replace it and its children
             replaceIcon = selectedIcons[0]
             iconParent = self.parentOf(replaceIcon)
-            self.entryIcon = typing.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
-             window=self)
-            iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
+            if iconParent is None:
+                self.entryIcon = typing.EntryIcon(None, None, window=self)
+                self.replaceTop(replaceIcon, self.entryIcon)
+            else:
+                self.entryIcon = typing.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
+                 window=self)
+                iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
             self.cursor.setToEntryIcon()
             self.entryIcon.addText(char)
             self._redisplayChangedEntryIcon()
@@ -245,9 +249,9 @@ class Window:
             self.entryIcon = typing.EntryIcon(None, None, window=self,
              location=self.cursor.icon.rect[:2])
             self.entryIcon.replaceChild(self.cursor.icon, ("input", 0))
-            self.topIcons.remove(self.cursor.icon)
+            self.removeTop(self.cursor.icon)
             self.cursor.setToEntryIcon()
-            self.topIcons.append(self.entryIcon)
+            self.addTop(self.entryIcon)
         else:
             self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
              window=self)
@@ -547,7 +551,7 @@ class Window:
                     ic.rect = offsetRect(ic.rect, x, y)
             redrawRect = AccumRects()
             for pastedTopIcon in pastedIcons:
-                self.topIcons.append(pastedTopIcon)
+                self.addTop(pastedTopIcon)
                 for ic in pastedTopIcon.traverse():
                     ic.draw()  # No need to clip or erase, all drawn on top
                     redrawRect.add(ic.rect)
@@ -719,11 +723,11 @@ class Window:
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
             redrawRegion.add(ic.rect)
-        self.topIcons += topDraggedIcons
+        self.addTop(topDraggedIcons)
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             parentIcon, childIcon, site = self.snapped
-            self.topIcons.remove(childIcon)  # Added above in case there were others
+            self.removeTop(childIcon)  # Added above in case there were others
             toDelete = parentIcon.childAt(site)
             redrawRegion.add(parentIcon.hierRect())
             if toDelete is not None:
@@ -854,7 +858,7 @@ class Window:
         resultX = outSiteX - RESULT_X_OFFSET - icon.rectWidth(resultRect)
         resultY = outSiteY - resultOutSiteY - resultIcon.rect[1]
         resultIcon.rect = offsetRect(resultIcon.rect, resultX, resultY)
-        self.topIcons.append(resultIcon)
+        self.addTop(resultIcon)
         resultIcon.layout()
         resultRect = resultIcon.hierRect()
         for ic in resultIcon.traverse():
@@ -994,11 +998,8 @@ class Window:
             ic.replaceChild(None, ic.siteOf(child))
         # Update the window's top-icon list to remove deleted icons and add those that
         # have become top icons via deletion of their parents (bring those to the front)
-        newTopIcons = []
-        for ic in self.topIcons:
-            if ic not in deletedDict:
-                newTopIcons.append(ic)
-        self.topIcons = newTopIcons + addTopIcons
+        self.removeTop([ic for ic in self.topIcons if ic in deletedDict])
+        self.addTop(addTopIcons)
         # Redo layouts of icons affected by detachment of children
         for ic in self.topIcons:
             if ic.needsLayout():
@@ -1063,6 +1064,32 @@ class Window:
             child = parent
         return child
 
+    def removeTop(self, ic):
+        """Remove top-level icon or icons (without re-layout or re-draw)."""
+        if hasattr(ic, '__iter__'):
+            for i in ic:
+                self.topIcons.remove(i)
+        else:
+            self.topIcons.remove(ic)
+
+    def replaceTop(self, old, new):
+        """Replace an existing top-level icon with a new icon in the same location
+        (without re-layout or re-draw)"""
+        self.topIcons.remove(old)
+        self.topIcons.append(new)
+        new.rect = icon.moveRect(new.rect, (old.rect[0], old.rect[1]))
+
+    def addTop(self, ic, x=None, y=None):
+        """Place an icon or icons on the window at the top level (without re-layout or
+        re-draw).  If ic is a list, x, y will not be applied."""
+        if hasattr(ic, '__iter__'):
+            for i in ic:
+                self.topIcons.append(i)
+        else:
+            self.topIcons.append(ic)
+            if x is not None and y is not None:
+                ic.rect = icon.moveRect(ic.rect, (x, y))
+
     def siteSelected(self, evt):
         """Look for icon sites near button press, if found return icon and site"""
         left = evt.x - SITE_SELECT_DIST
@@ -1105,8 +1132,9 @@ class Window:
             return ic
         # Redundant parens found: remove them
         if parentIcon is None:
-            self.topIcons.remove(ic)
-            self.topIcons.append(ic.argIcon)
+            # Not sure this ever happens: arithmetic ops require parent to force parens,
+            # and tuple conversion removes them
+            self.replaceTop(ic, ic.argIcon)
         else:
             parentIcon.replaceChild(ic.argIcon, parentSite)
             ic.argIcon.layoutDirty = True

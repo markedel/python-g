@@ -237,17 +237,13 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
         else:  # Entry icon is not attached to icon (independent in window)
             if self in self.window.topIcons:
-                self.window.topIcons.remove(self)
+                self.window.removeTop(self)
             if self.pendingArgument:
-                self.pendingArgument.rect = icon.moveRect(self.pendingArgument.rect,
-                 (self.rect[0], self.rect[1]))
-                self.window.topIcons.append(self.pendingArgument)
+                self.window.addTop(self.pendingArgument, self.rect[0], self.rect[1])
                 self.pendingArgument.layoutDirty = True
                 self.window.cursor.setToIconSite(self.pendingArgument, ("output", 0))
             elif self.pendingAttribute:
-                self.pendingAttribute.rect = icon.moveRect(self.pendingAttribute.rect,
-                 (self.rect[0], self.rect[1]))
-                self.window.topIcons.append(self.pendingAttribute)
+                self.window.addTop(self.pendingAttribute, self.rect[0], self.rect[1])
                 self.pendingAttribute.layoutDirty = True
                 self.window.cursor.setToIconSite(self.pendingAttribute, ("attrIn", 0))
             else:
@@ -256,7 +252,7 @@ class EntryIcon(icon.Icon):
 
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
-        parseResult = parseEntryText(newText, self.attachedToAttribute())
+        parseResult = parseEntryText(newText, self.attachedToAttribute(), self.window)
         # print('parse result', parseResult)
         if parseResult == "reject":
             beep()
@@ -316,10 +312,7 @@ class EntryIcon(icon.Icon):
                 parent = self.window.parentOf(matchingParen)
                 tupleIcon = icon.TupleIcon(window=self.window)
                 if parent is None:
-                    self.window.topIcons.remove(matchingParen)
-                    self.window.topIcons.append(tupleIcon)
-                    tupleIcon.rect = python_g.offsetRect(tupleIcon.rect,
-                     matchingParen.rect[0], matchingParen.rect[1])
+                    self.window.replaceTop(matchingParen, tupleIcon)
                     tupleIcon.layoutDirty = True
                 else:
                     parent.replaceChild(tupleIcon, parent.siteOf(matchingParen))
@@ -348,13 +341,11 @@ class EntryIcon(icon.Icon):
         ic, remainingText = parseResult
         if remainingText is None or remainingText in emptyDelimiters:
             remainingText = ""
-        ic.window = self.window
         snapLists = ic.snapLists()
         if self.attachedIcon is None:
-            ic.rect = python_g.offsetRect(ic.rect, self.rect[0], self.rect[1])
-            self.window.topIcons.append(ic)
+            self.window.addTop(ic, self.rect[0], self.rect[1])
             if self in self.window.topIcons:
-                self.window.topIcons.remove(self)
+                self.window.removeTop(self)
             ic.layoutDirty = True
             if "input" in snapLists:
                 cursor.setToIconSite(ic, ("input", 0))
@@ -460,10 +451,8 @@ class EntryIcon(icon.Icon):
             self.pendingArgument = None
             self.window.cursor.setToIconSite(tupleIcon, ("input", 0))
             if self in self.window.topIcons:
-                self.window.topIcons.remove(self)
-            self.window.topIcons.append(tupleIcon)
-            tupleIcon.rect = python_g.offsetRect(tupleIcon.rect, self.rect[0],
-             self.rect[1])
+                self.window.removeTop(self)
+            self.window.addTop(tupleIcon,self.rect[0], self.rect[1])
             return True
         if onIcon.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon) and \
          site[0] == "input":
@@ -493,10 +482,7 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(tupleIcon, ("input", 0))
             parent = self.window.parentOf(onIcon)
             if parent is None:
-                self.window.topIcons.remove(onIcon)
-                self.window.topIcons.append(tupleIcon)
-                tupleIcon.rect = python_g.offsetRect(tupleIcon.rect, onIcon.rect[0],
-                 onIcon.rect[1])
+                self.window.replaceTop(onIcon, tupleIcon)
             else:
                 parent.replaceChild(tupleIcon, parent.siteOf(onIcon))
             return True
@@ -510,7 +496,7 @@ class EntryIcon(icon.Icon):
             leftArg = None
             rightArg = onIcon
             if onIcon.leftArg is self:
-                onIcon.leftArg = self.pendingArgument
+                onIcon.replaceChild(self.pendingArgument, ("input", 0))
                 self.pendingArgument = None
                 self.attachedIcon = None
         elif onIcon.__class__ is icon.BinOpIcon and site == ("input", 1):
@@ -520,7 +506,7 @@ class EntryIcon(icon.Icon):
                 rightArg = self.pendingArgument
                 self.pendingArgument = None
                 self.attachedIcon = None
-            onIcon.rightArg = None
+            onIcon.replaceChild(None, ("input", 1))
             self.window.cursor.setToIconSite(onIcon, ("input", 1))
             cursorPlaced = True
         else:
@@ -531,7 +517,7 @@ class EntryIcon(icon.Icon):
             if parent.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon):
                 onIcon.layoutDirty = True
                 childSite = parent.siteOf(child)
-                parent.replaceChild(leftArg, childSite)
+                parent.replaceChild(leftArg, childSite, leavePlace=True)
                 siteType, siteIdx = childSite
                 insertSite = (siteType, siteIdx + 1)
                 parent.insertChildren([rightArg], insertSite)
@@ -547,10 +533,7 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToIconSite(tupleIcon, cursorSite)
                 parentParent = self.window.parentOf(parent)
                 if parentParent is None:
-                    self.window.topIcons.remove(parent)
-                    self.window.topIcons.append(tupleIcon)
-                    tupleIcon.rect = python_g.offsetRect(tupleIcon.rect, parent.rect[0],
-                     parent.rect[1])
+                    self.window.replaceTop(parent, tupleIcon)
                 else:
                     parentParent.replaceChild(tupleIcon, parentParent.siteOf(parent))
                 return True
@@ -569,13 +552,13 @@ class EntryIcon(icon.Icon):
             # Parent is a binary op icon without parens, and site is one of the two
             # input sites
             if parent.leftArg is child:  # Insertion was on left side of operator
-                parent.leftArg = rightArg
+                parent.replaceChild(rightArg, ("input", 0))
                 if parent.leftArg is None:
                     self.window.cursor.setToIconSite(parent, ("input", 0))
                     cursorPlaced = True
                 rightArg = parent
             elif parent.rightArg is child:   # Insertion was on right side of operator
-                parent.rightArg = leftArg
+                parent.replaceChild(leftArg, ("input", 1))
                 if parent.rightArg is None:
                     self.window.cursor.setToIconSite(parent, ("input", 1))
                     cursorPlaced = True
@@ -589,10 +572,7 @@ class EntryIcon(icon.Icon):
         tupleIcon.insertChildren([leftArg, rightArg], ("input", 0))
         if not cursorPlaced:
             self.window.cursor.setToIconSite(tupleIcon, ("input", 1))  # May want to check and put in whichever is empty
-        self.window.topIcons.remove(child)
-        self.window.topIcons.append(tupleIcon)
-        tupleIcon.rect = python_g.offsetRect(tupleIcon.rect, child.rect[0],
-         child.rect[1])
+        self.window.replaceTop(child, tupleIcon)
         return True
 
     def findOpenParen(self, fromIcon):
@@ -610,9 +590,7 @@ class EntryIcon(icon.Icon):
         fnIcon = icon.FnIcon(ic.name, window=self.window)
         fnIcon.layoutDirty = True
         if parent is None:
-            self.window.topIcons.remove(ic)
-            self.window.topIcons.append(fnIcon)
-            fnIcon.rect = python_g.offsetRect(fnIcon.rect, ic.rect[0], ic.rect[1])
+            self.window.replaceTop(ic, fnIcon)
         else:
             parent.replaceChild(fnIcon, parent.siteOf(ic))
         self.window.cursor.setToIconSite(fnIcon, ("input", 0))
@@ -643,16 +621,16 @@ class EntryIcon(icon.Icon):
                 op.replaceChild(newOpIcon, op.siteOf(childOp))
                 break
             if op.__class__ is icon.UnaryOpIcon:
-                op.argIcon = leftArg
+                op.replaceChild(leftArg, ("input", 0))
                 leftArg = op
             else:  # BinaryOp
                 if op.leftArg is childOp:  # Insertion was on left side of operation
-                    op.leftArg = rightArg
+                    op.replaceChild(rightArg, ("input", 0))
                     if op.leftArg is None:
                         self.window.cursor.setToIconSite(op, ("input", 0))
                     rightArg = op
                 else:                      # Insertion was on right side of operation
-                    op.rightArg = leftArg
+                    op.replaceChild(leftArg, ("input", 1))
                     leftArg = op
                 if op.hasParens:
                     # If the op has parens and the new op has been inserted within them,
@@ -660,10 +638,7 @@ class EntryIcon(icon.Icon):
                     stopAtParens = True
             childOp = op
         else:  # Reached the top level without finding a parent for newOpIcon
-            self.window.topIcons.remove(childOp)
-            self.window.topIcons.append(newOpIcon)
-            newOpIcon.rect = python_g.offsetRect(newOpIcon.rect, leftArg.rect[0],
-                argIcon.rect[1])
+            self.window.replaceTop(childOp, newOpIcon)
         if rightArg is None:
             self.window.cursor.setToIconSite(newOpIcon, ("input", 1))
         newOpIcon.layoutDirty = True
@@ -681,10 +656,7 @@ class EntryIcon(icon.Icon):
             return False
         self.attachedIcon.replaceChild(None, self.attachedSite)
         assignIcon.replaceChild(self.attachedIcon, ("input", 0))
-        self.window.topIcons.remove(self.attachedIcon)
-        self.window.topIcons.append(assignIcon)
-        assignIcon.rect = python_g.offsetRect(assignIcon.rect, self.attachedIcon.rect[0],
-            self.attachedIcon.rect[1])
+        self.window.replaceTop(self.attachedIcon, assignIcon)
         self.window.cursor.setToIconSite(assignIcon, ("input", 1))
         return True
 
@@ -1210,7 +1182,7 @@ class Cursor:
         """Returns True if the cursor is already at a given icon site"""
         return self.type == "icon" and self.icon == ic and self.site == site
 
-def parseEntryText(text, forAttrSite):
+def parseEntryText(text, forAttrSite, window):
     if len(text) == 0:
         return "accept"
     if forAttrSite:
@@ -1219,15 +1191,13 @@ def parseEntryText(text, forAttrSite):
         if text in ("i", "a", "o", "an"):
             return "accept"  # Legal precursor characters to binary keyword operation
         if text in ("and", "is", "in", "or"):
-            return icon.BinOpIcon(text), None # Binary keyword operation
+            return icon.BinOpIcon(text, window), None # Binary keyword operation
         if text in ("*", "/", "@", "<", ">", "=", "!"):
             return "accept"  # Legal precursor characters to binary operation
         if text in binaryOperators:
-            if text == '/':
-                return icon.DivideIcon(floorDiv=False), None
-            elif text == '//':
-                return icon.DivideIcon(floorDiv=True), None
-            return icon.BinOpIcon(text), None
+            if text == '//':
+                return icon.DivideIcon(window, floorDiv=True), None
+            return icon.BinOpIcon(text, window), None
         if text == '(':
             return "makeFunction"  # Make a function from the attached icon
         if text == ')':
@@ -1241,24 +1211,24 @@ def parseEntryText(text, forAttrSite):
         if op in binaryOperators and opDelimPattern.match(delim):
             # Valid binary operator followed by allowable operand character
             if op == '/':
-                return icon.DivideIcon(floorDiv=False), delim
+                return icon.DivideIcon(window, floorDiv=False), delim
             elif op == '//':
-                return icon.DivideIcon(floorDiv=True), delim
-            return icon.BinOpIcon(op), delim
+                return icon.DivideIcon(window, floorDiv=True), delim
+            return icon.BinOpIcon(op, window), delim
         if op == '=':
-            return icon.AssignIcon(), delim
+            return icon.AssignIcon(window), delim
         return "reject"
     else:
         # input site
         if text in ('+', '-', '~', "not"):
             # Unary operator
-            return icon.UnaryOpIcon(text), None
+            return icon.UnaryOpIcon(text, window), None
         if text == '(':
-            return CursorParenIcon(), None
+            return CursorParenIcon(window), None
         if text == ')':
             return "endParen"
         if text == '[':
-            return icon.ListIcon(), None
+            return icon.ListIcon(window), None
         if text == ']':
             return "endBracket"
         if text == ',':
@@ -1268,23 +1238,23 @@ def parseEntryText(text, forAttrSite):
         delim = text[-1]
         text = text[:-1]
         if text in ('+', '-', '~', "not") and opDelimPattern.match(delim):
-            return icon.UnaryOpIcon(text), delim
+            return icon.UnaryOpIcon(text, window), delim
         if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
             return "reject"  # Precursor characters do not form valid identifier or number
         if len(text) == 0 or delim not in delimitChars:
             return "reject"  # No legal text or not followed by a legal delimiter
         # All but the last character is ok and the last character is a valid delimiter
         if text in ('False', 'None', 'True'):
-            return icon.IdentifierIcon(text), delim
+            return icon.IdentifierIcon(text, window), delim
         if text in keywords:
             return "reject"
         exprAst = compile_eval.parseExprToAst(text)
         if exprAst is None:
             return "reject"
         if exprAst.__class__ == ast.Name:
-            return icon.IdentifierIcon(exprAst.id), delim
+            return icon.IdentifierIcon(exprAst.id, window), delim
         if exprAst.__class__ == ast.Num:
-            return icon.NumericIcon(exprAst.n), delim
+            return icon.NumericIcon(exprAst.n, window), delim
         return "reject"
 
 def tkCharFromEvt(evt):
