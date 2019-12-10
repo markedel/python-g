@@ -693,7 +693,7 @@ class EntryIcon(icon.Icon):
             x, y = self.rect[:2]
         else:
             x, y = location
-        self._doLayout(x, y+self.outSiteOffset[1], self._calcLayout())
+        self.doLayout(x, y+self.outSiteOffset[1], self.calcLayout())
 
     def click(self, evt):
         self.window.cursor.erase()
@@ -708,7 +708,7 @@ class EntryIcon(icon.Icon):
         right -= 2
         return left < x < right and top < y < bottom
 
-    def _doLayout(self, siteX, siteY, layout, parentPrecedence=None, assocOk=False):
+    def doLayout(self, siteX, siteY, layout, parentPrecedence=None, assocOk=False):
         width = self._width() + icon.outSiteImage.width - 1
         if self.attachedSite and self.attachedSite[0] == "attrOut":
             outSiteY = siteY - icon.ATTR_SITE_OFFSET
@@ -721,13 +721,13 @@ class EntryIcon(icon.Icon):
         top = outSiteY - self.height//2
         self.rect = (outSiteX, top, outSiteX + width, top + self.height)
         if self.pendingArgument is not None:
-            self.pendingArgument._doLayout(outSiteX + width - 4,
+            self.pendingArgument.doLayout(outSiteX + width - 4,
              outSiteY, layout.subLayouts[0])
         elif self.pendingAttribute is not None:
-            self.pendingAttribute._doLayout(outSiteX + width - 4,
+            self.pendingAttribute.doLayout(outSiteX + width - 4,
              outSiteY + icon.ATTR_SITE_OFFSET, layout.subLayouts[0])
 
-    def _calcLayout(self, parentPrecedence=None, assocOk=False):
+    def calcLayout(self, parentPrecedence=None, assocOk=False):
         if self.attachedToAttribute():
             width = self._width() - 1 + RIGHT_LAYOUT_MARGIN
         else:
@@ -738,12 +738,12 @@ class EntryIcon(icon.Icon):
         if self.pendingArgument is None and self.pendingAttribute is None:
             return icon.Layout(self, width, self.height, siteOffset, [])
         if self.pendingArgument:
-            pendingLayout = self.pendingArgument._calcLayout()
+            pendingLayout = self.pendingArgument.calcLayout()
             heightAbove = max(siteOffset, pendingLayout.siteOffset)
             pendingHeightBelow = pendingLayout.height - pendingLayout.siteOffset
             heightBelow = max(self.height - siteOffset, pendingHeightBelow)
         else:
-            pendingLayout = self.pendingAttribute._calcLayout()
+            pendingLayout = self.pendingAttribute.calcLayout()
             heightAbove = max(siteOffset, pendingLayout.siteOffset - icon.ATTR_SITE_OFFSET)
             pendingHeightBelow = icon.ATTR_SITE_OFFSET + pendingLayout.height - pendingLayout.siteOffset
             heightBelow = max(self.height - siteOffset, pendingHeightBelow)
@@ -863,9 +863,9 @@ class CursorParenIcon(icon.Icon):
             x, y = self.rect[:2]
         else:
             x, y = location
-        self._doLayout(x, y + self.outSiteOffset[1], self._calcLayout())
+        self.doLayout(x, y + self.outSiteOffset[1], self.calcLayout())
 
-    def _doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None,
+    def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None,
             assocOk=False):
         bodyWidth, height = self.bodySize
         argLayout, attrLayout = layout.subLayouts
@@ -881,16 +881,16 @@ class CursorParenIcon(icon.Icon):
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         self.cachedImage = None
         if self.argIcon:
-            self.argIcon._doLayout(outSiteX + bodyWidth - 1, outSiteY, argLayout)
+            self.argIcon.doLayout(outSiteX + bodyWidth - 1, outSiteY, argLayout)
         if self.closed:
             self.attrSiteOffset = (width-2, self.outSiteOffset[1] + icon.ATTR_SITE_OFFSET)
         else:
             self.attrSiteOffset = None
         if self.closed and self.attrIcon:
-            self.attrIcon._doLayout(outSiteX + width-2, outSiteY + icon.ATTR_SITE_OFFSET,
+            self.attrIcon.doLayout(outSiteX + width - 2, outSiteY + icon.ATTR_SITE_OFFSET,
              attrLayout)
 
-    def _calcLayout(self, parentPrecedence=None, assocOk=False):
+    def calcLayout(self, parentPrecedence=None, assocOk=False):
         singleParenWidth, height = self.bodySize
         siteYOff = height // 2
         argLayouts = [None, None]
@@ -898,7 +898,7 @@ class CursorParenIcon(icon.Icon):
             width = singleParenWidth + icon.EMPTY_ARG_WIDTH
             siteOffset = siteYOff
         else:
-            argLayout = self.argIcon._calcLayout()
+            argLayout = self.argIcon.calcLayout()
             heightAbove = max(siteYOff, argLayout.siteOffset)
             argHeightBelow = argLayout.height - argLayout.siteOffset
             myHeightBelow = height - siteYOff
@@ -910,7 +910,7 @@ class CursorParenIcon(icon.Icon):
         if self.closed:
             width += singleParenWidth
         if self.attrIcon:
-            attrLayout = self.attrIcon._calcLayout()
+            attrLayout = self.attrIcon.calcLayout()
             heightAbove = max(siteYOff, attrLayout.siteOffset - icon.ATTR_SITE_OFFSET)
             siteYOff = heightAbove
             attrHeightBelow = icon.ATTR_SITE_OFFSET + attrLayout.height - \

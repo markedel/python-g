@@ -1133,7 +1133,7 @@ class Window:
         # Redundant parens found: remove them
         if parentIcon is None:
             # Not sure this ever happens: arithmetic ops require parent to force parens,
-            # and tuple conversion removes them
+            # and tuple conversion removes the redundant paren icon, itself.
             self.replaceTop(ic, ic.argIcon)
         else:
             parentIcon.replaceChild(ic.argIcon, parentSite)
