@@ -215,12 +215,13 @@ class Window:
             self._insertEntryIconAtCursor(char)
             return
         elif self.cursor.type == "window":
-            self.entryIcon = typing.EntryIcon(None, None, window=self,
-             location=self.cursor.pos)
+            x, y = self.cursor.pos
+            self.entryIcon = typing.EntryIcon(None, None, window=self)
+            y -= self.entryIcon.sites.output.yOffset
+            self.entryIcon.rect = offsetRect(self.entryIcon.rect, x, y)
+            self.addTop(self.entryIcon)
+            self.cursor.setToEntryIcon()
             self.entryIcon.addText(char)
-            if self.entryIcon is not None:
-                self.addTop(self.entryIcon)
-                self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon()
             return
         # If there's an appropriate selection, use that
@@ -248,16 +249,16 @@ class Window:
         if self.cursor.site[0] == "output":
             self.entryIcon = typing.EntryIcon(None, None, window=self,
              location=self.cursor.icon.rect[:2])
-            self.entryIcon.replaceChild(self.cursor.icon, ("input", 0))
+            self.entryIcon.setPendingArg(self.cursor.icon)
             self.removeTop(self.cursor.icon)
             self.cursor.setToEntryIcon()
             self.addTop(self.entryIcon)
         else:
             self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
              window=self)
-            pendingArgs = self.cursor.icon.childAt(self.cursor.site)
+            pendingArg = self.cursor.icon.childAt(self.cursor.site)
             self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
-            self.entryIcon.replaceChild(pendingArgs, (self.cursor.site[0], 0))
+            self.entryIcon.setPendingArg(pendingArg)
             self.cursor.setToEntryIcon()
         self.entryIcon.addText(initialChar)
         self._redisplayChangedEntryIcon()
@@ -498,7 +499,7 @@ class Window:
             return  # Nothing usable on the clipboard
         # There was something clipboard that could be converted to icon form.  Figure out
         # where to put it
-        iconOutputSite = pastedIcons[0].outSiteOffset
+        iconOutputSite = pastedIcons[0].posOfSite(("output", 0))
         replaceParent = None
         replaceSite = None
         pastePos = None
@@ -612,7 +613,7 @@ class Window:
             if self.entryIcon is not None:
                 if len(self.entryIcon.text) == 0 and \
                  self.entryIcon.pendingAttribute is None and \
-                 self.entryIcon.pendingArgument is None:
+                 self.entryIcon.pendingArg() is None:
                     self.cursor.setToIconSite(self.entryIcon.attachedIcon, self.entryIcon.attachedSite)
                     self.removeIcons([self.entryIcon])
                     self.entryIcon = None
@@ -666,7 +667,7 @@ class Window:
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
                 isTopIcon = winIcon is topIcon
-                snapLists = winIcon.snapLists(atTop=isTopIcon)
+                snapLists = winIcon.snapLists()
                 for ic, pos, idx in snapLists.get("input", []):
                     stationaryInputs.append((pos, ic, ("input", idx)))
                 for ic, pos, idx in snapLists.get("insertInput", []):
@@ -735,7 +736,7 @@ class Window:
             if site[0] in ("input", "attrOut"):
                 parentIcon.replaceChild(childIcon, site)
             elif site[0] == "insertInput":
-                parentIcon.insertChildren([childIcon], site)
+                parentIcon.insertChild(childIcon, site)
             for ic in self.topIcons:
                 self.filterRedundantParens(ic)
             # Redo layouts for all affected (all the way to the top)
@@ -1034,7 +1035,21 @@ class Window:
             return ic
         return parents[0]
 
-    def parentage(self, child, fromIcon=None):
+    def parentage(self, child):
+        oldResult = self.parentageOld(child)
+        parentList = []
+        while True:
+            parent = child.parent()
+            if parent is None:
+                break
+            parentList.append(parent)
+            child = parent
+        newResult = tuple(reversed(parentList))
+        if oldResult != newResult:
+            print('parent links not correct\n   was', oldResult, '\n    is', newResult)
+        return newResult
+
+    def parentageOld(self, child, fromIcon=None):
         """Returns a tuple containing the lineage of the given icon, from window.topIcons
         down to the direct parent of the icon.  Don't use this casually.  Because we don't
         have a parent link, this is an exhaustive search of the hierarchy.  For an icon at
@@ -1047,7 +1062,7 @@ class Window:
         for ic in icons:
             if ic == child:
                 return ()
-            result = self.parentage(child, fromIcon=ic)
+            result = self.parentageOld(child, fromIcon=ic)
             if result is not None:
                 return (ic, *result)
         return None
@@ -1074,19 +1089,33 @@ class Window:
 
     def replaceTop(self, old, new):
         """Replace an existing top-level icon with a new icon in the same location
-        (without re-layout or re-draw)"""
+        (but don't re-layout or re-draw)"""
         self.topIcons.remove(old)
         self.topIcons.append(new)
-        new.rect = icon.moveRect(new.rect, (old.rect[0], old.rect[1]))
+        oldSite = old.sites.lookup(('output', 0))
+        newSite = new.sites.lookup(('output', 0))
+        oldX, oldY = old.rect[:2]
+        if oldSite is None or newSite is None:
+            newX, newY = oldX, oldY
+        else:
+            newX = oldX + oldSite.xOffset - newSite.xOffset
+            newY = oldY + oldSite.yOffset - newSite.yOffset
+        new.rect = icon.moveRect(new.rect, (newX, newY))
 
     def addTop(self, ic, x=None, y=None):
         """Place an icon or icons on the window at the top level (without re-layout or
         re-draw).  If ic is a list, x, y will not be applied."""
         if hasattr(ic, '__iter__'):
             for i in ic:
-                self.topIcons.append(i)
+                self.addTop(i)
         else:
             self.topIcons.append(ic)
+            # Detaching icons should remove all connections, but the consequence to
+            # leaving a parent link at the top level is dire, so make sure all parent
+            # links are removed.
+            for parentSiteType in icon.parentSiteTypes:
+                if hasattr(ic.sites, parentSiteType):
+                    ic.replaceChild(None, (parentSiteType, 0))
             if x is not None and y is not None:
                 ic.rect = icon.moveRect(ic.rect, (x, y))
 
@@ -1099,7 +1128,7 @@ class Window:
         minDist = SITE_SELECT_DIST + 1
         minSite = (None, (None, None))
         for ic in self.findIconsInRegion((left, top, right, bottom)):
-            iconSites = ic.snapLists(atTop=True)
+            iconSites = ic.snapLists()
             for siteType, siteList in iconSites.items():
                 for siteIcon, (x, y), siteIdx in siteList:
                     if siteType in ("input", "output"):
@@ -1124,32 +1153,33 @@ class Window:
             for c in ic.children():
                 self.filterRedundantParens(c, ic, ic.siteOf(c))
             return ic
-        if ic.argIcon is None:
+        argIcon = ic.sites.argIcon.att
+        if argIcon is None:
             return ic
-        if not (ic.argIcon.__class__ is typing.CursorParenIcon or
-         ic.argIcon.__class__ is icon.BinOpIcon and ic.argIcon.needsParens(parentIcon)):
-            self.filterRedundantParens(ic.argIcon, ic, ("input", 0))
+        if not (argIcon.__class__ is typing.CursorParenIcon or
+         argIcon.__class__ is icon.BinOpIcon and argIcon.needsParens(parentIcon)):
+            self.filterRedundantParens(argIcon, ic, ("input", 0))
             return ic
         # Redundant parens found: remove them
         if parentIcon is None:
             # Not sure this ever happens: arithmetic ops require parent to force parens,
             # and tuple conversion removes the redundant paren icon, itself.
-            self.replaceTop(ic, ic.argIcon)
+            self.replaceTop(ic, argIcon)
         else:
-            parentIcon.replaceChild(ic.argIcon, parentSite)
-            ic.argIcon.layoutDirty = True
+            parentIcon.replaceChild(argIcon, parentSite)
+            argIcon.layoutDirty = True
         # If the cursor was on the paren being removed, move it to the icon that has
         # taken its place (BinOp or CursorParen)
         if self.cursor.type == "icon" and self.cursor.icon is ic and \
          self.cursor.site[0] == "attrOut":
-            if "attrOut" not in ic.argIcon.snapLists():
+            if "attrOut" not in argIcon.snapLists():
                 # If it's a binary operation that *will have* parens once we remove the
                 # prop ones, it may not yet have a site on which to put the cursor.
                 # Call layout prematurely to make the site appear
-                self.topLevelParent(ic.argIcon).layout()
-            self.cursor.setToIconSite(ic.argIcon, ("attrOut", 0))
+                self.topLevelParent(argIcon).layout()
+            self.cursor.setToIconSite(argIcon, ("attrOut", 0))
 
-        return ic.argIcon
+        return argIcon
 
     def redoLayout(self, topIcon):
         """Recompute layout for a top-level icon and redraw all affected icons"""
@@ -1226,6 +1256,7 @@ class App:
         self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
 
 def findTopIcons(icons):
+    # ... replace this with new parent-link based alternative
     iconDir = {ic:True for ic in icons}
     for ic in icons:
         for child in ic.children():

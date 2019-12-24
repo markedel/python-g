@@ -24,6 +24,12 @@ unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operato
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
+parentSiteTypes = {'output':True, 'attrIn':True}
+childSiteTypes = {'input':True, 'attrOut':True}
+virtualSiteTypes = {'insertInput':'input', 'insertAttr':'attrOut'}
+matingSiteType = {'output':'input', 'input':'output', 'attrIn':'attrOut',
+ 'attrOut':'attrIn'}
+
 TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
@@ -217,16 +223,20 @@ class Icon:
         self.selected = False
         self.layoutDirty = False
         self.cachedImage = None
-        self.outSiteOffset = None
+        self.sites = IconSiteList()
 
     def draw(self, image=None, location=None, clip=None):
         """Draw the icon.  The image to which it is drawn and the location at which it is
          drawn can be optionally overridden by specifying image and/or location."""
         pass
 
-    def layout(self):
-        """Compute layout and set locations for icon and its children, but do not redraw"""
-        pass
+    def layout(self, location=None):
+        """Compute layout and set locations for icon and its children (do not redraw)"""
+        if location is None:
+            x, y = self.rect[:2]
+        else:
+            x, y = location
+        self.doLayout(x, y+self.sites.output.yOffset, self.calcLayout())
 
     def traverse(self, order="draw", includeSelf=True):
         """Iterator for traversing the tree below this icon.  Traversal can be in either
@@ -268,26 +278,78 @@ class Icon:
                 return True
 
     def children(self):
-        return []
+        return [c.att for c in self.sites.childSites() if c is not None and
+         c.att is not None]
+
+    def parent(self):
+        icSite = self.sites.parentSite()
+        return icSite.att if icSite is not None else None
+
+    def snapLists(self):
+        x, y = self.rect[:2]
+        return self.sites.makeSnapLists(self, x, y)
+
+    def replaceChild(self, newChild, site, leavePlace=False, childSite=("output", 0)):
+        siteType, siteIndex = site
+        if self.sites.isSeries(siteType):
+            if newChild is None and not leavePlace:
+                self.sites.removeSeriesSite(site)
+            else:
+                seriesLen = len(self.sites.getSeries(siteType))
+                if siteIndex == seriesLen:
+                    self.sites.insertSeriesSite(site)
+                self.sites.lookup(site).attach(self, newChild, childSite)
+        else:
+            self.sites.lookup(site).attach(self, newChild, childSite)
+        self.layoutDirty = True
+
+    def insertChild(self, child, site, childSite=("output", 0)):
+        """Insert a child icon or empty icon site (child=None) at the specified site"""
+        siteType, idx = site
+        siteType = virtualSiteTypes.get(siteType, siteType)
+        series = self.sites.getSeries(siteType)
+        if series is None:
+            return
+        if len(series) == 1 and series[0].att is None and idx == 0:
+            series[0].attach(self, child, childSite)
+        else:
+            self.sites.insertSeriesSite((siteType, idx))
+            self.sites.lookup((siteType, idx)).attach(self, child, childSite)
+        self.layoutDirty = True
+
+    def insertChildren(self, children, site, childSite=("output", 0)):
+        """Insert child icons or empty icon sites (child=None) at the specified site"""
+        siteType, siteIdx = site
+        for i, child in enumerate(children):
+            self.insertChild(child, (siteType, siteIdx + i), childSite)
+
+    def childAt(self, site):
+        icSite = self.sites.lookup(site)
+        return icSite.att if icSite is not None else None
+
+    def siteOf(self, child):
+        icSite = self.sites.findAttached(child)
+        return (icSite.type, icSite.idx) if icSite is not None else None
 
     def becomeTopLevel(self):
         pass  # Most icons look exactly the same at the top level
 
-    def posOfSite(self, site):
+    def posOfSite(self, siteId):
         """Return the window position of a given site of the icon"""
-        # Unless this needs to be more efficient, the common code, below is able to
-        # answer the question using the snapLists() method and avoid per-icon-type code.
-        siteType, siteIdx = site
-        snapLists = self.snapLists(atTop=True)  # atTop gives most sites
-        if siteType in snapLists:
-            for snapEntry in snapLists[siteType]:
-                ic, pos, idx = snapEntry
-                if siteIdx == idx:
-                    return pos
-        return None
+        site = self.sites.lookup(siteId)
+        if site is None:
+            return None
+        x, y = self.rect[:2]
+        return x + site.xOffset, y + site.yOffset
 
     def textRepr(self):
         return repr(self)
+
+    def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
+        pass
+
+    def calcLayout(self, parentPrecedence=None, assocOk=False):
+        pass
 
 class TextIcon(Icon):
     def __init__(self, text, window=None, location=None):
@@ -297,14 +359,14 @@ class TextIcon(Icon):
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
+        self.sites.add('output', 'output', 0, 0, bodyHeight // 2)
+        self.sites.add('attrIcon', 'attrOut', 0, bodyWidth,
+         bodyHeight // 2 + ATTR_SITE_OFFSET)
         if location is None:
             x, y = 0, 0
         else:
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
-        self.outSiteOffset = (0, bodyHeight // 2)
-        self.attrSiteOffset = (bodyWidth, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
-        self.attrIcon = None
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
@@ -316,62 +378,27 @@ class TextIcon(Icon):
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = iconBoxedText(self.text)
             self.cachedImage.paste(txtImg, (outSiteImage.width-1, 0))
-            outSiteX, outSiteY = self.outSiteOffset
-            outSiteY -= outSiteImage.height // 2
+            outSiteX = self.sites.output.xOffset
+            outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
-
-    def children(self):
-        if self.attrIcon:
-            return [self.attrIcon]
-        return []
-
-    def snapLists(self, atTop=False):
-        x, y = self.rect[:2]
-        outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
-        attrOutSite = (self, (x + self.attrSiteOffset[0], y + self.attrSiteOffset[1]), 0)
-        return {"output":[outSite], "attrOut":[attrOutSite]}
-
-    def replaceChild(self, newChild, site, leavePlace=False):
-        siteType, siteIndex = site
-        if siteType == "attrOut":
-            self.attrIcon = newChild
-            self.layoutDirty = True
-
-    def siteOf(self, child):
-        if child is self.attrIcon:
-            return ("attrOut", 0)
-        return None
-
-    def childAt(self, site):
-        siteType, siteIndex = site
-        if siteType == "attrOut" and siteIndex == 0:
-            return self.attrIcon
-        return None
-
-    def layout(self, location=None):
-        if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        self.doLayout(x, y+self.outSiteOffset[1], self.calcLayout())
 
     def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         width += outSiteImage.width - 1
         top = outSiteY - height//2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
-        if self.attrIcon:
-            self.attrIcon.doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
-             layout.subLayouts[0])
+        if self.sites.attrIcon.att:
+            self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
+             outSiteY + ATTR_SITE_OFFSET, layout.subLayouts[0])
 
     def calcLayout(self, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         mySiteOffset = height // 2
-        if self.attrIcon is None:
+        if self.sites.attrIcon.att is None:
             return Layout(self, width, height, mySiteOffset, [])
-        attrLayout = self.attrIcon.calcLayout()
+        attrLayout = self.sites.attrIcon.att.calcLayout()
         heightAbove = max(mySiteOffset, attrLayout.siteOffset - ATTR_SITE_OFFSET)
         attrHeightBelow = ATTR_SITE_OFFSET + attrLayout.height - attrLayout.siteOffset
         myHeightBelow = height - mySiteOffset
@@ -458,18 +485,18 @@ class UnaryOpIcon(Icon):
         Icon.__init__(self, window)
         self.operator = operator
         self.precedence = unaryOpPrecedence[operator]
-        self.argIcon = None
         bodyWidth, bodyHeight = globalFont.getsize(self.operator)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        self.sites.add('output', 'output', 0, 0, siteYOffset)
+        self.sites.add('argIcon', 'input', 0, bodyWidth - 1, siteYOffset)
         if location is None:
             x, y = 0, 0
         else:
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
-        self.outSiteOffset = (0, bodyHeight // 2)
-        self.inSiteOffset = (bodyWidth - 1, self.outSiteOffset[1])
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
@@ -484,12 +511,10 @@ class UnaryOpIcon(Icon):
             draw = ImageDraw.Draw(self.cachedImage)
             draw.rectangle((bodyLeft, 0, bodyLeft + width + 2 * TEXT_MARGIN,
              height + 2 * TEXT_MARGIN), fill=ICON_BG_COLOR, outline=OUTLINE_COLOR)
-            outSiteX, outSiteY = self.outSiteOffset
-            outImageY = outSiteY - outSiteImage.height // 2
-            self.cachedImage.paste(outSiteImage, (outSiteX, outImageY), mask=outSiteImage)
-            inSiteX, inSiteY = self.inSiteOffset
-            inImageY = inSiteY - inSiteImage.height // 2
-            self.cachedImage.paste(inSiteImage, (inSiteX, inImageY))
+            outImageY = self.sites.output.yOffset - outSiteImage.height // 2
+            self.cachedImage.paste(outSiteImage, (0, outImageY), mask=outSiteImage)
+            inImageY = self.sites.argIcon.yOffset - inSiteImage.height // 2
+            self.cachedImage.paste(inSiteImage, (self.sites.argIcon.xOffset, inImageY))
             if self.operator in ('+', '-', '~'):
                 # Raise unary operators up and move then to the left.  Not sure if this
                 # is safe for all fonts, but the Ariel font we're using pads on top.
@@ -503,56 +528,21 @@ class UnaryOpIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
-    def children(self):
-        if self.argIcon:
-            return [self.argIcon]
-        return []
-
-    def snapLists(self, atTop=False):
-        x, y = self.rect[:2]
-        outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
-        inSite = (self, (x + self.inSiteOffset[0], y + self.inSiteOffset[1]), 0)
-        return {"output":[outSite], "input":[inSite]}
-
-    def replaceChild(self, newChild, site, leavePlace=False):
-        siteType, siteIndex = site
-        if siteType == "input":
-            self.argIcon = newChild
-            self.layoutDirty = True
-
-    def siteOf(self, child):
-        if child is self.argIcon:
-            return ("input", 0)
-        return None
-
-    def childAt(self, site):
-        siteType, siteIndex = site
-        if siteType == "input" and siteIndex == 0:
-            return self.argIcon
-        return None
-
-    def layout(self, location=None):
-        if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        self.doLayout(x, y+self.outSiteOffset[1], self.calcLayout())
-
     def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         width += outSiteImage.width - 1
         top = outSiteY - height//2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
-        if self.argIcon:
-            self.argIcon.doLayout(outSiteX + width - 3, outSiteY, layout.subLayouts[0],
-             parentPrecedence=self.precedence)
+        if self.sites.argIcon.att:
+            self.sites.argIcon.att.doLayout(outSiteX + width - 3, outSiteY,
+             layout.subLayouts[0], parentPrecedence=self.precedence)
 
     def calcLayout(self, parentPrecedence=None, assocOk=False):
         width, height = self.bodySize
         mySiteOffset = height // 2
-        if self.argIcon is None:
+        if self.sites.argIcon.att is None:
             return Layout(self, width + EMPTY_ARG_WIDTH, height, mySiteOffset, [])
-        argLayout = self.argIcon.calcLayout(parentPrecedence=self.precedence)
+        argLayout = self.sites.argIcon.att.calcLayout(parentPrecedence=self.precedence)
         heightAbove = max(mySiteOffset, argLayout.siteOffset)
         argHeightBelow = argLayout.height - argLayout.siteOffset
         myHeightBelow = height - mySiteOffset
@@ -562,24 +552,31 @@ class UnaryOpIcon(Icon):
         return Layout(self, width, height, heightAbove, [argLayout])
 
     def textRepr(self):
-        argText = "None" if self.argIcon is None else self.argIcon.textRepr()
+        if self.sites.argIcon.att is None:
+            argText = "None"
+        else:
+            argText = self.sites.argIcon.att.textRepr()
         return self.operator + " " + argText
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
-        return (self.__class__.__name__, (self.operator, addPoints(location, offset),
-         None if self.argIcon is None else self.argIcon.clipboardRepr(offset)))
+        if self.sites.argIcon.att is None:
+            arg = None
+        else:
+            arg = self.sites.argIcon.att.clipboardRepr(offset)
+        return self.__class__.__name__, (self.operator, addPoints(location, offset), arg)
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         op, location, arg = clipData
         ic = UnaryOpIcon(op, window, (addPoints(location, offset)))
-        ic.argIcon = clipboardDataToIcons([arg], window, offset)
+        ic.sites.argIcon.attach(ic, clipboardDataToIcons([arg], window, offset),
+         ("output", 0))
 
     def execute(self):
-        if self.argIcon is None:
+        if self.sites.argIcon.att is None:
             raise IconExecException(self, "Missing argument")
-        argValue = self.argIcon.execute()
+        argValue = self.sites.argIcon.att.execute()
         try:
             result = unaryOpFn[self.operator](argValue)
         except Exception as err:
@@ -591,7 +588,6 @@ class ListTypeIcon(Icon):
         Icon.__init__(self, window)
         self.leftText = leftText
         self.rightText = rightText
-        self.argIcons = []
         self.emptyInOffsets = (0, LIST_EMPTY_ARG_WIDTH)
         self.inOffsets = self.emptyInOffsets
         leftTextWidth, leftTextHeight = globalFont.getsize(leftText)
@@ -600,12 +596,14 @@ class ListTypeIcon(Icon):
         self.bodySize = (leftTextWidth, leftTextHeight)
         rightTextWidth, rightTextHeight = globalFont.getsize(rightText)
         self.rightTextWidth = rightTextWidth + 2 * TEXT_MARGIN + 1
-        self.outSiteOffset = (0, leftTextHeight // 2)
-        x, y = (0, 0) if location is None else location
         width, height = self._size()
+        self.sites.add('output', 'output', 0, 0, leftTextHeight // 2)
+        self.sites.addSeries('argIcons', 'input', 1,
+         [(leftTextWidth, leftTextHeight // 2)])
+        self.sites.add('attrIcon', 'attrOut', 0, width-1,
+         self.sites.output.yOffset + ATTR_SITE_OFFSET)
+        x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
-        self.attrSiteOffset = (width-1, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
-        self.attrIcon = None
 
     def _size(self):
         width, height = self.bodySize
@@ -623,49 +621,41 @@ class ListTypeIcon(Icon):
             leftTxtImg = iconBoxedText(self.leftText)
             self.cachedImage.paste(leftTxtImg, (outSiteImage.width-1, 0))
             # Output site
-            outSiteX, siteY = self.outSiteOffset
-            outSiteY = siteY - outSiteImage.height // 2
+            outSiteX = self.sites.output.xOffset
+            outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
             # Body input site
             inSiteX = outSiteImage.width-1 + leftTxtImg.width - inSiteImage.width
-            inSiteY = siteY - inSiteImage.height // 2
+            inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
             # Commas
             commaXOffset = inSiteX + inSiteImage.width - commaImage.width
-            commaY = siteY + leftTxtImg.height//2 - commaImage.height
+            commaY = self.sites.output.yOffset + leftTxtImg.height//2 - commaImage.height
             for inOff in self.inOffsets[1:-1]:
                 self.cachedImage.paste(commaImage, (inOff + commaXOffset, commaY))
             # End paren/brace
             rightTxtImg = iconBoxedText(self.rightText)
-            parenY = siteY - rightTxtImg.height//2
+            parenY = self.sites.output.yOffset - rightTxtImg.height//2
             parenX = inSiteX + self.inOffsets[-1] + inSiteImage.width - 1
             self.cachedImage.paste(rightTxtImg, (parenX, parenY))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
-    def children(self):
-        return [ic for ic in self.argIcons + [self.attrIcon] if ic is not None]
-
-    def snapLists(self, atTop=False):
-        x, y = self.rect[:2]
-        outSite = (self, (x + self.outSiteOffset[0], y + self.outSiteOffset[1]), 0)
-        attrOutSite = (self, addPoints((x, y), self.attrSiteOffset), 0)
-        width, height = self.bodySize
-        x += width + outSiteImage.width - 1 - inSiteImage.width
-        y += height // 2
-        inSites = []
-        for i, child in enumerate(self.argIcons):
-            xOff = self.inOffsets[i]
-            snapListEntry = (self, (x + xOff, y), i)
-            inSites.append(giveInputSiteToBinOpChild(child, snapListEntry))
+    def snapLists(self):
+        siteSnapLists = Icon.snapLists(self)
+        # Add snap sites for insertion to those representing actual attachment sites"""
         insertSites = []
-        if len(self.argIcons) == 0:
-            inSites.append((self, (x, y), 0))
-        else:
-            for i, inOff in enumerate(self.inOffsets):
-                insertSites.append((self, (x + inOff, y + INSERT_SITE_Y_OFFSET), i))
-        return {"output":[outSite], "input":inSites, "attrOut":[attrOutSite],
-         "insertInput":insertSites}
+        inputSites = self.sites.argIcons
+        if len(inputSites) > 1 or \
+         len(inputSites) == 1 and inputSites[0].att is not None:
+            x, y = self.rect[:2]
+            y += inputSites[0].yOffset + INSERT_SITE_Y_OFFSET
+            for idx, site in enumerate(inputSites):
+                insertSites.append((self, (x + site.xOffset, y), idx))
+            x += inputSites[0].xOffset + self.inOffsets[-1]
+            insertSites.append((self, (x, y), idx+1))
+            siteSnapLists['insertInput'] = insertSites
+        return siteSnapLists
 
     def touchesRect(self, rect):
         if not rectsTouch(self.rect, rect):
@@ -675,61 +665,16 @@ class ListTypeIcon(Icon):
         bodyRight = self.rect[0] + self.bodySize[0]
         return not rectWithinXBounds(rect, bodyRight, bodyRight + self.inOffsets[-1])
 
-    def insertChildren(self, children, site):
-        """Insert one or more child icons at the specified site"""
-        siteType, siteIndex = site
-        if siteType in ("input", "insertInput"):
-            self.argIcons[siteIndex:siteIndex] = children
-        self.layoutDirty = True
-
-    def replaceChild(self, newChild, site, leavePlace=False):
-        siteType, siteIndex = site
-        if siteType == "input":
-            if newChild is None and not leavePlace:
-                if siteIndex < len(self.argIcons):
-                    del self.argIcons[siteIndex]
-            else:
-                if siteIndex == len(self.argIcons):
-                    self.argIcons.append(newChild)
-                else:
-                    self.argIcons[siteIndex] = newChild
-        elif siteType == "attrOut":
-            self.attrIcon = newChild
-        self.layoutDirty = True
-
-    def childAt(self, site):
-        siteType, siteIndex = site
-        if siteType == "input":
-            if siteIndex < len(self.argIcons):
-                return self.argIcons[siteIndex]
-        elif siteType == "attrOut" and siteIndex == 0:
-            return self.attrIcon
-        return None
-
-    def siteOf(self, child):
-        for i, a in enumerate(self.argIcons):
-            if a is child:
-                return ("input", i)
-        if child is self.attrIcon:
-            return ("attrOut", 0)
-        return None
-
-    def layout(self, location=None):
-        if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        self.doLayout(x, y+self.bodySize[1] // 2, self.calcLayout())
-
     def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         bodyWidth, bodyHeight = self.bodySize
-        if not self.argIcons:
+        if len(self.sites.argIcons) == 0 or len(self.sites.argIcons) == 1 and \
+         self.sites.argIcons[0].att is None:
             self.inOffsets = self.emptyInOffsets
         else:
             self.inOffsets = []
             childXOffset = outSiteX + bodyWidth + outSiteImage.width-1 - inSiteImage.width
             childX = 0
-            for i in range(len(self.argIcons)):
+            for i in range(len(self.sites.argIcons)):
                 childLayout = layout.subLayouts[i]
                 self.inOffsets.append(childX)
                 if childLayout is None:
@@ -738,20 +683,30 @@ class ListTypeIcon(Icon):
                     childLayout.icon.doLayout(childXOffset + childX, outSiteY, childLayout)
                     childX += childLayout.width-1 + commaImage.width-1
             self.inOffsets.append(childX - (commaImage.width-1))
+        argListLeft = bodyWidth + outSiteImage.width - 1 - inSiteImage.width
+        for i, site in enumerate(self.sites.argIcons):
+            xOff = self.inOffsets[i]
+            site.xOffset = argListLeft + xOff
+            site.yOffset = self.sites.output.yOffset
         width, height = self._size()
-        self.outSiteOffset = (0, bodyHeight // 2)
-        self.attrSiteOffset = (width-2, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
+        self.sites.attrIcon.xOffset = width-2
+        self.sites.attrIcon.yOffset = self.sites.output.yOffset + ATTR_SITE_OFFSET
         x = outSiteX
-        y = outSiteY - self.outSiteOffset[1]
+        y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x+width, y+height)
-        if self.attrIcon:
-            self.attrIcon.doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
-             layout.subLayouts[-1])
+        if self.sites.attrIcon.att is not None:
+            self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
+             outSiteY + ATTR_SITE_OFFSET, layout.subLayouts[-1])
         self.cachedImage = None
         self.layoutDirty = False
 
     def calcLayout(self, parentPrecedence=None, assocOk=False):
-        childLayouts = [None if c is None else c.calcLayout() for c in self.argIcons]
+        childLayouts = []
+        for site in self.sites.argIcons:
+            if site.att is None:
+                childLayouts.append(None)
+            else:
+                childLayouts.append(site.att.calcLayout())
         bodyWidth, bodyHeight = self.bodySize
         if len(childLayouts) == 0:
             childWidth = LIST_EMPTY_ARG_WIDTH
@@ -763,8 +718,8 @@ class ListTypeIcon(Icon):
             height = max((bodyHeight, *(c.height for c in childLayouts if c is not None)))
         width = bodyWidth + outSiteImage.width + childWidth + self.rightTextWidth - 4
         siteOffset = height // 2
-        if self.attrIcon:
-            attrLayout = self.attrIcon.calcLayout()
+        if self.sites.attrIcon.att:
+            attrLayout = self.sites.attrIcon.att.calcLayout()
             childLayouts.append(attrLayout)
             heightAbove = max(siteOffset, attrLayout.siteOffset - ATTR_SITE_OFFSET)
             siteOffset = heightAbove
@@ -776,11 +731,11 @@ class ListTypeIcon(Icon):
 
     def textRepr(self):
         argText = ""
-        for arg in self.argIcons:
-            if arg is None:
+        for site in self.sites.argIcons:
+            if site.att is None:
                 argText = argText + "None, "
             else:
-                argText = argText + arg.textRepr() + ", "
+                argText = argText + site.att.textRepr() + ", "
         if len(argText) > 0:
             argText = argText[:-2]
         return self.leftText + argText + self.rightText
@@ -791,10 +746,13 @@ class FnIcon(ListTypeIcon):
         ListTypeIcon.__init__(self, name + '(', ')', window, location)
 
     def execute(self):
-        for c in self.argIcons:
-            if c is None:
-                raise IconExecException(self, "Missing argument(s)")
-        argValues = [c.execute() for c in self.argIcons]
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0] is None:
+            argValues = []
+        else:
+            for site in self.sites.argIcons:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            argValues = [site.att.execute() for site in self.sites.argIcons]
         try:
             result = getattr(math, self.name)(*argValues)
         except Exception as err:
@@ -804,35 +762,46 @@ class FnIcon(ListTypeIcon):
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (self.name, addPoints(location, offset),
-         [None if c is None else c.clipboardRepr(offset) for c in self.argIcons]))
+         [None if site.att is None else site.att.clipboardRepr(offset)
+          for site in self.sites.argIcons]))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         name, location, children = clipData
         ic = FnIcon(name, window, (addPoints(location, offset)))
-        ic.argIcons = clipboardDataToIcons(children, window, offset)
+        for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
+            ic.insertChild(arg, ("input", i))
         return ic
 
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
         ListTypeIcon.__init__(self, '[', ']', window, location)
 
+    def argIcons(self):
+        """Return list of list argument icons.  This is trivial, but exists to match
+        the identical TupleIcon method which has a more complicated function."""
+        return [site.att for site in self.sites.argIcons]
+
     def execute(self):
-        for c in self.argIcons:
-            if c is None:
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            return []
+        for site in self.sites.argIcons:
+            if site.att is None:
                 raise IconExecException(self, "Missing argument(s)")
-        return [c.execute() for c in self.argIcons]
+        return [site.att.execute() for site in self.sites.argIcons]
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (addPoints(location, offset),
-         [None if c is None else c.clipboardRepr(offset) for c in self.argIcons]))
+         [None if site.att is None else site.att.clipboardRepr(offset)
+          for site in self.sites.argIcons]))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         location, children = clipData
         ic = ListIcon(window, (addPoints(location, offset)))
-        ic.argIcons = clipboardDataToIcons(children, window, offset)
+        for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
+            ic.insertChild(arg, ("input", i))
         return ic
 
 class TupleIcon(ListTypeIcon):
@@ -845,34 +814,45 @@ class TupleIcon(ListTypeIcon):
         ListTypeIcon.draw(self, image, location, clip, colorErr)
         if redrawingCachedImage:
             draw = ImageDraw.Draw(self.cachedImage)
-            outSiteX, outSiteY = self.outSiteOffset
-            y = outSiteY
-            x = outSiteX + 5  # This is font-dependent and could cause trouble later
+            x = self.sites.output.xOffset + 5  # Font-dependent, could cause trouble later
+            y = self.sites.output.yOffset
             draw.line((x, y, x+2, y), GRAY_75)
             # End paren
-            x = self.attrSiteOffset[0] - 3
+            x = self.sites.attrIcon.xOffset - 3
             draw.line((x, y, x-2, y), GRAY_75)
             ListTypeIcon.draw(self, image, location, clip, colorErr)
 
-    def execute(self):
-        if len(self.argIcons) == 2 and self.argIcons[0] and not self.argIcons[1]:
+    def argIcons(self):
+        """Return list of tuple argument icons, handling special case of a single element
+        tuple represented as (x,).  It would be nice to convert these at type-in, but
+        hard to distinguish from leaving a space for a second argument."""
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            return []
+        if len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is not None and \
+         self.sites.argIcons[1] is None:
             # Special case of single item tuple allowed to have missing arg
-            return self.argIcons[0].execute(),
-        for c in self.argIcons:
-            if c is None:
+            return [self.sites.argIcons.att[0]]
+        return [site.att for site in self.sites.argIcons]
+
+    def execute(self):
+        argIcons = self.argIcons()
+        for argIcon in argIcons:
+            if argIcon is None:
                 raise IconExecException(self, "Missing argument(s)")
-        return tuple((c.execute() for c in self.argIcons))
+        return tuple(argIcon.execute() for argIcon in argIcons)
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (addPoints(location, offset),
-         [None if c is None else c.clipboardRepr(offset) for c in self.argIcons]))
+         [None if site.att is None else site.att.clipboardRepr(offset)
+          for site in self.sites.argIcons]))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         location, children = clipData
         ic = TupleIcon(window, (addPoints(location, offset)))
-        ic.argIcons = clipboardDataToIcons(children, window, offset)
+        for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
+            ic.insertChild(arg, ("input", i))
         return ic
 
 class BinOpIcon(Icon):
@@ -881,8 +861,6 @@ class BinOpIcon(Icon):
         self.operator = op
         self.precedence = binOpPrecedence[op]
         self.hasParens = False  # Filled in by layout methods
-        self.leftArg = None
-        self.rightArg = None
         self.leftArgWidth = EMPTY_ARG_WIDTH
         self.rightArgWidth = EMPTY_ARG_WIDTH
         opWidth, opHeight = globalFont.getsize(self.operator)
@@ -893,10 +871,12 @@ class BinOpIcon(Icon):
         x, y = (0, 0) if location is None else location
         width, height = self._size()
         self.rect = (x, y, x + width, y + height)
-        self.outSiteOffset = (0, opHeight // 2)
-        self.attrSiteOffset = None
+        siteYOffset = opHeight // 2
+        self.sites.add('output', 'output', 0, 0, siteYOffset)
+        self.sites.add('leftArg', 'input', 0, 0, siteYOffset)
+        self.sites.add('rightArg', 'input', 1, self.leftArgWidth + opWidth, siteYOffset)
+        # There can be an attribute site but it only appears with parenthesis
         self.leftSiteDrawn = False
-        self.attrIcon = None
 
     def _size(self):
         opWidth, opHeight = self.opSize
@@ -907,6 +887,12 @@ class BinOpIcon(Icon):
             parenWidth = 0
         width = parenWidth + self.leftArgWidth + self.rightArgWidth + opWidth
         return width, opHeight
+
+    def leftArg(self):
+        return self.sites.leftArg.att if self.sites.leftArg is not None else None
+
+    def rightArg(self):
+        return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         cachedImage = self.cachedImage
@@ -924,7 +910,8 @@ class BinOpIcon(Icon):
         if cachedImage is None:
             cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
             # Output part (connector or paren)
-            outSiteX, siteY = self.outSiteOffset
+            outSiteX = self.sites.output.xOffset
+            siteY = self.sites.output.yOffset
             leftArgX = outSiteX + outSiteImage.width - 1
             if self.hasParens:
                 outSiteY = siteY - lParenImage.height // 2
@@ -966,7 +953,7 @@ class BinOpIcon(Icon):
     def touchesRect(self, rect):
         if not rectsTouch(self.rect, rect):
             return False
-        leftArgLeft = self.rect[0] + self.outSiteOffset[0] + outSiteImage.width - 1
+        leftArgLeft = self.rect[0] + self.sites.output.xOffset + outSiteImage.width - 1
         opWidth = self.opSize[0] + self.depthWidth
         if self.hasParens:
             # If rectangle passes vertically within one of the argument slots, it is
@@ -999,71 +986,10 @@ class BinOpIcon(Icon):
             self.hasParens = False
             self.layoutDirty = True
 
-    def children(self):
-        return [a for a in (self.rightArg, self.leftArg, self.attrIcon) if a is not None]
-
-    def snapLists(self, atTop=False):
-        x, y = self.rect[:2]
-        y += self.outSiteOffset[1]
-        outSite = (self, (x + self.outSiteOffset[0], y), 0)
-        bodyX = x + self.leftArgWidth - 1
-        if self.hasParens:
-            lArgX = x + lParenImage.width - inSiteImage.width
-            bodyX += lParenImage.width - 1
-        else:
-            lArgX = x
-            bodyX += 1
-        rArgX = bodyX + self.opSize[0] + self.depthWidth
-        inSites = []
-        if self.hasParens or self.leftArg is None or atTop:
-            snapEntry = (self, (lArgX, y), 0)
-            inSites.append(giveInputSiteToBinOpChild(self.leftArg, snapEntry))
-        snapEntry = (self, (rArgX, y), 1)
-        inSites.append(giveInputSiteToBinOpChild(self.rightArg, snapEntry))
-        snapSites = {"output":[outSite], "input":inSites}
-        if self.attrSiteOffset:
-            attrOutSite = (self, (x+self.attrSiteOffset[0], y+ATTR_SITE_OFFSET), 0)
-            snapSites["attrOut"] = [attrOutSite]
-        return snapSites
-
-    def replaceChild(self, newChild, site, leavePlace=False):
-        siteType, siteIndex = site
-        if siteType == "input":
-            if siteIndex == 0:
-                self.leftArg = newChild
-            else:
-                self.rightArg = newChild
-        elif siteType == "attrOut":
-            self.attrIcon = newChild
-        self.layoutDirty = True
-
-    def childAt(self, site):
-        siteType, siteIndex = site
-        if siteType == "input":
-            if siteIndex == 0:
-                return self.leftArg
-            elif siteIndex == 1:
-                return self.rightArg
-        elif siteType == "attrOut" and siteIndex == 0:
-            return self.attrIcon
-        return None
-
-    def siteOf(self, child):
-        if child is self.leftArg:
-           return ("input", 0)
-        elif child is self.rightArg:
-            return ("input", 1)
-        elif child is self.attrIcon:
-            return ("attrOut", 0)
-        return None
-
     def layout(self, location=None):
-        if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        self.doLayout(x, y + self.opSize[1] // 2, self.calcLayout())
-        # Layout is called only on the top-level icon.  Ensure left site is drawn
+        Icon.layout(self, location)
+        # Use the fact that layout is called only on the top-level icon to ensure left
+        # site is drawn when the icon is at the top level.
         self.leftSiteDrawn = True
 
     def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
@@ -1075,16 +1001,16 @@ class BinOpIcon(Icon):
             self.hasParens = self.precedence < parentPrecedence
         lArgLayout, rArgLayout, attrLayout = layout.subLayouts
         if self.hasParens:
-            lArgX = outSiteX + lParenImage.width - outSiteImage.width
+            self.sites.leftArg.xOffset = lParenImage.width - outSiteImage.width
         else:
-            lArgX = outSiteX
+            self.sites.leftArg.xOffset = 0
         if lArgLayout is None:
             self.leftArgWidth = EMPTY_ARG_WIDTH
             lDepth = 0
         else:
             self.leftArgWidth = lArgLayout.width
-            lArgLayout.icon.doLayout(lArgX, outSiteY, lArgLayout,
-             parentPrecedence=self.precedence, assocOk=self.rightAssoc())
+            lArgLayout.icon.doLayout(outSiteX + self.sites.leftArg.xOffset, outSiteY,
+             lArgLayout, parentPrecedence=self.precedence, assocOk=self.rightAssoc())
             lDepth = lArgLayout.exprDepth
         if rArgLayout is None:
             self.rightArgWidth = EMPTY_ARG_WIDTH
@@ -1092,21 +1018,26 @@ class BinOpIcon(Icon):
         else:
             self.depthWidth = max(lDepth, rArgLayout.exprDepth) * DEPTH_EXPAND
             self.rightArgWidth = rArgLayout.width
-            rArgX = lArgX + self.leftArgWidth + self.opSize[0] + self.depthWidth
-            rArgLayout.icon.doLayout(rArgX, outSiteY, rArgLayout,
-             parentPrecedence=self.precedence, assocOk=self.leftAssoc())
+        self.sites.rightArg.xOffset = self.sites.leftArg.xOffset + self.leftArgWidth + \
+         self.opSize[0] + self.depthWidth
+        if rArgLayout is not None:
+            rArgLayout.icon.doLayout(outSiteX + self.sites.rightArg.xOffset, outSiteY,
+             rArgLayout, parentPrecedence=self.precedence, assocOk=self.leftAssoc())
         width, height = self._size()
-        self.outSiteOffset = (0, height // 2)
         if self.hasParens:
-            self.attrSiteOffset = (width-2, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
+            attrSiteYOffset = self.sites.output.yOffset + ATTR_SITE_OFFSET
+            if hasattr(self.sites, 'attrIcon'):
+                self.sites.attrIcon.xOffset = width-2
+            else:
+                self.sites.add("attrIcon", "attrOut", 0, width-2, attrSiteYOffset)
         else:
-            self.attrSiteOffset = None
-        x = outSiteX
-        y = outSiteY - self.outSiteOffset[1]
+            self.sites.remove('attrIcon')
+        x = outSiteX - self.sites.output.xOffset
+        y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x+width, y+height)
-        if self.attrIcon:
-            self.attrIcon.doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
-             attrLayout)
+        if hasattr(self.sites, 'attrIcon') and self.sites.attrIcon.att is not None:
+            self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
+             outSiteY + ATTR_SITE_OFFSET, attrLayout)
         self.leftSiteDrawn = False # self.layout will reset on top-level icon
         self.cachedImage = None
         self.layoutDirty = False
@@ -1118,25 +1049,25 @@ class BinOpIcon(Icon):
             hasParens = assocOk
         else:
             hasParens = self.precedence < parentPrecedence
-        if self.leftArg is None:
+        if self.leftArg() is None:
             lArgLayout = None
             lArgWidth, lArgHeight = (EMPTY_ARG_WIDTH, 0)
             lArgYSiteOff = self.opSize[1] // 2
             lDepth = 0
         else:
-            lArgLayout = self.leftArg.calcLayout(parentPrecedence=self.precedence,
+            lArgLayout = self.leftArg().calcLayout(parentPrecedence=self.precedence,
              assocOk=self.rightAssoc())
             lArgWidth = lArgLayout.width
             lArgHeight = lArgLayout.height
             lArgYSiteOff = lArgLayout.siteOffset
             lDepth = lArgLayout.exprDepth
-        if self.rightArg is None:
+        if self.rightArg() is None:
             rArgLayout = None
             rArgWidth, rArgHeight = (EMPTY_ARG_WIDTH, 0)
             rArgYSiteOff = self.opSize[1] // 2
             rDepth = 0
         else:
-            rArgLayout = self.rightArg.calcLayout(parentPrecedence=self.precedence,
+            rArgLayout = self.rightArg().calcLayout(parentPrecedence=self.precedence,
              assocOk=self.leftAssoc())
             rArgWidth = rArgLayout.width
             rArgHeight = rArgLayout.height
@@ -1154,8 +1085,8 @@ class BinOpIcon(Icon):
             depth += 1
         height = max(lArgHeight, rArgHeight, opHeight)
         siteYOff = max(lArgYSiteOff, rArgYSiteOff)
-        if self.attrIcon:
-            attrLayout = self.attrIcon.calcLayout()
+        if hasattr(self.sites, 'attrIcon') and self.sites.attrIcon.att is not None:
+            attrLayout = self.sites.attrIcon.att.calcLayout()
             heightAbove = max(siteYOff, attrLayout.siteOffset - ATTR_SITE_OFFSET)
             siteYOff = heightAbove
             attrHeightBelow = ATTR_SITE_OFFSET + attrLayout.height - attrLayout.siteOffset
@@ -1168,8 +1099,8 @@ class BinOpIcon(Icon):
          depth)
 
     def textRepr(self):
-        leftArgText = "None" if self.leftArg is None else self.leftArg.textRepr()
-        rightArgText = "None" if self.rightArg is None else self.rightArg.textRepr()
+        leftArgText = "None" if self.leftArg() is None else self.leftArg().textRepr()
+        rightArgText = "None" if self.rightArg() is None else self.rightArg().textRepr()
         text = leftArgText + " " + self.operator + " " + rightArgText
         if self.hasParens:
             return "(" + text + ")"
@@ -1178,14 +1109,16 @@ class BinOpIcon(Icon):
     def clipboardRepr(self, offset):
         location = self.rect[:2]
         return (self.__class__.__name__, (self.operator, addPoints(location, offset),
-         (None if self.leftArg is None else self.leftArg.clipboardRepr(offset),
-          None if self.rightArg is None else self.rightArg.clipboardRepr(offset))))
+         (None if self.leftArg() is None else self.leftArg().clipboardRepr(offset),
+          None if self.rightArg() is None else self.rightArg().clipboardRepr(offset))))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         op, location, children = clipData
         ic = BinOpIcon(op, window, (addPoints(location, offset)))
-        ic.leftArg, ic.rightArg = clipboardDataToIcons(children, window, offset)
+        leftArg, rightArg = clipboardDataToIcons(children, window, offset)
+        ic.sites.leftArg.attach(ic, leftArg, ("output", 0))
+        ic.sites.rightArg.attach(ic, rightArg, ("output", 0))
         return ic
 
     def locIsOnLeftParen(self, btnPressLoc):
@@ -1206,19 +1139,19 @@ class BinOpIcon(Icon):
         if self.precedence < parent.precedence:
             return True
         # Precedence is equal to parent.  Look at associativity
-        if self is parent.leftArg and self.rightAssoc():
+        if self is parent.leftArg() and self.rightAssoc():
             return True
-        if self is parent.rightArg and self.leftAssoc():
+        if self is parent.rightArg() and self.leftAssoc():
             return True
         return False
 
     def execute(self):
-        if self.leftArg is None:
+        if self.leftArg() is None:
             raise IconExecException(self, "Missing left operand")
-        if self.rightArg is None:
+        if self.rightArg() is None:
             raise IconExecException(self, "Missing right operand")
-        leftValue = self.leftArg.execute()
-        rightValue = self.rightArg.execute()
+        leftValue = self.leftArg().execute()
+        rightValue = self.rightArg().execute()
         try:
             result = binOpFn[self.operator](leftValue, rightValue)
         except Exception as err:
@@ -1230,12 +1163,12 @@ class AssignIcon(BinOpIcon):
         BinOpIcon.__init__(self, "=", window, location)
 
     def execute(self):
-        if self.leftArg is None:
+        if self.leftArg() is None:
             raise IconExecException(self, "Missing assignment target")
-        if self.rightArg is None:
+        if self.rightArg() is None:
             raise IconExecException(self, "Missing value")
         # how to know if we have a valid assignment target?
-        self.assignValues(self.leftArg, self.rightArg.execute())
+        self.assignValues(self.leftArg(), self.rightArg().execute())
 
     def assignValues(self, leftIcon, values):
         if leftIcon.__class__ is IdentifierIcon:
@@ -1244,35 +1177,53 @@ class AssignIcon(BinOpIcon):
             except Exception as err:
                 raise IconExecException(self, err)
         elif leftIcon.__class__ in (TupleIcon, ListIcon):
-            if not hasattr(values, "__len__") or len(leftIcon.argIcons) != len(values):
+            assignTargets = leftIcon.argIcons()
+            for target in assignTargets:
+                if target is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            if not hasattr(values, "__len__") or len(assignTargets) != len(values):
                 raise IconExecException(self, "Could not unpack" )
-            for target, value in zip(leftIcon.argIcons, values):
+            for target, value in zip(assignTargets, values):
                 self.assignValues(target, value)
         else:
-            raise IconExecException(self.leftArg, "Not a valid assignment target")
+            raise IconExecException(self.leftArg(), "Not a valid assignment target")
+
+    def clipboardRepr(self, offset):
+        location = self.rect[:2]
+        return (self.__class__.__name__, (addPoints(location, offset),
+         (None if self.leftArg() is None else self.leftArg().clipboardRepr(offset),
+          None if self.rightArg() is None else self.rightArg().clipboardRepr(offset))))
+
+    @staticmethod
+    def fromClipboard(clipData, window, offset):
+        location, children = clipData
+        ic = AssignIcon(window, (addPoints(location, offset)))
+        leftArg, rightArg = clipboardDataToIcons(children, window, offset)
+        ic.sites.leftArg.attach(ic, leftArg, ("output", 0))
+        ic.sites.rightArg.attach(ic, rightArg, ("output", 0))
+        return ic
 
 class DivideIcon(Icon):
     def __init__(self, window, location=None, floorDiv=False):
         Icon.__init__(self, window)
         self.precedence = 11
-        self.topArg = None
-        self.bottomArg = None
         self.floorDiv = floorDiv
         emptyArgHeight = 14
         self.emptyArgSize = (EMPTY_ARG_WIDTH, emptyArgHeight)
         self.topArgSize = self.emptyArgSize
-        self.topArgSiteOffset = (2, -emptyArgHeight // 2 - 2)
         self.bottomArgSize = self.emptyArgSize
-        self.bottomArgSiteOffset = (2, emptyArgHeight // 2 + 2)
         width, height = self._size()
+        outSiteY = self.topArgSize[1] + 2
+        self.sites.add('output', 'output', 0, 0, outSiteY)
+        self.sites.add('topArg', 'input', 0, 2, outSiteY - emptyArgHeight // 2 - 2)
+        self.sites.add('bottomArg', 'input', 1, 2, outSiteY + emptyArgHeight // 2 + 2)
+        self.sites.add('attrIcon', 'attrOut', 0, width-1, outSiteY + ATTR_SITE_OFFSET)
+        self.leftSiteDrawn = False
         if location is None:
             x, y = 0, 0
         else:
             x, y = location
         self.rect = (x, y, x + width, y + height)
-        self.outSiteOffset = (0, self.topArgSize[1] + 2)
-        self.attrSiteOffset = (width-1, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
-        self.attrIcon = None
         self.textHasParens = False  # Like BinOpIcon.hasParens, but only affects text repr
 
     def _size(self):
@@ -1291,14 +1242,13 @@ class DivideIcon(Icon):
             width, height = self._size()
             self.cachedImage = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
             # Input sites
-            leftX, cntrY = self.outSiteOffset
-            topArgX, topArgY = self.topArgSiteOffset
-            topArgX += leftX
-            topArgY += cntrY - floatInImage.height // 2
+            leftX = self.sites.output.xOffset
+            cntrY = self.sites.output.yOffset
+            topArgX = self.sites.topArg.xOffset
+            topArgY = self.sites.topArg.yOffset - floatInImage.height // 2
             self.cachedImage.paste(floatInImage, (topArgX, topArgY))
-            bottomArgX, bottomArgY = self.bottomArgSiteOffset
-            bottomArgX += leftX
-            bottomArgY += cntrY - floatInImage.height // 2
+            bottomArgX = self.sites.bottomArg.xOffset
+            bottomArgY = self.sites.bottomArg.yOffset - floatInImage.height // 2
             self.cachedImage.paste(floatInImage, (bottomArgX, bottomArgY))
             # Body
             bodyLeft = outSiteImage.width - 1
@@ -1324,69 +1274,12 @@ class DivideIcon(Icon):
         # If rectangle passes horizontally above or below the central body of the icon,
         # it is considered to not be touching
         rectLeft, rectTop, rectRight, rectBottom = rect
-        centerY = self.rect[1] + self.outSiteOffset[1]
+        centerY = self.rect[1] + self.sites.output.yOffset
         iconTop = centerY - 5
         iconBottom = centerY + 5
         if rectBottom < iconTop or rectTop > iconBottom:
             return False
         return True
-
-    def children(self):
-        return [arg for arg in (self.topArg, self.bottomArg, self.attrIcon) if arg is not None]
-
-    def snapLists(self, atTop=False):
-        x, y = self.rect[:2]
-        y += self.outSiteOffset[1]
-        outSite = (self, (x + self.outSiteOffset[0], y), 0)
-        topArgX = x + self.topArgSiteOffset[0]
-        topArgY = y + self.topArgSiteOffset[1]
-        topArgSnapEntry = (self, (topArgX, topArgY), 0)
-        bottomArgX = x + self.bottomArgSiteOffset[0]
-        bottomArgY = y + self.bottomArgSiteOffset[1]
-        bottomArgSnapEntry = (self, (bottomArgX, bottomArgY), 1)
-        inSites = [giveInputSiteToBinOpChild(self.topArg, topArgSnapEntry),
-          giveInputSiteToBinOpChild(self.bottomArg, bottomArgSnapEntry)]
-        attrOutSite = (self, (x + self.attrSiteOffset[0], y + ATTR_SITE_OFFSET), 0)
-        return {"output":[outSite], "input":inSites, "attrOut":[attrOutSite]}
-
-    def replaceChild(self, newChild, site, leavePlace=False):
-        "Add or replace a child icon"
-        siteType, siteIndex = site
-        if siteType == "input":
-            if siteIndex == 0:
-                self.topArg = newChild
-            else:
-                self.bottomArg = newChild
-        elif siteType == "attrOut":
-            self.attrIcon = newChild
-        self.layoutDirty = True
-
-    def childAt(self, site):
-        siteType, siteIndex = site
-        if siteType == "input":
-            if siteIndex == 0:
-                return self.topArg
-            elif siteIndex == 1:
-                return self.bottomArg
-        elif siteType == "attrOut" and siteIndex == 0:
-            return self.attrIcon
-        return None
-
-    def siteOf(self, child):
-        if child is self.topArg:
-           return ("input", 0)
-        elif child is self.bottomArg:
-            return ("input", 1)
-        elif child is self.attrIcon:
-            return ("attrOut", 0)
-        return None
-
-    def layout(self, location=None):
-        if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        self.doLayout(x, y + self.topArgSize[1] + 2, self.calcLayout())
 
     def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None, assocOk=False):
         if parentPrecedence is None:
@@ -1411,49 +1304,50 @@ class DivideIcon(Icon):
         self.topArgSize = tArgWidth, tArgHeight
         self.bottomArgSize = bArgWidth, bArgHeight
         width = max(tArgWidth, bArgWidth) + 6
-        self.topArgSiteOffset = ((width - 2 - tArgWidth) // 2,
-         - tArgHeight + tArgSiteOffset - 1)
-        self.bottomArgSiteOffset = ((width - 2 - bArgWidth) // 2,
-         bArgSiteOffset + 2)
-        self.outSiteOffset = (0, tArgHeight + 2)
+        cntrY = tArgHeight + 2
+        self.sites.output.yOffset = cntrY
+        self.sites.topArg.xOffset = (width - 2 - tArgWidth) // 2
+        self.sites.topArg.yOffset = cntrY - tArgHeight + tArgSiteOffset - 1
+        self.sites.bottomArg.xOffset = (width - 2 - bArgWidth) // 2
+        self.sites.bottomArg.yOffset = cntrY + bArgSiteOffset + 2
+        self.sites.attrIcon.xOffset = width - 2
+        self.sites.attrIcon.yOffset = cntrY + ATTR_SITE_OFFSET
         width, height = self._size()
         x = outSiteX
-        y = outSiteY - self.outSiteOffset[1]
+        y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x+width, y+height)
         if tArgLayout is not None:
-            topArgX, topArgY = self.topArgSiteOffset
-            tArgLayout.icon.doLayout(outSiteX + topArgX, outSiteY + topArgY, tArgLayout)
+            tArgLayout.icon.doLayout(x + self.sites.topArg.xOffset,
+             y + self.sites.topArg.yOffset, tArgLayout)
         if bArgLayout is not None:
-            bottomArgX, bottomArgY = self.bottomArgSiteOffset
-            bArgLayout.icon.doLayout(outSiteX + bottomArgX, outSiteY + bottomArgY,
-             bArgLayout)
-        self.attrSiteOffset = (width - 2, self.outSiteOffset[1] + ATTR_SITE_OFFSET)
-        if self.attrIcon:
-            self.attrIcon.doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
+            bArgLayout.icon.doLayout(x + self.sites.bottomArg.xOffset,
+             y + self.sites.bottomArg.yOffset, bArgLayout)
+        if attrLayout is not None:
+            attrLayout.icon.doLayout(outSiteX + width - 2, outSiteY + ATTR_SITE_OFFSET,
              attrLayout)
         self.cachedImage = None
         self.layoutDirty = False
 
     def calcLayout(self, parentPrecedence=None, assocOk=False):
-        if self.topArg is None:
+        if self.sites.topArg.att is None:
             tArgLayout = None
             tArgWidth, tArgHeight = self.emptyArgSize
         else:
-            tArgLayout = self.topArg.calcLayout()
+            tArgLayout = self.sites.topArg.att.calcLayout()
             tArgWidth = tArgLayout.width
             tArgHeight = tArgLayout.height
-        if self.bottomArg is None:
+        if self.sites.bottomArg.att is None:
             bArgLayout = None
             bArgWidth, bArgHeight = self.emptyArgSize
         else:
-            bArgLayout = self.bottomArg.calcLayout()
+            bArgLayout = self.sites.bottomArg.att.calcLayout()
             bArgWidth = bArgLayout.width
             bArgHeight = bArgLayout.height
         width = max(tArgWidth, bArgWidth) + 4
         height = tArgHeight + bArgHeight + 2
         siteYOff = tArgHeight + 1
-        if self.attrIcon:
-            attrLayout = self.attrIcon.calcLayout()
+        if self.sites.attrIcon.att is not None:
+            attrLayout = self.sites.attrIcon.att.calcLayout()
             heightAbove = max(siteYOff, attrLayout.siteOffset - ATTR_SITE_OFFSET)
             siteYOff = heightAbove
             attrHeightBelow = ATTR_SITE_OFFSET + attrLayout.height - attrLayout.siteOffset
@@ -1465,34 +1359,48 @@ class DivideIcon(Icon):
         return Layout(self, width, height,siteYOff, (tArgLayout, bArgLayout, attrLayout))
 
     def textRepr(self):
-        topArgText = "None" if self.topArg is None else self.topArg.textRepr()
-        bottomArgText = "None" if self.bottomArg is None else self.bottomArg.textRepr()
-        operator = '//' if self.floorDiv else '/'
-        text = topArgText + " " + operator + " " + bottomArgText
+        if self.sites.topArg.att is None:
+            topArgText = "None"
+        else:
+            topArgText = self.sites.topArg.att.textRepr()
+        if self.sites.bottomArg.att is None:
+            bottomArgText = "None"
+        else:
+            bottomArgText = self.sites.bottomArg.att.textRepr()
+        op = '//' if self.floorDiv else '/'
+        text = topArgText + " " + op + " " + bottomArgText
         if self.textHasParens:
             return "(" + text + ")"
         return text
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
-        return (self.__class__.__name__, (addPoints(location, offset),
-         (None if self.topArg is None else self.topArg.clipboardRepr(offset),
-          None if self.bottomArg is None else self.bottomArg.clipboardRepr(offset))))
+        if self.sites.topArg.att is None:
+            topArg = None
+        else:
+            topArg = self.sites.topArg.att.clipboardRepr(offset)
+        if self.sites.bottomArg.att is None:
+            bottomArg = None
+        else:
+            bottomArg = self.sites.bottomArg.att.clipboardRepr(offset)
+        return self.__class__.__name__, (addPoints(location, offset), (topArg, bottomArg))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         location, children = clipData
         ic = DivideIcon(window, (addPoints(location, offset)))
-        ic.topArg, ic.bottomArg = clipboardDataToIcons(children, window, offset)
+        topArg, bottomArg = clipboardDataToIcons(children, window, offset)
+        ic.sites.topArg.attach(ic, topArg, ("output", 0))
+        ic.sites.bottomArg.attach(ic, bottomArg, ("output", 0))
         return ic
 
     def execute(self):
-        if self.topArg is None:
+        if self.sites.topArg.att is None:
             raise IconExecException(self, "Missing numerator")
-        if self.bottomArg is None:
+        if self.sites.bottomArg.att is None:
             raise IconExecException(self, "Missing denominator")
-        topValue = self.topArg.execute()
-        bottomValue = self.bottomArg.execute()
+        topValue = self.sites.topArg.att.execute()
+        bottomValue = self.sites.bottomArg.att.execute()
         try:
             if self.floorDiv:
                 result = operator.floordiv(topValue, bottomValue)
@@ -1520,10 +1428,11 @@ class ImageIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.image, self.selected,
          colorErr), location, clip)
 
-    def snapLists(self, atTop=False):
+    def snapLists(self):
         return {}
 
     def layout(self, location=None):
+        # Can't use Base class layout method because it depends on having an output site
         if location is not None:
             self.rect = moveRect(self.rect, location)
 
@@ -1613,14 +1522,14 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
         return clickedIcon
     # Only binary operations are candidates, and only when the expression directly below
     # has claimed itself to be the leftmost operand of an expression
-    if fromIcon.__class__ is AssignIcon and fromIcon.leftArg is not None:
+    if fromIcon.__class__ is AssignIcon and fromIcon.leftArg() is not None:
         # This is temporary for calculator app, until real python assignment is supported
-        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg, btnPressLoc)
-        if left is fromIcon.leftArg:
+        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg(), btnPressLoc)
+        if left is fromIcon.leftArg():
             return fromIcon  # Claim outermost status for this icon
-    if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg is not None:
-        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg, btnPressLoc)
-        if left is fromIcon.leftArg:
+    if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg() is not None:
+        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg(), btnPressLoc)
+        if left is fromIcon.leftArg():
             targetIsBinOpIcon = clickedIcon.__class__ is BinOpIcon
             if not targetIsBinOpIcon or targetIsBinOpIcon and clickedIcon.hasParens:
                 # Again, we have to check before claiming outermost status for fromIcon,
@@ -1632,9 +1541,9 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
         # Pass on status from non-contiguous expressions below fromIcon in the hierarchy
         if left is not None:
             return left
-        if fromIcon.rightArg is None:
+        if fromIcon.rightArg() is None:
             return None
-        return findLeftOuterIcon(clickedIcon, fromIcon.rightArg, btnPressLoc)
+        return findLeftOuterIcon(clickedIcon, fromIcon.rightArg(), btnPressLoc)
     # Pass on any results from below fromIcon in the hierarchy
     children = fromIcon.children()
     if children is not None:
@@ -1644,17 +1553,132 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
                 return result
     return None
 
-def giveInputSiteToBinOpChild(child, snapListEntry):
-    parent, pos, site = snapListEntry
-    if child is None or child.__class__ is not BinOpIcon or child.hasParens:
-        # child is empty or pick-able on the left
-        return snapListEntry
-    childLeft = child.leftArg
-    if childLeft is None or childLeft.__class__ is not BinOpIcon:
-        # Give the site to the child, but can't go further
-        return (child, pos, 0)
-    # Try to pass the site even further down
-    return giveInputSiteToBinOpChild(childLeft, (child, pos, 0))
+class IconSite:
+    def __init__(self, siteType, idx, xOffset=0, yOffset=0):
+        self.type = siteType
+        self.idx = idx
+        self.xOffset = xOffset
+        self.yOffset = yOffset
+        self.att = None
+
+    def attach(self, ownerIcon, fromIcon, fromSite=("output", 0)):
+        # Remove original link from attached site
+        if self.att:
+            backLinkSite = self.att.siteOf(ownerIcon)
+            if backLinkSite is not None:
+                self.att.sites.lookup(backLinkSite).att = None
+        # Attach fromIcon
+        self.att = fromIcon
+        if fromIcon is None:
+            return
+        # Make the link bi-directional
+        site = fromIcon.sites.lookup(fromSite)
+        if site is None:
+            print("Could not attach icon: invalid back-link")
+            return
+        site.att = ownerIcon
+
+class IconSiteList:
+    """
+    @DynamicAttrs
+    """
+    def __init__(self):
+        self.idDict = {}
+        self.siteTypeToSeriesName = {}
+
+    def lookup(self, siteId):
+        """External to the icon, sites are identified by tuple (site-type, site-index).
+        Locate the matching site by its external name."""
+        return self.idDict.get(siteId)
+
+    def isSeries(self, siteType):
+        return self.getSeries(siteType) is not None
+
+    def findAttached(self, ic):
+        for site in self.idDict.values():
+            if site.att == ic:
+                return site
+        return None
+
+    def childSites(self):
+        return [s for s in self.idDict.values() if s.type in childSiteTypes]
+
+    def parentSite(self):
+        for site in self.idDict.values():
+            if site.type in parentSiteTypes:
+                return site
+        return None
+
+    def add(self, name, siteType, idx, xOffset=0, yOffset=0):
+        site = IconSite(siteType, idx, xOffset, yOffset)
+        setattr(self, name, site)
+        self.idDict[(siteType, idx)] = site
+
+    def addSeries(self, name, siteType, initCount=0, initOffsets=None):
+        series = [None] * initCount
+        self.siteTypeToSeriesName[siteType] = name
+        setattr(self, name, series)
+        for idx in range(initCount):
+            if initOffsets is not None and idx < len(initOffsets):
+                xOff, yOff = initOffsets[idx]
+            else:
+                xOff, yOff = 0, 0
+            site = IconSite(siteType, idx, xOff, yOff)
+            series[idx] = site
+            self.idDict[(siteType, idx)] = site
+
+    def getSeries(self, siteType):
+        """If siteType is the type of a series, return a list of all of the sites in the
+        list.  Otherwise return None"""
+        if siteType in self.siteTypeToSeriesName:
+            return getattr(self, self.siteTypeToSeriesName[siteType])
+        return None
+
+    def remove(self, name):
+        if hasattr(self, name):
+            site = getattr(self, name)
+            delattr(self, name)
+            del self.idDict[(site.type, site.idx)]
+
+    def removeSeriesSite(self, site):
+        """Remove a site from a series (based on index)."""
+        siteType, idx = site
+        series = self.getSeries(siteType)
+        if series is None or not idx < len(series):
+            return
+        if len(series) == 1:  # Leave a single site for insertion
+            series[0].attach(None, None)
+        else:
+            del series[idx]
+            del self.idDict[(siteType, len(series))]
+            for i in range(idx, len(series)):
+                series[i].idx = i
+                self.idDict[(siteType, i)] = series[i]
+
+    def insertSeriesSite(self, site):
+        siteType, idx = site
+        siteType = virtualSiteTypes.get(siteType, siteType)
+        series = self.getSeries(siteType)
+        if series is None:
+            return
+        site = IconSite(siteType, idx)
+        series[idx:idx] = [site]
+        for i in range(idx, len(series)):
+            series[i].idx = i
+            self.idDict[(siteType, i)] = series[i]
+
+    def makeSnapLists(self, ic, x, y):
+        snapSites = {}
+        for (siteType, idx), site in self.idDict.items():
+            if not siteType in snapSites:
+                snapSites[siteType] = []
+            if not (siteType == "input" and coincidentSiteHasPriority(site.att)):
+                snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
+                 site.idx))
+        return snapSites
+
+def coincidentSiteHasPriority(child):
+    return child is not None and child.__class__ is BinOpIcon and not child.hasParens
 
 def containingRect(icons):
     maxRect = AccumRects()
