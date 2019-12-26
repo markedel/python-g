@@ -257,7 +257,9 @@ class EntryIcon(icon.Icon):
                 self.attachedIcon.replaceChild(None, self.attachedSite)
             self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
         else:  # Entry icon is not attached to icon (independent in window)
-            if self in self.window.topIcons:
+            if self not in self.window.topIcons:
+                print("why was entry icon not in top level icon list?")
+            else:
                 self.window.removeTop(self)
             if self.pendingArg():
                 self.window.addTop(self.pendingArg(), self.rect[0], self.rect[1])
@@ -330,7 +332,7 @@ class EntryIcon(icon.Icon):
                     beep()
             elif matchingParen is self.attachedIcon:
                 # Empty tuple
-                parent = self.window.parentOf(matchingParen)
+                parent = matchingParen.parent()
                 tupleIcon = icon.TupleIcon(window=self.window)
                 if parent is None:
                     self.window.replaceTop(matchingParen, tupleIcon)
@@ -365,7 +367,9 @@ class EntryIcon(icon.Icon):
         snapLists = ic.snapLists()
         if self.attachedIcon is None:
             self.window.addTop(ic, self.rect[0], self.rect[1])
-            if self in self.window.topIcons:
+            if self not in self.window.topIcons:
+                print("why was entry icon not in top level icon list?")
+            else:
                 self.window.removeTop(self)
             ic.layoutDirty = True
             if "input" in snapLists:
@@ -471,7 +475,9 @@ class EntryIcon(icon.Icon):
             tupleIcon.insertChildren([None, self.pendingArg()], ("input", 0))
             self.setPendingArg(None)
             self.window.cursor.setToIconSite(tupleIcon, ("input", 0))
-            if self in self.window.topIcons:
+            if self not in self.window.topIcons:
+                print("why was entry icon not in top level icon list?")
+            else:
                 self.window.removeTop(self)
             self.window.addTop(tupleIcon,self.rect[0], self.rect[1])
             return True
@@ -501,7 +507,7 @@ class EntryIcon(icon.Icon):
                 args += [onIcon.sites.argIcon.att]
             tupleIcon.insertChildren(args, ("input", 0))
             self.window.cursor.setToIconSite(tupleIcon, ("input", 0))
-            parent = self.window.parentOf(onIcon)
+            parent = onIcon.parent()
             if parent is None:
                 self.window.replaceTop(onIcon, tupleIcon)
             else:
@@ -534,7 +540,7 @@ class EntryIcon(icon.Icon):
             leftArg = onIcon
             rightArg = None
         child = onIcon
-        for parent in reversed(self.window.parentage(onIcon)):
+        for parent in onIcon.parentage():
             if parent.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon):
                 onIcon.layoutDirty = True
                 childSite = parent.siteOf(child)
@@ -552,7 +558,7 @@ class EntryIcon(icon.Icon):
                 if not cursorPlaced:
                     cursorSite = ("input", 0 if leftArg is None else 1)
                     self.window.cursor.setToIconSite(tupleIcon, cursorSite)
-                parentParent = self.window.parentOf(parent)
+                parentParent = parent.parent()
                 if parentParent is None:
                     self.window.replaceTop(parent, tupleIcon)
                 else:
@@ -599,7 +605,7 @@ class EntryIcon(icon.Icon):
     def findOpenParen(self, fromIcon):
         if fromIcon.__class__ is CursorParenIcon and not fromIcon.closed:
             return fromIcon
-        for parent in reversed(self.window.parentage(fromIcon)):
+        for parent in fromIcon.parentage():
             if parent.__class__ is CursorParenIcon:
                 return parent
         return None
@@ -607,7 +613,7 @@ class EntryIcon(icon.Icon):
     def makeFunction(self, ic):
         if ic.__class__ is not icon.IdentifierIcon:
             return False
-        parent = self.window.parentOf(ic)
+        parent = ic.parent()
         fnIcon = icon.FnIcon(ic.name, window=self.window)
         fnIcon.layoutDirty = True
         if parent is None:
@@ -622,7 +628,7 @@ class EntryIcon(icon.Icon):
         entered.  Stitch the operator in to the correct level with respect to the
         surrounding binary operators, and move the cursor to the empty operand slot."""
         argIcon = self.attachedIcon
-        entryIconParents = self.window.parentage(self)
+        entryIconParents = self.parentage()
         argIcon.replaceChild(None, self.attachedSite)
         leftArg = argIcon
         rightArg = None
@@ -633,7 +639,7 @@ class EntryIcon(icon.Icon):
         # lower precedence, or is not a binary operation.  Also stop if the parent
         # operation has equal precedence, and the associativity of the operation matches
         # the side of the operation on which the insertion is being made.
-        for op in reversed(entryIconParents[:-1]):
+        for op in entryIconParents[1:]:
             if stopAtParens or op.__class__ not in (icon.BinOpIcon, icon.UnaryOpIcon) or \
                     newOpIcon.precedence > op.precedence or \
                     newOpIcon.precedence == op.precedence and (
@@ -694,7 +700,7 @@ class EntryIcon(icon.Icon):
         right -= 2
         return left < x < right and top < y < bottom
 
-    def doLayout(self, siteX, siteY, layout, parentPrecedence=None, assocOk=False):
+    def doLayout(self, siteX, siteY, layout):
         width = self._width() + icon.outSiteImage.width - 1
         if self.attachedSite and self.attachedSite[0] == "attrOut":
             outSiteY = siteY - icon.ATTR_SITE_OFFSET
@@ -713,7 +719,7 @@ class EntryIcon(icon.Icon):
             self._pendingAttr().doLayout(outSiteX + width - 4,
              outSiteY + icon.ATTR_SITE_OFFSET, layout.subLayouts[0])
 
-    def calcLayout(self, parentPrecedence=None, assocOk=False):
+    def calcLayout(self):
         if self.attachedToAttribute():
             width = self._width() - 1 + RIGHT_LAYOUT_MARGIN
         else:
@@ -806,8 +812,7 @@ class CursorParenIcon(icon.Icon):
         icon.pasteImageWithClip(image, icon.tintSelectedImage(self.cachedImage,
          self.selected, colorErr), location, clip)
 
-    def doLayout(self, outSiteX, outSiteY, layout, parentPrecedence=None,
-            assocOk=False):
+    def doLayout(self, outSiteX, outSiteY, layout):
         bodyWidth, height = self.bodySize
         argLayout, attrLayout = layout.subLayouts
         if self.closed:
@@ -830,7 +835,7 @@ class CursorParenIcon(icon.Icon):
                 self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
                  outSiteY + icon.ATTR_SITE_OFFSET, attrLayout)
 
-    def calcLayout(self, parentPrecedence=None, assocOk=False):
+    def calcLayout(self):
         singleParenWidth, height = self.bodySize
         siteYOff = height // 2
         argLayouts = [None, None]
@@ -1013,7 +1018,7 @@ class Cursor:
             cursorSites.sort(key=itemgetter(1), reverse=True)
         x, y, ic, site = cursorSites[0]
         if site[0] == "output":
-            parent = self.window.parentOf(ic)
+            parent = ic.parent()
             if parent is not None:
                 self.setToIconSite(parent, parent.siteOf(ic))
                 return
@@ -1024,7 +1029,7 @@ class Cursor:
         # Build a list of possible destination cursor positions, normalizing attribute
         # site positions to the center of the cursor (in/out site position).  For the
         # moment, limit to icons with the same top level parent
-        topIcon = self.window.topLevelParent(self.icon)
+        topIcon = self.icon.topLevelParent()
         cursorSites = []
         for winIcon in topIcon.traverse():
             snapLists = winIcon.snapLists()
@@ -1088,7 +1093,7 @@ class Cursor:
             return True
         child = self.icon
         moveTo = False
-        for parent in reversed(self.window.parentage(self.icon)):
+        for parent in self.icon.parentage():
             if parent.__class__ is icon.BinOpIcon:
                 if child is parent.leftArg():
                     return False
@@ -1113,7 +1118,7 @@ class Cursor:
             self.setToIconSite(self.icon, ("attrOut", 0))
             return True
         # Just tear intervening icons to the end bracket (was this right?)
-        for parent in reversed(self.window.parentage(self.icon)):
+        for parent in self.icon.parentage():
             if parent.__class__ is icon.ListIcon:
                 self.setToIconSite(parent, ("attrOut", 0))
                 return True

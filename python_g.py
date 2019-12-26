@@ -229,7 +229,7 @@ class Window:
         if len(selectedIcons) == 1:
             # A single icon was selected.  Replace it and its children
             replaceIcon = selectedIcons[0]
-            iconParent = self.parentOf(replaceIcon)
+            iconParent = replaceIcon.parent()
             if iconParent is None:
                 self.entryIcon = typing.EntryIcon(None, None, window=self)
                 self.replaceTop(replaceIcon, self.entryIcon)
@@ -524,7 +524,7 @@ class Window:
                 return
             selectedIcons = findTopIcons(self.selectedIcons())
             if len(selectedIcons) == 1 and len(pastedIcons) == 1:
-                replaceParent = self.parentOf(selectedIcons[0])
+                replaceParent = selectedIcons[0].parent()
                 replaceSite = replaceParent.siteOf(selectedIcons[0])
             else:
                 selectedRect = icon.containingRect(self.selectedIcons())
@@ -534,7 +534,7 @@ class Window:
         # the icon at replaceSite.  Otherwise place the icons at the top level of the
         # window at position given by pastePos
         if replaceParent is not None:
-            topIcon = self.topLevelParent(replaceParent)
+            topIcon = replaceParent.topLevelParent()
             redrawRegion = AccumRects(topIcon.hierRect())
             replaceParent.replaceChild(pastedIcons[0], replaceSite)
             topIcon = self.filterRedundantParens(topIcon)
@@ -570,7 +570,7 @@ class Window:
             # Not using removeIcons here, to take advantage or replaceChild operation
             # on listType icons and remove an empty argument spot.
             self.cursor.icon.replaceChild(None, self.cursor.site)
-            self.redoLayout(self.topLevelParent(self.cursor.icon))
+            self.redoLayout(self.cursor.icon.topLevelParent())
 
     def _backspaceCb(self, _evt=None):
         if self.entryIcon is None:
@@ -624,7 +624,7 @@ class Window:
         else:
             return  # Nothing to execute
         # Find and execute the top level icon associated with the icon at the cursor
-        iconToExecute = self.topLevelParent(iconToExecute)
+        iconToExecute = iconToExecute.topLevelParent()
         if iconToExecute is None:
             print("Could not find top level icon to execute")
             return
@@ -1019,61 +1019,13 @@ class Window:
         l, t, r, b = rect
         self.draw.rectangle((l, t, r-1, b-1), fill=windowBgColor)
 
-    def parentOf(self, ic):
-        """Find the parent of a given icon.  Don't use this casually.  Because we don't
-        have a parent link, this is an exhaustive search of the hierarchy."""
-        parents = self.parentage(ic)
-        if parents is None or parents == ():
-            return None
-        return parents[-1]
-
-    def topLevelParent(self, ic):
-        parents = self.parentage(ic)
-        if parents is None:
-            return None
-        if parents == ():
-            return ic
-        return parents[0]
-
-    def parentage(self, child):
-        oldResult = self.parentageOld(child)
-        parentList = []
-        while True:
-            parent = child.parent()
-            if parent is None:
-                break
-            parentList.append(parent)
-            child = parent
-        newResult = tuple(reversed(parentList))
-        if oldResult != newResult:
-            print('parent links not correct\n   was', oldResult, '\n    is', newResult)
-        return newResult
-
-    def parentageOld(self, child, fromIcon=None):
-        """Returns a tuple containing the lineage of the given icon, from window.topIcons
-        down to the direct parent of the icon.  Don't use this casually.  Because we don't
-        have a parent link, this is an exhaustive search of the hierarchy.  For an icon at
-        the top of the hierarchy, returns an empty tuple.  If the icon is not found at all
-        in the hierarchy, returns None."""
-        if fromIcon is None:
-            icons = self.topIcons
-        else:
-            icons = fromIcon.children()
-        for ic in icons:
-            if ic == child:
-                return ()
-            result = self.parentageOld(child, fromIcon=ic)
-            if result is not None:
-                return (ic, *result)
-        return None
-
     def assocGrouping(self, ic):
         """Find the root binary operation associated with a group of equal precedence
         operations"""
         child = ic
         if ic.__class__ is not icon.BinOpIcon:
             return ic
-        for parent in reversed(self.parentage(ic)):
+        for parent in ic.parentage():
             if parent.__class__ is not icon.BinOpIcon or parent.precedence != ic.precedence:
                 return child
             child = parent
@@ -1157,7 +1109,7 @@ class Window:
         if argIcon is None:
             return ic
         if not (argIcon.__class__ is typing.CursorParenIcon or
-         argIcon.__class__ is icon.BinOpIcon and argIcon.needsParens(parentIcon)):
+         argIcon.__class__ is icon.BinOpIcon and icon.needsParens(argIcon, parentIcon)):
             self.filterRedundantParens(argIcon, ic, ("input", 0))
             return ic
         # Redundant parens found: remove them
@@ -1176,7 +1128,7 @@ class Window:
                 # If it's a binary operation that *will have* parens once we remove the
                 # prop ones, it may not yet have a site on which to put the cursor.
                 # Call layout prematurely to make the site appear
-                self.topLevelParent(argIcon).layout()
+                argIcon.topLevelParent().layout()
             self.cursor.setToIconSite(argIcon, ("attrOut", 0))
 
         return argIcon
@@ -1256,7 +1208,8 @@ class App:
         self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
 
 def findTopIcons(icons):
-    # ... replace this with new parent-link based alternative
+    """ Find the top icon(s) within a list of icons (the returned icons do not have to be
+     at the top of the window icon hierarchy, just the highest within the given list)."""
     iconDir = {ic:True for ic in icons}
     for ic in icons:
         for child in ic.children():
