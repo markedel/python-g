@@ -1519,9 +1519,11 @@ def needsParens(ic, parent=None, forText=False):
     if parent is None:
         return False
     if parent.__class__.__name__ == "CursorParenIcon" and not parent.closed:
-        parent = parent.parent()
-        if parent is None:
+        parenParent = parent.parent()
+        if parenParent is None or parenParent.__class__ is not BinOpIcon or \
+         parenParent.siteOf(parent) != ("input", 0):
             return False
+        parent = parenParent
     arithmeticOpClasses = (BinOpIcon, UnaryOpIcon)
     if forText:
         arithmeticOpClasses += (DivideIcon,)
@@ -1708,22 +1710,14 @@ class IconSiteList:
             # Omit any site whose attached icon has a site of the same type, at the same
             # location.  In such a case we want both dropped icons and typing to go to
             # the site of the innermost (most local) icon.
-            if not hasCoincidentSite(site.att, siteType):
+            if not hasCoincidentSite(site.att, (siteType, idx)):
                 snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
                  site.idx))
         return snapSites
 
-def hasCoincidentSite(ic, siteType):
+def hasCoincidentSite(ic, siteId):
     return ic is not None and hasattr(ic, 'coincidentSite') and \
-     ic.coincidentSite is not None and ic.coincidentSite[0] == siteType
-
-def highestCoincidentSite(ic, site):
-    while True:
-        if ic is None or not hasCoincidentSite(ic, site[0]):
-            return ic, site
-        parent = ic.parent()
-        site = None if parent is None else parent.siteOf(ic)
-        ic = parent
+     ic.coincidentSite is not None and ic.coincidentSite == siteId
 
 def containingRect(icons):
     maxRect = AccumRects()

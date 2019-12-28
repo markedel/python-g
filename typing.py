@@ -34,9 +34,8 @@ binaryOperators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '
  '>', '<=', '>=', '==', '!=']
 unaryOperators = ['+', '-', '~']
 emptyDelimiters = [' ', '\t', '\n', '\r', '\f', '\v']
-delimiters = emptyDelimiters + ['(', ')', '[', ']', '{', '},', ':', '.', ';', '@', '=',
- '->', '+=', '-=', '*=', '/=', '//=', '%=', '@=', '&=', '|=', '^=', '>>=', '<<=', '**=']
-delimitChars = list(dict.fromkeys("".join(binaryOperators + unaryOperators + delimiters)))
+delimitChars = emptyDelimiters + [')', ']', '}', ':', '.', ';', '@', '=',
+ '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!']
 keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
@@ -317,7 +316,7 @@ class EntryIcon(icon.Icon):
                 beep()
             return
         elif parseResult == "endParen":
-            matchingParen = self.findOpenParen(self.attachedIcon)
+            matchingParen = self.findOpenParen(self.attachedIcon, self.attachedSite)
             if matchingParen is None:
                 # Maybe user was just trying to move past an existing paren by typing it
                 if self.pendingArg() and self.attachedSite[0] == "input":
@@ -350,6 +349,8 @@ class EntryIcon(icon.Icon):
                 matchingParen.close()
                 if self.pendingArg():
                     self.attachedIcon.replaceChild(None, self.attachedSite)
+                    self.attachedIcon = matchingParen
+                    self.attachedSite = ("attrOut", 0)
                     matchingParen.replaceChild(self, ("attrOut", 0))
                 else:
                     self.attachedIcon.replaceChild(None, self.attachedSite)
@@ -403,7 +404,7 @@ class EntryIcon(icon.Icon):
                 self.setPendingArg(None)
         # If the pending text needs no further input, process it, now
         if remainingText == ')':
-            matchingParen = self.findOpenParen(cursor.icon)
+            matchingParen = self.findOpenParen(cursor.icon, cursor.site)
             if matchingParen is None:
                 # Maybe user was just trying to move past an existing paren by typing it
                 if not cursor.movePastEndParen():
@@ -602,13 +603,40 @@ class EntryIcon(icon.Icon):
         self.window.replaceTop(child, tupleIcon)
         return True
 
-    def findOpenParen(self, fromIcon):
-        if fromIcon.__class__ is CursorParenIcon and not fromIcon.closed:
-            return fromIcon
-        for parent in fromIcon.parentage():
-            if parent.__class__ is CursorParenIcon:
-                return parent
-        return None
+    def findOpenParen(self, fromIcon, fromSite):
+        """Find a matching open paren, and if necessary, relocate it among coincident
+        sites to match a close paren at fromIcon, fromSite"""
+        matchingParen = searchForOpenCursorParen(fromIcon, fromSite)
+        if matchingParen is None:
+            return None
+        if matchingParen is fromIcon:
+            return matchingParen
+        # Find the lowest common ancestor of the start paren and end location, looking at
+        # the visually-equivalent coincident sites to which the open-paren can be moved.
+        commonAncestor = tryMoveOpenParenDown(matchingParen, fromIcon)
+        if commonAncestor is matchingParen:
+            return matchingParen  # No re-parenting is necessary
+        if commonAncestor is None:
+            # No common ancestor found at the open paren or more local: broaden the scope
+            commonAncestor = tryMoveOpenParenUp(matchingParen, fromIcon)
+        if commonAncestor is None:
+            # Failed to find a common ancestor.  Give up
+            return None
+        # The matching open-paren needs re-parenting to match the close-paren
+        oldArg = matchingParen.sites.argIcon.att
+        matchingParen.replaceChild(None, ('input', 0))
+        oldParenParent = matchingParen.parent()
+        if oldParenParent is None:
+            self.window.replaceTop(matchingParen, oldArg)
+        else:
+            oldParenParent.replaceChild(oldArg, oldParenParent.siteOf(matchingParen))
+        newParenParent = commonAncestor.parent()
+        if newParenParent is None:
+            self.window.replaceTop(commonAncestor, matchingParen)
+        else:
+            newParenParent.replaceChild(matchingParen, newParenParent.siteOf(commonAncestor))
+        matchingParen.replaceChild(commonAncestor, ('input', 0))
+        return matchingParen
 
     def makeFunction(self, ic):
         if ic.__class__ is not icon.IdentifierIcon:
@@ -863,6 +891,7 @@ class CursorParenIcon(icon.Icon):
                 heightBelow = max(height - siteYOff, attrHeightBelow)
                 height = heightAbove + heightBelow
                 width += attrLayout.width
+                argLayouts[1] = attrLayout
         return icon.Layout(self, width, height, siteOffset, argLayouts)
 
     def textRepr(self):
@@ -1256,3 +1285,99 @@ def findTextOffset(text, pixelOffset):
                 return nChars if textLength - pixelOffset < guessDist else lastGuessedPos
         else:
             return guessedPos
+
+def tryMoveOpenParenDown(cursorParen, desiredChild):
+    """Cursor-parens are part of the icon hierarchy, but their meaning is partly defined
+    by the end-paren that the user eventually types to close them.  When they appear in
+    a site that has multiple coincident inputs, we don't really know which one the user
+    intends.  This function finds the most-local icon to which the parens can be moved
+    that is an ancestor to the icon holding the newly-typed end-paren.  If no such icon
+    exists, it returns None."""
+    ic = cursorParen
+    result = None
+    while True:
+        for dcParent in [desiredChild, *desiredChild.parentage()]:
+            if dcParent is ic:
+                # It can be mated with the end-paren
+                result = ic
+                break
+        else:
+            return result
+        cpChild = ic.childAt(('input', 0))
+        if cpChild is None or not icon.hasCoincidentSite(cpChild, ("input", 0)):
+            return result
+        # There is a lower coincident site, try that
+        ic = cpChild
+
+def tryMoveOpenParenUp(cursorParen, desiredChild):
+    """Cursor-parens are part of the icon hierarchy, but their meaning is partly defined
+    by the end-paren that the user eventually types to close them.  When they appear in
+    a site that has multiple coincident inputs, we don't really know which one the user
+    intends.  This function looks for icons above the cursor paren in the hierarchy, to
+    which it may be moved such that it has a common ancestor with the icon holding the
+    newly-typed end-paren.  If no such icon exists, it returns None."""
+    while True:
+        cpParent = cursorParen.parent()
+        if cpParent is None:
+            return None
+        cpSite = cpParent.siteOf(cursorParen)
+        if not icon.hasCoincidentSite(cpParent, cpSite):
+            return None
+        # Found a visually-equivalent spot to which the open-paren could be relocated
+        for dcParent in [desiredChild, *desiredChild.parentage()]:
+            if dcParent is cpParent:
+                # It can be mated with the end-paren
+                return cpParent
+        cursorParen = cpParent
+
+def searchForOpenCursorParen(ic, site):
+    """Traverse "leftward" across the expression hierarchy looking for an open paren that
+    can be mated with an end-paren at the specified icon and site.  If found, return it.
+    Otherwise, return None."""
+    while True:
+        if ic.__class__ is CursorParenIcon and not ic.closed:
+            # Found an open paren
+            return ic
+        siteType, idx = site
+        nextSite = None
+        scanAll = False
+        if siteType == "attrOut":
+            if ic.childAt(("output", 0)):
+                nextSite = ("output", 0)
+            elif ic.childAt(("attrIn", 0)):
+                nextSite = ("attrIn", 0)
+        elif siteType == "output":
+            if ic.childAt(("output", 0)):
+                nextSite = ("output", 0)
+        elif siteType == "input":
+            # siteType is "input", but inputs inside of fns, lists, parenthesized ops are
+            # all dead ends, so all we care about are arithmetic operations
+            if ic.__class__ is icon.UnaryOpIcon:
+                if idx > 0 and ic.childAt(("input", 0)):
+                    nextSite = ("input", 0)
+                    scanAll = True
+                elif ic.childAt(("output", 0)):
+                    nextSite = ("output", 0)
+            elif ic.__class__ is icon.BinOpIcon:
+                if idx > 1 and ic.childAt(("input", 1)):
+                    nextSite = ("input", 1)
+                    scanAll = True
+                elif idx == 1 and ic.childAt(("input", 0)):
+                    nextSite = ("input", 0)
+                    scanAll = True
+                elif not ic.hasParens and ic.childAt(("output", 0)):
+                    nextSite = ("output", 0)
+        if nextSite is None:
+            return None
+        nextIc = ic.childAt(nextSite)
+        if scanAll:
+            # Start at the right side of the icon and scan everything if it's an
+            # arithmetic expression, but skip over parenthesis
+            if nextIc.__class__ is icon.UnaryOpIcon or \
+             nextIc.__class__ is icon.BinOpIcon and not nextIc.hasParens:
+                site = ("input", 2)
+            else:
+                site = ("output", 0)
+        else:
+            site = nextIc.siteOf(ic)
+        ic = nextIc

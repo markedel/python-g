@@ -1130,7 +1130,6 @@ class Window:
                 # Call layout prematurely to make the site appear
                 argIcon.topLevelParent().layout()
             self.cursor.setToIconSite(argIcon, ("attrOut", 0))
-
         return argIcon
 
     def redoLayout(self, topIcon):
