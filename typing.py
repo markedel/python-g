@@ -34,7 +34,7 @@ binaryOperators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '
  '>', '<=', '>=', '==', '!=']
 unaryOperators = ['+', '-', '~']
 emptyDelimiters = [' ', '\t', '\n', '\r', '\f', '\v']
-delimitChars = emptyDelimiters + [')', ']', '}', ':', '.', ';', '@', '=',
+delimitChars = emptyDelimiters + ['(', ')', ']', '}', ':', '.', ';', '@', '=', ',',
  '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!']
 keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
@@ -417,7 +417,7 @@ class EntryIcon(icon.Icon):
             if not self.makeFunction(ic):
                 beep()
             remainingText = ""
-        elif remainingText == '(':
+        elif remainingText == '(' and ic.__class__ in (icon.BinOpIcon, icon.UnaryOpIcon):
             parenIcon = CursorParenIcon(self.window)
             cursor.icon.replaceChild(parenIcon, cursor.site)
             cursor.setToIconSite(parenIcon, ("input", 0))
@@ -755,21 +755,15 @@ class EntryIcon(icon.Icon):
         siteOffset = self.height // 2
         if self.attachedSite and self.attachedSite[0] == "attrOut":
             siteOffset += icon.ATTR_SITE_OFFSET
+        layout = icon.Layout(self, width, self.height, siteOffset)
         if self.pendingArg() is None and self._pendingAttr() is None:
-            return icon.Layout(self, width, self.height, siteOffset, [])
+            return layout
         if self.pendingArg():
-            pendingLayout = self.pendingArg().calcLayout()
-            heightAbove = max(siteOffset, pendingLayout.siteOffset)
-            pendingHeightBelow = pendingLayout.height - pendingLayout.siteOffset
-            heightBelow = max(self.height - siteOffset, pendingHeightBelow)
+            layout.addSubLayout(self.pendingArg().calcLayout(), width, 0)
         else:
-            pendingLayout = self._pendingAttr().calcLayout()
-            heightAbove = max(siteOffset, pendingLayout.siteOffset - icon.ATTR_SITE_OFFSET)
-            pendingHeightBelow = icon.ATTR_SITE_OFFSET + pendingLayout.height - pendingLayout.siteOffset
-            heightBelow = max(self.height - siteOffset, pendingHeightBelow)
-        height = heightAbove + heightBelow
-        width += pendingLayout.width
-        return icon.Layout(self, width, height, heightAbove, [pendingLayout])
+            layout.addSubLayout(self._pendingAttr().calcLayout(), width,
+             icon.ATTR_SITE_OFFSET)
+        return layout
 
     def clipboardRepr(self, offset):
         return None
@@ -865,34 +859,21 @@ class CursorParenIcon(icon.Icon):
 
     def calcLayout(self):
         singleParenWidth, height = self.bodySize
-        siteYOff = height // 2
-        argLayouts = [None, None]
+        width = singleParenWidth
+        layout = icon.Layout(self, width, height, height//2)
         if self.sites.argIcon.att is None:
-            width = singleParenWidth + icon.EMPTY_ARG_WIDTH
-            siteOffset = siteYOff
+            layout.addSubLayout(None)
+            width += icon.EMPTY_ARG_WIDTH
         else:
             argLayout = self.sites.argIcon.att.calcLayout()
-            heightAbove = max(siteYOff, argLayout.siteOffset)
-            argHeightBelow = argLayout.height - argLayout.siteOffset
-            myHeightBelow = height - siteYOff
-            heightBelow = max(myHeightBelow, argHeightBelow)
-            height = heightAbove + heightBelow
-            width = singleParenWidth + argLayout.width - 1
-            argLayouts[0] = argLayout
-            siteOffset = heightAbove
-        if self.closed:
-            width += singleParenWidth
-            if self.sites.attrIcon.att:
-                attrLayout = self.sites.attrIcon.att.calcLayout()
-                heightAbove = max(siteYOff, attrLayout.siteOffset - icon.ATTR_SITE_OFFSET)
-                siteYOff = heightAbove
-                attrHeightBelow = icon.ATTR_SITE_OFFSET + attrLayout.height - \
-                 attrLayout.siteOffset
-                heightBelow = max(height - siteYOff, attrHeightBelow)
-                height = heightAbove + heightBelow
-                width += attrLayout.width
-                argLayouts[1] = attrLayout
-        return icon.Layout(self, width, height, siteOffset, argLayouts)
+            layout.addSubLayout(argLayout, singleParenWidth, 0)
+            width += argLayout.width - 1
+        if self.closed and self.sites.attrIcon.att:
+            layout.addSubLayout(self.sites.attrIcon.att.calcLayout(),
+             width + singleParenWidth, icon.ATTR_SITE_OFFSET)
+        else:
+            layout.addSubLayout(None)
+        return layout
 
     def textRepr(self):
         if self.sites.argIcon.att is None:
