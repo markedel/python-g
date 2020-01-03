@@ -246,7 +246,7 @@ class Window:
             typing.beep()
 
     def _insertEntryIconAtCursor(self, initialChar):
-        if self.cursor.site[0] == "output":
+        if self.cursor.siteType == "output":
             self.entryIcon = typing.EntryIcon(None, None, window=self,
              location=self.cursor.icon.rect[:2])
             self.entryIcon.setPendingArg(self.cursor.icon)
@@ -499,7 +499,7 @@ class Window:
             return  # Nothing usable on the clipboard
         # There was something clipboard that could be converted to icon form.  Figure out
         # where to put it
-        iconOutputSite = pastedIcons[0].posOfSite(("output", 0))
+        iconOutputSite = pastedIcons[0].posOfSite("output")
         replaceParent = None
         replaceSite = None
         pastePos = None
@@ -560,7 +560,7 @@ class Window:
             if iconOutputSite is None:
                 self.cursor.removeCursor()
             else:
-                self.cursor.setToIconSite(pastedIcons[0], ("output", 0))
+                self.cursor.setToIconSite(pastedIcons[0], "output")
 
     def _deleteCb(self, _evt=None):
         selected = self.selectedIcons()
@@ -603,7 +603,6 @@ class Window:
         # Find the icon at the cursor.  If there's still an entry icon, try to process
         # its content before executing.
         if self.entryIcon is not None:
-            iconToExecute = self.entryIcon.attachedIcon
             # Add a delimiter character to force completion
             oldLoc = self.entryIcon.rect
             self.entryIcon.addText(" ")
@@ -614,7 +613,8 @@ class Window:
                 if len(self.entryIcon.text) == 0 and \
                  self.entryIcon.pendingAttribute is None and \
                  self.entryIcon.pendingArg() is None:
-                    self.cursor.setToIconSite(self.entryIcon.attachedIcon, self.entryIcon.attachedSite)
+                    self.cursor.setToIconSite(self.entryIcon.attachedIcon,
+                     self.entryIcon.attachedSite)
                     self.removeIcons([self.entryIcon])
                     self.entryIcon = None
                 else:
@@ -661,23 +661,22 @@ class Window:
         # dragged icons
         draggingOutputs = []
         for dragIcon in topDraggingIcons:
-            for ic, (x, y), siteIdx in dragIcon.snapLists().get("output", []):
+            for ic, (x, y), name in dragIcon.snapLists().get("output", []):
                 draggingOutputs.append(((x-xOff, y-yOff), ic))
         stationaryInputs = []
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
-                isTopIcon = winIcon is topIcon
                 snapLists = winIcon.snapLists()
-                for ic, pos, idx in snapLists.get("input", []):
-                    stationaryInputs.append((pos, ic, ("input", idx)))
-                for ic, pos, idx in snapLists.get("insertInput", []):
-                    stationaryInputs.append((pos, ic, ("insertInput", idx)))
+                for ic, pos, name in snapLists.get("input", []):
+                    stationaryInputs.append((pos, ic, "input", name))
+                for ic, pos, name in snapLists.get("insertInput", []):
+                    stationaryInputs.append((pos, ic, "insertInput", name))
         self.snapList = []
         for si in stationaryInputs:
-            (sx, sy), sIcon, sSite = si
+            (sx, sy), sIcon, sSiteType, sSiteName = si
             for do in draggingOutputs:
                 (dx, dy), dIcon = do
-                self.snapList.append((sx-dx, sy-dy, sIcon, dIcon, sSite))
+                self.snapList.append((sx-dx, sy-dy, sIcon, dIcon, sSiteType, sSiteName))
         self.snapped = None
         self._updateDrag(evt)
 
@@ -690,13 +689,13 @@ class Window:
         # drag position to mate them exactly (snap them together)
         self.snapped = None
         nearest = SNAP_DIST + 1
-        for sx, sy, inIcon, outIcon, site in self.snapList:
+        for sx, sy, inIcon, outIcon, siteType, siteName in self.snapList:
             dist = abs(x-sx) + abs(y-sy)
             if dist < nearest:
                 nearest = dist
                 x = sx
                 y = sy
-                self.snapped = (inIcon, outIcon, site)
+                self.snapped = (inIcon, outIcon, siteType, siteName)
         # Erase the old drag image
         width = self.dragImage.width
         height = self.dragImage.height
@@ -727,16 +726,16 @@ class Window:
         self.addTop(topDraggedIcons)
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
-            parentIcon, childIcon, site = self.snapped
+            parentIcon, childIcon, siteType, siteName = self.snapped
             self.removeTop(childIcon)  # Added above in case there were others
-            toDelete = parentIcon.childAt(site)
+            toDelete = parentIcon.childAt(siteName)
             redrawRegion.add(parentIcon.hierRect())
             if toDelete is not None:
                 redrawRegion.add(childIcon.hierRect())
-            if site[0] in ("input", "attrOut"):
-                parentIcon.replaceChild(childIcon, site)
-            elif site[0] == "insertInput":
-                parentIcon.insertChild(childIcon, site)
+            if siteType in ("input", "attrOut"):
+                parentIcon.replaceChild(childIcon, siteName)
+            elif siteType == "insertInput":
+                parentIcon.insertChild(childIcon, siteName)
             for ic in self.topIcons:
                 self.filterRedundantParens(ic)
             # Redo layouts for all affected (all the way to the top)
@@ -831,7 +830,7 @@ class Window:
             return
         # If the last execution result of the same icon is still laying where it was
         # placed, remove it so that results don't pile up
-        outSitePos = iconToExecute.posOfSite(("output", 0))
+        outSitePos = iconToExecute.posOfSite("output")
         if outSitePos in self.execResultPositions:
             lastResultIcon, lastResultPos = self.execResultPositions[outSitePos]
             if lastResultIcon is not None and lastResultIcon in self.topIcons and \
@@ -850,7 +849,7 @@ class Window:
         else:
             outSiteX, outSiteY = outSitePos
         resultRect = resultIcon.hierRect()
-        resultOutSitePos = resultIcon.posOfSite(("output", 0))
+        resultOutSitePos = resultIcon.posOfSite("output")
         if resultOutSitePos is None:
             resultOutSiteX, top, right, bottom = resultIcon.rect
             resultOutSiteY = (bottom + top) // 2
@@ -896,7 +895,7 @@ class Window:
         if ic is None or ic is self.entryIcon:
             return
         refreshRegion = AccumRects()
-        if op =='hier':
+        if op == 'hier':
             changedIcons = list(ic.traverse())
         elif op == 'left':
             changedIcons = list(self.findLeftOuterIcon(self.assocGrouping(ic)).traverse())
@@ -1026,7 +1025,8 @@ class Window:
         if ic.__class__ is not icon.BinOpIcon:
             return ic
         for parent in ic.parentage():
-            if parent.__class__ is not icon.BinOpIcon or parent.precedence != ic.precedence:
+            if parent.__class__ is not icon.BinOpIcon or parent.precedence !=\
+             ic.precedence:
                 return child
             child = parent
         return child
@@ -1044,8 +1044,8 @@ class Window:
         (but don't re-layout or re-draw)"""
         self.topIcons.remove(old)
         self.topIcons.append(new)
-        oldSite = old.sites.lookup(('output', 0))
-        newSite = new.sites.lookup(('output', 0))
+        oldSite = old.sites.lookup("output")
+        newSite = new.sites.lookup("output")
         oldX, oldY = old.rect[:2]
         if oldSite is None or newSite is None:
             newX, newY = oldX, oldY
@@ -1065,9 +1065,9 @@ class Window:
             # Detaching icons should remove all connections, but the consequence to
             # leaving a parent link at the top level is dire, so make sure all parent
             # links are removed.
-            for parentSiteType in icon.parentSiteTypes:
-                if hasattr(ic.sites, parentSiteType):
-                    ic.replaceChild(None, (parentSiteType, 0))
+            for parentSite in ic.parentSites():
+                ic.replaceChild(None, parentSite)
+            # If position was specified, relocate the icon
             if x is not None and y is not None:
                 ic.rect = icon.moveRect(ic.rect, (x, y))
 
@@ -1078,11 +1078,11 @@ class Window:
         top = evt.y - SITE_SELECT_DIST
         bottom = evt.y + SITE_SELECT_DIST
         minDist = SITE_SELECT_DIST + 1
-        minSite = (None, (None, None))
+        minSite = (None, None, None)
         for ic in self.findIconsInRegion((left, top, right, bottom)):
             iconSites = ic.snapLists()
             for siteType, siteList in iconSites.items():
-                for siteIcon, (x, y), siteIdx in siteList:
+                for siteIcon, (x, y), siteName in siteList:
                     if siteType in ("input", "output"):
                         x += 2
                     elif siteType in ("attrOut", "attrIn"):
@@ -1091,12 +1091,12 @@ class Window:
                     else:
                         continue  # not a visible site type
                     dist = (abs(evt.x - x) + abs(evt.y - y)) // 2
-                    if dist < minDist or (dist == minDist and \
-                     minSite[1][0] in ("attrIn", "output")):  # Prefer inputs, for now
+                    if dist < minDist or (dist == minDist and
+                     minSite[2] in ("attrIn", "output")):  # Prefer inputs, for now
                         minDist = dist
-                        minSite = siteIcon, (siteType, siteIdx)
+                        minSite = siteIcon, siteName, siteType
         if minDist < SITE_SELECT_DIST + 1:
-            return minSite
+            return minSite[0], minSite[1]
         return None, None
 
     def filterRedundantParens(self, ic, parentIcon=None, parentSite=None):
@@ -1110,7 +1110,7 @@ class Window:
             return ic
         if not (argIcon.__class__ is typing.CursorParenIcon or
          argIcon.__class__ is icon.BinOpIcon and icon.needsParens(argIcon, parentIcon)):
-            self.filterRedundantParens(argIcon, ic, ("input", 0))
+            self.filterRedundantParens(argIcon, ic, "leftArg")
             return ic
         # Redundant parens found: remove them
         if parentIcon is None:
@@ -1123,13 +1123,13 @@ class Window:
         # If the cursor was on the paren being removed, move it to the icon that has
         # taken its place (BinOp or CursorParen)
         if self.cursor.type == "icon" and self.cursor.icon is ic and \
-         self.cursor.site[0] == "attrOut":
+         self.cursor.siteType == "attrOut":
             if "attrOut" not in argIcon.snapLists():
                 # If it's a binary operation that *will have* parens once we remove the
                 # prop ones, it may not yet have a site on which to put the cursor.
                 # Call layout prematurely to make the site appear
                 argIcon.topLevelParent().layout()
-            self.cursor.setToIconSite(argIcon, ("attrOut", 0))
+            self.cursor.setToIconSite(argIcon, "attrIcon")
         return argIcon
 
     def redoLayout(self, topIcon):

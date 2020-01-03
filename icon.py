@@ -7,7 +7,7 @@ import operator
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
 binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
- '<<':9, '>>':9, '|':6, '^':7,'&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
+ '<<':9, '>>':9, '|':6, '^':7, '&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
  'is':5, 'is not':5, '<':5, '<=':5, '>':5, '>=':5, '==':5, '!=':5, '=':-1}
 
 unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4}
@@ -26,7 +26,6 @@ namedConsts = {'True':True, 'False':False, 'None':None}
 
 parentSiteTypes = {'output':True, 'attrIn':True}
 childSiteTypes = {'input':True, 'attrOut':True}
-virtualSiteTypes = {'insertInput':'input', 'insertAttr':'attrOut'}
 matingSiteType = {'output':'input', 'input':'output', 'attrIn':'attrOut',
  'attrOut':'attrIn'}
 
@@ -67,15 +66,15 @@ inSitePixmap = (
  "  o")
 
 leftInSitePixmap = (
-    "...o ",
-    "..o  ",
-    ".o  o",
-    "o  o.",
-    "o o..",
-    "o  o.",
-    ".o  o",
-    "..o  ",
-    "...o ",
+ "...o ",
+ "..o  ",
+ ".o  o",
+ "o  o.",
+ "o o..",
+ "o  o.",
+ ".o  o",
+ "..o  ",
+ "...o ",
 )
 commaPixmap = (
  "ooooo",
@@ -193,11 +192,10 @@ def iconBoxedText(text):
     if text in renderCache:
         return renderCache[text]
     width, height = globalFont.getsize(text)
-    txtImg = Image.new('RGBA', (width + 2*TEXT_MARGIN + 1, height + 2*TEXT_MARGIN + 1),
-     color=ICON_BG_COLOR)
+    txtImg = Image.new('RGBA',
+     (width + 2 * TEXT_MARGIN + 1, height + 2 * TEXT_MARGIN + 1), color=ICON_BG_COLOR)
     draw = ImageDraw.Draw(txtImg)
-    draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=globalFont,
-     fill=(0, 0, 0, 255))
+    draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=globalFont, fill=(0, 0, 0, 255))
     draw.rectangle((0, 0, width + 2 * TEXT_MARGIN, height + 2 * TEXT_MARGIN),
      fill=None, outline=OUTLINE_COLOR)
     renderCache[text] = txtImg
@@ -237,7 +235,7 @@ class Icon:
             x, y = self.rect[:2]
         else:
             x, y = location
-        self.doLayout(x, y+self.sites.output.yOffset, self.calcLayout())
+        self.doLayout(x, y + self.sites.output.yOffset, self.calcLayout())
 
     def traverse(self, order="draw", includeSelf=True):
         """Iterator for traversing the tree below this icon.  Traversal can be in either
@@ -248,7 +246,7 @@ class Icon:
         # reverse, but child icons are not intended to overlap in a detectable way.
         for child in self.children():
             if child is None:
-                print('icon has null child',self)
+                print('icon has null child', self)
             yield from child.traverse(order)
         if includeSelf and order is "pick":
             yield self
@@ -259,7 +257,7 @@ class Icon:
         if not pointInRect((x, y), self.rect) or self.cachedImage is None:
             return False
         l, t = self.rect[:2]
-        pixel = self.cachedImage.getpixel((x-l, y-t))
+        pixel = self.cachedImage.getpixel((x - l, y - t))
         return pixel[3] > 128
 
     def touchesRect(self, rect):
@@ -283,8 +281,16 @@ class Icon:
          c.att is not None]
 
     def parent(self):
-        icSite = self.sites.parentSite()
-        return icSite.att if icSite is not None else None
+        for site in self.sites.parentSites():
+            # icons can have multiple possible parent sites (Some icon types are capable
+            # of snapping to multiple site types).  Return whichever is attached.
+            if site.att is not None:
+                return site.att
+        return None
+
+    def parentSites(self):
+        """Return siteIds for all icon sites capable of holding parent links."""
+        return [site.name for site in self.sites.parentSites()]
 
     def parentage(self):
         """Returns a list containing the lineage of the given icon, from the icon up to
@@ -312,47 +318,70 @@ class Icon:
         x, y = self.rect[:2]
         return self.sites.makeSnapLists(self, x, y)
 
-    def replaceChild(self, newChild, site, leavePlace=False, childSite=("output", 0)):
-        siteType, siteIndex = site
-        if self.sites.isSeries(siteType):
+    def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
+        siteId = self.sites.siteIdWarn(siteId)
+        if self.sites.isSeries(siteId):
             if newChild is None and not leavePlace:
-                self.sites.removeSeriesSite(site)
+                self.sites.removeSeriesSiteById(siteId)
             else:
-                seriesLen = len(self.sites.getSeries(siteType))
-                if siteIndex == seriesLen:
-                    self.sites.insertSeriesSite(site)
-                self.sites.lookup(site).attach(self, newChild, childSite)
+                seriesName, idx = self.sites.splitSeriesSiteId(siteId)
+                seriesLen = len(self.sites.getSeries(seriesName))
+                if idx == seriesLen:
+                    self.sites.insertSeriesSiteByNameAndIndex(seriesName, idx)
+                self.sites.lookup(siteId).attach(self, newChild, childSite)
         else:
-            self.sites.lookup(site).attach(self, newChild, childSite)
+            self.sites.lookup(siteId).attach(self, newChild, childSite)
         self.layoutDirty = True
 
-    def insertChild(self, child, site, childSite=("output", 0)):
-        """Insert a child icon or empty icon site (child=None) at the specified site"""
-        siteType, idx = site
-        siteType = virtualSiteTypes.get(siteType, siteType)
-        series = self.sites.getSeries(siteType)
-        if series is None:
+    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
+        """Insert a child icon or empty icon site (child=None) at the specified site.
+        siteIdOrName may specify either the complete siteId for a site, or (if
+        seriesIdx is specified), the name for a series of sites with the index specified
+        in seriesIdx."""
+        if seriesIdx is None:
+            seriesName, seriesIdx = self.sites.splitSeriesSiteId(siteIdOrSeriesName)
+        else:
+            seriesName = siteIdOrSeriesName
+        if seriesName is None:
+            print("Failed to insert icon", child, "at", siteIdOrSeriesName)
             return
-        if len(series) == 1 and series[0].att is None and idx == 0:
+        series = self.sites.getSeries(seriesName)
+        if series is None:
+            print("Failed to insert icon,", child, "in series", seriesName)
+            return
+        if len(series) == 1 and series[0].att is None and seriesIdx == 0:
             series[0].attach(self, child, childSite)
         else:
-            self.sites.insertSeriesSite((siteType, idx))
-            self.sites.lookup((siteType, idx)).attach(self, child, childSite)
+            self.sites.insertSeriesSiteByNameAndIndex(seriesName, seriesIdx)
+            self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
         self.layoutDirty = True
 
-    def insertChildren(self, children, site, childSite=("output", 0)):
-        """Insert child icons or empty icon sites (child=None) at the specified site"""
-        siteType, siteIdx = site
+    def insertChildren(self, children, seriesName, seriesIdx, childSite=None):
+        """Insert a group of child icons at the specified site"""
         for i, child in enumerate(children):
-            self.insertChild(child, (siteType, siteIdx + i), childSite)
+            self.insertChild(child, seriesName, seriesIdx + i, childSite)
 
-    def childAt(self, site):
+    def childAt(self, siteOrSeriesName, seriesIdx=None):
+        if seriesIdx is None:
+            site = siteOrSeriesName
+        else:
+            site = makeSeriesSiteId(siteOrSeriesName, seriesIdx)
         icSite = self.sites.lookup(site)
         return icSite.att if icSite is not None else None
 
-    def siteOf(self, child):
-        icSite = self.sites.findAttached(child)
-        return (icSite.type, icSite.idx) if icSite is not None else None
+    def siteOf(self, ic, recursive=False):
+        """Find the site name for an attached icon.  If recursive is True, ic is not
+        required to be a direct descendant."""
+        if recursive:
+            while True:
+                parent = ic.parent()
+                if parent is None:
+                    return None
+                if parent is self:
+                    break
+                ic = parent
+        icSite = self.sites.siteOfAttachedIcon(ic)
+        return icSite.name if icSite is not None else None
 
     def becomeTopLevel(self):
         pass  # Most icons look exactly the same at the top level
@@ -364,6 +393,24 @@ class Icon:
             return None
         x, y = self.rect[:2]
         return x + site.xOffset, y + site.yOffset
+
+    def typeOf(self, siteId):
+        site = self.sites.lookup(siteId)
+        if site is None:
+            return None
+        return site.type
+
+    def indexOf(self, siteId):
+        series, index = self.sites.splitSeriesSiteId(siteId)
+        if series is not None:
+            return index
+        return None
+
+    def hasCoincidentSite(self):
+        """If the icon has an input site in the same spot as its output site (done so
+        binary operations can be arranged like text), return that input site"""
+        if hasattr(self, 'coincidentSite') and self.coincidentSite is not None:
+            return self.coincidentSite
 
     def textRepr(self):
         return repr(self)
@@ -382,8 +429,8 @@ class TextIcon(Icon):
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
-        self.sites.add('output', 'output', 0, 0, bodyHeight // 2)
-        self.sites.add('attrIcon', 'attrOut', 0, bodyWidth,
+        self.sites.add('output', 'output', 0, bodyHeight // 2)
+        self.sites.add('attrIcon', 'attrOut', bodyWidth,
          bodyHeight // 2 + ATTR_SITE_OFFSET)
         if location is None:
             x, y = 0, 0
@@ -400,7 +447,7 @@ class TextIcon(Icon):
             self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = iconBoxedText(self.text)
-            self.cachedImage.paste(txtImg, (outSiteImage.width-1, 0))
+            self.cachedImage.paste(txtImg, (outSiteImage.width - 1, 0))
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
@@ -410,7 +457,7 @@ class TextIcon(Icon):
     def doLayout(self, outSiteX, outSiteY, layout):
         width, height = self.bodySize
         width += outSiteImage.width - 1
-        top = outSiteY - height//2
+        top = outSiteY - height // 2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         if self.sites.attrIcon.att:
             self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
@@ -418,7 +465,7 @@ class TextIcon(Icon):
 
     def calcLayout(self):
         width, height = self.bodySize
-        layout = Layout(self, width, height, height // 2,)
+        layout = Layout(self, width, height, height // 2)
         if self.sites.attrIcon.att is None:
             layout.addSubLayout(None)
         else:
@@ -500,17 +547,17 @@ class StringIcon(TextIcon):
         return StringIcon(text, window, (addPoints(location, locationOffset)))
 
 class UnaryOpIcon(Icon):
-    def __init__(self, operator, window, location=None):
+    def __init__(self, op, window, location=None):
         Icon.__init__(self, window)
-        self.operator = operator
-        self.precedence = unaryOpPrecedence[operator]
+        self.operator = op
+        self.precedence = unaryOpPrecedence[op]
         bodyWidth, bodyHeight = globalFont.getsize(self.operator)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
-        self.sites.add('output', 'output', 0, 0, siteYOffset)
-        self.sites.add('argIcon', 'input', 0, bodyWidth - 1, siteYOffset)
+        self.sites.add('output', 'output', 0, siteYOffset)
+        self.sites.add('argIcon', 'input', bodyWidth - 1, siteYOffset)
         if location is None:
             x, y = 0, 0
         else:
@@ -550,7 +597,7 @@ class UnaryOpIcon(Icon):
     def doLayout(self, outSiteX, outSiteY, layout):
         width, height = self.bodySize
         width += outSiteImage.width - 1
-        top = outSiteY - height//2
+        top = outSiteY - height // 2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         if self.sites.argIcon.att:
             self.sites.argIcon.att.doLayout(outSiteX + width - 3, outSiteY,
@@ -585,8 +632,8 @@ class UnaryOpIcon(Icon):
     def fromClipboard(clipData, window, offset):
         op, location, arg = clipData
         ic = UnaryOpIcon(op, window, (addPoints(location, offset)))
-        ic.sites.argIcon.attach(ic, clipboardDataToIcons([arg], window, offset),
-         ("output", 0))
+        ic.sites.argIcon.attach(ic, clipboardDataToIcons([arg], window, offset)[0])
+        return ic
 
     def execute(self):
         if self.sites.argIcon.att is None:
@@ -609,10 +656,10 @@ class ListTypeIcon(Icon):
         self.bodySize = (leftTextWidth, leftTextHeight)
         rightTextWidth, rightTextHeight = globalFont.getsize(rightText)
         self.rightTextWidth = rightTextWidth + 2 * TEXT_MARGIN + 1
-        self.sites.add('output', 'output', 0, 0, leftTextHeight // 2)
+        self.sites.add('output', 'output', 0, leftTextHeight // 2)
         self.argList = HorizListMgr(self, 'argIcons', leftTextWidth-1, leftTextHeight//2)
         width, height = self._size()
-        self.sites.add('attrIcon', 'attrOut', 0, width-1,
+        self.sites.add('attrIcon', 'attrOut', width-1,
          self.sites.output.yOffset + ATTR_SITE_OFFSET)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
@@ -631,20 +678,20 @@ class ListTypeIcon(Icon):
             self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
             # Body
             leftTxtImg = iconBoxedText(self.leftText)
-            self.cachedImage.paste(leftTxtImg, (outSiteImage.width-1, 0))
+            self.cachedImage.paste(leftTxtImg, (outSiteImage.width - 1, 0))
             # Output site
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
             # Body input site
-            inSiteX = outSiteImage.width-1 + leftTxtImg.width - inSiteImage.width
+            inSiteX = outSiteImage.width - 1 + leftTxtImg.width - inSiteImage.width
             inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
             # Commas
             self.argList.drawCommas(self.cachedImage)
             # End paren/brace
             rightTxtImg = iconBoxedText(self.rightText)
-            parenY = self.sites.output.yOffset - rightTxtImg.height//2
+            parenY = self.sites.output.yOffset - rightTxtImg.height // 2
             parenX = inSiteX + self.argList.width() + inSiteImage.width - 1
             self.cachedImage.paste(rightTxtImg, (parenX, parenY))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
@@ -668,11 +715,11 @@ class ListTypeIcon(Icon):
         bodyWidth, bodyHeight = self.bodySize
         self.argList.doLayout(outSiteX + bodyWidth - 1, outSiteY, layout.subLayouts)
         width, height = self._size()
-        self.sites.attrIcon.xOffset = width-2
+        self.sites.attrIcon.xOffset = width - 2
         self.sites.attrIcon.yOffset = self.sites.output.yOffset + ATTR_SITE_OFFSET
         x = outSiteX
         y = outSiteY - self.sites.output.yOffset
-        self.rect = (x, y, x+width, y+height)
+        self.rect = (x, y, x + width, y + height)
         if self.sites.attrIcon.att is not None:
             self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
              outSiteY + ATTR_SITE_OFFSET, layout.subLayouts[-1])
@@ -733,7 +780,7 @@ class FnIcon(ListTypeIcon):
         name, location, children = clipData
         ic = FnIcon(name, window, (addPoints(location, offset)))
         for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
-            ic.insertChild(arg, ("input", i))
+            ic.insertChild(arg, "argIcons", i)
         return ic
 
 class ListIcon(ListTypeIcon):
@@ -764,7 +811,7 @@ class ListIcon(ListTypeIcon):
         location, children = clipData
         ic = ListIcon(window, (addPoints(location, offset)))
         for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
-            ic.insertChild(arg, ("input", i))
+            ic.insertChild(arg, "argIcons", i)
         return ic
 
 class TupleIcon(ListTypeIcon):
@@ -779,10 +826,10 @@ class TupleIcon(ListTypeIcon):
             draw = ImageDraw.Draw(self.cachedImage)
             x = self.sites.output.xOffset + 5  # Font-dependent, could cause trouble later
             y = self.sites.output.yOffset
-            draw.line((x, y, x+2, y), GRAY_75)
+            draw.line((x, y, x + 2, y), GRAY_75)
             # End paren
             x = self.sites.attrIcon.xOffset - 3
-            draw.line((x, y, x-2, y), GRAY_75)
+            draw.line((x, y, x - 2, y), GRAY_75)
             ListTypeIcon.draw(self, image, location, clip, colorErr)
 
     def argIcons(self):
@@ -815,7 +862,7 @@ class TupleIcon(ListTypeIcon):
         location, children = clipData
         ic = TupleIcon(window, (addPoints(location, offset)))
         for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
-            ic.insertChild(arg, ("input", i))
+            ic.insertChild(arg, "argIcons", i)
         return ic
 
 class BinOpIcon(Icon):
@@ -835,13 +882,13 @@ class BinOpIcon(Icon):
         width, height = self._size()
         self.rect = (x, y, x + width, y + height)
         siteYOffset = opHeight // 2
-        self.sites.add('output', 'output', 0, 0, siteYOffset)
-        self.sites.add('leftArg', 'input', 0, 0, siteYOffset)
-        self.sites.add('rightArg', 'input', 1, self.leftArgWidth + opWidth, siteYOffset)
+        self.sites.add('output', 'output', 0, siteYOffset)
+        self.sites.add('leftArg', 'input', 0, siteYOffset)
+        self.sites.add('rightArg', 'input', self.leftArgWidth + opWidth, siteYOffset)
         # There can be an attribute site but it only appears with parenthesis
         self.leftSiteDrawn = False
         # Indicates that input site falls directly on top of output site
-        self.coincidentSite = ('input', 0)
+        self.coincidentSite = 'leftArg'
 
     def _size(self):
         opWidth, opHeight = self.opSize
@@ -895,20 +942,20 @@ class BinOpIcon(Icon):
             if self.depthWidth > 0:
                 draw = ImageDraw.Draw(cachedImage)
                 opWidth = txtImg.width + self.depthWidth
-                draw.rectangle((opX, opY, opX+opWidth-1, opY+txtImg.height-1),
+                draw.rectangle((opX, opY, opX + opWidth - 1, opY + txtImg.height - 1),
                  outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
-                txtSubImg = txtImg.crop((1, 0, txtImg.width-1, txtImg.height))
-                cachedImage.paste(txtSubImg, (opX + self.depthWidth//2 + 1, opY))
+                txtSubImg = txtImg.crop((1, 0, txtImg.width - 1, txtImg.height))
+                cachedImage.paste(txtSubImg, (opX + self.depthWidth // 2 + 1, opY))
             else:
                 opWidth = txtImg.width
-                cachedImage.paste(txtImg, (opX + self.depthWidth//2, opY))
+                cachedImage.paste(txtImg, (opX + self.depthWidth // 2, opY))
             rInSiteX = opX + opWidth - inSiteImage.width
             rInSiteY = siteY - inSiteImage.height // 2
             cachedImage.paste(inSiteImage, (rInSiteX, rInSiteY))
             # End paren
             if self.hasParens:
                 rParenX = opX + opWidth - 1 + self.rightArgWidth - 1
-                rParenY = siteY - rParenImage.height//2
+                rParenY = siteY - rParenImage.height // 2
                 cachedImage.paste(rParenImage, (rParenX, rParenY))
         pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected,
          colorErr), location, clip)
@@ -949,7 +996,7 @@ class BinOpIcon(Icon):
             self.cachedImage = None
         if self.hasParens:
             self.hasParens = False
-            self.coincidentSite = ("input", 0)
+            self.coincidentSite = "leftArg"
             self.layoutDirty = True
 
     def depth(self, lDepth=None, rDepth=None):
@@ -980,9 +1027,9 @@ class BinOpIcon(Icon):
         # Also expand the operator to match the parent end of the associative group
         parent = self.parent()
         if parent.__class__ is BinOpIcon and parent.precedence == self.precedence:
-            if parent.siteOf(self) == ("input", 0) and parent.leftAssoc():
+            if parent.siteOf(self) == "leftArg" and parent.leftAssoc():
                 myDepth = max(myDepth, parent.depth(lDepth=myDepth))
-            elif parent.siteOf(self) == ("input", 1) and parent.rightAssoc():
+            elif parent.siteOf(self) == "rightArg" and parent.rightAssoc():
                 myDepth = max(myDepth, parent.depth(rDepth=myDepth))
         return myDepth
 
@@ -994,7 +1041,7 @@ class BinOpIcon(Icon):
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.hasParens = needsParens(self)
-        self.coincidentSite = None if self.hasParens else ("input", 0)
+        self.coincidentSite = None if self.hasParens else "leftArg"
         lArgLayout, rArgLayout, attrLayout = layout.subLayouts
         if self.hasParens:
             self.sites.leftArg.xOffset = lParenImage.width - outSiteImage.width
@@ -1020,18 +1067,18 @@ class BinOpIcon(Icon):
         if self.hasParens:
             attrSiteYOffset = self.sites.output.yOffset + ATTR_SITE_OFFSET
             if hasattr(self.sites, 'attrIcon'):
-                self.sites.attrIcon.xOffset = width-2
+                self.sites.attrIcon.xOffset = width - 2
             else:
-                self.sites.add("attrIcon", "attrOut", 0, width-2, attrSiteYOffset)
+                self.sites.add("attrIcon", "attrOut", width - 2, attrSiteYOffset)
         else:
             self.sites.remove('attrIcon')
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
-        self.rect = (x, y, x+width, y+height)
+        self.rect = (x, y, x + width, y + height)
         if hasattr(self.sites, 'attrIcon') and self.sites.attrIcon.att is not None:
             self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
              outSiteY + ATTR_SITE_OFFSET, attrLayout)
-        self.leftSiteDrawn = False # self.layout will reset on top-level icon
+        self.leftSiteDrawn = False  # self.layout will reset on top-level icon
         self.cachedImage = None
         self.layoutDirty = False
 
@@ -1039,7 +1086,7 @@ class BinOpIcon(Icon):
         hasParens = needsParens(self)
         if hasParens:
             lParenWidth = lParenImage.width - 2
-            rParenWidth =  rParenImage.width - 2
+            rParenWidth = rParenImage.width - 2
         else:
             lParenWidth = rParenWidth = 0
         opWidth, opHeight = self.opSize
@@ -1088,8 +1135,8 @@ class BinOpIcon(Icon):
         op, location, children = clipData
         ic = BinOpIcon(op, window, (addPoints(location, offset)))
         leftArg, rightArg = clipboardDataToIcons(children, window, offset)
-        ic.sites.leftArg.attach(ic, leftArg, ("output", 0))
-        ic.sites.rightArg.attach(ic, rightArg, ("output", 0))
+        ic.sites.leftArg.attach(ic, leftArg)
+        ic.sites.rightArg.attach(ic, rightArg)
         return ic
 
     def locIsOnLeftParen(self, btnPressLoc):
@@ -1139,7 +1186,7 @@ class AssignIcon(BinOpIcon):
                 if target is None:
                     raise IconExecException(self, "Missing argument(s)")
             if not hasattr(values, "__len__") or len(assignTargets) != len(values):
-                raise IconExecException(self, "Could not unpack" )
+                raise IconExecException(self, "Could not unpack")
             for target, value in zip(assignTargets, values):
                 self.assignValues(target, value)
         else:
@@ -1156,8 +1203,8 @@ class AssignIcon(BinOpIcon):
         location, children = clipData
         ic = AssignIcon(window, (addPoints(location, offset)))
         leftArg, rightArg = clipboardDataToIcons(children, window, offset)
-        ic.sites.leftArg.attach(ic, leftArg, ("output", 0))
-        ic.sites.rightArg.attach(ic, rightArg, ("output", 0))
+        ic.sites.leftArg.attach(ic, leftArg)
+        ic.sites.rightArg.attach(ic, rightArg)
         return ic
 
 class DivideIcon(Icon):
@@ -1171,10 +1218,10 @@ class DivideIcon(Icon):
         self.bottomArgSize = self.emptyArgSize
         width, height = self._size()
         outSiteY = self.topArgSize[1] + 2
-        self.sites.add('output', 'output', 0, 0, outSiteY)
-        self.sites.add('topArg', 'input', 0, 2, outSiteY - emptyArgHeight // 2 - 2)
-        self.sites.add('bottomArg', 'input', 1, 2, outSiteY + emptyArgHeight // 2 + 2)
-        self.sites.add('attrIcon', 'attrOut', 0, width-1, outSiteY + ATTR_SITE_OFFSET)
+        self.sites.add('output', 'output', 0, outSiteY)
+        self.sites.add('topArg', 'input', 2, outSiteY - emptyArgHeight // 2 - 2)
+        self.sites.add('bottomArg', 'input', 2, outSiteY + emptyArgHeight // 2 + 2)
+        self.sites.add('attrIcon', 'attrOut', width - 1, outSiteY + ATTR_SITE_OFFSET)
         self.leftSiteDrawn = False
         if location is None:
             x, y = 0, 0
@@ -1265,7 +1312,7 @@ class DivideIcon(Icon):
         width, height = self._size()
         x = outSiteX
         y = outSiteY - self.sites.output.yOffset
-        self.rect = (x, y, x+width, y+height)
+        self.rect = (x, y, x + width, y + height)
         if tArgLayout is not None:
             tArgLayout.icon.doLayout(x + self.sites.topArg.xOffset,
              y + self.sites.topArg.yOffset, tArgLayout)
@@ -1336,8 +1383,8 @@ class DivideIcon(Icon):
         location, children = clipData
         ic = DivideIcon(window, (addPoints(location, offset)))
         topArg, bottomArg = clipboardDataToIcons(children, window, offset)
-        ic.sites.topArg.attach(ic, topArg, ("output", 0))
-        ic.sites.bottomArg.attach(ic, bottomArg, ("output", 0))
+        ic.sites.topArg.attach(ic, topArg)
+        ic.sites.bottomArg.attach(ic, bottomArg)
         return ic
 
     def leftAssoc(self):
@@ -1391,7 +1438,7 @@ class ImageIcon(Icon):
             self.rect = moveRect(self.rect, location)
 
     def doLayout(self, x, bottom, _layout):
-        self.rect = (x, bottom-self.image.height, x + self.image.width, bottom)
+        self.rect = (x, bottom - self.image.height, x + self.image.width, bottom)
 
     def calcLayout(self):
         return Layout(self, self.image.width, self.image.height, 0)
@@ -1425,7 +1472,7 @@ class Layout:
         self.subLayouts.append(subLayout)
         if subLayout is None or xSiteOffset is None:
             return
-        heightAbove = max(self.siteOffset, ySiteOffset + subLayout.siteOffset)
+        heightAbove = max(self.siteOffset, subLayout.siteOffset - ySiteOffset)
         heightBelow = max(self.height - self.siteOffset, ySiteOffset +
          subLayout.height - subLayout.siteOffset)
         self.height = heightAbove + heightBelow
@@ -1486,7 +1533,7 @@ def needsParens(ic, parent=None, forText=False):
     if parent.__class__.__name__ == "CursorParenIcon" and not parent.closed:
         parenParent = parent.parent()
         if parenParent is None or parenParent.__class__ is not BinOpIcon or \
-         parenParent.siteOf(parent) != ("input", 0):
+         parenParent.siteOf(parent) != "leftArg":
             return False
         parent = parenParent
     arithmeticOpClasses = (BinOpIcon, UnaryOpIcon)
@@ -1499,9 +1546,9 @@ def needsParens(ic, parent=None, forText=False):
     if ic.precedence < parent.precedence:
         return True
     # Precedence is equal to parent.  Look at associativity
-    if parent.siteOf(ic) == ('input', 0) and ic.rightAssoc():
+    if parent.siteOf(ic, recursive=True) == "leftArg" and ic.rightAssoc():
         return True
-    if parent.siteOf(ic) == ('input', 1) and ic.leftAssoc():
+    if parent.siteOf(ic, recursive=True) == "rightArg" and ic.leftAssoc():
         return True
     return False
 
@@ -1554,134 +1601,261 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
     return None
 
 class IconSite:
-    def __init__(self, siteType, idx, xOffset=0, yOffset=0):
+    def __init__(self, siteName, siteType, xOffset=0, yOffset=0):
+        self.name = siteName
         self.type = siteType
-        self.idx = idx
         self.xOffset = xOffset
         self.yOffset = yOffset
         self.att = None
 
-    def attach(self, ownerIcon, fromIcon, fromSite=("output", 0)):
+    def attach(self, ownerIcon, fromIcon, fromSiteId=None):
         # Remove original link from attached site
         if self.att:
             backLinkSite = self.att.siteOf(ownerIcon)
             if backLinkSite is not None:
                 self.att.sites.lookup(backLinkSite).att = None
-        # Attach fromIcon
-        self.att = fromIcon
+        # If attaching None (removing attachment), no bidirectional link to make
         if fromIcon is None:
+            self.att = None
             return
-        # Make the link bi-directional
-        site = fromIcon.sites.lookup(fromSite)
-        if site is None:
-            print("Could not attach icon: invalid back-link")
+        # Determine the back-link
+        if fromSiteId is None:
+            siteType = matingSiteType[self.type]
+            sites = fromIcon.sites.sitesOfType(siteType)
+            if sites is None or len(sites) == 0:
+                print("Failed to find appropriate back-link for attaching", ownerIcon,
+                 "site", self.name, "to", fromIcon, "type", siteType)
+                return
+            fromSiteId = sites[0]
+            if len(sites) != 1:
+                print("Attaching icon,", ownerIcon, "site", self.name, "to", fromIcon,
+                 "site", fromSiteId, "but multiple targets made choice ambiguous")
+        fromSite = fromIcon.sites.lookup(fromSiteId)
+        if fromSite is None:
+            print("Could not attach icon: invalid back-link (fromSiteId)", fromSiteId)
             return
-        site.att = ownerIcon
+        # Make the bidirectional links
+        self.att = fromIcon
+        fromSite.att = ownerIcon
+
+class IconSiteSeries:
+    def __init__(self, name, siteType, initCount=0, initOffsets=None):
+        self.type = siteType
+        self.name = name
+        self.sites = [None] * initCount
+        for idx in range(initCount):
+            if initOffsets is not None and idx < len(initOffsets):
+                xOff, yOff = initOffsets[idx]
+            else:
+                xOff, yOff = 0, 0
+            self.sites[idx] = IconSite(makeSeriesSiteId(name, idx), siteType, xOff, yOff)
+
+    def __getitem__(self, idx):
+        return self.sites[idx]
+
+    def __len__(self):
+        return len(self.sites)
+
+    def insertSite(self, insertIdx):
+        site = IconSite(makeSeriesSiteId(self.name, insertIdx), self.type)
+        self.sites[insertIdx:insertIdx] = [site]
+        for i in range(insertIdx+1, len(self.sites)):
+            self.sites[i].name = makeSeriesSiteId(self.name, i)
+
+    def removeSite(self, idx):
+        if len(self.sites) == 1:  # Leave a single site for insertion
+            self.sites[0].attach(None, None)
+        else:
+            del self.sites[idx]
+            for i in range(idx, len(self.sites)):
+                self.sites[i].name = makeSeriesSiteId(self.name,i)
 
 class IconSiteList:
     """
     @DynamicAttrs
     """
     def __init__(self):
-        self.idDict = {}
-        self.siteTypeToSeriesName = {}
+        self._typeDict = {}
 
     def lookup(self, siteId):
-        """External to the icon, sites are identified by tuple (site-type, site-index).
-        Locate the matching site by its external name."""
-        return self.idDict.get(siteId)
+        """External to the icon, sites are usually identified by name, but older code
+        did so with a tuple: (site-type, site-index).  If siteId is just a name, it is
+        in the this object's dictionary.  If it's an old-style tuple, print a warning
+        and translate."""
+        # If it is an individual site, it will be in the object's dictionary
+        siteId = self.siteIdWarn(siteId)
+        if hasattr(self, siteId):
+            site = getattr(self, siteId)
+            if isinstance(site, IconSite):
+                return site
+            print("site lookup failed 1")
+            return None
+        # If it is a series site, split the name up in to the series name and index
+        # and return the site by-index from the series
+        seriesName, seriesIndex = self.splitSeriesSiteId(siteId)
+        if seriesName is None:
+            print("site lookup failed 2")
+            return None
+        series = getattr(self, seriesName)
+        if not isinstance(series, IconSiteSeries) or seriesIndex >= len(series):
+            print("site lookup failed 3")
+            return None
+        return series[seriesIndex]
 
-    def isSeries(self, siteType):
-        return self.getSeries(siteType) is not None
+    def lookupSeries(self, seriesName):
+        series = getattr(self, self.siteIdWarn(seriesName))
+        return series if isinstance(series, IconSiteSeries) else None
 
-    def findAttached(self, ic):
-        for site in self.idDict.values():
+    def siteIdWarn(self, idOrTypeAndIdx):
+        """Temporary routine until all instances of ("siteType", idx) are removed"""
+        if isinstance(idOrTypeAndIdx, tuple):
+            print("Old style type+idx encountered")
+            siteType, idx = idOrTypeAndIdx
+            return self._typeDict[siteType][idx]
+        return idOrTypeAndIdx
+
+    def sitesOfType(self, siteType):
+        return self._typeDict.get(siteType)
+
+    def isSeries(self, siteId):
+        return self.getSeries(siteId) is not None
+
+    def allSites(self):
+        """Traverse all sites in the list (generator)"""
+        for siteNames in self._typeDict.values():
+            for name in siteNames:
+                site =getattr(self, name)
+                if isinstance(site, IconSiteSeries):
+                    for s in site.sites:
+                        yield s
+                elif isinstance(site, IconSite):
+                    yield site
+
+    def siteOfAttachedIcon(self, ic):
+        for site in self.allSites():
             if site.att == ic:
                 return site
         return None
 
     def childSites(self):
-        return [s for s in self.idDict.values() if s.type in childSiteTypes]
+        childList = []
+        for siteType, siteNames in self._typeDict.items():
+            if siteType in childSiteTypes:
+                for name in siteNames:
+                    site = getattr(self, name)
+                    if isinstance(site, IconSiteSeries):
+                        childList += site.sites
+                    else:
+                        childList.append(site)
+        return childList
 
-    def parentSite(self):
-        for site in self.idDict.values():
-            if site.type in parentSiteTypes:
-                return site
-        return None
+    def parentSites(self):
+        parentList = []
+        for siteType, siteNames in self._typeDict.items():
+            if siteType in parentSiteTypes:
+                for name in siteNames:
+                    site = getattr(self, name)
+                    if isinstance(site, IconSiteSeries):
+                        parentList += site.sites
+                    else:
+                        parentList.append(site)
+        return parentList
 
-    def add(self, name, siteType, idx, xOffset=0, yOffset=0):
-        site = IconSite(siteType, idx, xOffset, yOffset)
-        setattr(self, name, site)
-        self.idDict[(siteType, idx)] = site
+    def add(self, name, siteType, xOffset=0, yOffset=0):
+        """Add a new icon site to the site list given name and type.  Optionally add
+        offset from the icon origin (sometimes these are not known until the icon has
+        been through layout).  The ordering of calls to add determines the order in which
+        sites will be traversed."""
+        setattr(self, name, IconSite(name, siteType, xOffset, yOffset))
+        if siteType not in self._typeDict:
+            self._typeDict[siteType] = []
+        self._typeDict[siteType].append(name)
 
     def addSeries(self, name, siteType, initCount=0, initOffsets=None):
-        series = [None] * initCount
-        self.siteTypeToSeriesName[siteType] = name
-        setattr(self, name, series)
-        for idx in range(initCount):
-            if initOffsets is not None and idx < len(initOffsets):
-                xOff, yOff = initOffsets[idx]
-            else:
-                xOff, yOff = 0, 0
-            site = IconSite(siteType, idx, xOff, yOff)
-            series[idx] = site
-            self.idDict[(siteType, idx)] = site
+        setattr(self, name, IconSiteSeries(name, siteType, initCount, initOffsets))
+        if siteType not in self._typeDict:
+            self._typeDict[siteType] = []
+        self._typeDict[siteType].append(name)
 
-    def getSeries(self, siteType):
-        """If siteType is the type of a series, return a list of all of the sites in the
+    def getSeries(self, siteIdOrSeriesName):
+        """If siteId is the part of a series, return a list of all of the sites in the
         list.  Otherwise return None"""
-        if siteType in self.siteTypeToSeriesName:
-            return getattr(self, self.siteTypeToSeriesName[siteType])
+        if hasattr(self, siteIdOrSeriesName):
+            seriesName = siteIdOrSeriesName
+        else:
+            seriesName, seriesIndex = self.splitSeriesSiteId(siteIdOrSeriesName)
+            if seriesName is None:
+                return None
+        if hasattr(self, seriesName):
+            series = getattr(self, seriesName)
+            if isinstance(series, IconSiteSeries):
+                return series
         return None
 
+    def splitSeriesSiteId(self, siteId):
+        for i, c in enumerate(reversed(siteId)):
+            if c.isdigit():
+                continue
+            if c == "_":
+                idx = len(siteId) - 1 - i
+                return siteId[:idx], int(siteId[i+idx:])
+        print("failed to get name and idx from seriesId", siteId)
+        return None, None
+
     def remove(self, name):
+        """Delete a (non-series) icon site."""
         if hasattr(self, name):
             site = getattr(self, name)
-            delattr(self, name)
-            del self.idDict[(site.type, site.idx)]
+            if isinstance(site, IconSite):
+                delattr(self, name)
+                self._typeDict[site.type].remove(name)
 
-    def removeSeriesSite(self, site):
-        """Remove a site from a series (based on index)."""
-        siteType, idx = site
-        series = self.getSeries(siteType)
-        if series is None or not idx < len(series):
-            return
-        if len(series) == 1:  # Leave a single site for insertion
-            series[0].attach(None, None)
+    def removeSeriesSiteById(self, siteId):
+        """Remove a site from a series given siteId (which encodes index)"""
+        name, idx = self.splitSeriesSiteId(siteId)
+        if name is None:
+            print("failed to remove series site", siteId)
         else:
-            del series[idx]
-            del self.idDict[(siteType, len(series))]
-            for i in range(idx, len(series)):
-                series[i].idx = i
-                self.idDict[(siteType, i)] = series[i]
+            self.removeSeriesSiteByNameAndIndex(name, idx)
 
-    def insertSeriesSite(self, site):
-        siteType, idx = site
-        siteType = virtualSiteTypes.get(siteType, siteType)
-        series = self.getSeries(siteType)
-        if series is None:
-            return
-        site = IconSite(siteType, idx)
-        series[idx:idx] = [site]
-        for i in range(idx, len(series)):
-            series[i].idx = i
-            self.idDict[(siteType, i)] = series[i]
+    def removeSeriesSiteByNameAndIndex(self, seriesName, idx):
+        """Remove a site from a series given the series name and index"""
+        series = getattr(self, seriesName)
+        if isinstance(series, IconSiteSeries):
+            series.removeSite(idx)
 
-    def makeSnapLists(self, ic, x, y):
+    def insertSeriesSiteById(self, siteId):
+        name, idx = self.splitSeriesSiteId(siteId)
+        if name is None:
+            print("failed to insert series site", siteId)
+        else:
+            self.insertSeriesSiteByNameAndIndex(name, idx)
+
+    def insertSeriesSiteByNameAndIndex(self, seriesName, insertIdx):
+        series = getattr(self, seriesName)
+        if isinstance(series, IconSiteSeries):
+            series.insertSite(insertIdx)
+
+    def makeSnapLists(self, ic, x, y, forMatingSite=None):
         snapSites = {}
-        for (siteType, idx), site in self.idDict.items():
-            if not siteType in snapSites:
-                snapSites[siteType] = []
-            # Omit any site whose attached icon has a site of the same type, at the same
-            # location.  In such a case we want both dropped icons and typing to go to
-            # the site of the innermost (most local) icon.
-            if not hasCoincidentSite(site.att, (siteType, idx)):
-                snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
-                 site.idx))
+        for site in self.allSites():
+            if forMatingSite is None or site.type == matingSiteType[forMatingSite]:
+                if site.type not in snapSites:
+                    snapSites[site.type] = []
+                # Omit any site whose attached icon has a site of the same type, at the
+                # same location.  In such a case we want both dropped icons and typing to
+                # go to the site of the innermost (most local) icon.
+                if not isCoincidentSite(site.att, site.name):
+                    snapSites[site.type].append((ic, (x + site.xOffset, y + site.yOffset),
+                     site.name))
         return snapSites
+
+def isCoincidentSite(ic, siteId):
+    return ic is not None and siteId == ic.hasCoincidentSite()
 
 class HorizListMgr:
     """Manage layout for a horizontal list of icon arguments."""
+
     def __init__(self, ic, siteSeriesName, leftSiteX, leftSiteY):
         self.icon = ic
         self.siteSeriesName = siteSeriesName
@@ -1703,18 +1877,20 @@ class HorizListMgr:
     def makeInsertSnapList(self):
         """Generate snap sites for item insertion"""
         insertSites = []
-        inputSites = getattr(self.icon.sites, self.siteSeriesName)
+        inputSites = self.icon.sites.getSeries(self.siteSeriesName)
         if len(inputSites) > 1 or len(inputSites) == 1 and inputSites[0].att is not None:
             x, y = self.icon.rect[:2]
             y += inputSites[0].yOffset + INSERT_SITE_Y_OFFSET
+            idx = 0
             for idx, site in enumerate(inputSites):
-                insertSites.append((self.icon, (x + site.xOffset, y), idx))
+                insertSites.append((self.icon, (x + site.xOffset, y), site.name))
             x += inputSites[0].xOffset + self.inOffsets[-1]
-            insertSites.append((self.icon, (x, y), idx + 1))
+            siteName = makeSeriesSiteId(inputSites.name, idx + 1)
+            insertSites.append((self.icon, (x, y), siteName))
         return insertSites
 
     def doLayout(self, leftSiteXOffset, leftSiteYOffset, argLayouts):
-        siteSeries = getattr(self.icon.sites, self.siteSeriesName)
+        siteSeries = self.icon.sites.getSeries(self.siteSeriesName)
         if len(siteSeries) == 0 or len(siteSeries) == 1 and \
          siteSeries[0].att is None:
             self.inOffsets = self.emptyInOffsets
@@ -1725,12 +1901,12 @@ class HorizListMgr:
                 childLayout = argLayouts[i]
                 self.inOffsets.append(childX)
                 if childLayout is None:
-                    childX += LIST_EMPTY_ARG_WIDTH + commaImage.width -1
+                    childX += LIST_EMPTY_ARG_WIDTH + commaImage.width - 1
                 else:
                     childLayout.icon.doLayout(leftSiteXOffset + childX, leftSiteYOffset,
-                     childLayout)
-                    childX += childLayout.width-1 + commaImage.width-1
-            self.inOffsets.append(childX - (commaImage.width-1))
+                        childLayout)
+                    childX += childLayout.width - 1 + commaImage.width - 1
+            self.inOffsets.append(childX - (commaImage.width - 1))
         for i, site in enumerate(siteSeries):
             site.xOffset = self.leftSiteX + self.inOffsets[i]
             site.yOffset = self.leftSiteY
@@ -1740,7 +1916,7 @@ class HorizListMgr:
         Returns the width of the list. leftSiteX and leftSiteY are offsets from the icon
          output site (as used in calcLayout and doLayout), not from the icon origin."""
         width = 0
-        siteSeries = getattr(self.icon.sites, self.siteSeriesName)
+        siteSeries = self.icon.sites.getSeries(self.siteSeriesName)
         for site in siteSeries:
             if site.att is None:
                 layout.addSubLayout(None)
@@ -1751,9 +1927,8 @@ class HorizListMgr:
                 width += childLayout.width - 1 + commaImage.width - 1
         return width - (commaImage.width - 1)
 
-def hasCoincidentSite(ic, siteId):
-    return ic is not None and hasattr(ic, 'coincidentSite') and \
-     ic.coincidentSite is not None and ic.coincidentSite == siteId
+def makeSeriesSiteId(seriesName, seriesIdx):
+    return seriesName + "_%d" % seriesIdx
 
 def containingRect(icons):
     maxRect = AccumRects()

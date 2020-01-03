@@ -95,31 +95,31 @@ def makeIcons(parsedExpr, window, x, y):
     if parsedExpr[0] == 'functionIcon':
         topIcon = icon.FnIcon(parsedExpr[1], window, (x, y))
         childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[2:]]
-        topIcon.insertChildren(childIcons, ("insertInput", 0))
+        topIcon.insertChildren(childIcons, "argIcons", 0)
         return topIcon
     if parsedExpr[0] == 'unaryOpIcon':
         topIcon = icon.UnaryOpIcon(parsedExpr[1], window, (x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "argIcon")
         return topIcon
     if parsedExpr[0] == 'binOpIcon':
         topIcon = icon.BinOpIcon(parsedExpr[1], window, (x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
-        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "leftArg")
+        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "rightArg")
         return topIcon
     if parsedExpr[0] == 'divideIcon':
         topIcon = icon.DivideIcon(window, (x, y), floorDiv=parsedExpr[1])
-        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), ("input", 0))
-        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), ("input", 1))
+        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "topArg")
+        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "bottomArg")
         return topIcon
     if parsedExpr[0] == 'listIcon':
         topIcon = icon.ListIcon(window, (x, y))
         childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
-        topIcon.insertChildren(childIcons, ("insertInput", 0))
+        topIcon.insertChildren(childIcons, "argIcons", 0)
         return topIcon
     if parsedExpr[0] == 'tupleIcon':
         topIcon = icon.TupleIcon(window, (x, y))
         childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
-        topIcon.insertChildren(childIcons, ("insertInput", 0))
+        topIcon.insertChildren(childIcons, "argIcons", 0)
         return topIcon
     else:
         return icon.TextIcon("**Internal Parse Error**", window, (x,y))
