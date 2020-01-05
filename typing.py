@@ -10,7 +10,10 @@ from operator import itemgetter
 
 PEN_BG_COLOR = (255, 245, 245, 255)
 PEN_OUTLINE_COLOR = (255, 97, 120, 255)
-RIGHT_LAYOUT_MARGIN = 3
+
+# Gap to be left between the entry icon and next icons to the right of it
+ENTRY_ICON_GAP = 3
+
 PEN_MARGIN = 6
 
 # How far to move the cursor per arrow keystroke on the window background
@@ -752,29 +755,25 @@ class EntryIcon(icon.Icon):
             self.textOffset = penImage.width + icon.TEXT_MARGIN
         top = outSiteY - self.height//2
         self.rect = (outSiteX, top, outSiteX + width, top + self.height)
-        if self.pendingArg() is not None:
-            self.pendingArg().doLayout(outSiteX + width - 4,
-             outSiteY, layout.subLayouts[0])
-        elif self._pendingAttr() is not None:
-            self._pendingAttr().doLayout(outSiteX + width - 4,
-             outSiteY + icon.ATTR_SITE_OFFSET, layout.subLayouts[0])
+        layout.updateSiteOffsets(self.sites.output)
+        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
 
     def calcLayout(self):
-        if self.attachedToAttribute():
-            width = self._width() - 1 + RIGHT_LAYOUT_MARGIN
-        else:
-            width = self._width() - 2 + RIGHT_LAYOUT_MARGIN
+        width = self._width() - (1 if self.attachedToAttribute() else 2)
         siteOffset = self.height // 2
         if self.attachedSite and self.attachedSite == "attrIcon":
             siteOffset += icon.ATTR_SITE_OFFSET
         layout = icon.Layout(self, width, self.height, siteOffset)
-        if self.pendingArg() is None and self._pendingAttr() is None:
-            return layout
         if self.pendingArg():
-            layout.addSubLayout(self.pendingArg().calcLayout(), width, 0)
-        else:
-            layout.addSubLayout(self._pendingAttr().calcLayout(), width,
+            pendingArgLayout = self.pendingArg().calcLayout()
+            layout.addSubLayout(pendingArgLayout, 'pendingArg', width, 0)
+            width += pendingArgLayout.width
+        elif self._pendingAttr():
+            pendingAttrLayout = self._pendingAttr().calcLayout()
+            layout.addSubLayout(pendingAttrLayout, 'pendingAttr', width,
              icon.ATTR_SITE_OFFSET)
+            width += pendingAttrLayout.width
+        layout.width = width + ENTRY_ICON_GAP
         return layout
 
     def clipboardRepr(self, offset):
@@ -847,46 +846,37 @@ class CursorParenIcon(icon.Icon):
          self.selected, colorErr), location, clip)
 
     def doLayout(self, outSiteX, outSiteY, layout):
+        layout.updateSiteOffsets(self.sites.output)
+        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         bodyWidth, height = self.bodySize
-        argLayout, attrLayout = layout.subLayouts
         if self.closed:
-            if argLayout is None:
-                argWidth = icon.EMPTY_ARG_WIDTH
-            else:
-                argWidth = argLayout.width
-            width = 2*bodyWidth + argWidth + icon.outSiteImage.width - 3
+            width = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH + 1
         else:
             width = bodyWidth + icon.outSiteImage.width - 1
-        top = outSiteY - height // 2
+        top = outSiteY - self.sites.output.yOffset
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         self.cachedImage = None
-        if self.sites.argIcon.att:
-            self.sites.argIcon.att.doLayout(outSiteX + bodyWidth - 1, outSiteY, argLayout)
-        if self.closed:
-            self.sites.attrIcon.xOffset = width-2
-            self.sites.attrIcon.yOffset = self.sites.output.yOffset+icon.ATTR_SITE_OFFSET
-            if self.sites.attrIcon.att:
-                self.sites.attrIcon.att.doLayout(outSiteX + width - 2,
-                 outSiteY + icon.ATTR_SITE_OFFSET, attrLayout)
 
     def calcLayout(self):
         singleParenWidth, height = self.bodySize
         width = singleParenWidth
         layout = icon.Layout(self, width, height, height//2)
         if self.sites.argIcon.att is None:
-            layout.addSubLayout(None)
+            layout.addSubLayout(None, 'argIcon', singleParenWidth-1, 0)
             width += icon.EMPTY_ARG_WIDTH
         else:
             argLayout = self.sites.argIcon.att.calcLayout()
-            layout.addSubLayout(argLayout, singleParenWidth, 0)
+            layout.addSubLayout(argLayout, 'argIcon', singleParenWidth-1, 0)
             width += argLayout.width - 1
-        if self.closed and self.sites.attrIcon.att:
-            layout.addSubLayout(self.sites.attrIcon.att.calcLayout(),
-             width + singleParenWidth, icon.ATTR_SITE_OFFSET)
-        else:
-            layout.addSubLayout(None)
-            if self.closed:
-                layout.width = width + singleParenWidth
+        if self.closed:
+            if self.sites.attrIcon.att:
+                attrLayout = self.sites.attrIcon.att.calcLayout()
+            else:
+                attrLayout = None
+            width += singleParenWidth
+            layout.width = width
+            layout.addSubLayout(attrLayout, 'attrIcon', width - icon.ATTR_SITE_DEPTH,
+             icon.ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
@@ -1127,7 +1117,9 @@ class Cursor:
                     return False
                 if parent.hasParens:
                     moveTo = True
-            elif parent.__class__ in (CursorParenIcon, icon.FnIcon, icon.TupleIcon):
+            elif parent.__class__ in (icon.FnIcon, icon.TupleIcon):
+                moveTo = True
+            elif parent.__class__ is CursorParenIcon and parent.closed:
                 moveTo = True
             # If a parenthesized icon was found with cursor preceding its left paren,
             # move the cursor after that paren

@@ -728,9 +728,8 @@ class Window:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             parentIcon, childIcon, siteType, siteName = self.snapped
             self.removeTop(childIcon)  # Added above in case there were others
-            toDelete = parentIcon.childAt(siteName)
             redrawRegion.add(parentIcon.hierRect())
-            if toDelete is not None:
+            if siteType != "insertInput" and parentIcon.childAt(siteName):
                 redrawRegion.add(childIcon.hierRect())
             if siteType in ("input", "attrOut"):
                 parentIcon.replaceChild(childIcon, siteName)
