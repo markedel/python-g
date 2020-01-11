@@ -160,6 +160,27 @@ class EntryIcon(icon.Icon):
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)
 
+    def restoreForUndo(self, text):
+        """Undo restores all attachments and saves the displayed text.  Update the
+        remaining internal state based on attachments and passed text."""
+        outIcon = self.sites.output.att
+        attrIcon = self.sites.attrIn.att
+        if outIcon is not None:
+            self.attachedIcon = outIcon
+            self.attachedSite = outIcon.siteOf(self)
+            self.attachedSiteType = outIcon.typeOf(self.attachedSite)
+        elif attrIcon is not None:
+            self.attachedIcon = attrIcon
+            self.attachedSite = attrIcon.siteOf(self)
+            self.attachedSiteType = attrIcon.typeOf(self.attachedSite)
+        else:
+            self.attachedIcon = None
+            self.attachedSite = None
+            self.attachedSiteType = None
+        self.text = text
+        self.cursorPos = len(text)
+        self.layoutDirty = True
+
     def _width(self, boxOnly=False):
         textWidth = icon.globalFont.getsize(self.text)[0]
         if textWidth > self.initTxtWidth:

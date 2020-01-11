@@ -3,6 +3,7 @@
 import tkinter as tk
 import typing
 import icon
+import undo
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import compile_eval
@@ -105,6 +106,9 @@ class Window:
         menu.add_command(label="New", command=self._newCb)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu)
+        menu.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
+        menu.add_command(label="Redo", command=self._redoCb, accelerator="Ctrl+Y")
+        menu.add_separator()
         menu.add_command(label="Cut", command=self._cutCb, accelerator="Ctrl+X")
         menu.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
         menu.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
@@ -123,6 +127,8 @@ class Window:
         self.imgFrame.bind("<Motion>", self._motionCb)
         self.top.bind("<FocusIn>", self._focusInCb)
         self.top.bind("<FocusOut>", self._focusOutCb)
+        self.top.bind("<Control-z>", self._undoCb)
+        self.top.bind("<Control-y>", self._redoCb)
         self.top.bind("<Control-x>", self._cutCb)
         self.top.bind("<Control-c>", self._copyCb)
         self.top.bind("<Control-v>", self._pasteCb)
@@ -139,10 +145,14 @@ class Window:
         self.frame.pack(fill=tk.BOTH, expand=True)
 
         self.popup = tk.Menu(self.imgFrame, tearoff=0)
+        self.popup.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
+        self.popup.add_command(label="Redo", command=self._redoCb, accelerator="Ctrl+Y")
+        self.popup.add_separator()
         self.popup.add_command(label="Cut", command=self._cutCb, accelerator="Ctrl+X")
         self.popup.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
         self.popup.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
-        self.popup.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
+        self.popup.add_command(label="Delete", command=self._deleteCb,
+         accelerator="Delete")
 
         self.buttonDownTime = None
         self.buttonDownLoc = None
@@ -163,6 +173,7 @@ class Window:
         self.entryIcon = None
         self.cursor = typing.Cursor(self, None)
         self.execResultPositions = {}
+        self.undo = undo.UndoRedoList(self)
 
     def allIcons(self, order="draw"):
         """Iterate over of all icons in the window, in drawing order, "draw", by default,
@@ -290,6 +301,7 @@ class Window:
         else:
             if self.entryIcon is not None:
                 self.entryIcon.draw()
+        self.undo.addBoundary()
 
     def _motionCb(self, evt):
         if self.dragging is not None:
@@ -442,9 +454,16 @@ class Window:
         if evt.widget == self.top:
             appData.removeWindow(self)
 
+    def _undoCb(self, _evt=None):
+        self.undo.undo()
+
+    def _redoCb(self, _evt=None):
+        self.undo.redo()
+
     def _cutCb(self, _evt=None):
         self._copyCb()
         self.removeIcons(self.selectedIcons())
+        self.undo.addBoundary()
 
     def _copyCb(self, evt=None):
         selectedIcons = self.selectedIcons()
@@ -561,6 +580,7 @@ class Window:
                 self.cursor.removeCursor()
             else:
                 self.cursor.setToIconSite(pastedIcons[0], "output")
+        self.undo.addBoundary()
 
     def _deleteCb(self, _evt=None):
         selected = self.selectedIcons()
@@ -571,6 +591,7 @@ class Window:
             # on listType icons and remove an empty argument spot.
             self.cursor.icon.replaceChild(None, self.cursor.site)
             self.redoLayout(self.cursor.icon.topLevelParent())
+        self.undo.addBoundary()
 
     def _backspaceCb(self, _evt=None):
         if self.entryIcon is None:
@@ -755,6 +776,7 @@ class Window:
         # possible, after all the dragging and drawing, it's prudent to ensure that the
         # display remains in sync with the image pixmap
         self.refresh()
+        self.undo.addBoundary()
 
     def _cancelDrag(self):
         # Not properly cancelling drag, yet, just dropping the icons being dragged
@@ -872,6 +894,7 @@ class Window:
             # Remember where the last result was drawn, so it can be erased if it is still
             # there the next time the same icon is executed
             self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
+        self.undo.addBoundary()
 
     def _handleExecErr(self, excep):
         iconRect = excep.icon.hierRect()
@@ -1034,15 +1057,16 @@ class Window:
         """Remove top-level icon or icons (without re-layout or re-draw)."""
         if hasattr(ic, '__iter__'):
             for i in ic:
-                self.topIcons.remove(i)
+                self.removeTop(i)
         else:
+            x, y = ic.rect[:2]
+            self.undo.registerRemoveFromTopLevel(ic, x, y, self.topIcons.index(ic))
             self.topIcons.remove(ic)
 
     def replaceTop(self, old, new):
         """Replace an existing top-level icon with a new icon in the same location
         (but don't re-layout or re-draw)"""
-        self.topIcons.remove(old)
-        self.topIcons.append(new)
+        self.removeTop(old)
         oldSite = old.sites.lookup("output")
         newSite = new.sites.lookup("output")
         oldX, oldY = old.rect[:2]
@@ -1051,16 +1075,20 @@ class Window:
         else:
             newX = oldX + oldSite.xOffset - newSite.xOffset
             newY = oldY + oldSite.yOffset - newSite.yOffset
-        new.rect = icon.moveRect(new.rect, (newX, newY))
+        self.addTop(new, newX, newY)
 
-    def addTop(self, ic, x=None, y=None):
+    def addTop(self, ic, x=None, y=None, index=None):
         """Place an icon or icons on the window at the top level (without re-layout or
         re-draw).  If ic is a list, x, y will not be applied."""
         if hasattr(ic, '__iter__'):
             for i in ic:
                 self.addTop(i)
         else:
-            self.topIcons.append(ic)
+            self.undo.registerAddToTopLevel(ic)
+            if index is None:
+                self.topIcons.append(ic)
+            else:
+                self.topIcons.insert(index, ic)
             # Detaching icons should remove all connections, but the consequence to
             # leaving a parent link at the top level is dire, so make sure all parent
             # links are removed.
@@ -1123,11 +1151,6 @@ class Window:
         # taken its place (BinOp or CursorParen)
         if self.cursor.type == "icon" and self.cursor.icon is ic and \
          self.cursor.siteType == "attrOut":
-            if "attrOut" not in argIcon.snapLists():
-                # If it's a binary operation that *will have* parens once we remove the
-                # prop ones, it may not yet have a site on which to put the cursor.
-                # Call layout prematurely to make the site appear
-                argIcon.topLevelParent().layout()
             self.cursor.setToIconSite(argIcon, "attrIcon")
         return argIcon
 
@@ -1147,6 +1170,8 @@ class AccumRects:
         self.rect = initRect
 
     def add(self, rect):
+        if rect is None:
+            return
         if self.rect is None:
             self.rect = rect
         else:

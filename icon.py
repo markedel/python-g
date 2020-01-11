@@ -228,6 +228,7 @@ class Icon:
         self.layoutDirty = False
         self.cachedImage = None
         self.sites = IconSiteList()
+        window.undo.registerIconCreated(self)
 
     def draw(self, image=None, location=None, clip=None):
         """Draw the icon.  The image to which it is drawn and the location at which it is
@@ -324,15 +325,23 @@ class Icon:
         return self.sites.makeSnapLists(self, x, y)
 
     def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
+        """Replace the icon attached at a particular site.  Note that while the name
+        is "replaceChild", it is possible to use this on any site.  The convention when
+        icons are arranged in a hierarchy, is to operate on child sites, so that the
+        back-link (childSite) can be automatically determined.  Meaning, if icons are not
+        arranged in a strict hierarchy, specify childSite or bad things will happen.
+        If leavePlace is False, replacing a series site with None will remove the site
+        itself from the series.  If leavePlace is True, the site will remain and be set
+        to None."""
         siteId = self.sites.siteIdWarn(siteId)
         if self.sites.isSeries(siteId):
             if newChild is None and not leavePlace:
                 self.sites.removeSeriesSiteById(siteId)
             else:
-                seriesName, idx = self.sites.splitSeriesSiteId(siteId)
+                seriesName, idx = splitSeriesSiteId(siteId)
                 seriesLen = len(self.sites.getSeries(seriesName))
                 if idx == seriesLen:
-                    self.sites.insertSeriesSiteByNameAndIndex(seriesName, idx)
+                    self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, idx)
                 self.sites.lookup(siteId).attach(self, newChild, childSite)
         else:
             self.sites.lookup(siteId).attach(self, newChild, childSite)
@@ -344,7 +353,7 @@ class Icon:
         seriesIdx is specified), the name for a series of sites with the index specified
         in seriesIdx."""
         if seriesIdx is None:
-            seriesName, seriesIdx = self.sites.splitSeriesSiteId(siteIdOrSeriesName)
+            seriesName, seriesIdx = splitSeriesSiteId(siteIdOrSeriesName)
         else:
             seriesName = siteIdOrSeriesName
         if seriesName is None:
@@ -357,7 +366,7 @@ class Icon:
         if len(series) == 1 and series[0].att is None and seriesIdx == 0:
             series[0].attach(self, child, childSite)
         else:
-            self.sites.insertSeriesSiteByNameAndIndex(seriesName, seriesIdx)
+            self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, seriesIdx)
             self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
         self.layoutDirty = True
 
@@ -406,7 +415,7 @@ class Icon:
         return site.type
 
     def indexOf(self, siteId):
-        series, index = self.sites.splitSeriesSiteId(siteId)
+        series, index = splitSeriesSiteId(siteId)
         if series is not None:
             return index
         return None
@@ -699,7 +708,7 @@ class ListTypeIcon(Icon):
          colorErr), location, clip)
 
     def snapLists(self):
-        """Add snap sites for insertion to those representing actual attachment sites"""
+        # Add snap sites for insertion to those representing actual attachment sites
         siteSnapLists = Icon.snapLists(self)
         siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
         return siteSnapLists
@@ -882,7 +891,8 @@ class BinOpIcon(Icon):
         self.sites.add('output', 'output', 0, siteYOffset)
         self.sites.add('leftArg', 'input', 0, siteYOffset)
         self.sites.add('rightArg', 'input', self.leftArgWidth + opWidth, siteYOffset)
-        # There can be an attribute site but it only appears with parenthesis
+        # Note that the attrIcon site is only usable when parens are displayed
+        self.sites.add("attrIcon", "attrOut", self.leftArgWidth + opWidth, siteYOffset)
         self.leftSiteDrawn = False
         # Indicates that input site falls directly on top of output site
         self.coincidentSite = 'leftArg'
@@ -1042,11 +1052,6 @@ class BinOpIcon(Icon):
         self.leftArgWidth = layout.lArgWidth
         self.rightArgWidth = layout.rArgWidth
         self.depthWidth = layout.depthWidth
-        if self.hasParens:
-            if not hasattr(self.sites, 'attrIcon'):
-                self.sites.add("attrIcon", "attrOut", 0, 0)
-        else:
-            self.sites.remove('attrIcon')
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         width, height = self._size()
@@ -1088,13 +1093,19 @@ class BinOpIcon(Icon):
         layout.addSubLayout(rArgLayout, "rightArg", rArgSiteX, 0)
         layout.width = rArgSiteX + rArgWidth + rParenWidth
         parent = self.parent()
-        if hasParens:
-            if hasattr(self.sites, 'attrIcon') and self.sites.attrIcon.att is not None:
-                attrLayout = self.sites.attrIcon.att.calcLayout()
-            else:
-                attrLayout = None
-            layout.addSubLayout(attrLayout, 'attrIcon', layout.width, ATTR_SITE_OFFSET)
+        if hasattr(self.sites, 'attrIcon') and self.sites.attrIcon.att is not None:
+            attrLayout = self.sites.attrIcon.att.calcLayout()
+        else:
+            attrLayout = None
+        layout.addSubLayout(attrLayout, 'attrIcon', layout.width, ATTR_SITE_OFFSET)
         return layout
+
+    def snapLists(self):
+        # Make attribute site unavailable unless the icon has no parens to hold it
+        siteSnapLists = Icon.snapLists(self)
+        if not self.hasParens:
+            del siteSnapLists['attrOut']
+        return siteSnapLists
 
     def textRepr(self):
         leftArgText = "None" if self.leftArg() is None else self.leftArg().textRepr()
@@ -1599,6 +1610,9 @@ class IconSite:
             backLinkSite = self.att.siteOf(ownerIcon)
             if backLinkSite is not None:
                 self.att.sites.lookup(backLinkSite).att = None
+        else:
+            backLinkSite = None
+        ownerIcon.window.undo.registerAttach(ownerIcon, self.name, self.att, backLinkSite)
         # If attaching None (removing attachment), no bidirectional link to make
         if fromIcon is None:
             self.att = None
@@ -1653,7 +1667,7 @@ class IconSiteSeries:
         else:
             del self.sites[idx]
             for i in range(idx, len(self.sites)):
-                self.sites[i].name = makeSeriesSiteId(self.name,i)
+                self.sites[i].name = makeSeriesSiteId(self.name, i)
 
 class IconSiteList:
     """
@@ -1677,7 +1691,7 @@ class IconSiteList:
             return None
         # If it is a series site, split the name up in to the series name and index
         # and return the site by-index from the series
-        seriesName, seriesIndex = self.splitSeriesSiteId(siteId)
+        seriesName, seriesIndex = splitSeriesSiteId(siteId)
         if seriesName is None:
             print("site lookup failed 2")
             return None
@@ -1768,7 +1782,7 @@ class IconSiteList:
         if hasattr(self, siteIdOrSeriesName):
             seriesName = siteIdOrSeriesName
         else:
-            seriesName, seriesIndex = self.splitSeriesSiteId(siteIdOrSeriesName)
+            seriesName, seriesIndex = splitSeriesSiteId(siteIdOrSeriesName)
             if seriesName is None:
                 return None
         if hasattr(self, seriesName):
@@ -1776,16 +1790,6 @@ class IconSiteList:
             if isinstance(series, IconSiteSeries):
                 return series
         return None
-
-    def splitSeriesSiteId(self, siteId):
-        for i, c in enumerate(reversed(siteId)):
-            if c.isdigit():
-                continue
-            if c == "_":
-                idx = len(siteId) - 1 - i
-                return siteId[:idx], int(siteId[i+idx:])
-        print("failed to get name and idx from seriesId", siteId)
-        return None, None
 
     def remove(self, name):
         """Delete a (non-series) icon site."""
@@ -1795,28 +1799,30 @@ class IconSiteList:
                 delattr(self, name)
                 self._typeDict[site.type].remove(name)
 
-    def removeSeriesSiteById(self, siteId):
+    def removeSeriesSiteById(self, ic, siteId):
         """Remove a site from a series given siteId (which encodes index)"""
-        name, idx = self.splitSeriesSiteId(siteId)
+        name, idx = splitSeriesSiteId(siteId)
         if name is None:
             print("failed to remove series site", siteId)
         else:
-            self.removeSeriesSiteByNameAndIndex(name, idx)
+            self.removeSeriesSiteByNameAndIndex(ic, name, idx)
 
-    def removeSeriesSiteByNameAndIndex(self, seriesName, idx):
+    def removeSeriesSiteByNameAndIndex(self, ic, seriesName, idx):
         """Remove a site from a series given the series name and index"""
+        ic.window.undo.registerRemoveSeriesSite(ic, seriesName, idx)
         series = getattr(self, seriesName)
         if isinstance(series, IconSiteSeries):
             series.removeSite(idx)
 
-    def insertSeriesSiteById(self, siteId):
-        name, idx = self.splitSeriesSiteId(siteId)
+    def insertSeriesSiteById(self, ic, siteId):
+        name, idx = splitSeriesSiteId(siteId)
         if name is None:
             print("failed to insert series site", siteId)
         else:
-            self.insertSeriesSiteByNameAndIndex(name, idx)
+            self.insertSeriesSiteByNameAndIndex(ic, name, idx)
 
-    def insertSeriesSiteByNameAndIndex(self, seriesName, insertIdx):
+    def insertSeriesSiteByNameAndIndex(self, ic, seriesName, insertIdx):
+        ic.window.undo.registerInsertSeriesSite(ic, seriesName, insertIdx)
         series = getattr(self, seriesName)
         if isinstance(series, IconSiteSeries):
             series.insertSite(insertIdx)
@@ -1904,6 +1910,15 @@ class HorizListMgr:
 
 def makeSeriesSiteId(seriesName, seriesIdx):
     return seriesName + "_%d" % seriesIdx
+
+def splitSeriesSiteId(siteId):
+    splitName = siteId.split('_')
+    if len(splitName) != 2:
+        return None, None
+    name, idx = splitName
+    if len(name) == 0 or len(idx) == 0 or not idx.isnumeric():
+        return None, None
+    return name, int(idx)
 
 def containingRect(icons):
     maxRect = AccumRects()
