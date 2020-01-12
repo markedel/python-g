@@ -6,6 +6,7 @@ class UndoRedoList:
         self.undoList = [Boundary(None)]  # Empty boundary removes cursor and entry icon
         self.redoList = []
         self._inUndo = False
+        self._inRedo = False
         # for the first pass, deleted icons hang around as objects in the undo list
         # Eventually, these should be allowed to go away and the lists should contain
         # an abbreviated version of the icon (either shrunk or replaced with an id).
@@ -14,32 +15,43 @@ class UndoRedoList:
         #self.currentId = 0
 
     def registerIconCreated(self, ic):
-        self._rcvList().append(IconCreated(ic))
+        self._addUndoRedoEntry(IconCreated(ic))
         #self.iconToId[self.currentId] = ic
         #self.idToIcon[ic] = self.currentId
         #self.currentId += 1
 
     def registerIconDelete(self, ic):
-        self._rcvList().append(IconDeleted(ic))
+        self._addUndoRedoEntry(IconDeleted(ic))
 
     def registerRemoveFromTopLevel(self, ic, fromX, fromY, index):
-        self._rcvList().append(RemoveFromTopLevel(ic, fromX, fromY, index))
+        self._addUndoRedoEntry(RemoveFromTopLevel(ic, fromX, fromY, index))
 
     def registerAddToTopLevel(self, ic):
-        self._rcvList().append(AddToTopLevel(ic))
+        self._addUndoRedoEntry(AddToTopLevel(ic))
 
     def registerAttach(self, parentIcon, siteId, origChild, childSite):
-        self._rcvList().append(Attach(parentIcon, siteId, origChild, childSite))
+        self._addUndoRedoEntry(Attach(parentIcon, siteId, origChild, childSite))
 
     def registerInsertSeriesSite(self, ic, seriesName, insertIdx):
-        self._rcvList().append(InsertSeriesSite(ic, seriesName, insertIdx))
+        self._addUndoRedoEntry(InsertSeriesSite(ic, seriesName, insertIdx))
 
     def registerRemoveSeriesSite(self, ic, seriesName, insertIdx):
-        self._rcvList().append(RemoveSeriesSite(ic, seriesName, insertIdx))
+        self._addUndoRedoEntry(RemoveSeriesSite(ic, seriesName, insertIdx))
+
+    def registerCallback(self, callback):
+        self._addUndoRedoEntry(Callback(callback))
 
     def addBoundary(self):
-        if len(self.undoList) == 0 or self.undoList[-1].__class__ is not Boundary:
+        if len(self.undoList) > 0 and self.undoList[-1].__class__ is Boundary:
+            # Don't record every keystroke, but rather capture the entry icon and cursor
+            # on the brink of the operation to best allow user to correct a mistaken entry
+            self.undoList[-1] = (Boundary(self.window))
+        else:
             self.undoList.append(Boundary(self.window))
+        # Typing (which is reflected only in addBoundary) is sufficient reason to
+        # invalidate the redo list
+        if not self._inRedo and not self._inUndo:
+            self.redoList = []
 
     def undo(self):
         """Perform operations on the undo list until the next undo boundary"""
@@ -51,7 +63,9 @@ class UndoRedoList:
     def redo(self):
         """Perform operations on the redo list until the next undo boundary"""
         self.undoList.append(Boundary(self.window))
+        self._inRedo = True
         self._undoOrRedoToBoundary(self.redoList)
+        self._inRedo = False
 
     def _undoOrRedoToBoundary(self, undoList):
         if len(undoList) == 0:
@@ -83,13 +97,19 @@ class UndoRedoList:
                 ic.draw(clip=redrawRegion.rect)
             self.window.refresh(redrawRegion.rect)
 
-    def _rcvList(self):
-        """Return the appropriate list (undo or redo) in which to register an operation
-        based upon whether it is happening in the context of processing an undo operation
-        itself, or whether it is an an original or redo operation."""
+    def _addUndoRedoEntry(self, undoEntry):
+        """Add undo entry to the appropriate list (undo or redo) based upon whether
+        operations are being recorded in the context of processing an undo command,
+        or driven by an an original operation or a redo operation.  Also clears the
+        redo list if new operations are done outside of the context of undo/redo"""
         if self._inUndo:
-            return self.redoList
-        return self.undoList
+            undoList =  self.redoList
+        else:
+            undoList = self.undoList
+        undoList.append(undoEntry)
+        if not self._inRedo and not self._inUndo:
+            self.redoList = []
+            
 
 class UndoListEntry:
     pass
@@ -207,6 +227,15 @@ class AddToTopLevel(UndoListEntry):
         redrawRect = self.icon.rect
         undoData.window.removeTop(self.icon)
         return redrawRect
+
+class Callback(UndoListEntry):
+    # ... Note that this is going to stop working when icon deletion is added, since
+    # this callback is being used from an icon.
+    def __init__(self, callback):
+        self.callback = callback
+
+    def undo(self, undoData):
+        self.callback()
 
 class AccumRect:
     """Make one big rectangle out of all rectangles added."""

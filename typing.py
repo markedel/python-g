@@ -923,6 +923,13 @@ class CursorParenIcon(icon.Icon):
         # Allow cursor to be set to the end paren before layout knows where it goes
         self.sites.add('attrIcon', 'attrOut', icon.rectWidth(self.rect),
          icon.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
+        self.window.undo.registerCallback(self.reopen)
+
+    def reopen(self):
+        self.closed = False
+        self.layoutDirty = True
+        self.sites.remove('attrIcon')
+        self.window.undo.registerCallback(self.close)
 
 class Cursor:
     def __init__(self, window, cursorType):
