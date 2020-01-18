@@ -1093,7 +1093,10 @@ class Window:
             # leaving a parent link at the top level is dire, so make sure all parent
             # links are removed.
             for parentSite in ic.parentSites():
-                ic.replaceChild(None, parentSite)
+                lingeringParent = ic.childAt(parentSite)
+                if lingeringParent:
+                    print("Removing lingering parent link to icon added to top")
+                    lingeringParent.replaceChild(None, lingeringParent.siteOf(ic))
             # If position was specified, relocate the icon
             if x is not None and y is not None:
                 ic.rect = icon.moveRect(ic.rect, (x, y))

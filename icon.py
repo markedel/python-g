@@ -336,7 +336,7 @@ class Icon:
         siteId = self.sites.siteIdWarn(siteId)
         if self.sites.isSeries(siteId):
             if newChild is None and not leavePlace:
-                self.sites.removeSeriesSiteById(siteId)
+                self.sites.removeSeriesSiteById(self, siteId)
             else:
                 seriesName, idx = splitSeriesSiteId(siteId)
                 seriesLen = len(self.sites.getSeries(seriesName))
@@ -1631,9 +1631,12 @@ class IconSite:
                  "site", fromSiteId, "but multiple targets made choice ambiguous")
         fromSite = fromIcon.sites.lookup(fromSiteId)
         if fromSite is None:
-            print("Could not attach icon: invalid back-link (fromSiteId)", fromSiteId)
+            if fromIcon.sites.isSeries(fromSiteId):
+                print("Could not attach icon: parent link points to series", fromSiteId)
+            else:
+                print("Could not attach icon: invalid back-link (fromSiteId)", fromSiteId)
             return
-        # Make the bidirectional links
+        # Make the (bidirectional) link
         self.att = fromIcon
         fromSite.att = ownerIcon
 
@@ -1661,13 +1664,10 @@ class IconSiteSeries:
         for i in range(insertIdx+1, len(self.sites)):
             self.sites[i].name = makeSeriesSiteId(self.name, i)
 
-    def removeSite(self, idx):
-        if len(self.sites) == 1:  # Leave a single site for insertion
-            self.sites[0].attach(None, None)
-        else:
-            del self.sites[idx]
-            for i in range(idx, len(self.sites)):
-                self.sites[i].name = makeSeriesSiteId(self.name, i)
+    def removeSite(self, ic, idx):
+        del self.sites[idx]
+        for i in range(idx, len(self.sites)):
+            self.sites[i].name = makeSeriesSiteId(self.name, i)
 
 class IconSiteList:
     """
@@ -1809,10 +1809,14 @@ class IconSiteList:
 
     def removeSeriesSiteByNameAndIndex(self, ic, seriesName, idx):
         """Remove a site from a series given the series name and index"""
-        ic.window.undo.registerRemoveSeriesSite(ic, seriesName, idx)
         series = getattr(self, seriesName)
         if isinstance(series, IconSiteSeries):
-            series.removeSite(idx)
+            if len(series.sites) == 1:  # Leave a single site for insertion
+                series.sites[0].attach(ic, None)
+            else:
+                series.sites[idx].attach(ic, None)
+                series.removeSite(ic, idx)
+                ic.window.undo.registerRemoveSeriesSite(ic, seriesName, idx)
 
     def insertSeriesSiteById(self, ic, siteId):
         name, idx = splitSeriesSiteId(siteId)
