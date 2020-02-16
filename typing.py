@@ -44,7 +44,7 @@ keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
  'return', 'try', 'while', 'with', 'yield']
 
-identPattern = re.compile('^[a-zA-z_][a-zA-z_\\d]*$')
+identPattern = re.compile('^[a-zA-z_][a-zA-Z_\\d]*$')
 numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
  '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
 attrPattern = re.compile('^\\.[a-zA-z_][a-zA-z_\\d]*$')
@@ -282,7 +282,12 @@ class EntryIcon(icon.Icon):
                 self.attachedIcon.replaceChild(self._pendingAttr(), self.attachedSite)
             else:
                 self.attachedIcon.replaceChild(None, self.attachedSite)
-            self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+            if self.attachedIcon.hasSite(self.attachedSite):
+                self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+            else: # The last element of list can disappear when entry icon is removed
+                seriesName, seriesIdx = icon.splitSeriesSiteId(self.attachedSite)
+                newSite = icon.makeSeriesSiteId(seriesName, seriesIdx-1)
+                self.window.cursor.setToIconSite(self.attachedIcon, newSite)
         else:  # Entry icon is not attached to icon (independent in window)
             if self not in self.window.topIcons:
                 print("why was entry icon not in top level icon list?")
@@ -356,7 +361,8 @@ class EntryIcon(icon.Icon):
                 cursor.setToIconSite(self.attachedIcon, self.attachedSite)
                 if not cursor.movePastEndParen():
                     beep()
-            elif matchingParen is self.attachedIcon:
+            elif matchingParen.__class__ is CursorParenIcon and \
+             matchingParen is self.attachedIcon:
                 # Empty tuple
                 parent = matchingParen.parent()
                 tupleIcon = icon.TupleIcon(window=self.window)
@@ -374,7 +380,12 @@ class EntryIcon(icon.Icon):
                     self.window.entryIcon = None
                     self.window.cursor.setToIconSite(tupleIcon, "attrIcon")
             else:
-                matchingParen.close()
+                if matchingParen.__class__ is icon.TupleIcon and matchingParen.noParens:
+                    # matchingParen is a tuple at the top level with no parens.  Add them
+                    matchingParen.restoreParens()
+                else:
+                    # matchingParen is an cursor paren, close it
+                    matchingParen.close()
                 if self.pendingArg():
                     self.attachedIcon.replaceChild(None, self.attachedSite)
                     self.attachedIcon = matchingParen
@@ -416,13 +427,18 @@ class EntryIcon(icon.Icon):
                 self.appendOperator(ic)
         elif self.attachedSiteType == "input":
             # Entry icon is attached to an input site
-            self.attachedIcon.replaceChild(ic, self.attachedSite)
-            if "input" in snapLists:
-                cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
-            elif "attrOut in snapLists":
-                cursor.setToIconSite(ic, snapLists["attrOut"][0][2])
+            if ic.__class__ is icon.AssignIcon:
+                if not self.insertAssign(ic):
+                    beep()
+                    return
             else:
-                cursor.removeCursor()
+                self.attachedIcon.replaceChild(ic, self.attachedSite)
+                if "input" in snapLists:
+                    cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
+                elif "attrOut in snapLists":
+                    cursor.setToIconSite(ic, snapLists["attrOut"][0][2])
+                else:
+                    cursor.removeCursor()
         # If entry icon has pending arguments, try to place them.  Code does its best
         # to place the cursor at the most reasonable spot.  If vacant, place pending
         # args there
@@ -439,7 +455,10 @@ class EntryIcon(icon.Icon):
                 if not cursor.movePastEndParen():
                     beep()
             else:
-                matchingParen.close()
+                if matchingParen.__class__ is icon.TupleIcon and matchingParen.noParens:
+                    matchingParen.restoreParens()
+                else:
+                    matchingParen.close()
                 cursor.setToIconSite(matchingParen, "attrIcon")
             remainingText = ""
         elif remainingText == '(' and ic.__class__ is icon.IdentifierIcon:
@@ -513,13 +532,13 @@ class EntryIcon(icon.Icon):
             self.window.addTop(tupleIcon,self.rect[0], self.rect[1])
             return True
         siteType = onIcon.typeOf(site)
-        if onIcon.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon) and \
-         siteType == "input":
+        if onIcon.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon,
+         icon.AssignIcon) and siteType == "input":
             # This is essentially ",,", which means leave a new space for an arg
             # Entry icon holds pending arguments
-            siteIdx = onIcon.indexOf(site)
-            onIcon.insertChildren([None], "argIcons", siteIdx)
-            siteAfterComma = icon.makeSeriesSiteId("argIcons", siteIdx + 1)
+            seriesName, seriesIndex = icon.splitSeriesSiteId(site)
+            onIcon.insertChildren([None], seriesName, seriesIndex)
+            siteAfterComma = icon.makeSeriesSiteId(seriesName, seriesIndex + 1)
             if onIcon.childAt(siteAfterComma) == self:
                 # Remove the Entry Icon and restore its pending arguments
                 if self.pendingArg() is None:
@@ -549,12 +568,6 @@ class EntryIcon(icon.Icon):
             else:
                 parent.replaceChild(tupleIcon, parent.siteOf(onIcon))
             return True
-        if onIcon.__class__ is icon.AssignIcon and site == "rightArg":
-            tupleIcon = icon.TupleIcon(window=self.window)
-            tupleIcon.insertChildren([None, onIcon.rightArg()], "argIcons", 0)
-            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
-            onIcon.replaceChild(tupleIcon, "rightArg")
-            return True
         if onIcon.__class__ is icon.BinOpIcon and site == "leftArg":
             leftArg = None
             rightArg = onIcon
@@ -577,15 +590,16 @@ class EntryIcon(icon.Icon):
             rightArg = None
         child = onIcon
         for parent in onIcon.parentage():
-            if parent.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon):
+            if parent.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon,
+             icon.AssignIcon):
                 onIcon.layoutDirty = True
                 childSite = parent.siteOf(child)
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
-                siteIdx = child.indexOf(childSite)
-                parent.insertChild(rightArg, "argIcons", siteIdx + 1)
+                seriesName, seriesIndex = icon.splitSeriesSiteId(childSite)
+                parent.insertChild(rightArg, seriesName, seriesIndex + 1)
                 if not cursorPlaced:
-                    cursorIdx = siteIdx if leftArg is None else siteIdx + 1
-                    self.window.cursor.setToIconSite(parent, "argIcons", cursorIdx)
+                    cursorIdx = seriesIndex if leftArg is None else seriesIndex + 1
+                    self.window.cursor.setToIconSite(parent, seriesName, cursorIdx)
                 return True
             if parent.__class__ is CursorParenIcon:
                 tupleIcon = icon.TupleIcon(window=self.window)
@@ -598,14 +612,6 @@ class EntryIcon(icon.Icon):
                     self.window.replaceTop(parent, tupleIcon)
                 else:
                     parentParent.replaceChild(tupleIcon, parentParent.siteOf(parent))
-                return True
-            if parent.__class__ is icon.AssignIcon:
-                tupleIcon = icon.TupleIcon(window=self.window)
-                tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
-                if not cursorPlaced:
-                    cursorSite = 0 if leftArg is None else 1
-                    self.window.cursor.setToIconSite(tupleIcon, "argIcons", cursorSite)
-                parent.replaceChild(tupleIcon, parent.siteOf(child))
                 return True
             if parent.__class__ is not icon.BinOpIcon:
                 return False
@@ -630,10 +636,10 @@ class EntryIcon(icon.Icon):
                 return False
             child = parent
         # Reached top level.  Create Tuple
-        tupleIcon = icon.TupleIcon(window=self.window)
+        tupleIcon = icon.TupleIcon(window=self.window, noParens=True)
         tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
         if not cursorPlaced:
-            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 1)  # May want to check and put in whichever is empty
+            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 1)
         self.window.replaceTop(child, tupleIcon)
         return True
 
@@ -643,7 +649,7 @@ class EntryIcon(icon.Icon):
         matchingParen = searchForOpenCursorParen(fromIcon, fromSite)
         if matchingParen is None:
             return None
-        if matchingParen is fromIcon:
+        if matchingParen is fromIcon or matchingParen.__class__ is icon.TupleIcon:
             return matchingParen
         # Find the lowest common ancestor of the start paren and end location, looking at
         # the visually-equivalent coincident sites to which the open-paren can be moved.
@@ -737,19 +743,68 @@ class EntryIcon(icon.Icon):
         newOpIcon.replaceChild(rightArg, rightSite)
 
     def insertAssign(self, assignIcon):
-        # Here is where we should test for proper assignment targets: names (but not
-        # numbers), tuples, slices; and appropriate spot in the hierarchy.  At the moment,
-        # only assignment to top level IdentifierIcons is allowed.  Also, temporarily, the
-        # assignment operator is attached to the input site, not the attribute site of
-        # the assignment target
-        if self.attachedIcon.__class__ not in (icon.IdentifierIcon, icon.TupleIcon,
-         icon.ListIcon) or self.attachedIcon not in self.window.topIcons:
+        attIconClass = self.attachedIcon.__class__
+        if not (attIconClass is icon.AssignIcon or attIconClass is icon.TupleIcon and
+         self.attachedIcon.noParens or self.attachedToAttribute() and attIconClass in
+         (icon.IdentifierIcon, icon.TupleIcon, icon.ListIcon)):
             return False
-        self.attachedIcon.replaceChild(None, self.attachedSite)
-        assignIcon.replaceChild(self.attachedIcon, "leftArg")
-        self.window.replaceTop(self.attachedIcon, assignIcon)
-        self.window.cursor.setToIconSite(assignIcon, "rightArg")
-        return True
+        if self.attachedIcon in self.window.topIcons and self.attachedToAttribute():
+            # The cursor is attached to an attribute of a top-level icon of a type
+            # appropriate as a target. Insert assignment icon and make it the target.
+            self.attachedIcon.replaceChild(None, self.attachedSite)
+            assignIcon.replaceChild(self.attachedIcon, "targets0_0")
+            self.window.replaceTop(self.attachedIcon, assignIcon)
+            self.window.cursor.setToIconSite(assignIcon, "values_0")
+            return True
+        topParent = self.attachedIcon.topLevelParent()
+        if topParent.__class__ is icon.TupleIcon and topParent.noParens:
+            # There is a no-paren tuple at the top level waiting to be converted in to an
+            # assignment statement.  Do the conversion.
+            self.attachedIcon.replaceChild(None, self.attachedSite)
+            if topParent is self.attachedIcon:
+                insertSiteId = self.attachedSite
+            else:
+                insertSiteId = topParent.siteOf(self.attachedIcon, recursive=True)
+            targetIcons = topParent.argIcons()
+            for tgtIcon in targetIcons:
+                topParent.replaceChild(None, topParent.siteOf(tgtIcon))
+            seriesName, seriesIdx = icon.splitSeriesSiteId(insertSiteId)
+            splitIdx = seriesIdx + (0 if topParent is self.attachedIcon else 1)
+            assignIcon.insertChildren(targetIcons[:splitIdx], 'targets0', 0)
+            assignIcon.insertChildren(targetIcons[splitIdx:], 'values', 0)
+            if splitIdx < len(targetIcons):
+                assignIcon.insertChild(None, 'values_0')
+            self.window.replaceTop(topParent, assignIcon)
+            self.window.cursor.setToIconSite(assignIcon, "values_0")
+            return True
+        if topParent.__class__ is icon.AssignIcon:
+            # There is already an assignment icon.  Add a new clause, splitting the
+            # target list at the entry location.  (assignIcon is thrown away)
+            self.attachedIcon.replaceChild(None, self.attachedSite)
+            if topParent is self.attachedIcon:
+                insertSiteId = self.attachedSite
+            else:
+                insertSiteId = topParent.siteOf(self.attachedIcon, recursive=True)
+            seriesName, seriesIdx = icon.splitSeriesSiteId(insertSiteId)
+            splitIdx = seriesIdx + (0 if topParent is self.attachedIcon else 1)
+            if seriesName == 'values':  # = was typed in the value series
+                newTgtGrpIdx = len(topParent.tgtLists)
+                cursorSite = 'values_0'
+                iconsToMove = [site.att for site in topParent.sites.values][:splitIdx]
+            else:  # = was typed in a target series
+                newTgtGrpIdx = int(seriesName[7:]) + 1
+                cursorSite = 'targets%d_0' % newTgtGrpIdx
+                series = getattr(topParent.sites, seriesName)
+                iconsToMove = [site.att for site in series][splitIdx:]
+            topParent.addTargetGroup(newTgtGrpIdx)
+            for tgtIcon in iconsToMove:
+                topParent.replaceChild(None, topParent.siteOf(tgtIcon))
+            topParent.insertChildren(iconsToMove, 'targets%d' % newTgtGrpIdx, 0)
+            if topParent.childAt(cursorSite):
+                topParent.insertChild(None, cursorSite)
+            self.window.cursor.setToIconSite(topParent, cursorSite)
+            return True
+        return False
 
     def click(self, evt):
         self.window.cursor.erase()
@@ -1232,6 +1287,8 @@ def parseEntryText(text, forAttrSite, window):
             return "endBracket"
         if text == ',':
             return "comma"
+        if text == '=':
+            return icon.AssignIcon(window), None
         if identPattern.fullmatch(text) or numPattern.fullmatch(text):
             return "accept"  # Nothing but legal identifier and numeric
         delim = text[-1]
@@ -1364,6 +1421,9 @@ def searchForOpenCursorParen(ic, site):
     while True:
         if ic.__class__ is CursorParenIcon and not ic.closed:
             # Found an open paren
+            return ic
+        if ic.__class__ is icon.TupleIcon and ic.noParens:
+            # Found a no-paren (top-level) tuple to parenthesize
             return ic
         if site == "all":
             siteType = "input"

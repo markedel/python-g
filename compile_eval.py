@@ -18,19 +18,21 @@ def parsePasted(text, window, location):
         return None
     if not isinstance(modAst, ast.Module):
         return None
-    exprList = [expr.value for expr in modAst.body if isinstance(expr, ast.Expr)]
-    if len(exprList) == 0:
+    if len(modAst.body) == 0:
         return None
     x, y = location
     icons = []
-    for expr in exprList:
-        topIcon = makeIcons(parseExpr(expr), window, x, y)
+    for stmt in modAst.body:
+        if isinstance(stmt, ast.Expr):
+            topIcon = makeIcons(parseExpr(stmt.value), window, x, y)
+        else:
+            topIcon = makeIcons(parseStmt(stmt), window, x, y)
         topIcon.layout((x, y))
         icons.append(topIcon)
         y += 30 # Figure out how to space multiple expressions, later
     return icons
 
-def parseExprToAst(text):
+def parseExprToAst(text):  #... Not used. what is this for?
     try:
         modAst = ast.parse(text, "Pasted text")
     except:
@@ -43,83 +45,93 @@ def parseExprToAst(text):
         return None
     return modAst.body[0].value
 
+def parseStmt(stmt):
+    if stmt.__class__ == ast.Assign:
+        print('ast.Assign')
+        targets = [parseExpr(e) for e in stmt.targets]
+        return (icon.AssignIcon, targets,  parseExpr(stmt.value))
+    return (icon.IdentifierIcon, "**Couldn't Parse**")
+
 def parseExpr(expr):
-    fn = 'functionIcon'
-    id = 'identifierIcon'
-    val = 'numericIcon'
-    st = 'stringIcon'
-    bin = 'binOpIcon'
-    unary = 'unaryOpIcon'
-    div = 'divideIcon'
-    lis = 'listIcon'
-    tup = 'tupleIcon'
     if expr.__class__ == ast.UnaryOp:
-        return (unary, unaryOps[expr.op.__class__], parseExpr(expr.operand))
+        return (icon.UnaryOpIcon, unaryOps[expr.op.__class__], parseExpr(expr.operand))
     elif expr.__class__ == ast.BinOp:
         if expr.op.__class__ is ast.Div:
-            return (div, False, parseExpr(expr.left), parseExpr(expr.right))
+            return (icon.DivideIcon, False, parseExpr(expr.left), parseExpr(expr.right))
         elif expr.op.__class__ is ast.FloorDiv:
-            return (div, True, parseExpr(expr.left), parseExpr(expr.right))
-        return (bin, binOps[expr.op.__class__], parseExpr(expr.left), parseExpr(expr.right))
+            return (icon.DivideIcon, True, parseExpr(expr.left), parseExpr(expr.right))
+        return (icon.BinOpIcon, binOps[expr.op.__class__], parseExpr(expr.left),
+         parseExpr(expr.right))
     elif expr.__class__ == ast.BoolOp:
-        return (bin, boolOps[expr.op.__class__], *(parseExpr(e) for e in expr.values))
+        return (icon.BinOpIcon, boolOps[expr.op.__class__],
+         *(parseExpr(e) for e in expr.values))
     elif expr.__class__ == ast.Compare:
         # Note: this does not handle multi-comparison types
-        return (fn, compareOps[expr.ops[0].__class__], parseExpr(expr.left), parseExpr(expr.comparators[0]))
+        return (icon.BinOpIcon, compareOps[expr.ops[0].__class__], parseExpr(expr.left),
+         parseExpr(expr.comparators[0]))
     elif expr.__class__ == ast.Call:
         # No keywords or other cool stuff, yet
-        return (fn, expr.func.id, *(parseExpr(e) for e in expr.args))
+        return (icon.FnIcon, expr.func.id, *(parseExpr(e) for e in expr.args))
     elif expr.__class__ == ast.Num:
-        return (val, expr.n)
+        return (icon.NumericIcon, expr.n)
     elif expr.__class__ == ast.Str:
-        return (st, expr.s)
+        return (icon.StringIcon, expr.s)
     # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
     elif expr.__class__ == ast.Name:
-        return (id, expr.id)
+        return (icon.IdentifierIcon, expr.id)
     elif expr.__class__ == ast.NameConstant:
-        return (val, expr.value)  # True and False as number is a bit weird
+        return (icon.NumericIcon, expr.value)  # True and False as number is a bit weird
     elif expr.__class__ == ast.List:
-        return (lis, *(parseExpr(e) for e in expr.elts))
+        return (icon.ListIcon, *(parseExpr(e) for e in expr.elts))
     elif expr.__class__ == ast.Tuple:
-        return (tup, *(parseExpr(e) for e in expr.elts))
+        return (icon.TupleIcon, *(parseExpr(e) for e in expr.elts))
     else:
-        return (id, "**Couldn't Parse**")
+        return (icon.IdentifierIcon, "**Couldn't Parse**")
 
 def makeIcons(parsedExpr, window, x, y):
-    if parsedExpr[0] == 'identifierIcon':
-        return icon.IdentifierIcon(parsedExpr[1], window, (x, y))
-    if parsedExpr[0] == 'numericIcon':
-        return icon.NumericIcon(parsedExpr[1], window, (x, y))
-    if parsedExpr[0] == 'stringIcon':
-        return icon.StringIcon(parsedExpr[1], window, (x, y))
-    if parsedExpr[0] == 'functionIcon':
-        topIcon = icon.FnIcon(parsedExpr[1], window, (x, y))
+    iconClass = parsedExpr[0]
+    if iconClass in (icon.IdentifierIcon, icon.NumericIcon, icon.StringIcon):
+        return iconClass(parsedExpr[1], window, (x, y))
+    if iconClass is icon.FnIcon:
+        topIcon = iconClass(parsedExpr[1], window, (x, y))
         childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[2:]]
         topIcon.insertChildren(childIcons, "argIcons", 0)
         return topIcon
-    if parsedExpr[0] == 'unaryOpIcon':
-        topIcon = icon.UnaryOpIcon(parsedExpr[1], window, (x, y))
+    if iconClass is icon.UnaryOpIcon:
+        topIcon = iconClass(parsedExpr[1], window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "argIcon")
         return topIcon
-    if parsedExpr[0] == 'binOpIcon':
-        topIcon = icon.BinOpIcon(parsedExpr[1], window, (x, y))
+    if iconClass is icon.BinOpIcon:
+        topIcon = iconClass(parsedExpr[1], window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "leftArg")
         topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "rightArg")
         return topIcon
-    if parsedExpr[0] == 'divideIcon':
-        topIcon = icon.DivideIcon(window, (x, y), floorDiv=parsedExpr[1])
+    if iconClass is icon.DivideIcon:
+        topIcon = iconClass(window, (x, y), floorDiv=parsedExpr[1])
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "topArg")
         topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "bottomArg")
         return topIcon
-    if parsedExpr[0] == 'listIcon':
-        topIcon = icon.ListIcon(window, (x, y))
+    if iconClass in (icon.ListIcon, icon.TupleIcon):
+        topIcon = iconClass(window, location=(x, y))
         childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
         topIcon.insertChildren(childIcons, "argIcons", 0)
         return topIcon
-    if parsedExpr[0] == 'tupleIcon':
-        topIcon = icon.TupleIcon(window, (x, y))
-        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
-        topIcon.insertChildren(childIcons, "argIcons", 0)
+    if iconClass is icon.AssignIcon:
+        topIcon = iconClass(window, (x, y))
+        tgts = parsedExpr[1]
+        if len(tgts) > 1:
+            for i in range(1, len(tgts)):
+                topIcon.addTargetGroup(i)
+        for i, tgt in enumerate(tgts):
+            if tgt[0] is icon.TupleIcon:
+                tgtIcons = [makeIcons(t, window, x, y) for t in tgt[1:]]
+            else:
+                tgtIcons = [makeIcons(tgt, window, x, y)]
+            topIcon.insertChildren(tgtIcons, "targets%d" % i, 0)
+        if parsedExpr[2][0] is icon.TupleIcon:
+            valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[2][1:]]
+            topIcon.insertChildren(valueIcons, "values", 0)
+        else:
+            topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "values_0")
         return topIcon
-    else:
-        return icon.TextIcon("**Internal Parse Error**", window, (x,y))
+    return icon.TextIcon("**Internal Parse Error**", window, (x,y))

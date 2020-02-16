@@ -38,8 +38,8 @@ class UndoRedoList:
     def registerRemoveSeriesSite(self, ic, seriesName, insertIdx):
         self._addUndoRedoEntry(RemoveSeriesSite(ic, seriesName, insertIdx))
 
-    def registerCallback(self, callback):
-        self._addUndoRedoEntry(Callback(callback))
+    def registerCallback(self, callback, *args):
+        self._addUndoRedoEntry(Callback(callback, args))
 
     def addBoundary(self):
         if len(self.undoList) > 0 and self.undoList[-1].__class__ is Boundary:
@@ -231,11 +231,11 @@ class AddToTopLevel(UndoListEntry):
 class Callback(UndoListEntry):
     # ... Note that this is going to stop working when icon deletion is added, since
     # this callback is being used from an icon.
-    def __init__(self, callback):
+    def __init__(self, callback, args):
         self.callback = callback
 
     def undo(self, undoData):
-        self.callback()
+        self.callback(*args)
 
 class AccumRect:
     """Make one big rectangle out of all rectangles added."""

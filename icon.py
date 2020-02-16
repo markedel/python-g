@@ -31,8 +31,9 @@ matingSiteType = {'output':'input', 'input':'output', 'attrIn':'attrOut',
 
 ATTR_SITE_DEPTH = 1
 OUTPUT_SITE_DEPTH = 2
+SEQ_SITE_DEPTH = -1  # Icons extend 1 pixel to the left of the sequence site
 siteDepths = {'input':OUTPUT_SITE_DEPTH, 'output':OUTPUT_SITE_DEPTH,
- 'attrIn':ATTR_SITE_DEPTH, 'attrOut':ATTR_SITE_DEPTH}
+ 'attrIn':ATTR_SITE_DEPTH, 'attrOut':ATTR_SITE_DEPTH, 'seqIn':SEQ_SITE_DEPTH}
 
 TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
@@ -89,9 +90,9 @@ commaPixmap = (
  "o  o.",
  "o   o",
  "o   o",
- "o % o",
- "o1% o",
- "o21 o",
+ "o %9o",
+ "o8%9o",
+ "o%8 o",
  "o   o",
  "ooooo",
 )
@@ -120,17 +121,17 @@ floatInPixmap = (
 binLParenPixmap = (
  "..ooooooo",
  "..o     o",
- "..o  32 o",
- "..o 32  o",
- "..o 13  o",
- "..o3%   o",
- ".o 1%  o.",
- "o  2% o..",
- ".o 1%  o.",
- "..o3%   o",
- "..o 13  o",
- "..o 32  o",
- "..o  32 o",
+ "..o  85 o",
+ "..o 85  o",
+ "..o 38  o",
+ "..o8%   o",
+ ".o 3%  o.",
+ "o  5% o..",
+ ".o 3%  o.",
+ "..o8%   o",
+ "..o 38  o",
+ "..o 85  o",
+ "..o  85 o",
  "..o     o",
  "..ooooooo",
 )
@@ -138,19 +139,97 @@ binLParenPixmap = (
 binRParenPixmap = (
  "oooooooo",
  "o      o",
- "o 23   o",
- "o  23  o",
- "o  31  o",
+ "o 58   o",
+ "o  58  o",
+ "o  83  o",
+ "o   %8 o",
  "o   %3 o",
- "o   %1 o",
- "o   %2 o",
- "o   %1 o",
+ "o   %5 o",
  "o   %3 o",
- "o  31  o",
- "o  23  o",
- "o 23   o",
+ "o   %8 o",
+ "o  83  o",
+ "o  58  o",
+ "o 58   o",
  "o      o",
  "oooooooo",
+)
+
+tupleLParenPixmap = (
+ "oooooooo",
+ "o      o",
+ "o   5  o",
+ "o  76  o",
+ "o  47  o",
+ "o  %8  o",
+ "o 9%8  o",
+ "o 8%8  o",
+ "o 8%8  o",
+ "o 8%8  o",
+ "o 9%8  o",
+ "o  %8  o",
+ "o  47  o",
+ "o  76  o",
+ "o   5  o",
+ "o      o",
+ "oooooooo",
+)
+
+tupleRParenPixmap = (
+ "oooooooo",
+ "o      o",
+ "o  5   o",
+ "o  67  o",
+ "o  74  o",
+ "o  8%  o",
+ "o  8%9 o",
+ "o  8%8 o",
+ "o  8%8 o",
+ "o  8%8 o",
+ "o  8%9 o",
+ "o  8%  o",
+ "o  74  o",
+ "o  67  o",
+ "o  5   o",
+ "o      o",
+ "oooooooo",
+)
+
+assignSeqPixmap = (
+ "o8o",
+ "8%8",
+ "o8o",
+ "o o",
+ "o o",
+ "o o",
+ "oo.",
+ "o..",
+ "...",
+ "o..",
+ "oo.",
+ "o o",
+ "o o",
+ "o8o",
+ "8%8",
+ "o8o",
+)
+
+assignDragPixmap = (
+ "...o8o",
+ "...8%8",
+ "...o8o",
+ "...o o",
+ "...o o",
+ "...o o",
+ "...ooo",
+ "5%5oo.",
+ "%%%o..",
+ "5%5oo.",
+ "...ooo",
+ "...o o",
+ "...o o",
+ "...o8o",
+ "...8%8",
+ "...o8o",
 )
 
 renderCache = {}
@@ -182,9 +261,12 @@ def clipboardDataToIcons(clipData, window, offset):
 def clipboardRepr(icons, offset):
     return repr([ic.clipboardRepr(offset) for ic in icons])
 
+asciiMap = {'.':(0, 0, 0, 0), 'o':OUTLINE_COLOR, ' ':ICON_BG_COLOR, '%':BLACK}
+for i in range(1, 10):
+    pixel = int(int(i) * 255 * 0.1)
+    asciiMap[str(i)] = (pixel, pixel, pixel, 255)
+
 def asciiToImage(asciiPixmap):
-    asciiMap = {'.':(0, 0, 0, 0), 'o':OUTLINE_COLOR, ' ':ICON_BG_COLOR,
-     '1':GRAY_25, '2':GRAY_50, '3':GRAY_75, '%':BLACK}
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
     pixels = "".join(asciiPixmap)
@@ -214,6 +296,10 @@ binOutImage = asciiToImage(binOutPixmap)
 floatInImage = asciiToImage(floatInPixmap)
 lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
+tupleLParenImage = asciiToImage(tupleLParenPixmap)
+tupleRParenImage = asciiToImage(tupleRParenPixmap)
+assignSeqImage = asciiToImage(assignSeqPixmap)
+assignDragImage = asciiToImage(assignDragPixmap)
 
 class IconExecException(Exception):
     def __init__(self, ic, exceptionText):
@@ -241,7 +327,11 @@ class Icon:
             x, y = self.rect[:2]
         else:
             x, y = location
-        self.doLayout(x, y + self.sites.output.yOffset, self.calcLayout())
+        if hasattr(self.sites, 'output'):
+            site = self.sites.output
+        else:
+            site = self.sites.seqIn
+        self.doLayout(x + site.xOffset, y + site.yOffset, self.calcLayout())
 
     def traverse(self, order="draw", includeSelf=True):
         """Iterator for traversing the tree below this icon.  Traversal can be in either
@@ -281,6 +371,7 @@ class Icon:
         for ic in self.traverse():
             if ic.layoutDirty:
                 return True
+        return False
 
     def children(self):
         return [c.att for c in self.sites.childSites() if c is not None and
@@ -397,8 +488,8 @@ class Icon:
         icSite = self.sites.siteOfAttachedIcon(ic)
         return icSite.name if icSite is not None else None
 
-    def becomeTopLevel(self):
-        pass  # Most icons look exactly the same at the top level
+    def hasSite(self, siteId):
+        return self.sites.lookup(siteId) is not None
 
     def posOfSite(self, siteId):
         """Return the window position of a given site of the icon"""
@@ -474,6 +565,7 @@ class TextIcon(Icon):
         top = outSiteY - height // 2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        self.layoutDirty = False
 
     def calcLayout(self):
         width, height = self.bodySize
@@ -612,6 +704,7 @@ class UnaryOpIcon(Icon):
         top = outSiteY - height // 2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        self.layoutDirty = False
 
     def calcLayout(self):
         width, height = self.bodySize
@@ -656,18 +749,16 @@ class UnaryOpIcon(Icon):
         return result
 
 class ListTypeIcon(Icon):
-    def __init__(self, leftText, rightText, window, location=None):
+    def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
+     location=None):
         Icon.__init__(self, window)
         self.leftText = leftText
         self.rightText = rightText
-        leftTextWidth, leftTextHeight = globalFont.getsize(leftText)
-        leftTextWidth += 2 * TEXT_MARGIN + 1
-        leftTextHeight += 2 * TEXT_MARGIN + 1
-        self.bodySize = (leftTextWidth, leftTextHeight)
-        rightTextWidth, rightTextHeight = globalFont.getsize(rightText)
-        self.rightTextWidth = rightTextWidth + 2 * TEXT_MARGIN + 1
-        self.sites.add('output', 'output', 0, leftTextHeight // 2)
-        self.argList = HorizListMgr(self, 'argIcons', leftTextWidth-1, leftTextHeight//2)
+        self.leftImg = iconBoxedText(self.leftText) if leftImg is None else leftImg
+        self.rightImg = iconBoxedText(self.rightText) if rightImg is None else rightImg
+        leftWidth, leftHeight = self.leftImg.size
+        self.sites.add('output', 'output', 0, leftHeight // 2)
+        self.argList = HorizListMgr(self, 'argIcons', leftWidth-1, leftHeight//2)
         width, height = self._size()
         self.sites.add('attrIcon', 'attrOut', width-1,
          self.sites.output.yOffset + ATTR_SITE_OFFSET)
@@ -675,8 +766,8 @@ class ListTypeIcon(Icon):
         self.rect = (x, y, x + width, y + height)
 
     def _size(self):
-        width, height = self.bodySize
-        width += self.argList.width() + self.rightTextWidth + 1
+        width, height = self.leftImg.size
+        width += self.argList.width() + self.rightImg.width
         return width, height
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
@@ -687,23 +778,21 @@ class ListTypeIcon(Icon):
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
             # Body
-            leftTxtImg = iconBoxedText(self.leftText)
-            self.cachedImage.paste(leftTxtImg, (outSiteImage.width - 1, 0))
+            self.cachedImage.paste(self.leftImg, (outSiteImage.width - 1, 0))
             # Output site
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
             # Body input site
-            inSiteX = outSiteImage.width - 1 + leftTxtImg.width - inSiteImage.width
+            inSiteX = outSiteImage.width - 1 + self.leftImg.width - inSiteImage.width
             inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
             # Commas
-            self.argList.drawCommas(self.cachedImage)
+            self.argList.drawCommas(self.cachedImage, inSiteX, self.sites.output.yOffset)
             # End paren/brace
-            rightTxtImg = iconBoxedText(self.rightText)
-            parenY = self.sites.output.yOffset - rightTxtImg.height // 2
-            parenX = inSiteX + self.argList.width() + inSiteImage.width - 1
-            self.cachedImage.paste(rightTxtImg, (parenX, parenY))
+            parenY = self.sites.output.yOffset - self.rightImg.height // 2
+            parenX = inSiteX + self.argList.width() + inSiteImage.width - 2
+            self.cachedImage.paste(self.rightImg, (parenX, parenY))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
@@ -718,7 +807,7 @@ class ListTypeIcon(Icon):
             return False
         # If the rectangle is entirely contained within the argument space (ignoring
         # commas), then we will call it not touching
-        bodyRight = self.rect[0] + self.bodySize[0]
+        bodyRight = self.rect[0] + self.leftImg.width
         return not rectWithinXBounds(rect, bodyRight, bodyRight + self.argList.width())
 
     def doLayout(self, outSiteX, outSiteY, layout):
@@ -733,16 +822,16 @@ class ListTypeIcon(Icon):
         self.layoutDirty = False
 
     def calcLayout(self):
-        bodyWidth, bodyHeight = self.bodySize
+        bodyWidth, bodyHeight = self.leftImg.size
         layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
         argWidth = self.argList.calcLayout(layout, bodyWidth - 1, 0)
         # layout now incorporates argument layout sizes, but not end paren/brace/bracket
-        layout.width = bodyWidth + outSiteImage.width + argWidth + self.rightTextWidth - 4
+        layout.width = bodyWidth + outSiteImage.width + argWidth + self.rightImg.width - 4
         if self.sites.attrIcon.att:
             attrLayout = self.sites.attrIcon.att.calcLayout()
         else:
             attrLayout = None
-        layout.addSubLayout(attrLayout, 'attrIcon', layout.width, ATTR_SITE_OFFSET)
+        layout.addSubLayout(attrLayout, 'attrIcon', layout.width-2, ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
@@ -791,7 +880,7 @@ class FnIcon(ListTypeIcon):
 
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
-        ListTypeIcon.__init__(self, '[', ']', window, location)
+        ListTypeIcon.__init__(self, '[', ']', window, location=location)
 
     def argIcons(self):
         """Return list of list argument icons.  This is trivial, but exists to match
@@ -821,22 +910,18 @@ class ListIcon(ListTypeIcon):
         return ic
 
 class TupleIcon(ListTypeIcon):
-    def __init__(self, window, location=None):
-        ListTypeIcon.__init__(self, '(', ')', window, location)
-
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        # Modify parens to have lines through them to distinguish tuple from normal paren
-        redrawingCachedImage = self.cachedImage is None
-        ListTypeIcon.draw(self, image, location, clip, colorErr)
-        if redrawingCachedImage:
-            draw = ImageDraw.Draw(self.cachedImage)
-            x = self.sites.output.xOffset + 5  # Font-dependent, could cause trouble later
-            y = self.sites.output.yOffset
-            draw.line((x, y, x + 2, y), GRAY_75)
-            # End paren
-            x = self.sites.attrIcon.xOffset - 3
-            draw.line((x, y, x - 2, y), GRAY_75)
-            ListTypeIcon.draw(self, image, location, clip, colorErr)
+    def __init__(self, window, noParens=False, location=None):
+        if noParens:
+            leftImg = assignSeqImage
+            rightImg = Image.new('RGBA', (0, 0))
+        else:
+            leftImg = tupleLParenImage
+            rightImg = tupleRParenImage
+        ListTypeIcon.__init__(self, '(', ')', window, location=location,
+         leftImg=leftImg, rightImg=rightImg)
+        if noParens:
+            self.sites.remove('attrOut')
+        self.noParens = noParens
 
     def argIcons(self):
         """Return list of tuple argument icons, handling special case of a single element
@@ -849,6 +934,28 @@ class TupleIcon(ListTypeIcon):
             # Special case of single item tuple allowed to have missing arg
             return [self.sites.argIcons.att[0]]
         return [site.att for site in self.sites.argIcons]
+
+    def restoreParens(self):
+        """Tuples with no parenthesis are allowed on the top level, to make typing
+        multi-variable assignment statements more natural.  If one of these paren-less
+        icons gets dragged or pasted in to an expression, it needs its parens back."""
+        if not self.noParens:
+            return
+        self.noParens = False
+        self.leftImg = tupleLParenImage
+        self.rightImg = tupleRParenImage
+        self.cachedImage = None
+        self.layoutDirty = True
+        width, height = self._size()
+        self.sites.add('attrIcon', 'attrOut', width-1,
+         self.sites.output.yOffset + ATTR_SITE_OFFSET)
+
+    def calcLayout(self):
+        # If the icon is no longer at the top level and needs its parens restored, do so
+        # before calculating the layout (would be better to do this elsewhere).
+        if self.noParens and self.parent() is not None:
+            self.restoreParens()
+        return ListTypeIcon.calcLayout(self)
 
     def execute(self):
         argIcons = self.argIcons()
@@ -893,7 +1000,6 @@ class BinOpIcon(Icon):
         self.sites.add('rightArg', 'input', self.leftArgWidth + opWidth, siteYOffset)
         # Note that the attrIcon site is only usable when parens are displayed
         self.sites.add("attrIcon", "attrOut", self.leftArgWidth + opWidth, siteYOffset)
-        self.leftSiteDrawn = False
         # Indicates that input site falls directly on top of output site
         self.coincidentSite = 'leftArg'
 
@@ -916,7 +1022,8 @@ class BinOpIcon(Icon):
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         cachedImage = self.cachedImage
         temporaryOutputSite = False
-        if image is not None and self.leftSiteDrawn:
+        atTop = self.parent() is None
+        if image is not None and atTop:
             # When image is specified the icon is being dragged, and it must display
             # something indicating where its output site is
             cachedImage = None
@@ -939,7 +1046,7 @@ class BinOpIcon(Icon):
             elif temporaryOutputSite:
                 outSiteY = siteY - binOutImage.height // 2
                 cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
-            elif self.leftSiteDrawn:
+            elif atTop:
                 outSiteY = siteY - floatInImage.height // 2
                 cachedImage.paste(floatInImage, (outSiteX, outSiteY), mask=floatInImage)
             # Body
@@ -995,17 +1102,6 @@ class BinOpIcon(Icon):
                 return False
         return True
 
-    def becomeTopLevel(self):
-        # When a BinOpIcon is dropped it can become a top level icon, which may mean it
-        # needs to have its's left site restored.
-        if not self.leftSiteDrawn:
-            self.leftSiteDrawn = True
-            self.cachedImage = None
-        if self.hasParens:
-            self.hasParens = False
-            self.coincidentSite = "leftArg"
-            self.layoutDirty = True
-
     def depth(self, lDepth=None, rDepth=None):
         """Calculate factor which decides how much to pad the operator to help indicate
         its level in the icon hierarchy.  The function does not expand the operator icon
@@ -1040,12 +1136,6 @@ class BinOpIcon(Icon):
                 myDepth = max(myDepth, parent.depth(rDepth=myDepth))
         return myDepth
 
-    def layout(self, location=None):
-        Icon.layout(self, location)
-        # Use the fact that layout is called only on the top-level icon to ensure left
-        # site is drawn when the icon is at the top level.
-        self.leftSiteDrawn = True
-
     def doLayout(self, outSiteX, outSiteY, layout):
         self.hasParens = layout.hasParens
         self.coincidentSite = None if self.hasParens else "leftArg"
@@ -1058,7 +1148,6 @@ class BinOpIcon(Icon):
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x + width, y + height)
-        self.leftSiteDrawn = False  # self.layout will set before draw on top-level icon
         self.cachedImage = None
         self.layoutDirty = False
 
@@ -1153,49 +1242,227 @@ class BinOpIcon(Icon):
             raise IconExecException(self, err)
         return result
 
-class AssignIcon(BinOpIcon):
+class AssignIcon(Icon):
     def __init__(self, window, location=None):
-        BinOpIcon.__init__(self, "=", window, location)
+        Icon.__init__(self, window)
+        opWidth, opHeight = globalFont.getsize('=')
+        opWidth += 2*TEXT_MARGIN + 1
+        opHeight += 2*TEXT_MARGIN + 1
+        siteY = opHeight // 2
+        self.opSize = (opWidth, opHeight)
+        self.sites.add('seqDrag', 'seqDrag', 0, siteY)
+        tgtSitesX = assignDragImage.width - 3
+        seqSiteX = tgtSitesX + 1
+        self.sites.add('seqIn', 'seqIn', seqSiteX, siteY - assignSeqImage.height // 2 + 1)
+        self.sites.add('seqOut', 'seqOut', seqSiteX, siteY + assignSeqImage.height//2 - 1)
+        self.sites.add('seqReplace', 'seqReplace', tgtSitesX, siteY)
+        self.tgtLists = [HorizListMgr(self, 'targets0', tgtSitesX, siteY)]
+        valueSitesX = tgtSitesX + EMPTY_ARG_WIDTH + opWidth
+        self.valueList = HorizListMgr(self, 'values', valueSitesX, siteY)
+        width, height = self._size()
+        if location is None:
+            x = y = 0
+        else:
+            x, y = location
+        self.rect = (x, y, x + width, y + height)
+
+    def _size(self):
+        opWidth, height = self.opSize
+        width = assignDragImage.width
+        for tgtList in self.tgtLists:
+            width += tgtList.width() + opWidth - 2
+        width += self.valueList.width()
+        return width, height
+
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
+        cachedImage = self.cachedImage
+        if image is None:
+            temporaryDragSite = False
+            image = self.window.image
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site
+            cachedImage = None
+            self.cachedImage = None
+            temporaryDragSite = True
+        if location is None:
+            location = self.rect[:2]
+        if cachedImage is None:
+            width, height = self._size()
+            cachedImage = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
+            # Left site (seq site bar + 1st target input or drag-insert site
+            tgtSiteX = self.sites.seqReplace.xOffset
+            siteY = height // 2
+            if temporaryDragSite:
+                y = siteY - assignDragImage.height // 2
+                cachedImage.paste(assignDragImage, (0, y), mask=assignDragImage)
+            else:
+                y = siteY - assignSeqImage.height // 2
+                cachedImage.paste(assignSeqImage, (tgtSiteX, y), mask=assignSeqImage)
+            #tgtSiteX += assignSeqImage.width - OUTPUT_SITE_DEPTH
+            opWidth, opHeight = self.opSize
+            for tgtList in self.tgtLists:
+                tgtList.drawCommas(cachedImage, tgtSiteX, siteY)
+                txtImg = iconBoxedText('=')
+                tgtSiteX += tgtList.width() - 1
+                cachedImage.paste(txtImg, (tgtSiteX + OUTPUT_SITE_DEPTH, 0))
+                tgtSiteX += opWidth - 1
+            rInSiteX = tgtSiteX
+            rInSiteY = siteY - inSiteImage.height // 2
+            cachedImage.paste(inSiteImage, (rInSiteX, rInSiteY))
+            self.valueList.drawCommas(cachedImage, rInSiteX, siteY)
+        pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected,
+         colorErr), location, clip)
+        if not temporaryDragSite:
+            self.cachedImage = cachedImage
+
+    def addTargetGroup(self, idx):
+        if idx < 0 or idx > len(self.tgtLists):
+            raise Exception('Bad index for adding target group to assignment icon')
+        # Name will be filled in by renumberTargetGroups, offset by layout
+        self.tgtLists.insert(idx, HorizListMgr(self, 'targetsX', 0, 0))
+        self.renumberTargetGroups(descending=True)
+        self.window.undo.registerCallback(self.removeTargetGroup, idx)
+        self.layoutDirty = True
+
+    def removeTargetGroup(self, idx):
+        if idx <= 0 or idx >= len(self.tgtLists):
+            raise Exception('Bad index for removing target group from assignment icon')
+        seriesName = 'target%d' % idx
+        for site in self.sites.getSeries(seriesName):
+            if site.att is not None:
+                raise Exception('Removing non-empty target group from assignment icon')
+        del self.tgtLists[idx]
+        self.renumberTargetGroups()
+        self.window.undo.registerCallback(self.addTargetGroup, idx)
+        self.layoutDirty = True
+
+    def renumberTargetGroups(self, descending=False):
+        tgtLists = list(enumerate(self.tgtLists))
+        if descending:
+            tgtLists = reversed(tgtLists)
+        for i, tgtList in tgtLists:
+            oldName = tgtList.siteSeriesName
+            newName = "targets%d" % i
+            if oldName != newName:
+                tgtList.rename(newName)
+
+    def snapLists(self):
+        # Add snap sites for insertion to those representing actual attachment sites
+        siteSnapLists = Icon.snapLists(self)
+        insertSites = []
+        for tgtList in self.tgtLists:
+            insertSites += tgtList.makeInsertSnapList()
+        insertSites += self.valueList.makeInsertSnapList()
+        siteSnapLists['insertInput'] = insertSites
+        return siteSnapLists
 
     def execute(self):
-        if self.leftArg() is None:
-            raise IconExecException(self, "Missing assignment target")
-        if self.rightArg() is None:
-            raise IconExecException(self, "Missing value")
-        # how to know if we have a valid assignment target?
-        self.assignValues(self.leftArg(), self.rightArg().execute())
+        # Get the target and value icons
+        tgtLists = []
+        for tgtList in self.tgtLists:
+            tgts = []
+            for site in getattr(self.sites, tgtList.siteSeriesName):
+                if site.att is None:
+                    raise IconExecException(self, "Missing assignment target(s)")
+                tgts.append(site.att)
+            tgtLists.append(tgts)
+        values = []
+        for site in self.sites.values:
+            if site.att is None:
+                raise IconExecException(self, "Missing assignment value")
+            values.append(site.att)
+        # Execute all of the value icons
+        executedValues = []
+        for value in values:
+            executedValues.append(value.execute())
+        # Assign the resulting values to the targets
+        if len(values) == 1:
+            value = executedValues[0]
+        else:
+            value = tuple(executedValues)
+        for tgts in tgtLists:
+            if len(tgts) == 1:
+                tgtIcon = tgts[0]
+            else:
+                tgtIcon = tgts
+            self.assignValues(tgtIcon, value)
 
-    def assignValues(self, leftIcon, values):
-        if leftIcon.__class__ is IdentifierIcon:
+    def assignValues(self, tgtIcon, value):
+        if isinstance(tgtIcon, IdentifierIcon):
             try:
-                globals()[leftIcon.name] = values
+                globals()[tgtIcon.name] = value
             except Exception as err:
                 raise IconExecException(self, err)
-        elif leftIcon.__class__ in (TupleIcon, ListIcon):
-            assignTargets = leftIcon.argIcons()
-            for target in assignTargets:
-                if target is None:
-                    raise IconExecException(self, "Missing argument(s)")
-            if not hasattr(values, "__len__") or len(assignTargets) != len(values):
-                raise IconExecException(self, "Could not unpack")
-            for target, value in zip(assignTargets, values):
-                self.assignValues(target, value)
+            return
+        if tgtIcon.__class__ in (TupleIcon, ListIcon):
+            assignTargets = tgtIcon.argIcons()
+        elif isinstance(tgtIcon, list):
+            assignTargets = tgtIcon
         else:
-            raise IconExecException(self.leftArg(), "Not a valid assignment target")
+            raise IconExecException(tgtIcon, "Not a valid assignment target")
+        if not hasattr(value, "__len__") or len(assignTargets) != len(value):
+            raise IconExecException(self, "Could not unpack")
+        for target in assignTargets:
+            if target is None:
+                raise IconExecException(self, "Missing argument(s)")
+            for t, v in zip(assignTargets, value):
+                self.assignValues(t, v)
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        for tgtList in self.tgtLists:
+            tgtList.doLayout(layout)
+        self.valueList.doLayout(layout)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        layout.doSubLayouts(self.sites.seqIn, outSiteX, outSiteY)
+        width, height = self._size()
+        x = outSiteX - self.sites.seqIn.xOffset
+        y = outSiteY - self.sites.seqIn.yOffset
+        self.rect = (x, y, x + width, y + height)
+        self.cachedImage = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        opWidth, opHeight = self.opSize
+        layout = Layout(self, opWidth, opHeight, opHeight // 2)
+        # Calculate for assignment target lists (each clause of =)
+        x = assignSeqImage.width - 1
+        y = assignSeqImage.height // 2 - 1
+        for tgtList in self.tgtLists:
+            tgtWidth = tgtList.calcLayout(layout, x, y)
+            x += tgtWidth + opWidth - 2
+        # Calculate layout for assignment value(s)
+        layout.width = x + 1
+        self.valueList.calcLayout(layout, x, y)
+        return layout
 
     def clipboardRepr(self, offset):
         location = self.rect[:2]
-        return (self.__class__.__name__, (addPoints(location, offset),
-         (None if self.leftArg() is None else self.leftArg().clipboardRepr(offset),
-          None if self.rightArg() is None else self.rightArg().clipboardRepr(offset))))
+        clipData = [addPoints(location, offset)]
+        for tgtList in self.tgtLists:
+            tgts = []
+            for site in getattr(self.sites, tgtList.siteSeriesName):
+                tgts.append(None if site.att is None else site.att.clipboardRepr(offset))
+            clipData.append(tuple(tgts))
+        values = []
+        for site in self.sites.values:
+            values.append(None if site.att is None else site.att.clipboardRepr(offset))
+        clipData.append(tuple(values))
+        return (self.__class__.__name__, tuple(clipData))
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
-        location, children = clipData
+        location = clipData[0]
+        values = clipData[-1]
+        targets = clipData[1:-1]
         ic = AssignIcon(window, (addPoints(location, offset)))
-        leftArg, rightArg = clipboardDataToIcons(children, window, offset)
-        ic.sites.leftArg.attach(ic, leftArg)
-        ic.sites.rightArg.attach(ic, rightArg)
+        if len(targets) > 1:
+            for i in range(1, len(targets)):
+                ic.addTargetGroup(i)
+        for i, tgt in enumerate(targets):
+            tgtIcons = clipboardDataToIcons(tgt, window, offset)
+            ic.insertChildren(tgtIcons, "targets%d" % i, 0)
+        ic.insertChildren(clipboardDataToIcons(values, window, offset), "values", 0)
         return ic
 
 class DivideIcon(Icon):
@@ -1213,7 +1480,6 @@ class DivideIcon(Icon):
         self.sites.add('topArg', 'input', 2, outSiteY - emptyArgHeight // 2 - 2)
         self.sites.add('bottomArg', 'input', 2, outSiteY + emptyArgHeight // 2 + 2)
         self.sites.add('attrIcon', 'attrOut', width - 1, outSiteY + ATTR_SITE_OFFSET)
-        self.leftSiteDrawn = False
         if location is None:
             x, y = 0, 0
         else:
@@ -1412,6 +1678,7 @@ class ImageIcon(Icon):
 
     def doLayout(self, x, bottom, _layout):
         self.rect = (x, bottom - self.image.height, x + self.image.width, bottom)
+        self.layoutDirty = False
 
     def calcLayout(self):
         return Layout(self, self.image.width, self.image.height, 0)
@@ -1565,11 +1832,12 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
         return clickedIcon
     # Only binary operations are candidates, and only when the expression directly below
     # has claimed itself to be the leftmost operand of an expression
-    if fromIcon.__class__ is AssignIcon and fromIcon.leftArg() is not None:
-        # This is temporary for calculator app, until real python assignment is supported
-        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg(), btnPressLoc)
-        if left is fromIcon.leftArg():
-            return fromIcon  # Claim outermost status for this icon
+    if fromIcon.__class__ is AssignIcon:
+        leftSiteIcon = fromIcon.sites.targets0[0].att
+        if leftSiteIcon is not None:
+            left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
+            if left is leftSiteIcon:
+                return fromIcon  # Claim outermost status for this icon
     if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg() is not None:
         left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg(), btnPressLoc)
         if left is fromIcon.leftArg():
@@ -1776,6 +2044,16 @@ class IconSiteList:
             self._typeDict[siteType] = []
         self._typeDict[siteType].append(name)
 
+    def renameSeries(self, oldName, newName):
+        series = self.getSeries(oldName)
+        for idx, site in enumerate(series.sites):
+            site.name = makeSeriesSiteId(newName, idx)
+        series.name = newName
+        delattr(self, oldName)
+        setattr(self, newName, series)
+        self._typeDict[series.type].remove(oldName)
+        self._typeDict[series.type].append(newName)
+
     def getSeries(self, siteIdOrSeriesName):
         """If siteId is the part of a series, return a list of all of the sites in the
         list.  Otherwise return None"""
@@ -1853,20 +2131,18 @@ class HorizListMgr:
     def __init__(self, ic, siteSeriesName, leftSiteX, leftSiteY):
         self.icon = ic
         self.siteSeriesName = siteSeriesName
-        self.leftSiteX = leftSiteX
-        self.leftSiteY = leftSiteY
         ic.sites.addSeries(siteSeriesName, 'input', 1, [(leftSiteX, leftSiteY)])
         self.emptyInOffsets = (0, LIST_EMPTY_ARG_WIDTH)
         self.inOffsets = self.emptyInOffsets
 
-    def drawCommas(self, image):
-        commaXOffset = self.leftSiteX + inSiteImage.width - commaImage.width
-        commaY = self.leftSiteY - commaImageSiteYOffset
+    def drawCommas(self, image, leftSiteX, leftSiteY):
+        commaXOffset = leftSiteX + inSiteImage.width - commaImage.width
+        commaY = leftSiteY - commaImageSiteYOffset
         for inOff in self.inOffsets[1:-1]:
             image.paste(commaImage, (inOff + commaXOffset, commaY))
 
     def width(self):
-        return self.inOffsets[-1]
+        return self.inOffsets[-1] + 1
 
     def makeInsertSnapList(self):
         """Generate snap sites for item insertion"""
@@ -1909,8 +2185,13 @@ class HorizListMgr:
                 width += childLayout.width - 1 + commaImage.width - 1
             inOffsets.append(width)
         inOffsets[-1] -= (commaImage.width - 1)
+        # Pass information doLayout will need to reconfigure
         setattr(layout, self.siteSeriesName + "InOffsets", inOffsets)
-        return inOffsets[-1]
+        return inOffsets[-1] + 1
+
+    def rename(self, newName):
+        self.icon.sites.renameSeries(self.siteSeriesName, newName)
+        self.siteSeriesName = newName
 
 def makeSeriesSiteId(seriesName, seriesIdx):
     return seriesName + "_%d" % seriesIdx

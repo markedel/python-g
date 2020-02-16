@@ -661,7 +661,6 @@ class Window:
         # (moving) parent icons
         topDraggingIcons = findTopIcons(self.dragging)
         for ic in topDraggingIcons:
-            ic.becomeTopLevel()
             if ic.needsLayout():
                 ic.layout()
         # For top performance, make a separate image containing the moving icons against
@@ -738,8 +737,6 @@ class Window:
         yOff = t - self.dragImageOffset[1]
         # self.dragging icons are not stored hierarchically, but are in draw order
         topDraggedIcons = findTopIcons(self.dragging)
-        for ic in topDraggedIcons:
-            ic.becomeTopLevel()
         redrawRegion = AccumRects()
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, xOff, yOff)
