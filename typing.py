@@ -447,65 +447,28 @@ class EntryIcon(icon.Icon):
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingArg(), cursor.site)
                 self.setPendingArg(None)
-        # If the pending text needs no further input, process it, now
-        if remainingText == ')':
-            matchingParen = self.findOpenParen(cursor.icon, cursor.site)
-            if matchingParen is None:
-                # Maybe user was just trying to move past an existing paren by typing it
-                if not cursor.movePastEndParen():
-                    beep()
-            else:
-                if matchingParen.__class__ is icon.TupleIcon and matchingParen.noParens:
-                    matchingParen.restoreParens()
-                else:
-                    matchingParen.close()
-                cursor.setToIconSite(matchingParen, "attrIcon")
-            remainingText = ""
-        elif remainingText == '(' and ic.__class__ is icon.IdentifierIcon:
-            if not self.makeFunction(ic):
-                beep()
-            remainingText = ""
-        elif remainingText == '(' and cursor.siteType == "input":
-            parenIcon = CursorParenIcon(self.window)
-            cursor.icon.replaceChild(parenIcon, cursor.site)
-            cursor.setToIconSite(parenIcon, "argIcon")
-            remainingText = ""
-        elif remainingText == '[':
-            listIcon = icon.ListIcon(self.window)
-            cursor.icon.replaceChild(listIcon, cursor.site)
-            cursor.setToIconSite(listIcon, "argIcons", 0)
-            remainingText = ""
-        elif remainingText == ']':
-            if not cursor.movePastEndBracket():
-                beep()
-            remainingText = ""
-        elif remainingText == ',':
-            if self.commaEntered(cursor.icon, cursor.site):
-                if self.pendingArg():
-                    if cursor.type is "icon" and cursor.siteType == "input" and \
-                            cursor.icon.childAt(cursor.site) is None:
-                        cursor.icon.replaceChild(self.pendingArg(), cursor.site)
-                        self.setPendingArg(None)
-                        self.window.entryIcon = None
-            else:
-                beep()
-            remainingText = ""
         # If the entry icon can go away, remove it and we're done
         if self.pendingArg() is None and remainingText == "":
             self.window.entryIcon = None
             return
-        # The entry icon needs to remain (cursor was set above to appropriate destination)
-        if cursor.type is not "icon":
+        # There is remaining text or pending arguments.  Restore the entry icon
+        if cursor.type is not "icon":  # I don't think this can happen
+            print('Cursor type not icon in _setText')
             return
         self.attachedIcon = cursor.icon
         self.attachedSite = cursor.site
         self.attachedSiteType = cursor.icon.typeOf(cursor.site)
-        self.text = remainingText
         self.attachedIcon.replaceChild(self, self.attachedSite)
-        self.cursorPos = len(remainingText)
         cursor.setToEntryIcon()
-        cursor.draw()
         self.layoutDirty = True
+        self.text = ""
+        self.cursorPos = 0
+        if remainingText == "":
+            cursor.draw()
+            return
+        # There is still text that might be processable.  Recursively go around again
+        # (we only get here if something was processed, so this won't loop forever)
+        self._setText(remainingText, len(remainingText))
 
     def commaEntered(self, onIcon, site):
         """A comma has been entered.  Search up the hierarchy to find a list, tuple,
