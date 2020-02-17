@@ -417,28 +417,22 @@ class EntryIcon(icon.Icon):
                 cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
             else:
                 cursor.setToIconSite(ic, "attrIcon")
+        elif ic.__class__ is icon.AssignIcon:
+            if not self.insertAssign(ic):
+                beep()
+                return
         elif self.attachedToAttribute():
             # Entry icon is attached to an attribute site (ic is operator or attribute)
-            if ic.__class__ is icon.AssignIcon:
-                if not self.insertAssign(ic):
-                    beep()
-                    return
-            else:
-                self.appendOperator(ic)
+            self.appendOperator(ic)
         elif self.attachedSiteType == "input":
             # Entry icon is attached to an input site
-            if ic.__class__ is icon.AssignIcon:
-                if not self.insertAssign(ic):
-                    beep()
-                    return
+            self.attachedIcon.replaceChild(ic, self.attachedSite)
+            if "input" in snapLists:
+                cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
+            elif "attrOut in snapLists":
+                cursor.setToIconSite(ic, snapLists["attrOut"][0][2])
             else:
-                self.attachedIcon.replaceChild(ic, self.attachedSite)
-                if "input" in snapLists:
-                    cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
-                elif "attrOut in snapLists":
-                    cursor.setToIconSite(ic, snapLists["attrOut"][0][2])
-                else:
-                    cursor.removeCursor()
+                cursor.removeCursor()
         # If entry icon has pending arguments, try to place them.  Code does its best
         # to place the cursor at the most reasonable spot.  If vacant, place pending
         # args there
