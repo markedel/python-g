@@ -194,7 +194,7 @@ tupleRParenPixmap = (
  "oooooooo",
 )
 
-assignSeqPixmap = (
+inpSeqPixmap = (
  "o8o",
  "8%8",
  "o8o",
@@ -214,22 +214,22 @@ assignSeqPixmap = (
 )
 
 assignDragPixmap = (
- "...o8o",
- "...8%8",
- "...o8o",
- "...o o",
- "...o o",
- "...o o",
+ "......",
+ "......",
+ "......",
+ "......",
+ "......",
  "...ooo",
- "5%5oo.",
- "%%%o..",
- "5%5oo.",
+ "..o%%%",
+ "55%%%.",
+ "%%%%..",
+ "55%%%.",
+ "..o%%%",
  "...ooo",
- "...o o",
- "...o o",
- "...o8o",
- "...8%8",
- "...o8o",
+ "......",
+ "......",
+ "......",
+ "......",
 )
 
 renderCache = {}
@@ -298,7 +298,7 @@ lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
 tupleLParenImage = asciiToImage(tupleLParenPixmap)
 tupleRParenImage = asciiToImage(tupleRParenPixmap)
-assignSeqImage = asciiToImage(assignSeqPixmap)
+inpSeqImage = asciiToImage(inpSeqPixmap)
 assignDragImage = asciiToImage(assignDragPixmap)
 
 class IconExecException(Exception):
@@ -511,6 +511,10 @@ class Icon:
             return index
         return None
 
+    def becomeTopLevel(self, isTop):
+        """Change top level status of icon (most icons add or remove sequence sites)."""
+        self.cachedImage = None  # Force change at next redraw
+
     def hasCoincidentSite(self):
         """If the icon has an input site in the same spot as its output site (done so
         binary operations can be arranged like text), return that input site"""
@@ -537,6 +541,9 @@ class TextIcon(Icon):
         self.sites.add('output', 'output', 0, bodyHeight // 2)
         self.sites.add('attrIcon', 'attrOut', bodyWidth,
          bodyHeight // 2 + ATTR_SITE_OFFSET)
+        seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
         if location is None:
             x, y = 0, 0
         else:
@@ -544,6 +551,7 @@ class TextIcon(Icon):
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and image is None
         if image is None:
             image = self.window.image
         if location is None:
@@ -553,6 +561,8 @@ class TextIcon(Icon):
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = iconBoxedText(self.text)
             self.cachedImage.paste(txtImg, (outSiteImage.width - 1, 0))
+            if needSeqSites:
+                drawSeqSites(self.cachedImage, outSiteImage.width-1, 0, txtImg.height)
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
@@ -565,6 +575,7 @@ class TextIcon(Icon):
         top = outSiteY - height // 2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        self.cachedImage = None  # Draw or undraw sequence sites ... refine when sites added
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -662,6 +673,9 @@ class UnaryOpIcon(Icon):
         siteYOffset = bodyHeight // 2
         self.sites.add('output', 'output', 0, siteYOffset)
         self.sites.add('argIcon', 'input', bodyWidth - 1, siteYOffset)
+        seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
         if location is None:
             x, y = 0, 0
         else:
@@ -669,6 +683,7 @@ class UnaryOpIcon(Icon):
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and image is None
         if image is None:
             image = self.window.image
         if location is None:
@@ -678,13 +693,17 @@ class UnaryOpIcon(Icon):
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             width, height = globalFont.getsize(self.operator)
             bodyLeft = outSiteImage.width - 1
+            bodyWidth = width + 2 * TEXT_MARGIN
+            bodyHeight = height + 2 * TEXT_MARGIN
             draw = ImageDraw.Draw(self.cachedImage)
-            draw.rectangle((bodyLeft, 0, bodyLeft + width + 2 * TEXT_MARGIN,
-             height + 2 * TEXT_MARGIN), fill=ICON_BG_COLOR, outline=OUTLINE_COLOR)
+            draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth, bodyHeight),
+             fill=ICON_BG_COLOR, outline=OUTLINE_COLOR)
             outImageY = self.sites.output.yOffset - outSiteImage.height // 2
             self.cachedImage.paste(outSiteImage, (0, outImageY), mask=outSiteImage)
             inImageY = self.sites.argIcon.yOffset - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (self.sites.argIcon.xOffset, inImageY))
+            if needSeqSites:
+                drawSeqSites(self.cachedImage, bodyLeft, 0, bodyHeight+1)
             if self.operator in ('+', '-', '~'):
                 # Raise unary operators up and move then to the left.  Not sure if this
                 # is safe for all fonts, but the Ariel font we're using pads on top.
@@ -762,6 +781,9 @@ class ListTypeIcon(Icon):
         width, height = self._size()
         self.sites.add('attrIcon', 'attrOut', width-1,
          self.sites.output.yOffset + ATTR_SITE_OFFSET)
+        seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, height-2)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
 
@@ -771,6 +793,7 @@ class ListTypeIcon(Icon):
         return width, height
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and image is None
         if image is None:
             image = self.window.image
         if location is None:
@@ -778,7 +801,10 @@ class ListTypeIcon(Icon):
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
             # Body
-            self.cachedImage.paste(self.leftImg, (outSiteImage.width - 1, 0))
+            leftImgX = outSiteImage.width - 1
+            self.cachedImage.paste(self.leftImg, (leftImgX, 0))
+            if needSeqSites:
+                drawSeqSites(self.cachedImage, leftImgX, 0, self.leftImg.height)
             # Output site
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
@@ -912,7 +938,7 @@ class ListIcon(ListTypeIcon):
 class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, location=None):
         if noParens:
-            leftImg = assignSeqImage
+            leftImg = inpSeqImage
             rightImg = Image.new('RGBA', (0, 0))
         else:
             leftImg = tupleLParenImage
@@ -1001,6 +1027,8 @@ class BinOpIcon(Icon):
         # Note that the attrIcon site is only usable when parens are displayed
         self.sites.add("attrIcon", "attrOut", self.leftArgWidth + opWidth, siteYOffset)
         # Indicates that input site falls directly on top of output site
+        self.sites.add('seqIn', 'seqIn', - SEQ_SITE_DEPTH, 1)
+        self.sites.add('seqOut', 'seqOut', - SEQ_SITE_DEPTH, height-2)
         self.coincidentSite = 'leftArg'
 
     def _size(self):
@@ -1047,8 +1075,8 @@ class BinOpIcon(Icon):
                 outSiteY = siteY - binOutImage.height // 2
                 cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
             elif atTop:
-                outSiteY = siteY - floatInImage.height // 2
-                cachedImage.paste(floatInImage, (outSiteX, outSiteY), mask=floatInImage)
+                outSiteY = siteY - inpSeqImage.height // 2
+                cachedImage.paste(inpSeqImage, (outSiteX, outSiteY), mask=inpSeqImage)
             # Body
             txtImg = iconBoxedText(self.operator)
             opX = leftArgX + self.leftArgWidth - 1
@@ -1253,8 +1281,8 @@ class AssignIcon(Icon):
         self.sites.add('seqDrag', 'seqDrag', 0, siteY)
         tgtSitesX = assignDragImage.width - 3
         seqSiteX = tgtSitesX + 1
-        self.sites.add('seqIn', 'seqIn', seqSiteX, siteY - assignSeqImage.height // 2 + 1)
-        self.sites.add('seqOut', 'seqOut', seqSiteX, siteY + assignSeqImage.height//2 - 1)
+        self.sites.add('seqIn', 'seqIn', seqSiteX, siteY - inpSeqImage.height // 2 + 1)
+        self.sites.add('seqOut', 'seqOut', seqSiteX, siteY + inpSeqImage.height//2 - 2)
         self.sites.add('seqReplace', 'seqReplace', tgtSitesX, siteY)
         self.tgtLists = [HorizListMgr(self, 'targets0', tgtSitesX, siteY)]
         valueSitesX = tgtSitesX + EMPTY_ARG_WIDTH + opWidth
@@ -1297,9 +1325,9 @@ class AssignIcon(Icon):
                 y = siteY - assignDragImage.height // 2
                 cachedImage.paste(assignDragImage, (0, y), mask=assignDragImage)
             else:
-                y = siteY - assignSeqImage.height // 2
-                cachedImage.paste(assignSeqImage, (tgtSiteX, y), mask=assignSeqImage)
-            #tgtSiteX += assignSeqImage.width - OUTPUT_SITE_DEPTH
+                y = siteY - inpSeqImage.height // 2
+                cachedImage.paste(inpSeqImage, (tgtSiteX, y), mask=inpSeqImage)
+            #tgtSiteX += inpSeqImage.width - OUTPUT_SITE_DEPTH
             opWidth, opHeight = self.opSize
             for tgtList in self.tgtLists:
                 tgtList.drawCommas(cachedImage, tgtSiteX, siteY)
@@ -1426,8 +1454,8 @@ class AssignIcon(Icon):
         opWidth, opHeight = self.opSize
         layout = Layout(self, opWidth, opHeight, opHeight // 2)
         # Calculate for assignment target lists (each clause of =)
-        x = assignSeqImage.width - 1
-        y = assignSeqImage.height // 2 - 1
+        x = inpSeqImage.width - 1
+        y = inpSeqImage.height // 2 - 1
         for tgtList in self.tgtLists:
             tgtWidth = tgtList.calcLayout(layout, x, y)
             x += tgtWidth + opWidth - 2
@@ -1480,6 +1508,9 @@ class DivideIcon(Icon):
         self.sites.add('topArg', 'input', 2, outSiteY - emptyArgHeight // 2 - 2)
         self.sites.add('bottomArg', 'input', 2, outSiteY + emptyArgHeight // 2 + 2)
         self.sites.add('attrIcon', 'attrOut', width - 1, outSiteY + ATTR_SITE_OFFSET)
+        seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
+        self.sites.add('seqIn', 'seqIn', seqX, emptyArgHeight - 2)
+        self.sites.add('seqOut', 'seqOut', seqX, emptyArgHeight + 5)
         if location is None:
             x, y = 0, 0
         else:
@@ -1494,6 +1525,7 @@ class DivideIcon(Icon):
         return width, height
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and image is None
         if image is None:
             image = self.window.image
         if location is None:
@@ -1518,6 +1550,8 @@ class DivideIcon(Icon):
             draw = ImageDraw.Draw(self.cachedImage)
             draw.rectangle((bodyLeft, bodyTop, bodyRight, bodyBottom),
              outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
+            if needSeqSites:
+                drawSeqSites(self.cachedImage, bodyLeft, bodyTop, bodyBottom-bodyTop+1)
             if self.floorDiv:
                 cntrX = (bodyLeft + bodyRight) // 2
                 draw.line((bodyLeft + 2, cntrY, cntrX - 1, cntrY), fill=BLACK)
@@ -1546,6 +1580,8 @@ class DivideIcon(Icon):
         self.bottomArgSize = layout.bottomArgSize
         self.sites.output.yOffset = layout.parentSiteOffset
         layout.updateSiteOffsets(self.sites.output)
+        self.sites.seqIn.yOffset = layout.parentSiteOffset - 4
+        self.sites.seqOut.yOffset = layout.parentSiteOffset + 4
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         width, height = self._size()
         x = outSiteX - self.sites.output.xOffset
@@ -1864,6 +1900,18 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
                 return result
     return None
 
+def drawSeqSites(img, boxLeft, boxTop, boxHeight):
+    """Draw sequence (in and out) sites on a rectangular boxed icon"""
+    img.putpixel((boxLeft+1, boxTop+1), BLACK)
+    img.putpixel((boxLeft+2, boxTop+1), OUTLINE_COLOR)
+    img.putpixel((boxLeft+2, boxTop+2), OUTLINE_COLOR)
+    img.putpixel((boxLeft+1, boxTop+2), OUTLINE_COLOR)
+    bottomSiteY = boxTop + boxHeight - 2
+    img.putpixel((boxLeft+1, bottomSiteY), BLACK)
+    img.putpixel((boxLeft+2, bottomSiteY), OUTLINE_COLOR)
+    img.putpixel((boxLeft+2, bottomSiteY-1), OUTLINE_COLOR)
+    img.putpixel((boxLeft+1, bottomSiteY-1), OUTLINE_COLOR)
+
 class IconSite:
     def __init__(self, siteName, siteType, xOffset=0, yOffset=0):
         self.name = siteName
@@ -2118,8 +2166,12 @@ class IconSiteList:
                 # Omit any site whose attached icon has a site of the same type, at the
                 # same location.  In such a case we want both dropped icons and typing to
                 # go to the site of the innermost (most local) icon.
-                if not isCoincidentSite(site.att, site.name):
-                    snapSites[site.type].append((ic, (x + site.xOffset, y + site.yOffset),
+                if isCoincidentSite(site.att, site.name):
+                    continue
+                # seqIn and seqOut sites are only valid for icons at the top level
+                if site.type in ('seqIn', 'seqOut') and ic.parent() is not None:
+                    continue
+                snapSites[site.type].append((ic, (x + site.xOffset, y + site.yOffset),
                      site.name))
         return snapSites
 

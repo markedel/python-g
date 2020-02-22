@@ -1186,7 +1186,7 @@ class Cursor:
 
     def erase(self):
         if self.lastDrawRect is not None and self.window.dragging is None:
-            self.window.refresh(self.lastDrawRect)
+            self.window.refresh(self.lastDrawRect, redraw=False)
             self.lastDrawRect = None
 
     def cursorAtIconSite(self, ic, site):

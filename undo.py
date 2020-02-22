@@ -92,9 +92,6 @@ class UndoRedoList:
                 redrawRegion.add(ic.hierRect())
         # Redraw the areas affected by the updated layouts
         if redrawRegion.rect is not None:
-            self.window.clearBgRect(redrawRegion.rect)
-            for ic in self.window.findIconsInRegion(redrawRegion.rect):
-                ic.draw(clip=redrawRegion.rect)
             self.window.refresh(redrawRegion.rect)
 
     def _addUndoRedoEntry(self, undoEntry):

@@ -202,12 +202,11 @@ class Window:
         if evt.width != self.image.width or evt.height != self.image.height:
             self.image = Image.new('RGB', (evt.width, evt.height), color=windowBgColor)
             self.draw = ImageDraw.Draw(self.image)
-        for ic in self.allIcons():
-            ic.draw()
+        self.redraw()
 
     def _exposeCb(self, _evt):
         """Called when a new part of the window is exposed and needs to be redrawn"""
-        self.refresh()
+        self.refresh(redraw=False)
 
     def _keyCb(self, evt):
         if evt.state & (CTRL_MASK | LEFT_ALT_MASK):
@@ -294,9 +293,6 @@ class Window:
                 redrawRegion.add(ic.hierRect())
         # Redraw the areas affected by the updated layouts
         if layoutNeeded:
-            self.clearBgRect(redrawRegion.get())
-            for ic in self.findIconsInRegion(redrawRegion.get()):
-                ic.draw(clip=redrawRegion.get())
             self.refresh(redrawRegion.get())
         else:
             if self.entryIcon is not None:
@@ -559,9 +555,6 @@ class Window:
             topIcon = self.filterRedundantParens(topIcon)
             topIcon.layout()
             redrawRegion.add(topIcon.hierRect())
-            self.clearBgRect(redrawRegion.get())
-            for ic in self.findIconsInRegion(redrawRegion.get()):
-                ic.draw(clip=redrawRegion.get())
             self.refresh(redrawRegion.get())
             self.cursor.setToIconSite(replaceParent, replaceSite)
         else:  # Put
@@ -573,9 +566,8 @@ class Window:
             for pastedTopIcon in pastedIcons:
                 self.addTop(pastedTopIcon)
                 for ic in pastedTopIcon.traverse():
-                    ic.draw()  # No need to clip or erase, all drawn on top
                     redrawRect.add(ic.rect)
-            self.refresh(redrawRect.get())
+            self.refresh(redrawRect.get(), clear=False)
             if iconOutputSite is None:
                 self.cursor.removeCursor()
             else:
@@ -691,6 +683,10 @@ class Window:
                     stationaryInputs.append((pos, ic, "input", name))
                 for ic, pos, name in snapLists.get("insertInput", []):
                     stationaryInputs.append((pos, ic, "insertInput", name))
+                for ic, pos, name in snapLists.get("seqIn", []):
+                    stationaryInputs.append((pos, ic, "seqIn", name))
+                for ic, pos, name in snapLists.get("seqOut", []):
+                    stationaryInputs.append((pos, ic, "seqOut", name))
         self.snapList = []
         for si in stationaryInputs:
             (sx, sy), sIcon, sSiteType, sSiteName = si
@@ -722,7 +718,7 @@ class Window:
         dragImageRegion = (x, y, x+width, y+height)
         if self.lastDragImageRegion is not None:
             for r in exposedRegions(self.lastDragImageRegion, dragImageRegion):
-                self.refresh(r)
+                self.refresh(r, redraw=False)
         # Draw the image of the moving icons in their new locations directly to the
         # display (leaving self.image clean).  This makes dragging fast by eliminating
         # individual icon drawing of while the user is dragging.
@@ -753,6 +749,8 @@ class Window:
                 parentIcon.replaceChild(childIcon, siteName)
             elif siteType == "insertInput":
                 parentIcon.insertChild(childIcon, siteName)
+            elif siteType in ('seqIn', 'seqOut'):
+                print('Put seq site snapping here!')
             for ic in self.topIcons:
                 self.filterRedundantParens(ic)
             # Redo layouts for all affected (all the way to the top)
@@ -763,8 +761,7 @@ class Window:
                     redrawRegion.add(ic.hierRect())
             # Redraw the areas affected by the updated layouts
             self.clearBgRect(redrawRegion.get())
-        for ic in self.findIconsInRegion(redrawRegion.get()):
-            ic.draw(clip=redrawRegion.get())
+        self.redraw(redrawRegion.get())
         self.dragging = None
         self.snapped = None
         self.snapList = None
@@ -772,16 +769,13 @@ class Window:
         # Refresh the entire display.  While refreshing a smaller area is technically
         # possible, after all the dragging and drawing, it's prudent to ensure that the
         # display remains in sync with the image pixmap
-        self.refresh()
+        self.refresh(redraw=False)
         self.undo.addBoundary()
 
     def _cancelDrag(self):
         # Not properly cancelling drag, yet, just dropping the icons being dragged
         if self.dragging is None:
             return
-        self.clearBgRect(self.lastDragImageRegion)
-        for ic in self.findIconsInRegion(self.lastDragImageRegion):
-            ic.draw(clip=self.lastDragImageRegion)
         self.refresh(self.lastDragImageRegion)
         self.dragging = None
         self.snapped = None
@@ -814,9 +808,7 @@ class Window:
                 ic.selected = newSelect
                 redrawRegion.add(ic.rect)
                 changedIcons.append(ic)
-        for ic in self.allIcons():
-            ic.draw(clip=redrawRegion.get())
-        self.refresh(redrawRegion.get())
+        self.refresh(redrawRegion.get(), clear=False)
         l, t, r, b = newRect
         hLineImg = Image.new('RGB', (r - l, 1), color=(255, 255, 255, 255))
         vLineImg = Image.new('RGB', (1, b - t), color=(255, 255, 255, 255))
@@ -828,10 +820,10 @@ class Window:
 
     def _eraseRectSelect(self):
         l, t, r, b = self.lastRectSelect
-        self.refresh((l, t, r+1, t+1))
-        self.refresh((l, b, r+1, b+1))
-        self.refresh((l, t, l+1, b+1))
-        self.refresh((r, t, r+1, b+1))
+        self.refresh((l, t, r+1, t+1), redraw=False)
+        self.refresh((l, b, r+1, b+1), redraw=False)
+        self.refresh((l, t, l+1, b+1), redraw=False)
+        self.refresh((r, t, r+1, b+1), redraw=False)
 
     def _endRectSelect(self):
         self._eraseRectSelect()
@@ -882,7 +874,7 @@ class Window:
         for ic in resultIcon.traverse():
             ic.selected = True
             ic.draw(clip=resultRect)
-        self.refresh(resultRect)
+        self.refresh(resultRect, redraw=False)
         # For expressions that yield "None", show it, then automatically erase
         if result is None:
             time.sleep(0.4)
@@ -897,11 +889,11 @@ class Window:
         iconRect = excep.icon.hierRect()
         for ic in excep.icon.traverse():
             ic.draw(clip=iconRect, colorErr=ic==excep.icon)
-        self.refresh(iconRect)
+        self.refresh(iconRect, redraw=False)
         tkinter.messagebox.showerror("Error Executing", message=excep.message)
         for ic in excep.icon.traverse():
             ic.draw(clip=iconRect, colorErr=False)
-        self.refresh(iconRect)
+        self.refresh(iconRect, redraw=False)
 
     def _select(self, ic, op='select'):
         """Change the selection.  Options are 'select': selects single icon, 'toggle':
@@ -926,9 +918,7 @@ class Window:
                 ic.selected = not ic.selected
             else:
                 ic.selected = True
-        for ic in self.findIconsInRegion(refreshRegion.get()):
-            ic.draw(clip=refreshRegion.get())
-        self.refresh(refreshRegion.get())
+        self.refresh(refreshRegion.get(), clear=False)
         self.cursor.removeCursor()
 
     def unselectAll(self):
@@ -939,13 +929,29 @@ class Window:
         for ic in selectedIcons:
             refreshRegion.add(ic.rect)
             ic.selected = False
-        for ic in self.findIconsInRegion(refreshRegion.get()):
-            ic.draw(clip=refreshRegion.get())
-        self.refresh(refreshRegion.get())
+        self.refresh(refreshRegion.get(), clear=False)
 
-    def refresh(self, region=None):
-        """Redraw any rectangle (region) of the window from the pseudo-framebuffer
-           (self.image).  Redraw the whole window if region==None"""
+    def redraw(self, region=None, clear=True):
+        """Cause all icons to redraw to the pseudo-framebuffer (call refresh to transfer
+        from there to the display).  Setting clear to False suppresses clearing the
+        region to the background color before redrawing."""
+        if clear:
+            self.clearBgRect(region)
+        if region is None:
+            for ic in self.allIcons():
+                ic.draw()
+        else:
+            for ic in self.findIconsInRegion(region):
+                ic.draw(clip=region)
+
+    def refresh(self, region=None, redraw=True, clear=True):
+        """Redraw any rectangle (region) of the window.  If redraw is set to False, the
+         window will be refreshed from the pseudo-framebuffer (self.image).  If redraw
+         is True, the framebuffer is first refreshed from the underlying icon structures.
+         If no region is specified (region==None), redraw the whole window.  Setting
+         clear to False will not clear the background area before redrawing."""
+        if redraw:
+            self.redraw(region, clear)
         if region is None:
             self.drawImage(self.image, (0, 0))
         else:
@@ -1026,15 +1032,15 @@ class Window:
                 ic.layout()
                 redrawRegion.add(ic.hierRect())
         # Redraw the area affected by the deletion
-        self.clearBgRect(redrawRegion.get())
-        for ic in self.findIconsInRegion(redrawRegion.get()):
-            ic.draw(clip=redrawRegion.get())
         self.refresh(redrawRegion.get())
 
-    def clearBgRect(self, rect):
+    def clearBgRect(self, rect=None):
         """Clear but don't refresh a rectangle of the window"""
         # Fill rectangle seems to go one beyond
-        l, t, r, b = rect
+        if rect is None:
+            l, t, r, b = 0, 0, self.image.width, self.image.height
+        else:
+            l, t, r, b = rect
         self.draw.rectangle((l, t, r-1, b-1), fill=windowBgColor)
 
     def assocGrouping(self, ic):
@@ -1059,6 +1065,7 @@ class Window:
             x, y = ic.rect[:2]
             self.undo.registerRemoveFromTopLevel(ic, x, y, self.topIcons.index(ic))
             self.topIcons.remove(ic)
+            ic.becomeTopLevel(True)
 
     def replaceTop(self, old, new):
         """Replace an existing top-level icon with a new icon in the same location
@@ -1097,6 +1104,7 @@ class Window:
             # If position was specified, relocate the icon
             if x is not None and y is not None:
                 ic.rect = icon.moveRect(ic.rect, (x, y))
+            ic.becomeTopLevel(True)
 
     def siteSelected(self, evt):
         """Look for icon sites near button press, if found return icon and site"""
@@ -1159,9 +1167,6 @@ class Window:
         redrawRegion = AccumRects(topIcon.hierRect())
         topIcon.layout()
         redrawRegion.add(topIcon.hierRect())
-        self.clearBgRect(redrawRegion.get())
-        for ic in self.findIconsInRegion(redrawRegion.get()):
-            ic.draw(clip=redrawRegion.get())
         self.refresh(redrawRegion.get())
 
 class AccumRects:
