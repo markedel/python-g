@@ -156,6 +156,8 @@ class EntryIcon(icon.Icon):
         self.rect = (x, y, x + self._width(), y + self.height)
         self.sites.add('output', 'output', 0, outSiteY)
         self.sites.add('attrIn', 'attrIn', 0, outSiteY + icon.ATTR_SITE_OFFSET)
+        self.sites.add('seqIn', 'seqIn', 1, 1)
+        self.sites.add('seqOut', 'seqOut', 1, self.height - 2)
         self.layoutDirty = True
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)

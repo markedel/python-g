@@ -85,11 +85,7 @@ class UndoRedoList:
             print("Warning:", listType, "list does not end in boundary")
             self.window.cursor.removeCursor()
         # Layouts may now be dirty
-        for ic in self.window.topIcons:
-            if ic.needsLayout():
-                redrawRegion.add(ic.hierRect())
-                ic.layout()
-                redrawRegion.add(ic.hierRect())
+        redrawRegion.add(self.window.layoutDirtyIcons())
         # Redraw the areas affected by the updated layouts
         if redrawRegion.rect is not None:
             self.window.refresh(redrawRegion.rect)

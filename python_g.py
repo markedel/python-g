@@ -282,17 +282,12 @@ class Window:
             redrawRegion = AccumRects(self.entryIcon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
-        layoutNeeded = False
         for ic in self.topIcons.copy():  # Copy because function can change list
             self.filterRedundantParens(ic)
-        for ic in self.topIcons:
-            if ic.needsLayout():
-                layoutNeeded = True
-                redrawRegion.add(ic.hierRect())
-                ic.layout()
-                redrawRegion.add(ic.hierRect())
+        layoutNeeded = self.layoutDirtyIcons()
         # Redraw the areas affected by the updated layouts
         if layoutNeeded:
+            redrawRegion.add(layoutNeeded)
             self.refresh(redrawRegion.get())
         else:
             if self.entryIcon is not None:
@@ -652,9 +647,7 @@ class Window:
         # Dragging parent icons away from their children may require re-layout of the
         # (moving) parent icons
         topDraggingIcons = findTopIcons(self.dragging)
-        for ic in topDraggingIcons:
-            if ic.needsLayout():
-                ic.layout()
+        self.layoutDirtyIcons(topDraggingIcons)
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
         moveRegion = AccumRects()
@@ -669,6 +662,7 @@ class Window:
         for ic in self.dragging:
             l, t = ic.rect[:2]
             ic.draw(self.dragImage, (l-xOff, t-yOff))
+        icon.drawSeqSiteConnections(self.dragging, image=self.dragImage)
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons
         draggingOutputs = []
@@ -754,11 +748,7 @@ class Window:
             for ic in self.topIcons:
                 self.filterRedundantParens(ic)
             # Redo layouts for all affected (all the way to the top)
-            for ic in self.topIcons:
-                if ic.needsLayout():
-                    redrawRegion.add(ic.hierRect())
-                    ic.layout()
-                    redrawRegion.add(ic.hierRect())
+            redrawRegion.add(self.layoutDirtyIcons())
             # Redraw the areas affected by the updated layouts
             self.clearBgRect(redrawRegion.get())
         self.redraw(redrawRegion.get())
@@ -937,12 +927,16 @@ class Window:
         region to the background color before redrawing."""
         if clear:
             self.clearBgRect(region)
-        if region is None:
-            for ic in self.allIcons():
-                ic.draw()
-        else:
-            for ic in self.findIconsInRegion(region):
-                ic.draw(clip=region)
+        # Traverse all top icons (only way to find out what's in the region).  Correct
+        # drawing depends on everything being ordered so overlaps happen properly.
+        # Sequence lines must be drawn on top of the icons they connect but below any
+        # icons that might be placed on top of them.
+        for topIcon in self.topIcons:
+            for ic in topIcon.traverse():
+                if region is None or rectsTouch(region, ic.rect):
+                    ic.draw()
+            if region is None or icon.seqConnectorTouches(topIcon, region):
+                icon.drawSeqSiteConnection(topIcon, clip=region)
 
     def refresh(self, region=None, redraw=True, clear=True):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
@@ -1026,11 +1020,7 @@ class Window:
         self.removeTop([ic for ic in self.topIcons if ic in deletedDict])
         self.addTop(addTopIcons)
         # Redo layouts of icons affected by detachment of children
-        for ic in self.topIcons:
-            if ic.needsLayout():
-                redrawRegion.add(ic.hierRect())
-                ic.layout()
-                redrawRegion.add(ic.hierRect())
+        redrawRegion.add(self.layoutDirtyIcons())
         # Redraw the area affected by the deletion
         self.refresh(redrawRegion.get())
 
@@ -1089,6 +1079,21 @@ class Window:
                 self.addTop(i)
         else:
             self.undo.registerAddToTopLevel(ic)
+            # Drawing depends on sequences being in-order in topIcons list
+            if index is None and hasattr(ic.sites, 'seqIn'):
+                prevIcon = ic.sites.seqIn.att
+                if prevIcon is not None:
+                    try:
+                        index = self.topIcons.index(prevIcon) + 1
+                    except ValueError:
+                        index = None
+            if index is None and hasattr(ic.sites, 'seqOut'):
+                nextIcon = ic.sites.seqOut.att
+                if nextIcon is not None:
+                    try:
+                        index = self.topIcons.index(nextIcon)
+                    except ValueError:
+                        index = None
             if index is None:
                 self.topIcons.append(ic)
             else:
@@ -1105,6 +1110,66 @@ class Window:
             if x is not None and y is not None:
                 ic.rect = icon.moveRect(ic.rect, (x, y))
             ic.becomeTopLevel(True)
+
+    def findSequences(self, topIcons=None):
+        """Find the starting icons for all sequences in the window.  If topIcons is
+        None, look at all of the icons in the window.  Otherwise look for just those
+        in topIcons (which do not have to be in self.topIcons)"""
+        sequenceTops = {}
+        topIconSeqs = {}
+        if topIcons is None:
+            topIcons = self.topIcons
+        for topIcon in topIcons:
+            if topIcon not in topIconSeqs:
+                topOfSeq = icon.findSeqStart(topIcon)
+                sequenceTops[topOfSeq] = True
+                for seqIcon in icon.traverseSeq(topOfSeq):
+                    topIconSeqs[seqIcon] = topOfSeq
+        return sequenceTops.keys()
+
+    def layoutDirtyIcons(self, topIcons=None):
+        """Look for icons marked as needing layout and lay them out.  If topIcons is
+        None, look at all of the icons in the window.  Otherwise look for just those
+        in topIcons (which do not have to be in self.topIcons).  Returns a rectangle
+        representing the changed areas that need to be redrawn, or None if nothing
+        changed."""
+        redrawRegion = AccumRects()
+        for seqTopIcon in self.findSequences(topIcons):
+            redrawRegion.add(self.layoutIconsInSeq(seqTopIcon))
+        return redrawRegion.get()
+
+    def layoutIconsInSeq(self, seqStartIcon, checkAllForDirty=True):
+        """Lay out all icons in a sequence starting from seqStartIcon. if checkAllForDirty
+        is True, will traverse all trees looking for dirty icons and redo those layouts
+        as well.  If False, only the top icon is assumed to require layout, and the
+        rest in the sequence will be moved up or down without additional checking."""
+        redrawRegion = AccumRects()
+        x, y = seqStartIcon.pos()
+        for seqIc in icon.traverseSeq(seqStartIcon):
+            seqIcOrigRect = seqIc.hierRect()
+            xOffsetToSeqIn, yOffsetToSeqIn = seqIc.posOfSite('seqIn')
+            yOffsetToSeqIn -= seqIcOrigRect[1]
+            if (seqIc is seqStartIcon or checkAllForDirty) and seqIc.needsLayout():
+                layout = seqIc.layout((0, 0))
+                yOffsetToSeqIn = layout.parentSiteOffset
+            # For the start icon, y is original seqIn site, otherwise it is the
+            # bottom of the layout of the statement above.
+            if seqIc is not seqStartIcon:
+                y += yOffsetToSeqIn
+            seqIcX, seqIcY = seqIc.pos()
+            yOffset = y - seqIcY
+            xOffset = x - seqIcX
+            if xOffset == 0 and yOffset == 0:
+                seqIcNewRect = seqIc.hierRect()
+            else:
+                redrawRegion.add(seqIcOrigRect)
+                for ic in seqIc.traverse():
+                    ic.rect = offsetRect(ic.rect, xOffset, yOffset)
+                seqIcNewRect = seqIc.hierRect()
+                redrawRegion.add(seqIcNewRect)
+            y = seqIcNewRect[3] + 1
+            # ... loop and condition icons will adjust x
+        return redrawRegion.get()
 
     def siteSelected(self, evt):
         """Look for icon sites near button press, if found return icon and site"""
@@ -1164,10 +1229,8 @@ class Window:
 
     def redoLayout(self, topIcon):
         """Recompute layout for a top-level icon and redraw all affected icons"""
-        redrawRegion = AccumRects(topIcon.hierRect())
-        topIcon.layout()
-        redrawRegion.add(topIcon.hierRect())
-        self.refresh(redrawRegion.get())
+        redrawRect = self.layoutIconsInSeq(topIcon, checkAllForDirty=True)
+        self.refresh(redrawRect)
 
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""

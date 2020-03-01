@@ -22,14 +22,25 @@ def parsePasted(text, window, location):
         return None
     x, y = location
     icons = []
+    seqStartIcon = None
     for stmt in modAst.body:
         if isinstance(stmt, ast.Expr):
-            topIcon = makeIcons(parseExpr(stmt.value), window, x, y)
+            stmtIcon = makeIcons(parseExpr(stmt.value), window, x, y)
         else:
-            topIcon = makeIcons(parseStmt(stmt), window, x, y)
-        topIcon.layout((x, y))
-        icons.append(topIcon)
-        y += 30 # Figure out how to space multiple expressions, later
+            stmtIcon = makeIcons(parseStmt(stmt), window, x, y)
+        if seqStartIcon is None:
+            seqStartIcon = stmtIcon
+        elif hasattr(icons[-1].sites, 'seqOut') and hasattr(stmtIcon.sites, 'seqIn'):
+            # Link the statement to the previous statement
+            icons[-1].sites.seqOut.attach(icons[-1], stmtIcon, 'seqIn')
+        else:
+            layout = window.layoutIconsInSeq(seqStartIcon)
+            seqStartIcon = None
+            stmtX, stmtY = stmtIcon.pos()
+            y += stmtY + layout.height + 10
+        icons.append(stmtIcon)
+    if seqStartIcon:
+        window.layoutIconsInSeq(seqStartIcon)
     return icons
 
 def parseExprToAst(text):  #... Not used. what is this for?
@@ -47,7 +58,6 @@ def parseExprToAst(text):  #... Not used. what is this for?
 
 def parseStmt(stmt):
     if stmt.__class__ == ast.Assign:
-        print('ast.Assign')
         targets = [parseExpr(e) for e in stmt.targets]
         return (icon.AssignIcon, targets,  parseExpr(stmt.value))
     return (icon.IdentifierIcon, "**Couldn't Parse**")

@@ -321,17 +321,30 @@ class Icon:
          drawn can be optionally overridden by specifying image and/or location."""
         pass
 
+    def pos(self):
+        """The "official" position of an icon is defined by the location of its seqIn
+        site if it has one.  Otherwise, by the top-left corner of its rectangle."""
+        if hasattr(self.sites, 'seqIn'):
+            return self.posOfSite('seqIn')
+        else:
+            return self.rect[:2]
+
     def layout(self, location=None):
-        """Compute layout and set locations for icon and its children (do not redraw)"""
+        """Compute layout and set locations for icon and its children (do not redraw).
+        location (at least for the moment) is upper left corner of .rect, not .pos()."""
         if location is None:
             x, y = self.rect[:2]
         else:
             x, y = location
+        # The calcLayout and doLayout calls use the icon's output site (if it has one)
+        # as its reference position even if it is connected to a sequence site.
         if hasattr(self.sites, 'output'):
             site = self.sites.output
         else:
             site = self.sites.seqIn
-        self.doLayout(x + site.xOffset, y + site.yOffset, self.calcLayout())
+        lo = self.calcLayout()
+        self.doLayout(x + site.xOffset, y + site.yOffset, lo)
+        return lo
 
     def traverse(self, order="draw", includeSelf=True):
         """Iterator for traversing the tree below this icon.  Traversal can be in either
@@ -1452,7 +1465,7 @@ class AssignIcon(Icon):
 
     def calcLayout(self):
         opWidth, opHeight = self.opSize
-        layout = Layout(self, opWidth, opHeight, opHeight // 2)
+        layout = Layout(self, opWidth, opHeight, self.sites.seqIn.yOffset)
         # Calculate for assignment target lists (each clause of =)
         x = inpSeqImage.width - 1
         y = inpSeqImage.height // 2 - 1
@@ -2244,6 +2257,84 @@ class HorizListMgr:
     def rename(self, newName):
         self.icon.sites.renameSeries(self.siteSeriesName, newName)
         self.siteSeriesName = newName
+
+def drawSeqSiteConnections(icons, image=None, clip=None):
+    toDraw = set()
+    for ic in icons:
+        if hasattr(ic.sites, 'seqOut') and ic.sites.seqOut.att:
+            toDraw.add(ic.sites.seqOut.att)
+        if hasattr(ic.sites, 'seqIn') and ic.sites.seqIn.att:
+            toDraw.add(ic)
+    for ic in toDraw:
+        drawSeqSiteConnection(ic, image, clip)
+
+def drawSeqSiteConnection(toIcon, image=None, clip=None):
+    """Draw connection line between ic's seqIn site and whatever it connects."""
+    if not hasattr(toIcon.sites, 'seqIn'):
+        return
+    fromIcon = toIcon.sites.seqIn.att
+    if fromIcon is None:
+        return
+    fromX, fromY = fromIcon.posOfSite('seqOut')
+    toX, toY = toIcon.posOfSite('seqIn')
+    if clip is not None:
+        # Clip the line to within the clip rectangle.  This is simplified by the fact
+        # that connections are always vertical and drawn downward from seqOut to seqIn,
+        # and that rectangles are defined ordered left, top, right, bottom.
+        l, t, r, b = clip
+        if fromX < l or fromX > r:
+            return
+        if fromY < t:
+            if toY < t:
+                return
+            fromY = t
+        if toY > b:
+            if fromY > b:
+                return
+            toY = b
+    if image is None:
+        draw = fromIcon.window.draw
+    else:
+        draw = ImageDraw.Draw(image)
+    draw.line((fromX, fromY, toX, toY), BLACK)
+
+def seqConnectorTouches(toIcon, rect):
+    """Return True if the icon is connected via its seqIn site and the sequence site
+    connector line intersects rectangle, rect."""
+    if not hasattr(toIcon.sites, 'seqIn'):
+        return False
+    fromIcon = toIcon.sites.seqIn.att
+    if fromIcon is None:
+        return False
+    fromX, fromY = fromIcon.posOfSite('seqOut')
+    toX, toY = toIcon.posOfSite('seqIn')
+    l, t, r, b = rect
+    if fromX < l or fromX > r:
+        return False
+    if fromY < t and toY < t:
+        return False
+    if toY > b and fromY > b:
+        return False
+    return True
+
+def findSeqStart(ic):
+    while True:
+        if not hasattr(ic.sites, 'seqIn'):
+            return ic
+        if ic.sites.seqIn.att is None:
+            return ic
+        ic = ic.sites.seqIn.att
+
+def traverseSeq(ic, includeStartingIcon=True):
+    if includeStartingIcon:
+        yield ic
+    while True:
+        if not hasattr(ic.sites, 'seqOut'):
+            return
+        if ic.sites.seqOut.att is None:
+            return
+        ic = ic.sites.seqOut.att
+        yield ic
 
 def makeSeriesSiteId(seriesName, seriesIdx):
     return seriesName + "_%d" % seriesIdx
