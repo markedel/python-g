@@ -654,21 +654,19 @@ class Window:
         for ic in self.dragging:
             moveRegion.add(ic.rect)
         el, et, er, eb = moveRegion.get()
-        xOff = el
-        yOff = et
-        self.dragImageOffset = xOff, yOff
-        self.dragImage = Image.new('RGBA', (er - xOff, eb - yOff), color=(0, 0, 0, 0))
+        self.dragImageOffset = el - self.buttonDownLoc[0], et - self.buttonDownLoc[1]
+        self.dragImage = Image.new('RGBA', (er - el, eb - et), color=(0, 0, 0, 0))
         self.lastDragImageRegion = None
         for ic in self.dragging:
-            l, t = ic.rect[:2]
-            ic.draw(self.dragImage, (l-xOff, t-yOff))
-        icon.drawSeqSiteConnections(self.dragging, image=self.dragImage)
+            ic.rect = offsetRect(ic.rect, -el, -et)
+            ic.draw(self.dragImage)
+            icon.drawSeqSiteConnection(ic, image=self.dragImage)
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons
         draggingOutputs = []
         for dragIcon in topDraggingIcons:
             for ic, (x, y), name in dragIcon.snapLists().get("output", []):
-                draggingOutputs.append(((x-xOff, y-yOff), ic))
+                draggingOutputs.append(((x, y), ic))
         stationaryInputs = []
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
@@ -693,8 +691,8 @@ class Window:
     def _updateDrag(self, evt):
         if not self.dragging:
             return
-        x = self.dragImageOffset[0] + evt.x - self.buttonDownLoc[0]
-        y = self.dragImageOffset[1] + evt.y - self.buttonDownLoc[1]
+        x = self.dragImageOffset[0] + evt.x
+        y = self.dragImageOffset[1] + evt.y
         # If the drag results in mating sites being within snapping distance, change the
         # drag position to mate them exactly (snap them together)
         self.snapped = None
@@ -722,14 +720,12 @@ class Window:
         self.lastDragImageRegion = dragImageRegion
 
     def _endDrag(self):
-        l, t, r, b = self.lastDragImageRegion
-        xOff = l - self.dragImageOffset[0]
-        yOff = t - self.dragImageOffset[1]
         # self.dragging icons are not stored hierarchically, but are in draw order
         topDraggedIcons = findTopIcons(self.dragging)
         redrawRegion = AccumRects()
+        l, t, r, b = self.lastDragImageRegion
         for ic in self.dragging:
-            ic.rect = offsetRect(ic.rect, xOff, yOff)
+            ic.rect = offsetRect(ic.rect, l, t)
             redrawRegion.add(ic.rect)
         self.addTop(topDraggedIcons)
         if self.snapped is not None:
@@ -997,27 +993,49 @@ class Window:
         """Remove icons from window icon list redraw affected areas of the display"""
         if len(icons) == 0:
             return
-        # deletedDict is used to quickly determine if an icon is on the deleted list
-        deletedDict = {ic:True for ic in icons}
+        # deletedSet more efficiently determines if an icon is on the deleted list
+        deletedSet = set(icons)
         detachList = []
+        seqReconnectList = []
         redrawRegion = AccumRects()
         for ic in icons:
             redrawRegion.add(ic.rect)
         # Find and unlink child icons from parents at deletion boundary
         addTopIcons = []
-        for ic in self.allIcons():
-            for child in ic.children():
-                if ic in deletedDict and child not in deletedDict:
-                    detachList.append((ic, child))
-                    addTopIcons.append(child)
-                    redrawRegion.add(child.hierRect())
-                elif ic not in deletedDict and child in deletedDict:
-                    detachList.append((ic, child))
-        for ic, child in detachList:
-            ic.replaceChild(None, ic.siteOf(child))
+        for topIcon in self.topIcons:
+            if hasattr(topIcon.sites, 'seqOut'):
+                nextIcon = topIcon.sites.seqOut.att
+                if nextIcon is not None:
+                    if topIcon in deletedSet and nextIcon not in deletedSet:
+                        detachList.append((topIcon, 'seqOut'))
+                        topIcon.layoutDirty = True
+                    if topIcon not in deletedSet and nextIcon in deletedSet:
+                        detachList.append((topIcon, 'seqOut'))
+                        topIcon.layoutDirty = True
+                        while True:
+                            if not hasattr(nextIcon.sites, 'seqOut'):
+                                break
+                            nextIcon = nextIcon.sites.seqOut.att
+                            if nextIcon is None:
+                                break
+                            if nextIcon not in deletedSet:
+                                seqReconnectList.append((topIcon, nextIcon))
+                                break
+            for ic in topIcon.traverse():
+                for child in ic.children():
+                    if ic in deletedSet and child not in deletedSet:
+                        detachList.append((ic, ic.siteOf(child)))
+                        addTopIcons.append(child)
+                        redrawRegion.add(child.hierRect())
+                    elif ic not in deletedSet and child in deletedSet:
+                        detachList.append((ic, ic.siteOf(child)))
+        for ic, site in detachList:
+            ic.replaceChild(None, site)
+        for outIcon, inIcon in seqReconnectList:
+            outIcon.replaceChild(inIcon, 'seqOut')
         # Update the window's top-icon list to remove deleted icons and add those that
         # have become top icons via deletion of their parents (bring those to the front)
-        self.removeTop([ic for ic in self.topIcons if ic in deletedDict])
+        self.removeTop([ic for ic in self.topIcons if ic in deletedSet])
         self.addTop(addTopIcons)
         # Redo layouts of icons affected by detachment of children
         redrawRegion.add(self.layoutDirtyIcons())

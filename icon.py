@@ -27,7 +27,7 @@ namedConsts = {'True':True, 'False':False, 'None':None}
 parentSiteTypes = {'output':True, 'attrIn':True}
 childSiteTypes = {'input':True, 'attrOut':True}
 matingSiteType = {'output':'input', 'input':'output', 'attrIn':'attrOut',
- 'attrOut':'attrIn'}
+ 'attrOut':'attrIn', 'seqOut':'seqIn', 'seqIn':'seqOut'}
 
 ATTR_SITE_DEPTH = 1
 OUTPUT_SITE_DEPTH = 2
@@ -2257,16 +2257,6 @@ class HorizListMgr:
     def rename(self, newName):
         self.icon.sites.renameSeries(self.siteSeriesName, newName)
         self.siteSeriesName = newName
-
-def drawSeqSiteConnections(icons, image=None, clip=None):
-    toDraw = set()
-    for ic in icons:
-        if hasattr(ic.sites, 'seqOut') and ic.sites.seqOut.att:
-            toDraw.add(ic.sites.seqOut.att)
-        if hasattr(ic.sites, 'seqIn') and ic.sites.seqIn.att:
-            toDraw.add(ic)
-    for ic in toDraw:
-        drawSeqSiteConnection(ic, image, clip)
 
 def drawSeqSiteConnection(toIcon, image=None, clip=None):
     """Draw connection line between ic's seqIn site and whatever it connects."""
