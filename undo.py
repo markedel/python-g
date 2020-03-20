@@ -208,7 +208,7 @@ class RemoveFromTopLevel(UndoListEntry):
         self.index = idx
 
     def undo(self, undoData):
-        undoData.window.addTop(self.icon, self.fromX, self.fromY, index=self.index)
+        undoData.window.insertTopLevel(self.icon, self.index, self.fromX, self.fromY)
         self.icon.layoutDirty = True
         return None
 
@@ -226,9 +226,10 @@ class Callback(UndoListEntry):
     # this callback is being used from an icon.
     def __init__(self, callback, args):
         self.callback = callback
+        self.args = args
 
     def undo(self, undoData):
-        self.callback(*args)
+        self.callback(*self.args)
 
 class AccumRect:
     """Make one big rectangle out of all rectangles added."""

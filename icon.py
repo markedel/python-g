@@ -424,6 +424,16 @@ class Icon:
                 return child
             child = parent
 
+    def nextInSeq(self):
+        if not hasattr(self.sites, 'seqOut'):
+            return None
+        return self.sites.seqOut.att
+
+    def prevInSeq(self):
+        if not hasattr(self.sites, 'seqIn'):
+            return None
+        return self.sites.seqIn.att
+
     def snapLists(self):
         x, y = self.rect[:2]
         return self.sites.makeSnapLists(self, x, y)
@@ -565,6 +575,8 @@ class TextIcon(Icon):
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         needSeqSites = self.parent() is None and image is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+         self.sites.seqOut.att is None or image is not None)
         if image is None:
             image = self.window.image
         if location is None:
@@ -576,9 +588,10 @@ class TextIcon(Icon):
             self.cachedImage.paste(txtImg, (outSiteImage.width - 1, 0))
             if needSeqSites:
                 drawSeqSites(self.cachedImage, outSiteImage.width-1, 0, txtImg.height)
-            outSiteX = self.sites.output.xOffset
-            outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
-            self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
+            if needOutSite:
+                outX = self.sites.output.xOffset
+                outY = self.sites.output.yOffset - outSiteImage.height // 2
+                self.cachedImage.paste(outSiteImage, (outX, outY), mask=outSiteImage)
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
@@ -697,6 +710,8 @@ class UnaryOpIcon(Icon):
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         needSeqSites = self.parent() is None and image is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+         self.sites.seqOut.att is None or image is not None)
         if image is None:
             image = self.window.image
         if location is None:
@@ -711,8 +726,9 @@ class UnaryOpIcon(Icon):
             draw = ImageDraw.Draw(self.cachedImage)
             draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth, bodyHeight),
              fill=ICON_BG_COLOR, outline=OUTLINE_COLOR)
-            outImageY = self.sites.output.yOffset - outSiteImage.height // 2
-            self.cachedImage.paste(outSiteImage, (0, outImageY), mask=outSiteImage)
+            if needOutSite:
+                outImageY = self.sites.output.yOffset - outSiteImage.height // 2
+                self.cachedImage.paste(outSiteImage, (0, outImageY), mask=outSiteImage)
             inImageY = self.sites.argIcon.yOffset - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (self.sites.argIcon.xOffset, inImageY))
             if needSeqSites:
@@ -807,6 +823,8 @@ class ListTypeIcon(Icon):
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         needSeqSites = self.parent() is None and image is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+         self.sites.seqOut.att is None or image is not None)
         if image is None:
             image = self.window.image
         if location is None:
@@ -819,9 +837,11 @@ class ListTypeIcon(Icon):
             if needSeqSites:
                 drawSeqSites(self.cachedImage, leftImgX, 0, self.leftImg.height)
             # Output site
-            outSiteX = self.sites.output.xOffset
-            outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
-            self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
+            if needOutSite:
+                outSiteX = self.sites.output.xOffset
+                outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
+                self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY),
+                 mask=outSiteImage)
             # Body input site
             inSiteX = outSiteImage.width - 1 + self.leftImg.width - inSiteImage.width
             inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
@@ -1062,14 +1082,15 @@ class BinOpIcon(Icon):
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         cachedImage = self.cachedImage
-        temporaryOutputSite = False
         atTop = self.parent() is None
-        if image is not None and atTop:
+        suppressSeqSites = image is not None and self.prevInSeq() is None
+        temporaryOutputSite = suppressSeqSites and atTop and self.leftArg() is None
+        if temporaryOutputSite or suppressSeqSites:
             # When image is specified the icon is being dragged, and it must display
-            # something indicating where its output site is
+            # something indicating where its output site is where it would otherwise
+            # not nor
             cachedImage = None
             self.cachedImage = None
-            temporaryOutputSite = True
         if image is None:
             image = self.window.image
         if location is None:
@@ -1087,7 +1108,7 @@ class BinOpIcon(Icon):
             elif temporaryOutputSite:
                 outSiteY = siteY - binOutImage.height // 2
                 cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
-            elif atTop:
+            elif atTop and not suppressSeqSites:
                 outSiteY = siteY - inpSeqImage.height // 2
                 cachedImage.paste(inpSeqImage, (outSiteX, outSiteY), mask=inpSeqImage)
             # Body
@@ -1114,7 +1135,7 @@ class BinOpIcon(Icon):
                 cachedImage.paste(rParenImage, (rParenX, rParenY))
         pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected,
          colorErr), location, clip)
-        if not temporaryOutputSite:
+        if not (temporaryOutputSite or suppressSeqSites):
             self.cachedImage = cachedImage
 
     def touchesRect(self, rect):
@@ -1231,7 +1252,7 @@ class BinOpIcon(Icon):
         return layout
 
     def snapLists(self):
-        # Make attribute site unavailable unless the icon has no parens to hold it
+        # Make attribute site unavailable unless the icon has parens to hold it
         siteSnapLists = Icon.snapLists(self)
         if not self.hasParens:
             del siteSnapLists['attrOut']
@@ -1296,7 +1317,7 @@ class AssignIcon(Icon):
         seqSiteX = tgtSitesX + 1
         self.sites.add('seqIn', 'seqIn', seqSiteX, siteY - inpSeqImage.height // 2 + 1)
         self.sites.add('seqOut', 'seqOut', seqSiteX, siteY + inpSeqImage.height//2 - 2)
-        self.sites.add('seqReplace', 'seqReplace', tgtSitesX, siteY)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteY)
         self.tgtLists = [HorizListMgr(self, 'targets0', tgtSitesX, siteY)]
         valueSitesX = tgtSitesX + EMPTY_ARG_WIDTH + opWidth
         self.valueList = HorizListMgr(self, 'values', valueSitesX, siteY)
@@ -1322,17 +1343,17 @@ class AssignIcon(Icon):
             image = self.window.image
         else:
             # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site
+            # its sequence-insert snap site unless it is in a sequence and not the start.
             cachedImage = None
             self.cachedImage = None
-            temporaryDragSite = True
+            temporaryDragSite = self.prevInSeq() is None
         if location is None:
             location = self.rect[:2]
         if cachedImage is None:
             width, height = self._size()
             cachedImage = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
             # Left site (seq site bar + 1st target input or drag-insert site
-            tgtSiteX = self.sites.seqReplace.xOffset
+            tgtSiteX = self.sites.targets0[0].xOffset
             siteY = height // 2
             if temporaryDragSite:
                 y = siteY - assignDragImage.height // 2
@@ -1340,7 +1361,6 @@ class AssignIcon(Icon):
             else:
                 y = siteY - inpSeqImage.height // 2
                 cachedImage.paste(inpSeqImage, (tgtSiteX, y), mask=inpSeqImage)
-            #tgtSiteX += inpSeqImage.width - OUTPUT_SITE_DEPTH
             opWidth, opHeight = self.opSize
             for tgtList in self.tgtLists:
                 tgtList.drawCommas(cachedImage, tgtSiteX, siteY)
@@ -1539,6 +1559,8 @@ class DivideIcon(Icon):
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         needSeqSites = self.parent() is None and image is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+         self.sites.seqOut.att is None or image is not None)
         if image is None:
             image = self.window.image
         if location is None:
@@ -1571,7 +1593,9 @@ class DivideIcon(Icon):
                 draw.line((cntrX + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
             else:
                 draw.line((bodyLeft + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
-            self.cachedImage.paste(outSiteImage, (leftX, cntrY - outSiteImage.height//2))
+            if needOutSite:
+                self.cachedImage.paste(outSiteImage,
+                 (leftX, cntrY - outSiteImage.height//2))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
@@ -2174,8 +2198,6 @@ class IconSiteList:
         snapSites = {}
         for site in self.allSites():
             if forMatingSite is None or site.type == matingSiteType[forMatingSite]:
-                if site.type not in snapSites:
-                    snapSites[site.type] = []
                 # Omit any site whose attached icon has a site of the same type, at the
                 # same location.  In such a case we want both dropped icons and typing to
                 # go to the site of the innermost (most local) icon.
@@ -2184,7 +2206,20 @@ class IconSiteList:
                 # seqIn and seqOut sites are only valid for icons at the top level
                 if site.type in ('seqIn', 'seqOut') and ic.parent() is not None:
                     continue
-                snapSites[site.type].append((ic, (x + site.xOffset, y + site.yOffset),
+                # The first icon in a sequence hosts the snap site for the sequence
+                hasPrev = ic.prevInSeq() is not None
+                if hasPrev and site.type in ('output', 'seqInsert'):
+                    continue
+                # If the icon is in a sequence, convert the output site to a seqInsert
+                hasNext = ic.nextInSeq()
+                if site.type == 'output' and (hasPrev or hasNext):
+                    siteType = 'seqInsert'
+                else:
+                    siteType = site.type
+                # Add the snap site to the list
+                if siteType not in snapSites:
+                    snapSites[siteType] = []
+                snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
                      site.name))
         return snapSites
 
@@ -2260,9 +2295,7 @@ class HorizListMgr:
 
 def drawSeqSiteConnection(toIcon, image=None, clip=None):
     """Draw connection line between ic's seqIn site and whatever it connects."""
-    if not hasattr(toIcon.sites, 'seqIn'):
-        return
-    fromIcon = toIcon.sites.seqIn.att
+    fromIcon = toIcon.prevInSeq()
     if fromIcon is None:
         return
     fromX, fromY = fromIcon.posOfSite('seqOut')
@@ -2291,9 +2324,7 @@ def drawSeqSiteConnection(toIcon, image=None, clip=None):
 def seqConnectorTouches(toIcon, rect):
     """Return True if the icon is connected via its seqIn site and the sequence site
     connector line intersects rectangle, rect."""
-    if not hasattr(toIcon.sites, 'seqIn'):
-        return False
-    fromIcon = toIcon.sites.seqIn.att
+    fromIcon = toIcon.prevInSeq()
     if fromIcon is None:
         return False
     fromX, fromY = fromIcon.posOfSite('seqOut')
@@ -2315,6 +2346,11 @@ def findSeqStart(ic):
             return ic
         ic = ic.sites.seqIn.att
 
+def findSeqEnd(ic):
+    for seqEndIc in traverseSeq(ic):
+        pass
+    return seqEndIc
+
 def traverseSeq(ic, includeStartingIcon=True):
     if includeStartingIcon:
         yield ic
@@ -2325,6 +2361,19 @@ def traverseSeq(ic, includeStartingIcon=True):
             return
         ic = ic.sites.seqOut.att
         yield ic
+
+def insertSeq(seqStartIc, atIc, before=False):
+    seqEndIc = findSeqEnd(seqStartIc)
+    if before:
+        prevIcon = atIc.sites.seqIn.att
+        if prevIcon is not None:
+            prevIcon.replaceChild(seqStartIc, 'seqOut')
+        atIc.replaceChild(seqEndIc, 'seqIn')
+    else:
+        nextIcon = atIc.sites.seqOut.att
+        atIc.replaceChild(seqStartIc, 'seqOut')
+        if nextIcon is not None:
+            nextIcon.replaceChild(seqEndIc, 'seqIn')
 
 def makeSeriesSiteId(seriesName, seriesIdx):
     return seriesName + "_%d" % seriesIdx

@@ -664,50 +664,70 @@ class Window:
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons
         draggingOutputs = []
+        draggingSeqInserts = []
         for dragIcon in topDraggingIcons:
-            for ic, (x, y), name in dragIcon.snapLists().get("output", []):
+            dragSnapList = dragIcon.snapLists()
+            for ic, (x, y), name in dragSnapList.get("output", []):
                 draggingOutputs.append(((x, y), ic))
+            for ic, (x, y), name in dragSnapList.get("seqInsert", []):
+                draggingSeqInserts.append(((x, y), ic))
         stationaryInputs = []
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
                 snapLists = winIcon.snapLists()
                 for ic, pos, name in snapLists.get("input", []):
-                    stationaryInputs.append((pos, ic, "input", name))
+                    stationaryInputs.append((pos, 0, ic, "input", name))
                 for ic, pos, name in snapLists.get("insertInput", []):
-                    stationaryInputs.append((pos, ic, "insertInput", name))
+                    stationaryInputs.append((pos, 0, ic, "insertInput", name))
                 for ic, pos, name in snapLists.get("seqIn", []):
-                    stationaryInputs.append((pos, ic, "seqIn", name))
+                    if ic.sites.seqIn.att is None:
+                        stationaryInputs.append((pos, 0, ic, "seqIn", name))
                 for ic, pos, name in snapLists.get("seqOut", []):
-                    stationaryInputs.append((pos, ic, "seqOut", name))
+                    nextIc = ic.sites.seqOut.att
+                    if nextIc is None:
+                        sHgt = 0
+                    else:
+                        nextInX, nextInY = nextIc.posOfSite('seqIn')
+                        sHgt = nextInY - pos[1]
+                    stationaryInputs.append((pos, sHgt, ic, "seqOut", name))
         self.snapList = []
         for si in stationaryInputs:
-            (sx, sy), sIcon, sSiteType, sSiteName = si
-            for do in draggingOutputs:
-                (dx, dy), dIcon = do
-                self.snapList.append((sx-dx, sy-dy, sIcon, dIcon, sSiteType, sSiteName))
+            (sx, sy), sh, sIcon, sSiteType, sSiteName = si
+            for (dx, dy), dIcon in draggingOutputs:
+                self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sSiteName))
+            for (dx, dy), dIcon in draggingSeqInserts:
+                if sSiteType in ('seqIn', 'seqOut'):
+                    self.snapList.append((sx - dx, sy - dy, sh, sIcon, dIcon, sSiteType, sSiteName))
         self.snapped = None
         self._updateDrag(evt)
 
     def _updateDrag(self, evt):
         if not self.dragging:
             return
-        x = self.dragImageOffset[0] + evt.x
-        y = self.dragImageOffset[1] + evt.y
+        x = snappedX = self.dragImageOffset[0] + evt.x
+        y = snappedY = self.dragImageOffset[1] + evt.y
         # If the drag results in mating sites being within snapping distance, change the
         # drag position to mate them exactly (snap them together)
         self.snapped = None
         nearest = SNAP_DIST + 1
-        for sx, sy, inIcon, outIcon, siteType, siteName in self.snapList:
-            dist = abs(x-sx) + abs(y-sy)
+        for sx, sy, sHgt, sIcon, movIcon, siteType, siteName in self.snapList:
+            if sHgt == 0 or y < sy:
+                dist = abs(x-sx) + abs(y-sy)
+            elif y > sy + sHgt:
+                dist = abs(x-sx) + abs(y-sy-sHgt)
+                sy += sHgt
+            else:  # y is vertically within the range of a sequence site
+                dist = abs(x-sx)
+                sy = y
             if dist < nearest:
                 nearest = dist
-                x = sx
-                y = sy
-                self.snapped = (inIcon, outIcon, siteType, siteName)
+                snappedX = sx
+                snappedY = sy
+                self.snapped = (sIcon, movIcon, siteType, siteName)
         # Erase the old drag image
         width = self.dragImage.width
         height = self.dragImage.height
-        dragImageRegion = (x, y, x+width, y+height)
+        dragImageRegion = (snappedX, snappedY, snappedX+width, snappedY+height)
         if self.lastDragImageRegion is not None:
             for r in exposedRegions(self.lastDragImageRegion, dragImageRegion):
                 self.refresh(r, redraw=False)
@@ -716,7 +736,7 @@ class Window:
         # individual icon drawing of while the user is dragging.
         dragImage = self.image.crop(dragImageRegion)
         dragImage.paste(self.dragImage, mask=self.dragImage)
-        self.drawImage(dragImage, (x, y))
+        self.drawImage(dragImage, (snappedX, snappedY))
         self.lastDragImageRegion = dragImageRegion
 
     def _endDrag(self):
@@ -727,26 +747,29 @@ class Window:
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, l, t)
             redrawRegion.add(ic.rect)
-        self.addTop(topDraggedIcons)
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
-            parentIcon, childIcon, siteType, siteName = self.snapped
-            self.removeTop(childIcon)  # Added above in case there were others
-            redrawRegion.add(parentIcon.hierRect())
-            if siteType != "insertInput" and parentIcon.childAt(siteName):
-                redrawRegion.add(childIcon.hierRect())
+            statIcon, movIcon, siteType, siteName = self.snapped
+            redrawRegion.add(statIcon.hierRect())
+            if siteType != "insertInput" and statIcon.childAt(siteName):
+                redrawRegion.add(movIcon.hierRect())
             if siteType in ("input", "attrOut"):
-                parentIcon.replaceChild(childIcon, siteName)
+                topDraggedIcons.remove(movIcon)
+                statIcon.replaceChild(movIcon, siteName)
             elif siteType == "insertInput":
-                parentIcon.insertChild(childIcon, siteName)
-            elif siteType in ('seqIn', 'seqOut'):
-                print('Put seq site snapping here!')
+                topDraggedIcons.remove(movIcon)
+                statIcon.insertChild(movIcon, siteName)
+            elif siteType == 'seqOut':
+                icon.insertSeq(movIcon, statIcon)
+            elif siteType == 'seqIn':
+                icon.insertSeq(movIcon, statIcon, before=True)
             for ic in self.topIcons:
                 self.filterRedundantParens(ic)
             # Redo layouts for all affected (all the way to the top)
             redrawRegion.add(self.layoutDirtyIcons())
             # Redraw the areas affected by the updated layouts
             self.clearBgRect(redrawRegion.get())
+        self.addTop(topDraggedIcons)
         self.redraw(redrawRegion.get())
         self.dragging = None
         self.snapped = None
@@ -997,30 +1020,38 @@ class Window:
         deletedSet = set(icons)
         detachList = []
         seqReconnectList = []
+        # Find region needing erase, including following sequence connectors
         redrawRegion = AccumRects()
         for ic in icons:
             redrawRegion.add(ic.rect)
+            nextIc = ic.nextInSeq()
+            if nextIc is not None:
+                tx, ty = ic.posOfSite('seqOut')
+                bx, by = nextIc.posOfSite('seqIn')
+                redrawRegion.add((tx-1, ty-1, tx+1, by+1))
+            prevIc = ic.prevInSeq()
+            if prevIc is not None:
+                tx, ty = prevIc.posOfSite('seqOut')
+                bx, by = ic.posOfSite('seqIn')
+                redrawRegion.add((tx-1, ty-1, tx+1, by+1))
         # Find and unlink child icons from parents at deletion boundary
         addTopIcons = []
         for topIcon in self.topIcons:
-            if hasattr(topIcon.sites, 'seqOut'):
-                nextIcon = topIcon.sites.seqOut.att
-                if nextIcon is not None:
-                    if topIcon in deletedSet and nextIcon not in deletedSet:
-                        detachList.append((topIcon, 'seqOut'))
-                        topIcon.layoutDirty = True
-                    if topIcon not in deletedSet and nextIcon in deletedSet:
-                        detachList.append((topIcon, 'seqOut'))
-                        topIcon.layoutDirty = True
-                        while True:
-                            if not hasattr(nextIcon.sites, 'seqOut'):
-                                break
-                            nextIcon = nextIcon.sites.seqOut.att
-                            if nextIcon is None:
-                                break
-                            if nextIcon not in deletedSet:
-                                seqReconnectList.append((topIcon, nextIcon))
-                                break
+            nextIcon = topIcon.nextInSeq()
+            if nextIcon is not None:
+                if topIcon in deletedSet and nextIcon not in deletedSet:
+                    detachList.append((topIcon, 'seqOut'))
+                    topIcon.layoutDirty = True
+                if topIcon not in deletedSet and nextIcon in deletedSet:
+                    detachList.append((topIcon, 'seqOut'))
+                    topIcon.layoutDirty = True
+                    while True:
+                        nextIcon = nextIcon.nextInSeq()
+                        if nextIcon is None:
+                            break
+                        if nextIcon not in deletedSet:
+                            seqReconnectList.append((topIcon, nextIcon))
+                            break
             for ic in topIcon.traverse():
                 for child in ic.children():
                     if ic in deletedSet and child not in deletedSet:
@@ -1073,12 +1104,21 @@ class Window:
             x, y = ic.rect[:2]
             self.undo.registerRemoveFromTopLevel(ic, x, y, self.topIcons.index(ic))
             self.topIcons.remove(ic)
-            ic.becomeTopLevel(True)
+            ic.becomeTopLevel(True)  #... ??? This does not seem right
 
     def replaceTop(self, old, new):
-        """Replace an existing top-level icon with a new icon in the same location
-        (but don't re-layout or re-draw)"""
+        """Replace an existing top-level icon with a new icon.  If the existing icon was
+         part of a sequence, replace it in the sequence.  If the icon was not part of a
+         sequence place it in the same location.  Does not re-layout or re-draw."""
         self.removeTop(old)
+        nextInSeq = old.nextInSeq()
+        if nextInSeq:
+            old.replaceChild(None, 'seqOut')
+            new.replaceChild(nextInSeq, 'seqOut')
+        prevInSeq = old.prevInSeq()
+        if prevInSeq:
+            old.replaceChild(None, 'seqIn')
+            new.replaceChild(prevInSeq, 'seqIn')
         oldSite = old.sites.lookup("output")
         newSite = new.sites.lookup("output")
         oldX, oldY = old.rect[:2]
@@ -1092,30 +1132,75 @@ class Window:
     def addTop(self, ic, x=None, y=None, index=None):
         """Place an icon or icons on the window at the top level (without re-layout or
         re-draw).  If ic is a list, x, y will not be applied."""
-        if hasattr(ic, '__iter__'):
-            for i in ic:
-                self.addTop(i)
-        else:
-            self.undo.registerAddToTopLevel(ic)
-            # Drawing depends on sequences being in-order in topIcons list
-            if index is None and hasattr(ic.sites, 'seqIn'):
+        # Find the appropriate index at which to place each icon.  The fact that python 3
+        # dictionaries are ordered preserves the order of the added icons, except where
+        # we reorder to join sequences with existing sequences.
+        addedIcons = {i:True for i in (ic if hasattr(ic, '__iter__') else [ic])}
+        # Find any icons in list that are connected to icons outside of the list.  If
+        # found look for the attached icon in the topIcons list and insert them in the
+        # appropriate place in the list.  This is done first for sequences attached at
+        # the top, then for sequences attached at the bottom.  As these sequences are
+        # spliced in to the topIcons list, they are removed from addedIcons, so sequences
+        # attached at both the top and bottom will not be done twice, and the the
+        # remaining (unattached) icons will be left at the end in addedIcons
+        attachedSeqs = []
+        for ic in addedIcons:
+            if hasattr(ic.sites, 'seqIn'):
                 prevIcon = ic.sites.seqIn.att
-                if prevIcon is not None:
-                    try:
-                        index = self.topIcons.index(prevIcon) + 1
-                    except ValueError:
-                        index = None
-            if index is None and hasattr(ic.sites, 'seqOut'):
-                nextIcon = ic.sites.seqOut.att
-                if nextIcon is not None:
-                    try:
-                        index = self.topIcons.index(nextIcon)
-                    except ValueError:
-                        index = None
-            if index is None:
-                self.topIcons.append(ic)
-            else:
-                self.topIcons.insert(index, ic)
+                if prevIcon is not None and prevIcon not in addedIcons:
+                    attachedSeqs.append((ic, prevIcon))
+        for ic, attachedTo in attachedSeqs:
+            try:
+                idx = self.topIcons.index(attachedTo) + 1
+            except ValueError:
+                continue
+            iconsInSeq = []
+            seqIc = ic
+            while True:
+                del addedIcons[seqIc]
+                iconsInSeq.append(seqIc)
+                seqIc = seqIc.nextInSeq()
+                if seqIc is None or seqIc not in addedIcons:
+                    break
+            self.insertTopLevel(iconsInSeq, idx)
+        attachedSeqs = []
+        for ic in addedIcons:
+            nextIcon = ic.nextInSeq()
+            if nextIcon is not None and nextIcon not in addedIcons:
+                attachedSeqs.append((ic, nextIcon))
+        for ic, attachedTo in attachedSeqs:
+            try:
+                idx = self.topIcons.index(attachedTo)
+            except ValueError:
+                continue
+            iconsInSeq = []
+            seqIc = ic
+            while True:
+                del addedIcons[seqIc]
+                iconsInSeq.append(seqIc)
+                seqIc = seqIc.prevInSeq()
+                if seqIc is None or seqIc not in addedIcons:
+                    break
+            iconsInSeq.reverse()
+            self.insertTopLevel(iconsInSeq, idx)
+        # Insert the remaining icons (not needing to be placed in sequence), at the end
+        # of the list.
+        self.insertTopLevel(list(addedIcons), x=x, y=y)
+
+    def insertTopLevel(self, icons, index=None, x=None, y=None):
+        """Add icon or icons to the window's top-level icon list at a specific position
+        in the list.  If index is None, append to the end.  Note that this is not
+        appropriate for adding icons that are attached to sequences that have icons
+        already in the window."""
+        if not hasattr(icons, '__iter__'):
+            icons = [icons]
+        for ic in icons:
+            self.undo.registerAddToTopLevel(ic)
+        if index is None:
+            self.topIcons += icons
+        else:
+            self.topIcons[index:index] = icons
+        for ic in icons:
             # Detaching icons should remove all connections, but the consequence to
             # leaving a parent link at the top level is dire, so make sure all parent
             # links are removed.
@@ -1169,16 +1254,24 @@ class Window:
             yOffsetToSeqIn -= seqIcOrigRect[1]
             if (seqIc is seqStartIcon or checkAllForDirty) and seqIc.needsLayout():
                 layout = seqIc.layout((0, 0))
+                # Find y offset from top of layout to the seqIn site by which the icon
+                # needs to be positioned.  If seqIc has an output site, parentSiteOffset
+                # of layout is to the output site and needs to be moved to the seqIn site.
                 yOffsetToSeqIn = layout.parentSiteOffset
-            # For the start icon, y is original seqIn site, otherwise it is the
-            # bottom of the layout of the statement above.
+                if hasattr(seqIc.sites, 'output'):
+                    yOffsetToSeqIn += seqIc.sites.seqIn.yOffset-seqIc.sites.output.yOffset
+            # At this point, y is the seqIn site position if it is the first icon in the
+            # sequence.  Otherwise y is the bottom of the layout of the statement above.
+            # Adjust it to be the desired y of the seqIn site.
             if seqIc is not seqStartIcon:
                 y += yOffsetToSeqIn
-            seqIcX, seqIcY = seqIc.pos()
+            # Figure out how much to move the icons of the statement
+            seqIcX, seqIcY = seqIc.posOfSite('seqIn')
             yOffset = y - seqIcY
             xOffset = x - seqIcX
+            # If the icons need to be moved, offset them
             if xOffset == 0 and yOffset == 0:
-                seqIcNewRect = seqIc.hierRect()
+                seqIcNewRect = seqIc.hierRect()  # Already in the right place
             else:
                 redrawRegion.add(seqIcOrigRect)
                 for ic in seqIc.traverse():

@@ -840,26 +840,36 @@ class CursorParenIcon(icon.Icon):
         self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width, y + bodyHeight)
         self.sites.add('output', 'output', 0, bodyHeight // 2)
         self.sites.add('argIcon', 'input', bodyWidth - 1, self.sites.output.yOffset)
+        seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and image is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+         self.sites.seqOut.att is None or image is not None)
         if image is None:
             image = self.window.image
         if location is None:
             location = self.rect[:2]
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', (icon.rectWidth(self.rect),
-            icon.rectHeight(self.rect)), color=(0, 0, 0, 0))
+             icon.rectHeight(self.rect)), color=(0, 0, 0, 0))
             textWidth, textHeight = icon.globalFont.getsize("(")
             bodyLeft = icon.outSiteImage.width - 1
             draw = ImageDraw.Draw(self.cachedImage)
-            draw.rectangle((bodyLeft, 0, bodyLeft + textWidth + 2 * icon.TEXT_MARGIN,
-             textHeight + 2 * icon.TEXT_MARGIN), fill=icon.ICON_BG_COLOR,
-             outline=icon.OUTLINE_COLOR)
+            width = textWidth + 2 * icon.TEXT_MARGIN
+            height = textHeight + 2 * icon.TEXT_MARGIN
+            draw.rectangle((bodyLeft, 0, bodyLeft + width, height),
+             fill=icon.ICON_BG_COLOR, outline=icon.OUTLINE_COLOR)
+            if needSeqSites:
+                icon.drawSeqSites(self.cachedImage, bodyLeft, 0, height+1)
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset
             outImageY = outSiteY - icon.outSiteImage.height // 2
-            self.cachedImage.paste(icon.outSiteImage, (outSiteX, outImageY),
-                mask=icon.outSiteImage)
+            if needOutSite:
+                self.cachedImage.paste(icon.outSiteImage, (outSiteX, outImageY),
+                 mask=icon.outSiteImage)
             inSiteX = self.sites.argIcon.xOffset
             inImageY = self.sites.argIcon.yOffset - icon.inSiteImage.height // 2
             self.cachedImage.paste(icon.inSiteImage, (inSiteX, inImageY))
