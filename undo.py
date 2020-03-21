@@ -23,8 +23,8 @@ class UndoRedoList:
     def registerIconDelete(self, ic):
         self._addUndoRedoEntry(IconDeleted(ic))
 
-    def registerRemoveFromTopLevel(self, ic, fromX, fromY, index):
-        self._addUndoRedoEntry(RemoveFromTopLevel(ic, fromX, fromY, index))
+    def registerRemoveFromTopLevel(self, ic, fromPos, index):
+        self._addUndoRedoEntry(RemoveFromTopLevel(ic, fromPos, index))
 
     def registerAddToTopLevel(self, ic):
         self._addUndoRedoEntry(AddToTopLevel(ic))
@@ -201,14 +201,13 @@ class IconDeleted(UndoListEntry):
         return None
 
 class RemoveFromTopLevel(UndoListEntry):
-    def __init__(self, ic, fromX, fromY, idx):
+    def __init__(self, ic, fromPos, idx):
         self.icon = ic
-        self.fromX = fromX
-        self.fromY = fromY
+        self.fromPos = fromPos
         self.index = idx
 
     def undo(self, undoData):
-        undoData.window.insertTopLevel(self.icon, self.index, self.fromX, self.fromY)
+        undoData.window.insertTopLevel(self.icon, self.index, self.fromPos)
         self.icon.layoutDirty = True
         return None
 

@@ -295,14 +295,18 @@ class EntryIcon(icon.Icon):
                 print("why was entry icon not in top level icon list?")
             else:
                 self.window.removeTop(self)
-            if self.pendingArg():
-                self.window.addTop(self.pendingArg(), self.rect[0], self.rect[1])
-                self.pendingArg().layoutDirty = True
-                self.window.cursor.setToIconSite(self.pendingArg(), "output")
+            pendingArg = self.pendingArg()
+            if pendingArg:
+                self.replaceChild(None, 'pendingArg', 'output')
+                self.window.insertTopLevel(pendingArg, pos=self.rect[:2])
+                pendingArg.layoutDirty = True
+                self.window.cursor.setToIconSite(pendingArg, "output")
             elif self._pendingAttr():
-                self.window.addTop(self._pendingAttr(), self.rect[0], self.rect[1])
-                self._pendingAttr().layoutDirty = True
-                self.window.cursor.setToIconSite(self._pendingAttr(), "attrIn")
+                pendingAttr = self._pendingAttr()
+                self.replaceChild(None, 'pendingAttr', 'attrIn')
+                self.window.insertTopLevel(pendingAttr, pos=self.rect[:2])
+                pendingAttr.layoutDirty = True
+                self.window.cursor.setToIconSite(pendingAttr, "attrIn")
             else:
                 self.window.cursor.setToWindowPos((self.rect[0], self.rect[1]))
         self.window.entryIcon = None
@@ -409,7 +413,7 @@ class EntryIcon(icon.Icon):
             remainingText = ""
         snapLists = ic.snapLists()
         if self.attachedIcon is None:
-            self.window.addTop(ic, self.rect[0], self.rect[1])
+            self.window.insertTopLevel(ic, pos=self.rect[:2])
             if self not in self.window.topIcons:
                 print("why was entry icon not in top level icon list?")
             else:
@@ -488,7 +492,7 @@ class EntryIcon(icon.Icon):
                 print("why was entry icon not in top level icon list?")
             else:
                 self.window.removeTop(self)
-            self.window.addTop(tupleIcon,self.rect[0], self.rect[1])
+            self.window.insertTopLevel(tupleIcon, pos=self.rect[:2])
             return True
         siteType = onIcon.typeOf(site)
         if onIcon.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon,
@@ -596,10 +600,10 @@ class EntryIcon(icon.Icon):
             child = parent
         # Reached top level.  Create Tuple
         tupleIcon = icon.TupleIcon(window=self.window, noParens=True)
+        self.window.replaceTop(child, tupleIcon)
         tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
         if not cursorPlaced:
             self.window.cursor.setToIconSite(tupleIcon, "argIcons", 1)
-        self.window.replaceTop(child, tupleIcon)
         return True
 
     def findOpenParen(self, fromIcon, fromSite):

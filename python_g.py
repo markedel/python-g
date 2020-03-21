@@ -229,7 +229,7 @@ class Window:
             self.entryIcon = typing.EntryIcon(None, None, window=self)
             y -= self.entryIcon.sites.output.yOffset
             self.entryIcon.rect = offsetRect(self.entryIcon.rect, x, y)
-            self.addTop(self.entryIcon)
+            self.insertTopLevel(self.entryIcon)
             self.cursor.setToEntryIcon()
             self.entryIcon.addText(char)
             self._redisplayChangedEntryIcon()
@@ -262,7 +262,7 @@ class Window:
             self.entryIcon.setPendingArg(self.cursor.icon)
             self.removeTop(self.cursor.icon)
             self.cursor.setToEntryIcon()
-            self.addTop(self.entryIcon)
+            self.insertTopLevel(self.entryIcon)
         else:
             self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
              window=self)
@@ -877,7 +877,7 @@ class Window:
         resultX = outSiteX - RESULT_X_OFFSET - icon.rectWidth(resultRect)
         resultY = outSiteY - resultOutSiteY - resultIcon.rect[1]
         resultIcon.rect = offsetRect(resultIcon.rect, resultX, resultY)
-        self.addTop(resultIcon)
+        self.insertTopLevel(resultIcon)
         resultIcon.layout()
         resultRect = resultIcon.hierRect()
         for ic in resultIcon.traverse():
@@ -1101,8 +1101,7 @@ class Window:
             for i in ic:
                 self.removeTop(i)
         else:
-            x, y = ic.rect[:2]
-            self.undo.registerRemoveFromTopLevel(ic, x, y, self.topIcons.index(ic))
+            self.undo.registerRemoveFromTopLevel(ic, ic.rect[:2], self.topIcons.index(ic))
             self.topIcons.remove(ic)
             ic.becomeTopLevel(True)  #... ??? This does not seem right
 
@@ -1127,11 +1126,13 @@ class Window:
         else:
             newX = oldX + oldSite.xOffset - newSite.xOffset
             newY = oldY + oldSite.yOffset - newSite.yOffset
-        self.addTop(new, newX, newY)
+        new.rect = icon.moveRect(new.rect, (newX, newY))
+        self.addTop(new)
 
-    def addTop(self, ic, x=None, y=None, index=None):
-        """Place an icon or icons on the window at the top level (without re-layout or
-        re-draw).  If ic is a list, x, y will not be applied."""
+    def addTop(self, ic):
+        """Place an icon or icons on the window at the top level.  If the icon(s) are
+         part of a sequence, maintain sequence order in the list, otherwise place them
+         at the end of the list (last-drawn, on-top).  Does not re-layout or re-draw."""
         # Find the appropriate index at which to place each icon.  The fact that python 3
         # dictionaries are ordered preserves the order of the added icons, except where
         # we reorder to join sequences with existing sequences.
@@ -1185,13 +1186,14 @@ class Window:
             self.insertTopLevel(iconsInSeq, idx)
         # Insert the remaining icons (not needing to be placed in sequence), at the end
         # of the list.
-        self.insertTopLevel(list(addedIcons), x=x, y=y)
+        self.insertTopLevel(list(addedIcons))
 
-    def insertTopLevel(self, icons, index=None, x=None, y=None):
+    def insertTopLevel(self, icons, index=None, pos=None):
         """Add icon or icons to the window's top-level icon list at a specific position
         in the list.  If index is None, append to the end.  Note that this is not
         appropriate for adding icons that are attached to sequences that have icons
-        already in the window."""
+        already in the window. If pos is specified, attempt to place the (single) ic at
+        that position in the window."""
         if not hasattr(icons, '__iter__'):
             icons = [icons]
         for ic in icons:
@@ -1210,8 +1212,8 @@ class Window:
                     print("Removing lingering parent link to icon added to top")
                     lingeringParent.replaceChild(None, lingeringParent.siteOf(ic))
             # If position was specified, relocate the icon
-            if x is not None and y is not None:
-                ic.rect = icon.moveRect(ic.rect, (x, y))
+            if pos is not None:
+                ic.rect = icon.moveRect(ic.rect, pos)
             ic.becomeTopLevel(True)
 
     def findSequences(self, topIcons=None):
