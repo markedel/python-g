@@ -25,13 +25,17 @@ WINDOW_CURSOR_MARGIN = 5
 # Max allowable cursor y movement for left and right arrow movement over icons
 HORIZ_ARROW_Y_JUMP_MAX = 12
 
-# Minimum threshold for y cursor movement on up/down arrow (to prevent minor alignment
-# issues from dominating the destination site choice
+# Minimum threshold (pixels) for cursor movement via arrow keys (to prevent minor
+# alignment issues from dominating the destination site choice
 VERT_ARROW_Y_JUMP_MIN = 5
+VERT_ARROW_X_JUMP_MIN = 3
 
-# Allowable variance in y site positions for two sites to be considered the same y
-# distance during up/down arrow cursor movement
-VERT_ARROW_Y_EQUIVALENCE_DIST = 4
+# Limits (pixels) for cursor movement via arrow key
+VERT_ARROW_MAX_DIST = 400
+HORIZ_ARROW_MAX_DIST = 600
+
+# Weight of x distance in y cursor movement
+VERT_ARROW_X_WEIGHT = 2
 
 binaryOperators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '^', '<',
  '>', '<=', '>=', '==', '!=']
@@ -102,6 +106,24 @@ attrSiteCursorPixmap = (
 )
 attrSiteCursorOffset = 11
 attrSiteCursorImage = icon.asciiToImage(attrSiteCursorPixmap)
+
+seqInSiteCursorPixmap = (
+    "   .   ",
+    "%%% %%%",
+    "...%...",
+)
+seqInSiteCursorXOffset = 3
+seqInSiteCursorYOffset = 3
+seqInSiteCursorImage = icon.asciiToImage(seqInSiteCursorPixmap)
+
+seqOutSiteCursorPixmap = (
+    "   %   ",
+    "%%%.%%%",
+    ".......",
+)
+seqOutSiteCursorXOffset = 3
+seqOutSiteCursorYOffset = 0
+seqOutSiteCursorImage = icon.asciiToImage(seqOutSiteCursorPixmap)
 
 textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
@@ -1028,6 +1050,14 @@ class Cursor:
             elif self.siteType in ("attrIn", "attrOut"):
                 cursorImg = attrSiteCursorImage
                 y -= attrSiteCursorOffset
+            elif self.siteType == "seqIn":
+                cursorImg = seqInSiteCursorImage
+                x -= seqInSiteCursorXOffset
+                y -= seqInSiteCursorYOffset
+            elif self.siteType == "seqOut":
+                cursorImg = seqOutSiteCursorImage
+                x -= seqOutSiteCursorXOffset
+                y -= seqOutSiteCursorYOffset
             else:
                 return
         elif self.type == "text":
@@ -1101,21 +1131,27 @@ class Cursor:
     def _processIconArrowKey(self, direction):
         """For cursor on icon site, set new site based on arrow direction"""
         # Build a list of possible destination cursor positions, normalizing attribute
-        # site positions to the center of the cursor (in/out site position).  For the
-        # moment, limit to icons with the same top level parent
-        topIcon = self.icon.topLevelParent()
+        # site positions to the center of the cursor (in/out site position).
+        cursorX, cursorY = self.icon.posOfSite(self.site)
+        searchRect = (cursorX-HORIZ_ARROW_MAX_DIST, cursorY-VERT_ARROW_MAX_DIST,
+         cursorX+HORIZ_ARROW_MAX_DIST, cursorY+VERT_ARROW_MAX_DIST)
         cursorSites = []
-        for winIcon in topIcon.traverse():
+        for winIcon in self.window.findIconsInRegion(searchRect):
             snapLists = winIcon.snapLists()
-            for ic, (x, y), name in snapLists.get("input", []):
+            for ic, (x, y), name in snapLists.get('input', []):
                 cursorSites.append((x, y, ic, name))
+            for ic, (x, y), name in snapLists.get('seqIn', []):
+                if direction in ('Up', 'Down'):
+                    cursorSites.append((x, y, ic, name))
+            for ic, (x, y), name in snapLists.get('seqOut', []):
+                if not hasattr(ic.sites, 'output') or direction in ('Up', 'Down'):
+                    cursorSites.append((x, y, ic, name))
             for ic, (x, y), name in snapLists.get("attrOut", []):
                 cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, name))
-            if winIcon is topIcon:
+            if winIcon.parent() is None:
                 outSites = snapLists.get("output", [])
                 if len(outSites) > 0:
                     cursorSites.append((*outSites[0][1], winIcon, "output"))
-        cursorX, cursorY = self.icon.posOfSite(self.site)
         # Rank the destination positions by nearness to the current cursor position
         # in the cursor movement direction, and cull those in the wrong direction
         if self.siteType == "attrOut":
@@ -1139,24 +1175,29 @@ class Cursor:
             # For horizontal movement, just use a simple vertical threshold to decide
             # if the movement is appropriate
             for xDist, x, y, ic, site in choices:
-                if abs(y - cursorY) < HORIZ_ARROW_Y_JUMP_MAX:
-                    self.setToIconSite(ic, site)
-                    return
+                if xDist > VERT_ARROW_X_JUMP_MIN:
+                    if abs(y - cursorY) < HORIZ_ARROW_Y_JUMP_MAX:
+                        self.setToIconSite(ic, site)
+                        return
         else:  # Up, Down
-            # For vertical movement, do a second round of culling and ranking.  This time
-            # cull to only nearest equivalent y distance and re-rank by x distance
-            nearestYDist = None
-            newRanking = []
+            # For vertical movement, do a second round of ranking.  This time add y
+            # distance to weighted X distance (ranking x jumps as further away)
+            bestRank = None
             for yDist, x, y, ic, site in choices:
                 if yDist > VERT_ARROW_Y_JUMP_MIN:
-                    if nearestYDist is None:
-                        nearestYDist = yDist
-                    if yDist - nearestYDist < VERT_ARROW_Y_EQUIVALENCE_DIST:
-                        newRanking.append((abs(x-cursorX), ic, site))
-            if len(newRanking) == 0:
+                    rank = yDist + VERT_ARROW_X_WEIGHT*abs(x-cursorX)
+                    if bestRank is None or rank < bestRank[0]:
+                        bestRank = (rank, ic, site)
+            if bestRank is None:
                 return
-            newRanking.sort(key=itemgetter(0))
-            xDist, ic, site = newRanking[0]
+            rank, ic, site = bestRank
+            if site == 'seqIn' and direction == "Up":
+                # Typing at a seqIn site is the same as typing at the connected seqOut
+                # site, so save the user a keypress by going to the seqOut site above
+                prevIcon = ic.prevInSeq()
+                if prevIcon:
+                    ic = prevIcon
+                    site = 'seqOut'
             self.setToIconSite(ic, site)
 
     def movePastEndParen(self):
