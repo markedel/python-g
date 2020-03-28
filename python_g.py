@@ -241,6 +241,7 @@ class Window:
             replaceIcon = selectedIcons[0]
             iconParent = replaceIcon.parent()
             if iconParent is None:
+                # Icon is at top, but may be part of a sequence
                 self.entryIcon = typing.EntryIcon(None, None, window=self)
                 self.replaceTop(replaceIcon, self.entryIcon)
             else:
@@ -257,10 +258,15 @@ class Window:
 
     def _insertEntryIconAtCursor(self, initialChar):
         if self.cursor.siteType == "output":
+            self.entryIcon = typing.EntryIcon(None, None, window=self)
+            self.entryIcon.setPendingArg(self.cursor.icon)
+            self.replaceTop(self.cursor.icon, self.entryIcon)
+            self.cursor.setToEntryIcon()
+        elif self.cursor.siteType in ("seqIn", "seqOut"):
             self.entryIcon = typing.EntryIcon(None, None, window=self,
              location=self.cursor.icon.rect[:2])
-            self.entryIcon.setPendingArg(self.cursor.icon)
-            self.removeTop(self.cursor.icon)
+            before = self.cursor.siteType == "seqIn"
+            icon.insertSeq(self.entryIcon, self.cursor.icon, before=before)
             self.cursor.setToEntryIcon()
             self.insertTopLevel(self.entryIcon)
         else:
@@ -1096,7 +1102,8 @@ class Window:
         return child
 
     def removeTop(self, ic):
-        """Remove top-level icon or icons (without re-layout or re-draw)."""
+        """Remove top-level icon or icons from the top level.  Does NOT remove from
+        sequence (use removeIcons for that).  Also, does not re-layout or re-draw."""
         if hasattr(ic, '__iter__'):
             for i in ic:
                 self.removeTop(i)

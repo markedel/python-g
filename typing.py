@@ -133,9 +133,9 @@ penPixmap = (
     "...o%%%%oo  ",
     "..o%%%%%%%oo",
     "..o%%%%%%%%%",
-    ".o%%%%22%%%%",
-    "o33333333%%%",
-    ".o%%%%22%%%%",
+    ".o%%%%55%%%%",
+    "o77777777%%%",
+    ".o%%%%55%%%%",
     "..o%%%%%%%%%",
     "..o%%%%%%%oo",
     "...o%%%%oo  ",
@@ -148,12 +148,12 @@ attrPenPixmap = (
     "...o%%%%o..",
     "..o%%%%%%o.",
     ".o%%%%%%%%o",
-    ".o%%%33%%%o",
-    ".o%%%33%%%o",
-    ".o%%3%%%%%o",
-    "o%%3%%%%%o.",
-    "o%3%%%%%o..",
-    "o3%%oooo...",
+    ".o%%%77%%%o",
+    ".o%%%77%%%o",
+    ".o%%7%%%%%o",
+    "o%%7%%%%%o.",
+    "o%7%%%%%o..",
+    "o7%%oooo...",
     "oooo......."
 )
 attrPenImage = icon.asciiToImage(attrPenPixmap)
@@ -178,8 +178,8 @@ class EntryIcon(icon.Icon):
         self.rect = (x, y, x + self._width(), y + self.height)
         self.sites.add('output', 'output', 0, outSiteY)
         self.sites.add('attrIn', 'attrIn', 0, outSiteY + icon.ATTR_SITE_OFFSET)
-        self.sites.add('seqIn', 'seqIn', 1, 1)
-        self.sites.add('seqOut', 'seqOut', 1, self.height - 2)
+        self.sites.add('seqIn', 'seqIn', 0, outSiteY)
+        self.sites.add('seqOut', 'seqOut', 0, outSiteY)
         self.layoutDirty = True
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)
@@ -249,7 +249,7 @@ class EntryIcon(icon.Icon):
         draw.text((textLeft, y + icon.TEXT_MARGIN), self.text, font=icon.globalFont,
          fill=(0, 0, 0, 255))
         if self.attachedToAttribute():
-            nibTop = y + self.sites.attrIn.yOffset - attrPenImage.height
+            nibTop = y + self.sites.attrIn.yOffset - attrPenImage.height + 2
             image.paste(attrPenImage, box=(x, nibTop), mask=attrPenImage)
         else:
             nibTop = y + self.sites.output.yOffset - penImage.height // 2
@@ -312,24 +312,21 @@ class EntryIcon(icon.Icon):
                 seriesName, seriesIdx = icon.splitSeriesSiteId(self.attachedSite)
                 newSite = icon.makeSeriesSiteId(seriesName, seriesIdx-1)
                 self.window.cursor.setToIconSite(self.attachedIcon, newSite)
-        else:  # Entry icon is not attached to icon (independent in window)
-            if self not in self.window.topIcons:
-                print("why was entry icon not in top level icon list?")
-            else:
-                self.window.removeTop(self)
+        else:  # Entry icon is not attached to icon (independent in window or in seq)
             pendingArg = self.pendingArg()
             if pendingArg:
                 self.replaceChild(None, 'pendingArg', 'output')
-                self.window.insertTopLevel(pendingArg, pos=self.rect[:2])
+                self.window.replaceTop(self, pendingArg)
                 pendingArg.layoutDirty = True
                 self.window.cursor.setToIconSite(pendingArg, "output")
             elif self._pendingAttr():
                 pendingAttr = self._pendingAttr()
                 self.replaceChild(None, 'pendingAttr', 'attrIn')
-                self.window.insertTopLevel(pendingAttr, pos=self.rect[:2])
+                self.window.replaceTop(self, pendingAttr)
                 pendingAttr.layoutDirty = True
                 self.window.cursor.setToIconSite(pendingAttr, "attrIn")
             else:
+                self.window.removeIcons([self])
                 self.window.cursor.setToWindowPos((self.rect[0], self.rect[1]))
         self.window.entryIcon = None
 
@@ -435,11 +432,7 @@ class EntryIcon(icon.Icon):
             remainingText = ""
         snapLists = ic.snapLists()
         if self.attachedIcon is None:
-            self.window.insertTopLevel(ic, pos=self.rect[:2])
-            if self not in self.window.topIcons:
-                print("why was entry icon not in top level icon list?")
-            else:
-                self.window.removeTop(self)
+            self.window.replaceTop(self, ic)
             ic.layoutDirty = True
             if "input" in snapLists:
                 cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
@@ -510,11 +503,7 @@ class EntryIcon(icon.Icon):
             tupleIcon.insertChildren([None, self.pendingArg()], "argIcons", 0)
             self.setPendingArg(None)
             self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
-            if self not in self.window.topIcons:
-                print("why was entry icon not in top level icon list?")
-            else:
-                self.window.removeTop(self)
-            self.window.insertTopLevel(tupleIcon, pos=self.rect[:2])
+            self.window.replaceTop(self, tupleIcon)
             return True
         siteType = onIcon.typeOf(site)
         if onIcon.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon,
@@ -1138,13 +1127,14 @@ class Cursor:
         cursorSites = []
         for winIcon in self.window.findIconsInRegion(searchRect):
             snapLists = winIcon.snapLists()
+            hasOutSite = len(snapLists.get("output", [])) > 0
             for ic, (x, y), name in snapLists.get('input', []):
                 cursorSites.append((x, y, ic, name))
             for ic, (x, y), name in snapLists.get('seqIn', []):
                 if direction in ('Up', 'Down'):
                     cursorSites.append((x, y, ic, name))
             for ic, (x, y), name in snapLists.get('seqOut', []):
-                if not hasattr(ic.sites, 'output') or direction in ('Up', 'Down'):
+                if  direction in ('Up', 'Down') or not hasOutSite:
                     cursorSites.append((x, y, ic, name))
             for ic, (x, y), name in snapLists.get("attrOut", []):
                 cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, name))
