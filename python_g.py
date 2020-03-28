@@ -28,7 +28,7 @@ CURSOR_BLINK_RATE = 500
 
 SNAP_DIST = 8
 
-SITE_SELECT_DIST = 4
+SITE_SELECT_DIST = 8
 
 # How far to the right of icons to deposit the result of executing them
 RESULT_X_OFFSET = 5
@@ -424,7 +424,7 @@ class Window:
         hierSel = list(clickedIcon.traverse())
         leftSel = list(self.findLeftOuterIcon(self.assocGrouping(clickedIcon)).traverse())
         if not currentSel:
-            if siteIcon is not None and not siteSelected:
+            if siteIcon is not None and (not siteSelected or site != self.cursor.site):
                 return "moveCursor"
             return "select"
         if currentSel == singleSel:
@@ -1296,14 +1296,19 @@ class Window:
             iconSites = ic.snapLists()
             for siteType, siteList in iconSites.items():
                 for siteIcon, (x, y), siteName in siteList:
+                    # Tweak site location based on cursor appearance and differentiation
                     if siteType in ("input", "output"):
                         x += 2
                     elif siteType in ("attrOut", "attrIn"):
                         y -= icon.ATTR_SITE_OFFSET
                         x += 1
+                    elif siteType in "seqIn":
+                        y -= 1
+                    elif siteType in "seqOut":
+                        y += 1
                     else:
                         continue  # not a visible site type
-                    dist = (abs(evt.x - x) + abs(evt.y - y)) // 2
+                    dist = (abs(evt.x - x) + abs(evt.y - y))
                     if dist < minDist or (dist == minDist and
                      minSite[2] in ("attrIn", "output")):  # Prefer inputs, for now
                         minDist = dist
