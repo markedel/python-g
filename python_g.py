@@ -136,6 +136,7 @@ class Window:
         self.top.bind("<BackSpace>", self._backspaceCb)
         self.top.bind("<Escape>", self._cancelCb)
         self.top.bind("<Return>", self._enterCb)
+        self.top.bind("<Control-Return>", self._execCb)
         self.top.bind("<Up>", self._arrowCb)
         self.top.bind("<Down>", self._arrowCb)
         self.top.bind("<Left>", self._arrowCb)
@@ -612,27 +613,25 @@ class Window:
             self.cursor.removeCursor()
         self._cancelDrag()
 
-    def _enterCb(self, evt=None):
+    def _enterCb(self, evt):
+        """Move Entry icon after the top-level icon where the cursor is found."""
+        if not self._completeEntry(evt):
+            return
+        if self.cursor.type != "icon":
+            return  # Not on an icon
+        # Find the top level icon associated with the icon at the cursor
+        topIcon = self.cursor.icon.topLevelParent()
+        if topIcon is None or not hasattr(topIcon.sites, 'seqOut'):
+            return
+        self.cursor.setToIconSite(topIcon, 'seqOut')
+        self._insertEntryIconAtCursor("")
+
+    def _execCb(self, evt):
         """Execute the top level icon at the entry or icon cursor"""
         # Find the icon at the cursor.  If there's still an entry icon, try to process
         # its content before executing.
-        if self.entryIcon is not None:
-            # Add a delimiter character to force completion
-            oldLoc = self.entryIcon.rect
-            self.entryIcon.addText(" ")
-            self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
-            # If the entry icon is still there, check if it's empty, and if so, remove
-            # Otherwise, just give up trying to execute
-            if self.entryIcon is not None:
-                if len(self.entryIcon.text) == 0 and \
-                 self.entryIcon.pendingAttribute is None and \
-                 self.entryIcon.pendingArg() is None:
-                    self.cursor.setToIconSite(self.entryIcon.attachedIcon,
-                     self.entryIcon.attachedSite)
-                    self.removeIcons([self.entryIcon])
-                    self.entryIcon = None
-                else:
-                    return
+        if not self._completeEntry(evt):
+            return
         if self.cursor.type == "icon":
             iconToExecute = self.cursor.icon
         else:
@@ -643,6 +642,29 @@ class Window:
             print("Could not find top level icon to execute")
             return
         self._execute(iconToExecute)
+
+    def _completeEntry(self, evt):
+        """Attempt to finish any text entry in progress.  Returns True if successful,
+        false if text remains unprocessed in the entry icon."""
+        if self.entryIcon is None:
+            return True
+        # Add a delimiter character to force completion
+        oldLoc = self.entryIcon.rect
+        self.entryIcon.addText(" ")
+        self._redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
+        # If the entry icon is still there, check if it's empty and attached to an icon.
+        # If so, remove.  Otherwise, give up and fail out
+        if self.entryIcon is not None and self.entryIcon.attachedIcon is not None:
+            if len(self.entryIcon.text) == 0 and \
+             self.entryIcon.pendingAttr() is None and \
+             self.entryIcon.pendingArg() is None:
+                self.cursor.setToIconSite(self.entryIcon.attachedIcon,
+                 self.entryIcon.attachedSite)
+                self.removeIcons([self.entryIcon])
+                self.entryIcon = None
+            else:
+                return False
+        return True
 
     def _startDrag(self, evt, icons, needRemove=True):
         self.dragging = icons
