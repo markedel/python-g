@@ -274,7 +274,7 @@ class EntryIcon(icon.Icon):
             self.sites.add('pendingAttr', 'attrOut', x, y)
         self.sites.pendingArg.attach(self, newArg)
 
-    def _pendingAttr(self):
+    def pendingAttr(self):
         return self.sites.pendingArg.att if hasattr(self.sites, 'pendingAttr') else None
 
     def addText(self, char):
@@ -302,8 +302,8 @@ class EntryIcon(icon.Icon):
         if self.attachedIcon:
             if self.pendingArg() and self.attachedSiteType == "input":
                 self.attachedIcon.replaceChild(self.pendingArg(), self.attachedSite)
-            elif self._pendingAttr() and self.attachedSiteType == "attrOut":
-                self.attachedIcon.replaceChild(self._pendingAttr(), self.attachedSite)
+            elif self.pendingAttr() and self.attachedSiteType == "attrOut":
+                self.attachedIcon.replaceChild(self.pendingAttr(), self.attachedSite)
             else:
                 self.attachedIcon.replaceChild(None, self.attachedSite)
             if self.attachedIcon.hasSite(self.attachedSite):
@@ -319,8 +319,8 @@ class EntryIcon(icon.Icon):
                 self.window.replaceTop(self, pendingArg)
                 pendingArg.layoutDirty = True
                 self.window.cursor.setToIconSite(pendingArg, "output")
-            elif self._pendingAttr():
-                pendingAttr = self._pendingAttr()
+            elif self.pendingAttr():
+                pendingAttr = self.pendingAttr()
                 self.replaceChild(None, 'pendingAttr', 'attrIn')
                 self.window.replaceTop(self, pendingAttr)
                 pendingAttr.layoutDirty = True
@@ -818,8 +818,8 @@ class EntryIcon(icon.Icon):
             pendingArgLayout = self.pendingArg().calcLayout()
             layout.addSubLayout(pendingArgLayout, 'pendingArg', width, 0)
             width += pendingArgLayout.width
-        elif self._pendingAttr():
-            pendingAttrLayout = self._pendingAttr().calcLayout()
+        elif self.pendingAttr():
+            pendingAttrLayout = self.pendingAttr().calcLayout()
             layout.addSubLayout(pendingAttrLayout, 'pendingAttr', width,
              icon.ATTR_SITE_OFFSET)
             width += pendingAttrLayout.width

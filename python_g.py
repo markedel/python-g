@@ -155,6 +155,20 @@ class Window:
         self.popup.add_command(label="Delete", command=self._deleteCb,
          accelerator="Delete")
 
+        self.listPopup = tk.Menu(self.imgFrame, tearoff=0)
+        self.listPopupVal = tk.StringVar()
+        self.listPopup.add_radiobutton(label="Tuple", variable=self.listPopupVal,
+         command=self._listPopupCb, value="(")
+        self.listPopup.add_radiobutton(label="List", variable=self.listPopupVal,
+         command=self._listPopupCb, value="[")
+        self.listPopup.add_radiobutton(label="Set", variable=self.listPopupVal,
+         command=self._listPopupCb, value="{")
+        self.listPopup.add_radiobutton(label="Params", variable=self.listPopupVal,
+         command=self._listPopupCb, value="p")
+        self.listPopup.entryconfig("Set", state=tk.DISABLED)
+        self.listPopup.entryconfig("Params", state=tk.DISABLED)
+        self.listPopupIcon = None
+
         self.buttonDownTime = None
         self.buttonDownLoc = None
         self.buttonDownState = None
@@ -193,7 +207,22 @@ class Window:
             self._select(self.findIconAt(evt.x, evt.y))
 
     def _btn3ReleaseCb(self, evt):
+        selectedIcons = self.selectedIcons()
+        lastMenuEntry = self.popup.index(tk.END)
+        # Add context-sensitive items to pop-up menu
+        if len(selectedIcons) == 1:
+            selIcon = selectedIcons[0]
+            if isinstance(selIcon, icon.ListTypeIcon):
+                self.listPopupIcon = selIcon
+                self.listPopupVal.set('(' if isinstance(selIcon, icon.TupleIcon) else '[')
+                self.popup.add_separator()
+                self.popup.add_cascade(label="Change To", menu=self.listPopup)
+        # Pop it up
         self.popup.tk_popup(evt.x_root, evt.y_root, 0)
+        # Remove context-sensitive items
+        newLastMenuEntry = self.popup.index(tk.END)
+        if newLastMenuEntry != lastMenuEntry:
+            self.popup.delete(lastMenuEntry+1, newLastMenuEntry)
 
     def _newCb(self):
         appData.newWindow()
@@ -257,7 +286,7 @@ class Window:
             # we don't know what to replace).
             typing.beep()
 
-    def _insertEntryIconAtCursor(self, initialChar):
+    def _insertEntryIconAtCursor(self, initialText):
         if self.cursor.siteType == "output":
             self.entryIcon = typing.EntryIcon(None, None, window=self)
             self.entryIcon.setPendingArg(self.cursor.icon)
@@ -277,7 +306,7 @@ class Window:
             self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
             self.entryIcon.setPendingArg(pendingArg)
             self.cursor.setToEntryIcon()
-        self.entryIcon.addText(initialChar)
+        self.entryIcon.addText(initialText)
         self._redisplayChangedEntryIcon()
 
     def _redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
@@ -587,12 +616,133 @@ class Window:
             self.redoLayout(self.cursor.icon.topLevelParent())
         self.undo.addBoundary()
 
-    def _backspaceCb(self, _evt=None):
+    def _backspaceCb(self, evt=None):
         if self.entryIcon is None:
-            self.removeIcons(self.selectedIcons())
+            selectedIcons = self.selectedIcons()
+            if len(selectedIcons) > 0:
+                self.removeIcons(selectedIcons)
+            elif self.cursor.type == "icon":
+                self._backspaceIcon(evt)
         else:
             self.entryIcon.backspace()
             self._redisplayChangedEntryIcon()
+
+    def _backspaceIcon(self, evt):
+        if self.cursor.type != 'icon' or self.cursor.site == 'output':
+            return
+        ic = self.cursor.icon
+        # For different types of icon, the method for re-editing is different.  For
+        # identifiers, strings, and numeric constants, it's simply replacing the icon
+        # with an entry icon containing the text of the icon.  For unary operators.
+        # it's similar, just the argument needs to be attached to the pendingArgument
+        # site on the entry icon.  Tuples, lists, and sets, use the same mechanism as
+        # as the context menu.  Binary operations are more complicated (see code below).
+        if isinstance(ic, icon.TextIcon) or isinstance(ic, icon.UnaryOpIcon):
+            text = ic.operator if isinstance(ic, icon.UnaryOpIcon) else ic.text
+            parent = ic.parent()
+            if parent is None:
+                self.entryIcon = typing.EntryIcon(None, None, initialString=text,
+                 window = self)
+                self.replaceTop(ic, self.entryIcon)
+            else:
+                parentSite = parent.siteOf(ic)
+                self.entryIcon = typing.EntryIcon(parent, parentSite,
+                 initialString=text, window=self)
+                parent.replaceChild(self.entryIcon, parentSite)
+            if isinstance(ic, icon.UnaryOpIcon) and ic.sites.argIcon.att:
+                self.entryIcon.setPendingArg(ic.sites.argIcon.att)
+            self.cursor.setToEntryIcon()
+            self._redisplayChangedEntryIcon(evt)
+        elif isinstance(ic, icon.ListTypeIcon):
+            siteName, index = icon.splitSeriesSiteId(self.cursor.site)
+            if index == 0:
+                self.listPopupIcon = ic
+                self.listPopupVal.set('(' if isinstance(ic, icon.TupleIcon) else '[')
+                # Tkinter's pop-up grab does not allow accelerator keys to operate while
+                # up, which is unfortunate as you'd really like to type [ or (
+                self.listPopup.tk_popup(evt.x_root, evt.y_root, 0)
+            else:
+                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                if ic.childAt(prevSite):
+                    typing.beep()
+                    return
+                topIcon = ic.topLevelParent()
+                redrawRegion = AccumRects(topIcon.hierRect())
+                ic.removeEmptySeriesSite(self.cursor.site)
+                self.cursor.setToIconSite(ic, prevSite)
+                redrawRegion.add(self.layoutDirtyIcons())
+                self.refresh(redrawRegion.get())
+        elif isinstance(ic, icon.BinOpIcon) or isinstance(ic, icon.DivideIcon):
+            # Binary operations replace the icon with its left argument and attach the
+            # entry icon to its attribute site, with the right argument as a pending
+            # argument.  Note that this takes advantage of the fact that a lot of
+            # things that shouldn't have attribute sites, do, which may be fragile.
+            parent = ic.parent()
+            if isinstance(ic, icon.DivideIcon):
+                leftArg = ic.sites.topArg.att
+                rightArg = ic.sites.bottomArg.att
+                op = '//' if ic.floorDiv else '/'
+            else:
+                leftArg = ic.leftArg()
+                rightArg = ic.rightArg()
+                op = ic.operator
+            if parent is None and leftArg is None:
+                self.entryIcon = typing.EntryIcon(None, None,
+                    initialString=op, window=self)
+            else:
+                self.entryIcon = typing.EntryIcon(leftArg, 'attrIcon',
+                    initialString=op, window=self)
+            if leftArg is not None:
+                leftArg.replaceChild(None, 'output')
+            if rightArg is not None:
+                rightArg.replaceChild(None, 'output')
+                self.entryIcon.setPendingArg(rightArg)
+            if parent is None:
+                if leftArg is None:
+                    self.replaceTop(ic, self.entryIcon)
+                else:
+                    self.replaceTop(ic, leftArg)
+                    leftArg.replaceChild(self.entryIcon, 'attrIcon')
+            else:
+                parentSite = parent.siteOf(ic)
+                if leftArg is None:
+                    parent.replaceChild(self.entryIcon, parent.siteOf(ic))
+                else:
+                    parent.replaceChild(leftArg, parentSite, parent.siteOf(ic))
+                    leftArg.replaceChild(self.entryIcon, 'attrIcon')
+            if isinstance(ic, icon.DivideIcon):
+                ic.replaceChild(None, 'topArg')
+                ic.replaceChild(None, 'bottomArg')
+            else:
+                ic.replaceChild(None, 'leftArg')
+                ic.replaceChild(None, 'rightArg')
+            self.cursor.setToEntryIcon()
+            self._redisplayChangedEntryIcon(evt)
+
+    def _listPopupCb(self):
+        char = self.listPopupVal.get()
+        fromIcon = self.listPopupIcon
+        if char == "[" and not isinstance(fromIcon, icon.ListIcon):
+            ic = icon.ListIcon(fromIcon.window)
+        elif char == "(" and not isinstance(fromIcon, icon.TupleIcon):
+            ic = icon.TupleIcon(fromIcon.window)
+        else:
+            return
+        topIcon = fromIcon.topLevelParent()
+        redrawRegion = AccumRects(topIcon.hierRect())
+        argIcons = fromIcon.argIcons()
+        for i, arg in enumerate(argIcons):
+            fromIcon.replaceChild(None, fromIcon.siteOf(arg))
+            ic.insertChild(arg, "argIcons", i)
+        parent = fromIcon.parent()
+        if parent is None:
+            self.replaceTop(fromIcon, ic)
+        else:
+            parentSite = parent.siteOf(fromIcon)
+            parent.replaceChild(ic, parentSite)
+        self.cursor.setToIconSite(ic, self.cursor.site)
+        redrawRegion.add(self.layoutDirtyIcons())
+        self.refresh(redrawRegion.get())
 
     def _arrowCb(self, evt):
         if self.cursor.type is None:

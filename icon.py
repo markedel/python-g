@@ -461,6 +461,12 @@ class Icon:
             self.sites.lookup(siteId).attach(self, newChild, childSite)
         self.layoutDirty = True
 
+    def removeEmptySeriesSite(self, siteId):
+        if self.childAt(siteId):
+            return
+        self.sites.removeSeriesSiteById(self, siteId)
+        self.layoutDirty = True
+
     def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
         """Insert a child icon or empty icon site (child=None) at the specified site.
         siteIdOrName may specify either the complete siteId for a site, or (if
