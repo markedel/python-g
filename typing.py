@@ -726,8 +726,8 @@ class EntryIcon(icon.Icon):
             # The cursor is attached to an attribute of a top-level icon of a type
             # appropriate as a target. Insert assignment icon and make it the target.
             self.attachedIcon.replaceChild(None, self.attachedSite)
-            assignIcon.replaceChild(self.attachedIcon, "targets0_0")
             self.window.replaceTop(self.attachedIcon, assignIcon)
+            assignIcon.replaceChild(self.attachedIcon, "targets0_0")
             self.window.cursor.setToIconSite(assignIcon, "values_0")
             return True
         topParent = self.attachedIcon.topLevelParent()

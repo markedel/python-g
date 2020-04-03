@@ -1395,11 +1395,12 @@ class AssignIcon(Icon):
     def removeTargetGroup(self, idx):
         if idx <= 0 or idx >= len(self.tgtLists):
             raise Exception('Bad index for removing target group from assignment icon')
-        seriesName = 'target%d' % idx
+        seriesName = 'targets%d' % idx
         for site in self.sites.getSeries(seriesName):
             if site.att is not None:
                 raise Exception('Removing non-empty target group from assignment icon')
         del self.tgtLists[idx]
+        self.sites.removeSeries("targets%d" % idx)
         self.renumberTargetGroups()
         self.window.undo.registerCallback(self.addTargetGroup, idx)
         self.layoutDirty = True
@@ -2134,6 +2135,11 @@ class IconSiteList:
         if siteType not in self._typeDict:
             self._typeDict[siteType] = []
         self._typeDict[siteType].append(name)
+
+    def removeSeries(self, name):
+        series = getattr(self, name)
+        delattr(self, name)
+        self._typeDict[series.type].remove(name)
 
     def renameSeries(self, oldName, newName):
         series = self.getSeries(oldName)

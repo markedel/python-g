@@ -628,7 +628,7 @@ class Window:
             self._redisplayChangedEntryIcon()
 
     def _backspaceIcon(self, evt):
-        if self.cursor.type != 'icon' or self.cursor.site == 'output':
+        if self.cursor.type != 'icon' or self.cursor.site in ('output', 'seqIn', 'seqOut'):
             return
         ic = self.cursor.icon
         # For different types of icon, the method for re-editing is different.  For
@@ -668,7 +668,7 @@ class Window:
                     return
                 topIcon = ic.topLevelParent()
                 redrawRegion = AccumRects(topIcon.hierRect())
-                ic.removeEmptySeriesSite(self.cursor.site)
+                ic.removeEmptySeriesSite(prevSite)
                 self.cursor.setToIconSite(ic, prevSite)
                 redrawRegion.add(self.layoutDirtyIcons())
                 self.refresh(redrawRegion.get())
@@ -718,6 +718,66 @@ class Window:
                 ic.replaceChild(None, 'rightArg')
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt)
+        elif isinstance(ic, icon.AssignIcon):
+            siteName, index = icon.splitSeriesSiteId(self.cursor.site)
+            topIcon = ic.topLevelParent()
+            redrawRegion = AccumRects(topIcon.hierRect())
+            if index == 0:
+                if siteName == "targets0":
+                    return
+                if siteName == "values" and not hasattr(ic.sites, 'targets1'):
+                    # This is the only '=' in the assignment, convert it to a tuple
+                    argIcons = [site.att for site in ic.sites.targets0]
+                    numTargets = len(argIcons)
+                    argIcons += [site.att for site in ic.sites.values]
+                    newTuple = icon.TupleIcon(window=self, noParens=True)
+                    for i, arg in enumerate(argIcons):
+                        ic.replaceChild(None, ic.siteOf(arg))
+                        newTuple.insertChild(arg, "argIcons", i)
+                    parent = ic.parent()
+                    if parent is None:
+                        self.replaceTop(ic, newTuple)
+                    else:
+                        parentSite = parent.siteOf(ic)
+                        parent.replaceChild(newTuple, parentSite)
+                    cursorSite = icon.makeSeriesSiteId('argIcons', numTargets)
+                    self.cursor.setToIconSite(newTuple, cursorSite)
+                else:
+                    # Merge lists around '=' to convert it to ','
+                    topIcon = ic.topLevelParent()
+                    redrawRegion = AccumRects(topIcon.hierRect())
+                    if siteName == "values":
+                        removetgtGrpIdx = len(ic.tgtLists) - 1
+                        srcSite = "targets%d" % removetgtGrpIdx
+                        destSite = "values"
+                        destIdx = 0
+                        cursorIdx = len(getattr(ic.sites, srcSite))
+                    else:
+                        srcSite = siteName
+                        removetgtGrpIdx = int(siteName[7:])
+                        destSite = siteName[:7] + str(removetgtGrpIdx - 1)
+                        destIdx = len(getattr(ic.sites, destSite))
+                        cursorIdx = destIdx
+                    argIcons = [site.att for site in getattr(ic.sites, srcSite)]
+                    for i, arg in enumerate(argIcons):
+                        ic.replaceChild(None, ic.siteOf(arg))
+                        ic.insertChild(arg, destSite, destIdx + i)
+                    ic.removeTargetGroup(removetgtGrpIdx)
+                    cursorSite = icon.makeSeriesSiteId(destSite, cursorIdx)
+                    self.cursor.setToIconSite(ic, cursorSite)
+            else:
+                # Delete empty comma site before cursor
+                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                if ic.childAt(prevSite):
+                    typing.beep()
+                    return
+                topIcon = ic.topLevelParent()
+                redrawRegion = AccumRects(topIcon.hierRect())
+                ic.removeEmptySeriesSite(prevSite)
+                self.cursor.setToIconSite(ic, prevSite)
+            redrawRegion.add(self.layoutDirtyIcons())
+            self.refresh(redrawRegion.get())
+            self.undo.addBoundary()
 
     def _listPopupCb(self):
         char = self.listPopupVal.get()
