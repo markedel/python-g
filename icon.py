@@ -24,16 +24,16 @@ unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operato
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
-parentSiteTypes = {'output':True, 'attrIn':True}
-childSiteTypes = {'input':True, 'attrOut':True}
-matingSiteType = {'output':'input', 'input':'output', 'attrIn':'attrOut',
- 'attrOut':'attrIn', 'seqOut':'seqIn', 'seqIn':'seqOut'}
+parentSiteTypes = {'output', 'attrOut'}
+childSiteTypes = {'input', 'attrIn'}
+matingSiteType = {'output':'input', 'input':'output', 'attrOut':'attrIn',
+ 'attrIn':'attrOut', 'seqOut':'seqIn', 'seqIn':'seqOut'}
 
 ATTR_SITE_DEPTH = 1
 OUTPUT_SITE_DEPTH = 2
 SEQ_SITE_DEPTH = -1  # Icons extend 1 pixel to the left of the sequence site
 siteDepths = {'input':OUTPUT_SITE_DEPTH, 'output':OUTPUT_SITE_DEPTH,
- 'attrIn':ATTR_SITE_DEPTH, 'attrOut':ATTR_SITE_DEPTH, 'seqIn':SEQ_SITE_DEPTH}
+ 'attrOut':ATTR_SITE_DEPTH, 'attrIn':ATTR_SITE_DEPTH, 'seqIn':SEQ_SITE_DEPTH}
 
 TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
@@ -70,6 +70,16 @@ inSitePixmap = (
  "o..",
  " o.",
  "  o")
+
+attrOutPixmap = (
+ "%%",
+ "%%",
+)
+
+attrInPixmap = (
+ "o.",
+ "o.",
+)
 
 leftInSitePixmap = (
  "...o ",
@@ -147,8 +157,8 @@ binRParenPixmap = (
  "o   %5 o",
  "o   %3 o",
  "o   %8 o",
- "o  83  o",
- "o  58  o",
+ "o  83 o.",
+ "o  58 o.",
  "o 58   o",
  "o      o",
  "oooooooo",
@@ -187,8 +197,8 @@ tupleRParenPixmap = (
  "o  8%8 o",
  "o  8%9 o",
  "o  8%  o",
- "o  74  o",
- "o  67  o",
+ "o  74 o.",
+ "o  67 o.",
  "o  5   o",
  "o      o",
  "oooooooo",
@@ -290,6 +300,8 @@ def iconBoxedText(text):
 
 outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
+attrOutImage = asciiToImage(attrOutPixmap)
+attrInImage = asciiToImage(attrInPixmap)
 leftInSiteImage = asciiToImage(leftInSitePixmap)
 commaImage = asciiToImage(commaPixmap)
 binOutImage = asciiToImage(binOutPixmap)
@@ -560,15 +572,16 @@ class Icon:
         pass
 
 class TextIcon(Icon):
-    def __init__(self, text, window=None, location=None):
+    def __init__(self, text, window=None, location=None, hasAttrIn=True):
         Icon.__init__(self, window)
         self.text = text
+        self.hasAttrIn = hasAttrIn
         bodyWidth, bodyHeight = globalFont.getsize(self.text)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
         self.sites.add('output', 'output', 0, bodyHeight // 2)
-        self.sites.add('attrIcon', 'attrOut', bodyWidth,
+        self.sites.add('attrIcon', 'attrIn', bodyWidth,
          bodyHeight // 2 + ATTR_SITE_OFFSET)
         seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
@@ -598,6 +611,10 @@ class TextIcon(Icon):
                 outX = self.sites.output.xOffset
                 outY = self.sites.output.yOffset - outSiteImage.height // 2
                 self.cachedImage.paste(outSiteImage, (outX, outY), mask=outSiteImage)
+            if self.hasAttrIn:
+                attrX = self.sites.attrIcon.xOffset
+                attrY = self.sites.attrIcon.yOffset
+                self.cachedImage.paste(attrInImage, (attrX, attrY))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
@@ -661,7 +678,7 @@ class NumericIcon(TextIcon):
                 value = int(value)
             except ValueError:
                 value = float(value)
-        TextIcon.__init__(self, repr(value), window, location)
+        TextIcon.__init__(self, repr(value), window, location, hasAttrIn=False)
         self.value = value
 
     def execute(self):
@@ -692,6 +709,74 @@ class StringIcon(TextIcon):
     def fromClipboard(clipData, window, locationOffset):
         text, location = clipData
         return StringIcon(text, window, (addPoints(location, locationOffset)))
+
+class AttrIcon(Icon):
+    def __init__(self, text, window=None, location=None):
+        Icon.__init__(self, window)
+        self.text = text
+        bodyWidth, bodyHeight = globalFont.getsize(self.text)
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        self.sites.add('attrOut', 'attrOut', 0, bodyHeight // 2 + ATTR_SITE_OFFSET)
+        self.sites.add('attrIcon', 'attrIn', bodyWidth - ATTR_SITE_DEPTH,
+         bodyHeight // 2 + ATTR_SITE_OFFSET)
+        if location is None:
+            x, y = 0, 0
+        else:
+            x, y = location
+        self.rect = (x, y, x + bodyWidth + attrOutImage.width, y + bodyHeight)
+
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        if self.cachedImage is None:
+            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText(self.text)
+            self.cachedImage.paste(txtImg, (attrOutImage.width - 1, 0))
+            attrOutX = self.sites.attrOut.xOffset
+            attrOutY = self.sites.attrOut.yOffset
+            self.cachedImage.paste(attrOutImage, (attrOutX, attrOutY), mask=attrOutImage)
+            attrInX = self.sites.attrIcon.xOffset
+            attrInY = self.sites.attrIcon.yOffset
+            self.cachedImage.paste(attrInImage, (attrInX, attrInY))
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
+         colorErr), location, clip)
+
+    def doLayout(self,  attrSiteX,  attrSiteY, layout):
+        width, height = self.bodySize
+        width += attrOutImage.width - 1
+        top = attrSiteY - (height // 2 + ATTR_SITE_OFFSET)
+        self.rect = (attrSiteX, top,  attrSiteX + width, top + height)
+        layout.doSubLayouts(self.sites.attrOut, attrSiteX, attrSiteY)
+        self.cachedImage = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = self.bodySize
+        layout = Layout(self, width, height, height // 2 + ATTR_SITE_OFFSET)
+        if self.sites.attrIcon.att is None:
+            attrLayout = None
+        else:
+            attrLayout = self.sites.attrIcon.att.calcLayout()
+        layout.addSubLayout(attrLayout, 'attrIcon', width, 0)
+        return layout
+
+    def textRepr(self):
+        return '.' + self.text
+
+    def execute(self, attrOfValue):
+        # This execution method is a remnant from when the IdentIcon did numbers, strings,
+        # and identifiers, and is probably no longer appropriate.  Not sure if the current
+        # uses of naked text icons should even be executed at all
+        try:
+            result = getattr(attrOfValue, self.text)
+        except Exception as err:
+            raise IconExecException(self, err)
+        return result
 
 class UnaryOpIcon(Icon):
     def __init__(self, op, window, location=None):
@@ -809,12 +894,18 @@ class ListTypeIcon(Icon):
         self.leftText = leftText
         self.rightText = rightText
         self.leftImg = iconBoxedText(self.leftText) if leftImg is None else leftImg
-        self.rightImg = iconBoxedText(self.rightText) if rightImg is None else rightImg
+        if rightImg is None:
+            self.rightImg = iconBoxedText( self.rightText)
+            attrInX = self.rightImg.width-2
+            attrInY = self.rightImg.height // 2 +  + ATTR_SITE_OFFSET
+            self.rightImg.paste(attrInImage, (attrInX, attrInY))
+        else:
+            self.rightImg = rightImg
         leftWidth, leftHeight = self.leftImg.size
         self.sites.add('output', 'output', 0, leftHeight // 2)
         self.argList = HorizListMgr(self, 'argIcons', leftWidth-1, leftHeight//2)
         width, height = self._size()
-        self.sites.add('attrIcon', 'attrOut', width-1,
+        self.sites.add('attrIcon', 'attrIn', width-1,
          self.sites.output.yOffset + ATTR_SITE_OFFSET)
         seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
@@ -985,7 +1076,7 @@ class TupleIcon(ListTypeIcon):
         ListTypeIcon.__init__(self, '(', ')', window, location=location,
          leftImg=leftImg, rightImg=rightImg)
         if noParens:
-            self.sites.remove('attrOut')
+            self.sites.remove('attrIn')
         self.noParens = noParens
 
     def argIcons(self):
@@ -1012,7 +1103,7 @@ class TupleIcon(ListTypeIcon):
         self.cachedImage = None
         self.layoutDirty = True
         width, height = self._size()
-        self.sites.add('attrIcon', 'attrOut', width-1,
+        self.sites.add('attrIcon', 'attrIn', width-1,
          self.sites.output.yOffset + ATTR_SITE_OFFSET)
 
     def calcLayout(self):
@@ -1064,7 +1155,7 @@ class BinOpIcon(Icon):
         self.sites.add('leftArg', 'input', 0, siteYOffset)
         self.sites.add('rightArg', 'input', self.leftArgWidth + opWidth, siteYOffset)
         # Note that the attrIcon site is only usable when parens are displayed
-        self.sites.add("attrIcon", "attrOut", self.leftArgWidth + opWidth, siteYOffset)
+        self.sites.add("attrIcon", "attrIn", self.leftArgWidth + opWidth, siteYOffset)
         # Indicates that input site falls directly on top of output site
         self.sites.add('seqIn', 'seqIn', - SEQ_SITE_DEPTH, 1)
         self.sites.add('seqOut', 'seqOut', - SEQ_SITE_DEPTH, height-2)
@@ -1261,7 +1352,7 @@ class BinOpIcon(Icon):
         # Make attribute site unavailable unless the icon has parens to hold it
         siteSnapLists = Icon.snapLists(self)
         if not self.hasParens:
-            del siteSnapLists['attrOut']
+            del siteSnapLists['attrIn']
         return siteSnapLists
 
     def textRepr(self):
@@ -1547,7 +1638,7 @@ class DivideIcon(Icon):
         self.sites.add('output', 'output', 0, outSiteY)
         self.sites.add('topArg', 'input', 2, outSiteY - emptyArgHeight // 2 - 2)
         self.sites.add('bottomArg', 'input', 2, outSiteY + emptyArgHeight // 2 + 2)
-        self.sites.add('attrIcon', 'attrOut', width - 1, outSiteY + ATTR_SITE_OFFSET)
+        self.sites.add('attrIcon', 'attrIn', width - 1, outSiteY + ATTR_SITE_OFFSET)
         seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, emptyArgHeight - 2)
         self.sites.add('seqOut', 'seqOut', seqX, emptyArgHeight + 5)
@@ -2386,6 +2477,18 @@ def insertSeq(seqStartIc, atIc, before=False):
         atIc.replaceChild(seqStartIc, 'seqOut')
         if nextIcon is not None:
             nextIcon.replaceChild(seqEndIc, 'seqIn')
+
+def traverseAttrs(ic, includeStart=True):
+    if includeStart:
+        yield ic
+    while hasattr(ic.sites, 'attrIcon') and ic.sites.attrIcon.att != None:
+        ic = ic.sites.attrIcon.att
+        yield ic
+
+def findLastAttrIcon(ic):
+    for i in traverseAttrs(ic):
+        pass
+    return i
 
 def makeSeriesSiteId(seriesName, seriesIdx):
     return seriesName + "_%d" % seriesIdx

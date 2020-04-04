@@ -95,6 +95,8 @@ def parseExpr(expr):
         return (icon.ListIcon, *(parseExpr(e) for e in expr.elts))
     elif expr.__class__ == ast.Tuple:
         return (icon.TupleIcon, *(parseExpr(e) for e in expr.elts))
+    elif expr.__class__ == ast.Attribute:
+        return (icon.AttrIcon, expr.attr, parseExpr(expr.value))
     else:
         return (icon.IdentifierIcon, "**Couldn't Parse**")
 
@@ -143,5 +145,11 @@ def makeIcons(parsedExpr, window, x, y):
             topIcon.insertChildren(valueIcons, "values", 0)
         else:
             topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "values_0")
+        return topIcon
+    if iconClass is icon.AttrIcon:
+        attrIcon = iconClass(parsedExpr[1], window)
+        topIcon = makeIcons(parsedExpr[2], window, x, y)
+        parentIcon = icon.findLastAttrIcon(topIcon)
+        parentIcon.replaceChild(attrIcon, "attrIcon")
         return topIcon
     return icon.TextIcon("**Internal Parse Error**", window, (x,y))

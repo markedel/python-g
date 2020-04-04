@@ -177,7 +177,7 @@ class EntryIcon(icon.Icon):
         outSiteY = self.height // 2
         self.rect = (x, y, x + self._width(), y + self.height)
         self.sites.add('output', 'output', 0, outSiteY)
-        self.sites.add('attrIn', 'attrIn', 0, outSiteY + icon.ATTR_SITE_OFFSET)
+        self.sites.add('attrOut', 'attrOut', 0, outSiteY + icon.ATTR_SITE_OFFSET)
         self.sites.add('seqIn', 'seqIn', 0, outSiteY)
         self.sites.add('seqOut', 'seqOut', 0, outSiteY)
         self.layoutDirty = True
@@ -188,7 +188,7 @@ class EntryIcon(icon.Icon):
         """Undo restores all attachments and saves the displayed text.  Update the
         remaining internal state based on attachments and passed text."""
         outIcon = self.sites.output.att
-        attrIcon = self.sites.attrIn.att
+        attrIcon = self.sites.attrOut.att
         if outIcon is not None:
             self.attachedIcon = outIcon
             self.attachedSite = outIcon.siteOf(self)
@@ -224,7 +224,7 @@ class EntryIcon(icon.Icon):
         if x > rectLeft + self.penOffset():
             return True
         if self.attachedToAttribute():
-            penImgYOff = self.sites.attrIn.yOffset - attrPenImage.height
+            penImgYOff = self.sites.attrOut.yOffset - attrPenImage.height
             pixel = attrPenImage.getpixel((x - rectLeft, y - rectTop - penImgYOff))
         else:
             penImgYOff = self.sites.output.yOffset - penImage.height // 2
@@ -249,7 +249,7 @@ class EntryIcon(icon.Icon):
         draw.text((textLeft, y + icon.TEXT_MARGIN), self.text, font=icon.globalFont,
          fill=(0, 0, 0, 255))
         if self.attachedToAttribute():
-            nibTop = y + self.sites.attrIn.yOffset - attrPenImage.height + 2
+            nibTop = y + self.sites.attrOut.yOffset - attrPenImage.height + 2
             image.paste(attrPenImage, box=(x, nibTop), mask=attrPenImage)
         else:
             nibTop = y + self.sites.output.yOffset - penImage.height // 2
@@ -271,7 +271,7 @@ class EntryIcon(icon.Icon):
         if not hasattr(self.sites, 'pendingAttr'):
             x = self.sites.output.xOffset + self._width()
             y = self.sites.output.yOffset + icon.ATTR_SITE_OFFSET
-            self.sites.add('pendingAttr', 'attrOut', x, y)
+            self.sites.add('pendingAttr', 'attrIn', x, y)
         self.sites.pendingArg.attach(self, newArg)
 
     def pendingAttr(self):
@@ -302,7 +302,7 @@ class EntryIcon(icon.Icon):
         if self.attachedIcon:
             if self.pendingArg() and self.attachedSiteType == "input":
                 self.attachedIcon.replaceChild(self.pendingArg(), self.attachedSite)
-            elif self.pendingAttr() and self.attachedSiteType == "attrOut":
+            elif self.pendingAttr() and self.attachedSiteType == "attrIn":
                 self.attachedIcon.replaceChild(self.pendingAttr(), self.attachedSite)
             else:
                 self.attachedIcon.replaceChild(None, self.attachedSite)
@@ -321,10 +321,10 @@ class EntryIcon(icon.Icon):
                 self.window.cursor.setToIconSite(pendingArg, "output")
             elif self.pendingAttr():
                 pendingAttr = self.pendingAttr()
-                self.replaceChild(None, 'pendingAttr', 'attrIn')
+                self.replaceChild(None, 'pendingAttr', 'attrOut')
                 self.window.replaceTop(self, pendingAttr)
                 pendingAttr.layoutDirty = True
-                self.window.cursor.setToIconSite(pendingAttr, "attrIn")
+                self.window.cursor.setToIconSite(pendingAttr, "attrOut")
             else:
                 self.window.removeIcons([self])
                 self.window.cursor.setToWindowPos((self.rect[0], self.rect[1]))
@@ -399,7 +399,7 @@ class EntryIcon(icon.Icon):
                 if self.pendingArg():
                     self.attachedIcon = tupleIcon
                     self.attachedSite = "attrIcon"
-                    self.attachedSiteType = "attrOut"
+                    self.attachedSiteType = "attrIn"
                     tupleIcon.replaceChild(self, "attrIcon")
                 else:
                     self.window.entryIcon = None
@@ -415,7 +415,7 @@ class EntryIcon(icon.Icon):
                     self.attachedIcon.replaceChild(None, self.attachedSite)
                     self.attachedIcon = matchingParen
                     self.attachedSite = "attrIcon"
-                    self.attachedSiteType = "attrOut"
+                    self.attachedSiteType = "attrIn"
                     matchingParen.replaceChild(self, "attrIcon")
                 else:
                     self.attachedIcon.replaceChild(None, self.attachedSite)
@@ -450,8 +450,8 @@ class EntryIcon(icon.Icon):
             self.attachedIcon.replaceChild(ic, self.attachedSite)
             if "input" in snapLists:
                 cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
-            elif "attrOut in snapLists":
-                cursor.setToIconSite(ic, snapLists["attrOut"][0][2])
+            elif "attrIn in snapLists":
+                cursor.setToIconSite(ic, snapLists["attrIn"][0][2])
             else:
                 cursor.removeCursor()
         # If entry icon has pending arguments, try to place them.  Code does its best
@@ -834,7 +834,7 @@ class EntryIcon(icon.Icon):
 
     def attachedToAttribute(self):
         return self.attachedSite is not None and \
-         self.attachedSiteType in ("attrIn", "attrOut")
+         self.attachedSiteType in ("attrOut", "attrIn")
 
     def penOffset(self):
         penImgWidth = attrPenImage.width if self.attachedToAttribute() else penImage.width
@@ -899,6 +899,9 @@ class CursorParenIcon(icon.Icon):
                 textLeft = endParenLeft + icon.TEXT_MARGIN + 1
                 draw.text((textLeft, icon.TEXT_MARGIN), ")",
                     font=icon.globalFont, fill=(180, 180, 180, 255))
+                attrX = self.sites.attrIcon.xOffset
+                attrY = self.sites.attrIcon.yOffset
+                self.cachedImage.paste(icon.attrInImage, (attrX, attrY))
             else:
                 draw.line((bodyLeft, outSiteY, inSiteX, outSiteY),
                  fill=icon.ICON_BG_COLOR, width=3)
@@ -960,7 +963,7 @@ class CursorParenIcon(icon.Icon):
         self.closed = True
         self.layoutDirty = True
         # Allow cursor to be set to the end paren before layout knows where it goes
-        self.sites.add('attrIcon', 'attrOut', icon.rectWidth(self.rect),
+        self.sites.add('attrIcon', 'attrIn', icon.rectWidth(self.rect),
          icon.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
         self.window.undo.registerCallback(self.reopen)
 
@@ -1036,7 +1039,7 @@ class Cursor:
             if self.siteType in ("input", "output"):
                 cursorImg = inputSiteCursorImage
                 y -= inputSiteCursorOffset
-            elif self.siteType in ("attrIn", "attrOut"):
+            elif self.siteType in ("attrOut", "attrIn"):
                 cursorImg = attrSiteCursorImage
                 y -= attrSiteCursorOffset
             elif self.siteType == "seqIn":
@@ -1094,7 +1097,7 @@ class Cursor:
             snapLists = ic.snapLists()
             for ic, (x, y), name in snapLists.get("input", []):
                 cursorSites.append((x, y, ic, name))
-            for ic, (x, y), name in snapLists.get("attrOut", []):
+            for ic, (x, y), name in snapLists.get("attrIn", []):
                 cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, name))
             outSites = snapLists.get("output", [])
             if len(outSites) > 0:
@@ -1136,7 +1139,7 @@ class Cursor:
             for ic, (x, y), name in snapLists.get('seqOut', []):
                 if  direction in ('Up', 'Down') or not hasOutSite:
                     cursorSites.append((x, y, ic, name))
-            for ic, (x, y), name in snapLists.get("attrOut", []):
+            for ic, (x, y), name in snapLists.get("attrIn", []):
                 cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, name))
             if winIcon.parent() is None:
                 outSites = snapLists.get("output", [])
@@ -1144,7 +1147,7 @@ class Cursor:
                     cursorSites.append((*outSites[0][1], winIcon, "output"))
         # Rank the destination positions by nearness to the current cursor position
         # in the cursor movement direction, and cull those in the wrong direction
-        if self.siteType == "attrOut":
+        if self.siteType == "attrIn":
             cursorY -= icon.ATTR_SITE_OFFSET  # Normalize to input/output site y
         choices = []
         for x, y, ic, site in cursorSites:
@@ -1435,11 +1438,11 @@ def searchForOpenCursorParen(ic, site):
             siteType = ic.typeOf(site)
         nextSite = None
         scanAll = False
-        if siteType == "attrOut":
+        if siteType == "attrIn":
             if ic.childAt("output"):
                 nextSite = "output"
-            elif ic.childAt("attrIn"):
-                nextSite = "attrIn"
+            elif ic.childAt("attrOut"):
+                nextSite = "attrOut"
         elif siteType == "output":
             if ic.childAt("output"):
                 nextSite = "output"

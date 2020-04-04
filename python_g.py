@@ -991,7 +991,7 @@ class Window:
             redrawRegion.add(statIcon.hierRect())
             if siteType != "insertInput" and statIcon.childAt(siteName):
                 redrawRegion.add(movIcon.hierRect())
-            if siteType in ("input", "attrOut"):
+            if siteType in ("input", "attrIn"):
                 topDraggedIcons.remove(movIcon)
                 statIcon.replaceChild(movIcon, siteName)
             elif siteType == "insertInput":
@@ -1538,7 +1538,7 @@ class Window:
                     # Tweak site location based on cursor appearance and differentiation
                     if siteType in ("input", "output"):
                         x += 2
-                    elif siteType in ("attrOut", "attrIn"):
+                    elif siteType in ("attrIn", "attrOut"):
                         y -= icon.ATTR_SITE_OFFSET
                         x += 1
                     elif siteType in "seqIn":
@@ -1549,7 +1549,7 @@ class Window:
                         continue  # not a visible site type
                     dist = (abs(evt.x - x) + abs(evt.y - y))
                     if dist < minDist or (dist == minDist and
-                     minSite[2] in ("attrIn", "output")):  # Prefer inputs, for now
+                     minSite[2] in ("attrOut", "output")):  # Prefer inputs, for now
                         minDist = dist
                         minSite = siteIcon, siteName, siteType
         if minDist < SITE_SELECT_DIST + 1:
@@ -1580,7 +1580,7 @@ class Window:
         # If the cursor was on the paren being removed, move it to the icon that has
         # taken its place (BinOp or CursorParen)
         if self.cursor.type == "icon" and self.cursor.icon is ic and \
-         self.cursor.siteType == "attrOut":
+         self.cursor.siteType == "attrIn":
             self.cursor.setToIconSite(argIcon, "attrIcon")
         return argIcon
 
