@@ -51,7 +51,8 @@ EMPTY_ARG_WIDTH = 11
 LIST_EMPTY_ARG_WIDTH = 4
 
 # Pixels below input/output site to place function/list/tuple icons insertion site
-INSERT_SITE_Y_OFFSET = sum(globalFont.getmetrics()) // 2
+INSERT_SITE_X_OFFSET = 0
+INSERT_SITE_Y_OFFSET = 5 # sum(globalFont.getmetrics()) // 2
 
 # Pixels below input/output site to place attribute site
 # This should be based on font metrics, but for the moment, we have a hard-coded cursor
@@ -1514,6 +1515,10 @@ class AssignIcon(Icon):
             insertSites += tgtList.makeInsertSnapList()
         insertSites += self.valueList.makeInsertSnapList()
         siteSnapLists['insertInput'] = insertSites
+        # Snap site for seqOut is too close to snap site for inserting the first target.
+        # Nudge the seqOut site down and to the left to make it easier to snap to
+        ic, (x, y), siteType = siteSnapLists['seqOut'][0]
+        siteSnapLists['seqOut'][0] = (ic, (x-1, y+1), siteType)
         return siteSnapLists
 
     def execute(self):
@@ -2353,10 +2358,12 @@ class HorizListMgr:
         inputSites = self.icon.sites.getSeries(self.siteSeriesName)
         if len(inputSites) > 1 or len(inputSites) == 1 and inputSites[0].att is not None:
             x, y = self.icon.rect[:2]
-            y += inputSites[0].yOffset + INSERT_SITE_Y_OFFSET
+            x += INSERT_SITE_X_OFFSET
+            y += INSERT_SITE_Y_OFFSET
             idx = 0
             for idx, site in enumerate(inputSites):
-                insertSites.append((self.icon, (x + site.xOffset, y), site.name))
+                insertSites.append((self.icon, (x + site.xOffset, y + site.yOffset),
+                 site.name))
             x += inputSites[0].xOffset + self.inOffsets[-1]
             siteName = makeSeriesSiteId(inputSites.name, idx + 1)
             insertSites.append((self.icon, (x, y), siteName))
