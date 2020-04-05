@@ -51,7 +51,7 @@ EMPTY_ARG_WIDTH = 11
 LIST_EMPTY_ARG_WIDTH = 4
 
 # Pixels below input/output site to place function/list/tuple icons insertion site
-INSERT_SITE_X_OFFSET = 0
+INSERT_SITE_X_OFFSET = 2
 INSERT_SITE_Y_OFFSET = 5 # sum(globalFont.getmetrics()) // 2
 
 # Pixels below input/output site to place attribute site
@@ -132,6 +132,7 @@ floatInPixmap = (
 binLParenPixmap = (
  "..ooooooo",
  "..o     o",
+ "..o     o",
  "..o  85 o",
  "..o 85  o",
  "..o 38  o",
@@ -150,6 +151,7 @@ binLParenPixmap = (
 binRParenPixmap = (
  "oooooooo",
  "o      o",
+ "o      o",
  "o 58   o",
  "o  58  o",
  "o  83  o",
@@ -167,6 +169,7 @@ binRParenPixmap = (
 
 tupleLParenPixmap = (
  "oooooooo",
+ "o      o",
  "o      o",
  "o   5  o",
  "o  76  o",
@@ -188,6 +191,7 @@ tupleLParenPixmap = (
 tupleRParenPixmap = (
  "oooooooo",
  "o      o",
+ "o      o",
  "o  5   o",
  "o  67  o",
  "o  74  o",
@@ -205,7 +209,7 @@ tupleRParenPixmap = (
  "oooooooo",
 )
 
-inpSeqPixmap = (
+binInSeqPixmap = (
  "o8o",
  "8%8",
  "o8o",
@@ -217,6 +221,27 @@ inpSeqPixmap = (
  "...",
  "o..",
  "oo.",
+ "o o",
+ "o o",
+ "o8o",
+ "8%8",
+ "o8o",
+)
+
+inpSeqPixmap = (
+ "o8o",
+ "8%8",
+ "o8o",
+ "o o",
+ "o o",
+ "o o",
+ "o o",
+ "oo.",
+ "o..",
+ "...",
+ "o..",
+ "oo.",
+ "o o",
  "o o",
  "o o",
  "o8o",
@@ -286,16 +311,18 @@ def asciiToImage(asciiPixmap):
     image.putdata(colors)
     return image
 
-def iconBoxedText(text):
+def iconBoxedText(text, minHgt=None):
     if text in renderCache:
         return renderCache[text]
     width, height = globalFont.getsize(text)
-    txtImg = Image.new('RGBA',
-     (width + 2 * TEXT_MARGIN + 1, height + 2 * TEXT_MARGIN + 1), color=ICON_BG_COLOR)
+    width += 2 * TEXT_MARGIN + 1
+    height += 2 * TEXT_MARGIN + 1
+    if minHgt is not None and height < minHgt:
+        height = minHgt
+    txtImg = Image.new('RGBA', (width, height), color=ICON_BG_COLOR)
     draw = ImageDraw.Draw(txtImg)
     draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=globalFont, fill=(0, 0, 0, 255))
-    draw.rectangle((0, 0, width + 2 * TEXT_MARGIN, height + 2 * TEXT_MARGIN),
-     fill=None, outline=OUTLINE_COLOR)
+    draw.rectangle((0, 0, width-1, height-1), fill=None, outline=OUTLINE_COLOR)
     renderCache[text] = txtImg
     return txtImg
 
@@ -312,6 +339,7 @@ rParenImage = asciiToImage(binRParenPixmap)
 tupleLParenImage = asciiToImage(tupleLParenPixmap)
 tupleRParenImage = asciiToImage(tupleRParenPixmap)
 inpSeqImage = asciiToImage(inpSeqPixmap)
+binInSeqImage = asciiToImage(binInSeqPixmap)
 assignDragImage = asciiToImage(assignDragPixmap)
 
 class IconExecException(Exception):
@@ -573,11 +601,13 @@ class Icon:
         pass
 
 class TextIcon(Icon):
-    def __init__(self, text, window=None, location=None, hasAttrIn=True):
+    def __init__(self, text, window=None, location=None, hasAttrIn=True, minTxtHgt=None):
         Icon.__init__(self, window)
         self.text = text
         self.hasAttrIn = hasAttrIn
         bodyWidth, bodyHeight = globalFont.getsize(self.text)
+        if minTxtHgt is not None and minTxtHgt > bodyHeight:
+            bodyHeight = minTxtHgt
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -604,7 +634,7 @@ class TextIcon(Icon):
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.text)
+            txtImg = iconBoxedText(self.text, self.bodySize[1])
             self.cachedImage.paste(txtImg, (outSiteImage.width - 1, 0))
             if needSeqSites:
                 drawSeqSites(self.cachedImage, outSiteImage.width-1, 0, txtImg.height)
@@ -653,7 +683,8 @@ class TextIcon(Icon):
 
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
-        TextIcon.__init__(self, name, window, location)
+        _w, minTxtHgt = globalFont.getsize("Mg_")
+        TextIcon.__init__(self, name, window, location, minTxtHgt=minTxtHgt)
         self.name = name
 
     def execute(self):
@@ -983,12 +1014,12 @@ class ListTypeIcon(Icon):
         layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
         argWidth = self.argList.calcLayout(layout, bodyWidth - 1, 0)
         # layout now incorporates argument layout sizes, but not end paren/brace/bracket
-        layout.width = bodyWidth + outSiteImage.width + argWidth + self.rightImg.width - 4
+        layout.width = bodyWidth + outSiteImage.width + argWidth + self.rightImg.width - 5
         if self.sites.attrIcon.att:
             attrLayout = self.sites.attrIcon.att.calcLayout()
         else:
             attrLayout = None
-        layout.addSubLayout(attrLayout, 'attrIcon', layout.width-2, ATTR_SITE_OFFSET)
+        layout.addSubLayout(attrLayout, 'attrIcon', layout.width-1, ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
@@ -1207,8 +1238,8 @@ class BinOpIcon(Icon):
                 outSiteY = siteY - binOutImage.height // 2
                 cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
             elif atTop and not suppressSeqSites:
-                outSiteY = siteY - inpSeqImage.height // 2
-                cachedImage.paste(inpSeqImage, (outSiteX, outSiteY), mask=inpSeqImage)
+                outSiteY = siteY - binInSeqImage.height // 2
+                cachedImage.paste(binInSeqImage, (outSiteX, outSiteY), mask=binInSeqImage)
             # Body
             txtImg = iconBoxedText(self.operator)
             opX = leftArgX + self.leftArgWidth - 1
@@ -1408,7 +1439,7 @@ class AssignIcon(Icon):
         opWidth, opHeight = globalFont.getsize('=')
         opWidth += 2*TEXT_MARGIN + 1
         opHeight += 2*TEXT_MARGIN + 1
-        siteY = opHeight // 2
+        siteY = inpSeqImage.height // 2
         self.opSize = (opWidth, opHeight)
         self.sites.add('seqDrag', 'seqDrag', 0, siteY)
         tgtSitesX = assignDragImage.width - 3
@@ -1427,12 +1458,12 @@ class AssignIcon(Icon):
         self.rect = (x, y, x + width, y + height)
 
     def _size(self):
-        opWidth, height = self.opSize
+        opWidth, opHeight = self.opSize
         width = assignDragImage.width
         for tgtList in self.tgtLists:
             width += tgtList.width() + opWidth - 2
         width += self.valueList.width()
-        return width, height
+        return width, inpSeqImage.height
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         cachedImage = self.cachedImage
@@ -1464,7 +1495,8 @@ class AssignIcon(Icon):
                 tgtList.drawCommas(cachedImage, tgtSiteX, siteY)
                 txtImg = iconBoxedText('=')
                 tgtSiteX += tgtList.width() - 1
-                cachedImage.paste(txtImg, (tgtSiteX + OUTPUT_SITE_DEPTH, 0))
+                cachedImage.paste(txtImg, (tgtSiteX + OUTPUT_SITE_DEPTH,
+                (height-opHeight)//2))
                 tgtSiteX += opWidth - 1
             rInSiteX = tgtSiteX
             rInSiteY = siteY - inSiteImage.height // 2
@@ -2359,10 +2391,10 @@ class HorizListMgr:
         if len(inputSites) > 1 or len(inputSites) == 1 and inputSites[0].att is not None:
             x, y = self.icon.rect[:2]
             x += INSERT_SITE_X_OFFSET
-            y += INSERT_SITE_Y_OFFSET
+            y += inputSites[0].yOffset + INSERT_SITE_Y_OFFSET
             idx = 0
             for idx, site in enumerate(inputSites):
-                insertSites.append((self.icon, (x + site.xOffset, y + site.yOffset),
+                insertSites.append((self.icon, (x + site.xOffset, y),
                  site.name))
             x += inputSites[0].xOffset + self.inOffsets[-1]
             siteName = makeSeriesSiteId(inputSites.name, idx + 1)
