@@ -722,14 +722,23 @@ class EntryIcon(icon.Icon):
          self.attachedIcon.noParens or self.attachedToAttribute() and attIconClass in
          (icon.IdentifierIcon, icon.TupleIcon, icon.ListIcon)):
             return False
-        if self.attachedIcon in self.window.topIcons and self.attachedToAttribute():
-            # The cursor is attached to an attribute of a top-level icon of a type
-            # appropriate as a target. Insert assignment icon and make it the target.
-            self.attachedIcon.replaceChild(None, self.attachedSite)
-            self.window.replaceTop(self.attachedIcon, assignIcon)
-            assignIcon.replaceChild(self.attachedIcon, "targets0_0")
-            self.window.cursor.setToIconSite(assignIcon, "values_0")
-            return True
+        if self.attachedToAttribute():
+            highestCoincidentIcon = icon.highestCoincidentIcon(self.attachedIcon)
+            if highestCoincidentIcon in self.window.topIcons:
+                # The cursor is attached to an attribute of a top-level icon of a type
+                # appropriate as a target. Insert assignment icon and make it the target.
+                self.attachedIcon.replaceChild(None, self.attachedSite)
+                self.window.replaceTop(highestCoincidentIcon, assignIcon)
+                if highestCoincidentIcon is not self.attachedIcon:
+                    parent = self.attachedIcon.parent()
+                    parentSite = parent.siteOf(self.attachedIcon)
+                    parent.replaceChild(None, parentSite)
+                    assignIcon.replaceChild(parent, 'values_0')
+                    self.window.cursor.setToIconSite(parent, parentSite)
+                else:
+                    self.window.cursor.setToIconSite(assignIcon, "values_0")
+                assignIcon.replaceChild(self.attachedIcon, "targets0_0")
+                return True
         topParent = self.attachedIcon.topLevelParent()
         if topParent.__class__ is icon.TupleIcon and topParent.noParens:
             # There is a no-paren tuple at the top level waiting to be converted in to an

@@ -2385,6 +2385,14 @@ class IconSiteList:
 def isCoincidentSite(ic, siteId):
     return ic is not None and siteId == ic.hasCoincidentSite()
 
+def highestCoincidentIcon(ic):
+    """Return highest icon with an output coincident with that of ic"""
+    while True:
+        parent = ic.parent()
+        if parent is None or not isCoincidentSite(parent, parent.siteOf(ic)):
+            return ic
+        ic = parent
+
 class HorizListMgr:
     """Manage layout for a horizontal list of icon arguments."""
     def __init__(self, ic, siteSeriesName, leftSiteX, leftSiteY):
