@@ -903,12 +903,15 @@ class Window:
         # dragged icons
         draggingOutputs = []
         draggingSeqInserts = []
+        draggingAttrOuts = []
         for dragIcon in topDraggingIcons:
             dragSnapList = dragIcon.snapLists()
             for ic, (x, y), name in dragSnapList.get("output", []):
                 draggingOutputs.append(((x, y), ic))
             for ic, (x, y), name in dragSnapList.get("seqInsert", []):
                 draggingSeqInserts.append(((x, y), ic))
+            for ic, (x, y), name in dragSnapList.get("attrOut", []):
+                draggingAttrOuts.append(((x, y), ic))
         stationaryInputs = []
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
@@ -917,6 +920,10 @@ class Window:
                     stationaryInputs.append((pos, 0, ic, "input", name))
                 for ic, pos, name in snapLists.get("insertInput", []):
                     stationaryInputs.append((pos, 0, ic, "insertInput", name))
+                for ic, pos, name in snapLists.get("attrIn", []):
+                    stationaryInputs.append((pos, 0, ic, "attrIn", name))
+                for ic, pos, name in snapLists.get("insertAttr", []):
+                    stationaryInputs.append((pos, 0, ic, "insertAttr", name))
                 for ic, pos, name in snapLists.get("seqIn", []):
                     if ic.sites.seqIn.att is None:
                         stationaryInputs.append((pos, 0, ic, "seqIn", name))
@@ -932,7 +939,11 @@ class Window:
         for si in stationaryInputs:
             (sx, sy), sh, sIcon, sSiteType, sSiteName = si
             for (dx, dy), dIcon in draggingOutputs:
-                self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sSiteName))
+                if sSiteType in ('input', 'insertInput', 'seqIn', 'seqOut'):
+                    self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sSiteName))
+            for (dx, dy), dIcon in draggingAttrOuts:
+                if sSiteType in ('attrIn', 'insertAttr'):
+                    self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sSiteName))
             for (dx, dy), dIcon in draggingSeqInserts:
                 if sSiteType in ('seqIn', 'seqOut'):
                     self.snapList.append((sx - dx, sy - dy, sh, sIcon, dIcon, sSiteType, sSiteName))
@@ -997,6 +1008,9 @@ class Window:
             elif siteType == "insertInput":
                 topDraggedIcons.remove(movIcon)
                 statIcon.insertChild(movIcon, siteName)
+            elif siteType == "insertAttr":
+                topDraggedIcons.remove(movIcon)
+                statIcon.insertAttr(movIcon)
             elif siteType == 'seqOut':
                 icon.insertSeq(movIcon, statIcon)
             elif siteType == 'seqIn':
@@ -1258,6 +1272,7 @@ class Window:
         deletedSet = set(icons)
         detachList = []
         seqReconnectList = []
+        reconnectList = {}
         # Find region needing erase, including following sequence connectors
         redrawRegion = AccumRects()
         for ic in icons:
@@ -1294,14 +1309,22 @@ class Window:
                 for child in ic.children():
                     if ic in deletedSet and child not in deletedSet:
                         detachList.append((ic, ic.siteOf(child)))
-                        addTopIcons.append(child)
+                        if child not in reconnectList:
+                            addTopIcons.append(child)
                         redrawRegion.add(child.hierRect())
                     elif ic not in deletedSet and child in deletedSet:
                         detachList.append((ic, ic.siteOf(child)))
+                        if ic.siteOf(child) == 'attrIcon':
+                            for i in icon.traverseAttrs(ic, includeStart=False):
+                                if i not in deletedSet:
+                                    reconnectList[i] = (ic, 'attrIcon')
+                                    break
         for ic, site in detachList:
             ic.replaceChild(None, site)
         for outIcon, inIcon in seqReconnectList:
             outIcon.replaceChild(inIcon, 'seqOut')
+        for outIcon, (inIcon, site) in reconnectList.items():
+            inIcon.replaceChild(outIcon, site)
         # Update the window's top-icon list to remove deleted icons and add those that
         # have become top icons via deletion of their parents (bring those to the front)
         self.removeTop([ic for ic in self.topIcons if ic in deletedSet])
@@ -1489,6 +1512,12 @@ class Window:
         rest in the sequence will be moved up or down without additional checking."""
         redrawRegion = AccumRects()
         x, y = seqStartIcon.pos()
+        if not hasattr(seqStartIcon.sites, 'seqIn'):
+            # Icon can not be laid out by sequence site.  Just lay it out by itself
+            redrawRegion.add(seqStartIcon.hierRect())
+            seqStartIcon.layout((x, y))
+            redrawRegion.add(seqStartIcon.hierRect())
+            return redrawRegion.get()
         for seqIc in icon.traverseSeq(seqStartIcon):
             seqIcOrigRect = seqIc.hierRect()
             xOffsetToSeqIn, yOffsetToSeqIn = seqIc.posOfSite('seqIn')
@@ -1532,7 +1561,7 @@ class Window:
         minDist = SITE_SELECT_DIST + 1
         minSite = (None, None, None)
         for ic in self.findIconsInRegion((left, top, right, bottom)):
-            iconSites = ic.snapLists()
+            iconSites = ic.snapLists(forCursor=True)
             for siteType, siteList in iconSites.items():
                 for siteIcon, (x, y), siteName in siteList:
                     # Tweak site location based on cursor appearance and differentiation

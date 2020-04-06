@@ -312,8 +312,8 @@ def asciiToImage(asciiPixmap):
     return image
 
 def iconBoxedText(text, minHgt=None):
-    if text in renderCache:
-        return renderCache[text]
+    if (text, minHgt) in renderCache:
+        return renderCache[(text, minHgt)]
     width, height = globalFont.getsize(text)
     width += 2 * TEXT_MARGIN + 1
     height += 2 * TEXT_MARGIN + 1
@@ -323,7 +323,7 @@ def iconBoxedText(text, minHgt=None):
     draw = ImageDraw.Draw(txtImg)
     draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=globalFont, fill=(0, 0, 0, 255))
     draw.rectangle((0, 0, width-1, height-1), fill=None, outline=OUTLINE_COLOR)
-    renderCache[text] = txtImg
+    renderCache[(text, minHgt)] = txtImg
     return txtImg
 
 outSiteImage = asciiToImage(outSitePixmap)
@@ -379,12 +379,15 @@ class Icon:
             x, y = location
         # The calcLayout and doLayout calls use the icon's output site (if it has one)
         # as its reference position even if it is connected to a sequence site.
-        if hasattr(self.sites, 'output'):
-            site = self.sites.output
-        else:
-            site = self.sites.seqIn
         lo = self.calcLayout()
-        self.doLayout(x + site.xOffset, y + site.yOffset, lo)
+        if hasattr(self.sites, 'output'):
+            self.doLayout(x+self.sites.output.xOffset, y+self.sites.output.yOffset, lo)
+        elif hasattr(self.sites, 'seqIn'):
+            self.doLayout(x+self.sites.seqIn.xOffset, y+self.sites.seqIn.yOffset, lo)
+        elif hasattr(self.sites, 'attrOut'):
+            self.doLayout(x+self.sites.attrOut.xOffset, y+self.sites.attrOut.yOffset, lo)
+        else:
+            self.doLayout(x, y, lo)
         return lo
 
     def traverse(self, order="draw", includeSelf=True):
@@ -475,9 +478,9 @@ class Icon:
             return None
         return self.sites.seqIn.att
 
-    def snapLists(self):
+    def snapLists(self, forCursor=False):
         x, y = self.rect[:2]
-        return self.sites.makeSnapLists(self, x, y)
+        return self.sites.makeSnapLists(self, x, y, forCursor=forCursor)
 
     def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
         """Replace the icon attached at a particular site.  Note that while the name
@@ -535,6 +538,14 @@ class Icon:
         """Insert a group of child icons at the specified site"""
         for i, child in enumerate(children):
             self.insertChild(child, seriesName, seriesIdx + i, childSite)
+
+    def insertAttr(self, topAttrIcon):
+        """Insert an attribute or chain of attributes between the icon and its current
+        attributes"""
+        endAttrIcon = findLastAttrIcon(topAttrIcon)
+        origAttrIcon = self.childAt('attrIcon')
+        self.replaceChild(topAttrIcon, 'attrIcon')
+        endAttrIcon.replaceChild(origAttrIcon, 'attrIcon')
 
     def childAt(self, siteOrSeriesName, seriesIdx=None):
         if seriesIdx is None:
@@ -746,7 +757,8 @@ class AttrIcon(Icon):
     def __init__(self, text, window=None, location=None):
         Icon.__init__(self, window)
         self.text = text
-        bodyWidth, bodyHeight = globalFont.getsize(self.text)
+        bodyWidth, _h = globalFont.getsize(self.text)
+        _w, bodyHeight = globalFont.getsize("Mg_")
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -767,7 +779,7 @@ class AttrIcon(Icon):
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.text)
+            txtImg = iconBoxedText(self.text, self.bodySize[1])
             self.cachedImage.paste(txtImg, (attrOutImage.width - 1, 0))
             attrOutX = self.sites.attrOut.xOffset
             attrOutY = self.sites.attrOut.yOffset
@@ -984,9 +996,9 @@ class ListTypeIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
-    def snapLists(self):
+    def snapLists(self, forCursor=False):
         # Add snap sites for insertion to those representing actual attachment sites
-        siteSnapLists = Icon.snapLists(self)
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
         siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
         return siteSnapLists
 
@@ -1380,9 +1392,9 @@ class BinOpIcon(Icon):
         layout.addSubLayout(attrLayout, 'attrIcon', layout.width, ATTR_SITE_OFFSET)
         return layout
 
-    def snapLists(self):
+    def snapLists(self, forCursor=False):
         # Make attribute site unavailable unless the icon has parens to hold it
-        siteSnapLists = Icon.snapLists(self)
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
         if not self.hasParens:
             del siteSnapLists['attrIn']
         return siteSnapLists
@@ -1539,9 +1551,9 @@ class AssignIcon(Icon):
             if oldName != newName:
                 tgtList.rename(newName)
 
-    def snapLists(self):
+    def snapLists(self, forCursor=False):
         # Add snap sites for insertion to those representing actual attachment sites
-        siteSnapLists = Icon.snapLists(self)
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
         insertSites = []
         for tgtList in self.tgtLists:
             insertSites += tgtList.makeInsertSnapList()
@@ -1931,7 +1943,7 @@ class Layout:
          subLayout.height - subLayout.parentSiteOffset)
         self.height = heightAbove + heightBelow
         self.parentSiteOffset = heightAbove
-        self.width = max(self.width, xSiteOffset + subLayout.width)
+        self.width = max(self.width, xSiteOffset + subLayout.width-1)
 
     def updateSiteOffsets(self, parentSite):
         parentSiteDepth = siteDepths[parentSite.type]
@@ -2334,33 +2346,40 @@ class IconSiteList:
         if isinstance(series, IconSiteSeries):
             series.insertSite(insertIdx)
 
-    def makeSnapLists(self, ic, x, y, forMatingSite=None):
+    def makeSnapLists(self, ic, x, y, forCursor=False):
         snapSites = {}
         for site in self.allSites():
-            if forMatingSite is None or site.type == matingSiteType[forMatingSite]:
-                # Omit any site whose attached icon has a site of the same type, at the
-                # same location.  In such a case we want both dropped icons and typing to
-                # go to the site of the innermost (most local) icon.
-                if isCoincidentSite(site.att, site.name):
-                    continue
-                # seqIn and seqOut sites are only valid for icons at the top level
-                if site.type in ('seqIn', 'seqOut') and ic.parent() is not None:
-                    continue
-                # The first icon in a sequence hosts the snap site for the sequence
-                hasPrev = ic.prevInSeq() is not None
-                if hasPrev and site.type in ('output', 'seqInsert'):
-                    continue
-                # If the icon is in a sequence, convert the output site to a seqInsert
-                hasNext = ic.nextInSeq()
-                if site.type == 'output' and (hasPrev or hasNext):
-                    siteType = 'seqInsert'
-                else:
-                    siteType = site.type
-                # Add the snap site to the list
-                if siteType not in snapSites:
-                    snapSites[siteType] = []
-                snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
-                     site.name))
+            # Omit any site whose attached icon has a site of the same type, at the
+            # same location.  In such a case we want both dropped icons and typing to
+            # go to the site of the innermost (most local) icon.
+            if isCoincidentSite(site.att, site.name):
+                continue
+            # Numeric icons have attribute sites for cursor, only (no snapping)
+            if site.type == 'attrIn' and not forCursor and isinstance(ic, NumericIcon):
+                continue
+            # seqIn and seqOut sites are only valid for icons at the top level
+            if site.type in ('seqIn', 'seqOut') and ic.parent() is not None:
+                continue
+            # The first icon in a sequence hosts the snap site for the sequence
+            hasPrev = ic.prevInSeq() is not None
+            if hasPrev and site.type in ('output', 'seqInsert'):
+                continue
+            # If the icon is in a sequence, convert the output site to a seqInsert
+            hasNext = ic.nextInSeq()
+            if site.type == 'output' and (hasPrev or hasNext):
+                siteType = 'seqInsert'
+            else:
+                siteType = site.type
+            # If the icon has an attrIn site with something connected, also give it an
+            # insertAttr site
+            if site.type == 'attrIn' and ic.sites.attrIcon.att is not None:
+                snapSites['insertAttr'] = [(ic, (x + site.xOffset,
+                 y + site.yOffset + INSERT_SITE_Y_OFFSET), site.name)]
+            # Add the snap site to the list
+            if siteType not in snapSites:
+                snapSites[siteType] = []
+            snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
+             site.name))
         return snapSites
 
 def isCoincidentSite(ic, siteId):

@@ -430,7 +430,7 @@ class EntryIcon(icon.Icon):
         ic, remainingText = parseResult
         if remainingText is None or remainingText in emptyDelimiters:
             remainingText = ""
-        snapLists = ic.snapLists()
+        snapLists = ic.snapLists(forCursor=True)
         if self.attachedIcon is None:
             self.window.replaceTop(self, ic)
             ic.layoutDirty = True
@@ -1094,7 +1094,7 @@ class Cursor:
         unselected before this is called, but passed in via the selectedIcons parameter"""
         cursorSites = []
         for ic in selectedIcons:
-            snapLists = ic.snapLists()
+            snapLists = ic.snapLists(forCursor=True)
             for ic, (x, y), name in snapLists.get("input", []):
                 cursorSites.append((x, y, ic, name))
             for ic, (x, y), name in snapLists.get("attrIn", []):
@@ -1129,7 +1129,7 @@ class Cursor:
          cursorX+HORIZ_ARROW_MAX_DIST, cursorY+VERT_ARROW_MAX_DIST)
         cursorSites = []
         for winIcon in self.window.findIconsInRegion(searchRect):
-            snapLists = winIcon.snapLists()
+            snapLists = winIcon.snapLists(forCursor=True)
             hasOutSite = len(snapLists.get("output", [])) > 0
             for ic, (x, y), name in snapLists.get('input', []):
                 cursorSites.append((x, y, ic, name))
