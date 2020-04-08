@@ -299,12 +299,15 @@ class Window:
             icon.insertSeq(self.entryIcon, self.cursor.icon, before=before)
             self.cursor.setToEntryIcon()
             self.insertTopLevel(self.entryIcon)
-        else:
+        else:  # Cursor site type is input or attrIn
             self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
              window=self)
             pendingArg = self.cursor.icon.childAt(self.cursor.site)
             self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
-            self.entryIcon.setPendingArg(pendingArg)
+            if self.cursor.site == 'attrIcon':
+                self.entryIcon.setPendingAttr(pendingArg)
+            else:
+                self.entryIcon.setPendingArg(pendingArg)
             self.cursor.setToEntryIcon()
         self.entryIcon.addText(initialText)
         self._redisplayChangedEntryIcon()
@@ -637,8 +640,14 @@ class Window:
         # it's similar, just the argument needs to be attached to the pendingArgument
         # site on the entry icon.  Tuples, lists, and sets, use the same mechanism as
         # as the context menu.  Binary operations are more complicated (see code below).
-        if isinstance(ic, icon.TextIcon) or isinstance(ic, icon.UnaryOpIcon):
-            text = ic.operator if isinstance(ic, icon.UnaryOpIcon) else ic.text
+        if isinstance(ic, icon.TextIcon) or isinstance(ic, icon.UnaryOpIcon) or \
+         isinstance(ic, icon.AttrIcon):
+            if isinstance(ic, icon.UnaryOpIcon):
+                text = ic.operator
+            elif isinstance(ic, icon.AttrIcon):
+                text = "." + ic.text
+            else:
+                text = ic.text
             parent = ic.parent()
             if parent is None:
                 self.entryIcon = typing.EntryIcon(None, None, initialString=text,
@@ -651,6 +660,8 @@ class Window:
                 parent.replaceChild(self.entryIcon, parentSite)
             if isinstance(ic, icon.UnaryOpIcon) and ic.sites.argIcon.att:
                 self.entryIcon.setPendingArg(ic.sites.argIcon.att)
+            elif self.cursor.site == 'attrIcon' and ic.sites.attrIcon.att is not None:
+                self.entryIcon.setPendingAttr(ic.sites.attrIcon.att)
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt)
         elif isinstance(ic, icon.ListTypeIcon):

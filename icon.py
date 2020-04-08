@@ -446,10 +446,12 @@ class Icon:
         """Return siteIds for all icon sites capable of holding parent links."""
         return [site.name for site in self.sites.parentSites()]
 
-    def parentage(self):
+    def parentage(self, includeSelf=False):
         """Returns a list containing the lineage of the given icon, from the icon up to
          the top of the window hierarchy."""
         parentList = []
+        if includeSelf:
+            parentList.append(self)
         child = self
         while True:
             parent = child.parent()
@@ -1146,9 +1148,6 @@ class TupleIcon(ListTypeIcon):
         self.rightImg = tupleRParenImage
         self.cachedImage = None
         self.layoutDirty = True
-        width, height = self._size()
-        self.sites.add('attrIcon', 'attrIn', width-1,
-         self.sites.output.yOffset + ATTR_SITE_OFFSET)
 
     def calcLayout(self):
         # If the icon is no longer at the top level and needs its parens restored, do so
@@ -2555,6 +2554,14 @@ def findLastAttrIcon(ic):
     for i in traverseAttrs(ic):
         pass
     return i
+
+def findAttrOutputSite(ic):
+    if hasattr(ic.sites, 'output'):
+        return ic
+    for i in ic.parentage():
+        if hasattr(i.sites, 'output'):
+            return i
+    return None
 
 def makeSeriesSiteId(seriesName, seriesIdx):
     return seriesName + "_%d" % seriesIdx

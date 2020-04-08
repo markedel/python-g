@@ -51,7 +51,7 @@ keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
 identPattern = re.compile('^[a-zA-z_][a-zA-Z_\\d]*$')
 numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
  '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
-attrPattern = re.compile('^\\.[a-zA-z_][a-zA-z_\\d]*$')
+attrPattern = re.compile('^\\.[a-zA-z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
 opDelimPattern = re.compile('[a-zA-z\\d_.\\(\\[\\{\\s+-~]')
 
@@ -256,7 +256,8 @@ class EntryIcon(icon.Icon):
             image.paste(penImage, box=(x, nibTop), mask=penImage)
 
     def setPendingArg(self, newArg):
-        self.sites.remove('pendingAttr')
+        if hasattr(self.sites, 'pendingAttr'):
+            self.sites.remove('pendingAttr')
         if not hasattr(self.sites, 'pendingArg'):
             x = self.sites.output.xOffset + self._width()
             y = self.sites.output.yOffset
@@ -266,16 +267,17 @@ class EntryIcon(icon.Icon):
     def pendingArg(self):
         return self.sites.pendingArg.att if hasattr(self.sites, 'pendingArg') else None
 
-    def _setPendingAttr(self, newArg):
-        self.sites.remove('pendingArg')
+    def setPendingAttr(self, newAttr):
+        if hasattr(self.sites, 'pendingArg'):
+            self.sites.remove('pendingArg')
         if not hasattr(self.sites, 'pendingAttr'):
             x = self.sites.output.xOffset + self._width()
             y = self.sites.output.yOffset + icon.ATTR_SITE_OFFSET
             self.sites.add('pendingAttr', 'attrIn', x, y)
-        self.sites.pendingArg.attach(self, newArg)
+        self.sites.pendingAttr.attach(self, newAttr, "attrOut")
 
     def pendingAttr(self):
-        return self.sites.pendingArg.att if hasattr(self.sites, 'pendingAttr') else None
+        return self.sites.pendingAttr.att if hasattr(self.sites, 'pendingAttr') else None
 
     def addText(self, char):
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
@@ -348,28 +350,35 @@ class EntryIcon(icon.Icon):
             return
         elif parseResult == "comma":
             if self.commaEntered(self.attachedIcon, self.attachedSite):
-                if self.pendingArg() is None:
-                    if self.attachedIcon is not None:
-                        self.attachedIcon.replaceChild(None, self.attachedSite)
+                if self.attachedIcon is not None:
+                    self.attachedIcon.replaceChild(None, self.attachedSite)
+                if self.pendingArg() is None and self.pendingAttr() is None:
+                    self.window.entryIcon = None
+                elif self.pendingArg() is not None and cursor.type is "icon" and \
+                 cursor.siteType == "input" and cursor.icon.childAt(cursor.site) is None:
+                    # Pending args can safely be placed (note that commaEntered will not
+                    # put the cursor on an attribute site, so don't bother with them)
+                    cursor.icon.replaceChild(self.pendingArg(), cursor.site)
+                    self.setPendingArg(None)
+                    self.window.entryIcon = None
+                elif cursor.icon.childAt(cursor.site):
+                    print("Yipes, can't place pending icons")
                     self.window.entryIcon = None
                 else:
-                    if cursor.type is "icon" and cursor.siteType == "input" and \
-                            cursor.icon.childAt(cursor.site) is None:
-                        cursor.icon.replaceChild(self.pendingArg(), cursor.site)
-                        if self.attachedIcon is not None:
-                            self.attachedIcon.replaceChild(None, self.attachedSite)
-                        self.setPendingArg(None)
-                        self.window.entryIcon = None
+                    # Could not remove entry icon due to pending arguments
+                    cursor.icon.replaceChild(self, cursor.site)
+                    self.attachedIcon = cursor.icon
+                    self.attachedSite = cursor.site
+                    self.attachedSiteType = cursor.siteType
+                    cursor.setToEntryIcon()
             else:
                 beep()
             return
         elif parseResult == "endBracket":
-            if self.pendingArg() and self.attachedSiteType == "input":
-                self.attachedIcon.replaceChild(self.pendingArg(), self.attachedSite)
-            else:
-                self.attachedIcon.replaceChild(None, self.attachedSite, leavePlace=True)
-            self.window.entryIcon = None
-            cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+            if not self._removeAndReplaceWithPending():
+                # Cant unload pending args from cursor.  Don't allow move
+                beep()
+                return
             if not cursor.movePastEndBracket():
                 beep()
             return
@@ -377,18 +386,16 @@ class EntryIcon(icon.Icon):
             matchingParen = self.findOpenParen(self.attachedIcon, self.attachedSite)
             if matchingParen is None:
                 # Maybe user was just trying to move past an existing paren by typing it
-                if self.pendingArg() and self.attachedSiteType == "input":
-                    self.attachedIcon.replaceChild(self.pendingArg(), self.attachedSite)
-                else:
-                    self.attachedIcon.replaceChild(None, self.attachedSite,
-                     leavePlace=True)
-                self.window.entryIcon = None
-                cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+                if not self._removeAndReplaceWithPending():
+                    # Cant unload pending args from cursor.  Don't allow move
+                    beep()
+                    return
                 if not cursor.movePastEndParen():
                     beep()
             elif matchingParen.__class__ is CursorParenIcon and \
              matchingParen is self.attachedIcon:
-                # Empty tuple
+                # The entry icon is directly on the input site of a cursor paren icon to
+                # be closed, this is the special case of an empty tuple: convert it to one
                 parent = matchingParen.parent()
                 tupleIcon = icon.TupleIcon(window=self.window)
                 if parent is None:
@@ -396,7 +403,8 @@ class EntryIcon(icon.Icon):
                     tupleIcon.layoutDirty = True
                 else:
                     parent.replaceChild(tupleIcon, parent.siteOf(matchingParen))
-                if self.pendingArg():
+                if self.pendingArg() or self.pendingAttr():
+                    # Move entry icon with pending args past the paren
                     self.attachedIcon = tupleIcon
                     self.attachedSite = "attrIcon"
                     self.attachedSiteType = "attrIn"
@@ -405,22 +413,24 @@ class EntryIcon(icon.Icon):
                     self.window.entryIcon = None
                     self.window.cursor.setToIconSite(tupleIcon, "attrIcon")
             else:
-                if matchingParen.__class__ is icon.TupleIcon and matchingParen.noParens:
-                    # matchingParen is a tuple at the top level with no parens.  Add them
+                # matchingParen is an open cursor paren or a tuple at the top level with
+                # no parens or an open cursor paren.  Add/close the parens
+                if matchingParen.__class__ is icon.TupleIcon:
                     matchingParen.restoreParens()
                 else:
-                    # matchingParen is an cursor paren, close it
                     matchingParen.close()
-                if self.pendingArg():
+                # Try to place pending arguments where they came from and move the cursor
+                # past the end paren.  If that doesn't work, preserve the entry icon with
+                # its pending argument/attribute, and attach that to the end paren (which
+                # since it didn't previously exist, shouldn't have an existing attribute).
+                if self._removeAndReplaceWithPending():
+                    cursor.setToIconSite(matchingParen, "attrIcon")
+                else:
                     self.attachedIcon.replaceChild(None, self.attachedSite)
+                    # Move entry icon with pending args past the paren
                     self.attachedIcon = matchingParen
                     self.attachedSite = "attrIcon"
                     self.attachedSiteType = "attrIn"
-                    matchingParen.replaceChild(self, "attrIcon")
-                else:
-                    self.attachedIcon.replaceChild(None, self.attachedSite)
-                    self.window.entryIcon = None
-                    cursor.setToIconSite(matchingParen, "attrIcon")
             return
         elif parseResult == "makeFunction":
             if not self.makeFunction(self.attachedIcon):
@@ -444,7 +454,13 @@ class EntryIcon(icon.Icon):
                 return
         elif self.attachedToAttribute():
             # Entry icon is attached to an attribute site (ic is operator or attribute)
-            self.appendOperator(ic)
+            if ic.__class__ is icon.AttrIcon:
+                self.attachedIcon.replaceChild(ic, "attrIcon")
+                cursor.setToIconSite(ic, "attrIcon")
+            else:
+                if not self.appendOperator(ic):
+                    beep()
+                    return
         elif self.attachedSiteType == "input":
             # Entry icon is attached to an input site
             self.attachedIcon.replaceChild(ic, self.attachedSite)
@@ -462,8 +478,13 @@ class EntryIcon(icon.Icon):
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingArg(), cursor.site)
                 self.setPendingArg(None)
+        if self.pendingAttr() is not None and remainingText == "":
+            if cursor.type is "icon" and cursor.siteType == "attrIn" and \
+             cursor.icon.childAt(cursor.site) is None:
+                cursor.icon.replaceChild(self.pendingAttr(), cursor.site)
+                self.setPendingAttr(None)
         # If the entry icon can go away, remove it and we're done
-        if self.pendingArg() is None and remainingText == "":
+        if self.pendingArg() is None and self.pendingAttr() is None and remainingText == "":
             self.window.entryIcon = None
             return
         # There is remaining text or pending arguments.  Restore the entry icon
@@ -484,6 +505,25 @@ class EntryIcon(icon.Icon):
         # There is still text that might be processable.  Recursively go around again
         # (we only get here if something was processed, so this won't loop forever)
         self._setText(remainingText, len(remainingText))
+
+    def _removeAndReplaceWithPending(self):
+        """Removes the entry icon and replaces it with it's pending argument or attribute
+        if that is possible.  If the pending item cannot be put in place of the entry
+        icon, does nothing and returns False"""
+        if self.pendingArg() and self.attachedSiteType == "input":
+            self.attachedIcon.replaceChild(self.pendingArg(), self.attachedSite)
+            self.setPendingArg(None)
+        elif self.pendingAttr() and self.attachedSiteType == "attrIn":
+            self.attachedIcon.replaceChild(self.pendingAttr(), self.attachedSite)
+            self.setPendingAttr(None)
+        elif self.pendingArg() is None and self.pendingAttr() is None:
+            self.attachedIcon.replaceChild(None, self.attachedSite,
+                leavePlace=True)
+        else:
+            return False
+        self.window.entryIcon = None
+        self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+        return True
 
     def commaEntered(self, onIcon, site):
         """A comma has been entered.  Search up the hierarchy to find a list, tuple,
@@ -560,6 +600,7 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(onIcon, "rightArg")
             cursorPlaced = True
         else:
+            onIcon = icon.findAttrOutputSite(onIcon)
             leftArg = onIcon
             rightArg = None
         child = onIcon
@@ -669,9 +710,10 @@ class EntryIcon(icon.Icon):
         """The entry icon is attached to an attribute site and a binary operator has been
         entered.  Stitch the operator in to the correct level with respect to the
         surrounding binary operators, and move the cursor to the empty operand slot."""
-        argIcon = self.attachedIcon
-        entryIconParents = self.parentage()
-        argIcon.replaceChild(None, self.attachedSite)
+        argIcon = icon.findAttrOutputSite(self.attachedIcon)
+        if argIcon is None:
+            return False
+        self.attachedIcon.replaceChild(None, self.attachedSite)
         leftArg = argIcon
         rightArg = None
         childOp = argIcon
@@ -681,7 +723,7 @@ class EntryIcon(icon.Icon):
         # lower precedence, or is not a binary operation.  Also stop if the parent
         # operation has equal precedence, and the associativity of the operation matches
         # the side of the operation on which the insertion is being made.
-        for op in entryIconParents[1:]:
+        for op in argIcon.parentage():
             if stopAtParens or op.__class__ not in (icon.BinOpIcon, icon.UnaryOpIcon) or \
                     newOpIcon.precedence > op.precedence or \
                     newOpIcon.precedence == op.precedence and (
@@ -715,39 +757,38 @@ class EntryIcon(icon.Icon):
         newOpIcon.layoutDirty = True
         newOpIcon.replaceChild(leftArg, leftSite)
         newOpIcon.replaceChild(rightArg, rightSite)
+        return True
 
     def insertAssign(self, assignIcon):
-        attIconClass = self.attachedIcon.__class__
+        attIcon = icon.findAttrOutputSite(self.attachedIcon)
+        attIconClass = attIcon.__class__
         if not (attIconClass is icon.AssignIcon or attIconClass is icon.TupleIcon and
-         self.attachedIcon.noParens or self.attachedToAttribute() and attIconClass in
-         (icon.IdentifierIcon, icon.TupleIcon, icon.ListIcon)):
+         attIcon.noParens or self.attachedToAttribute() and attIconClass in
+         (icon.IdentifierIcon, icon.TupleIcon, icon.ListIcon, icon.AttrIcon)):
             return False
         if self.attachedToAttribute():
-            highestCoincidentIcon = icon.highestCoincidentIcon(self.attachedIcon)
+            highestCoincidentIcon = icon.highestCoincidentIcon(attIcon)
             if highestCoincidentIcon in self.window.topIcons:
                 # The cursor is attached to an attribute of a top-level icon of a type
                 # appropriate as a target. Insert assignment icon and make it the target.
                 self.attachedIcon.replaceChild(None, self.attachedSite)
                 self.window.replaceTop(highestCoincidentIcon, assignIcon)
-                if highestCoincidentIcon is not self.attachedIcon:
-                    parent = self.attachedIcon.parent()
-                    parentSite = parent.siteOf(self.attachedIcon)
+                if highestCoincidentIcon is not attIcon:
+                    parent = attIcon.parent()
+                    parentSite = parent.siteOf(attIcon)
                     parent.replaceChild(None, parentSite)
-                    assignIcon.replaceChild(parent, 'values_0')
+                    assignIcon.replaceChild(highestCoincidentIcon, 'values_0')
                     self.window.cursor.setToIconSite(parent, parentSite)
                 else:
                     self.window.cursor.setToIconSite(assignIcon, "values_0")
-                assignIcon.replaceChild(self.attachedIcon, "targets0_0")
+                assignIcon.replaceChild(attIcon, "targets0_0")
                 return True
-        topParent = self.attachedIcon.topLevelParent()
+        topParent = attIcon.topLevelParent()
         if topParent.__class__ is icon.TupleIcon and topParent.noParens:
             # There is a no-paren tuple at the top level waiting to be converted in to an
             # assignment statement.  Do the conversion.
             self.attachedIcon.replaceChild(None, self.attachedSite)
-            if topParent is self.attachedIcon:
-                insertSiteId = self.attachedSite
-            else:
-                insertSiteId = topParent.siteOf(self.attachedIcon, recursive=True)
+            insertSiteId = topParent.siteOf(attIcon, recursive=True)
             targetIcons = topParent.argIcons()
             for tgtIcon in targetIcons:
                 topParent.replaceChild(None, topParent.siteOf(tgtIcon))
@@ -764,10 +805,7 @@ class EntryIcon(icon.Icon):
             # There is already an assignment icon.  Add a new clause, splitting the
             # target list at the entry location.  (assignIcon is thrown away)
             self.attachedIcon.replaceChild(None, self.attachedSite)
-            if topParent is self.attachedIcon:
-                insertSiteId = self.attachedSite
-            else:
-                insertSiteId = topParent.siteOf(self.attachedIcon, recursive=True)
+            insertSiteId = topParent.siteOf(attIcon, recursive=True)
             seriesName, seriesIdx = icon.splitSeriesSiteId(insertSiteId)
             splitIdx = seriesIdx + (0 if topParent is self.attachedIcon else 1)
             if seriesName == 'values':  # = was typed in the value series
@@ -1205,42 +1243,33 @@ class Cursor:
     def movePastEndParen(self):
         if self.type is not "icon":
             return False
-        if self.icon.__class__ is icon.TupleIcon and self.siteType == "input":
-            self.setToIconSite(self.icon, "attrIcon")
-            return True
-        child = self.icon
-        moveTo = False
-        for parent in self.icon.parentage():
-            if parent.__class__ is icon.BinOpIcon:
-                if child is parent.leftArg():
-                    return False
-                if parent.hasParens:
-                    moveTo = True
-            elif parent.__class__ in (icon.FnIcon, icon.TupleIcon):
-                moveTo = True
-            elif parent.__class__ is CursorParenIcon and parent.closed:
-                moveTo = True
-            # If a parenthesized icon was found with cursor preceding its left paren,
-            # move the cursor after that paren
-            if moveTo:
+        siteType = self.siteType
+        child = None
+        for parent in self.icon.parentage(includeSelf=True):
+            if child is not None:
+                siteType = parent.typeOf(parent.siteOf(child))
+            if siteType == "input" and (
+             parent.__class__ is icon.BinOpIcon and parent.hasParens or
+             parent.__class__ in (icon.FnIcon, icon.TupleIcon) or
+             parent.__class__ is CursorParenIcon and parent.closed):
                 self.setToIconSite(parent, "attrIcon")
                 return True
-            # At this point, the cursor is still on the right side of all of the parent
-            # icons, but no parens have been found yet.  Check further up the tree
             child = parent
         return False
 
     def movePastEndBracket(self):
         if self.type is not "icon":
             return False
-        if self.icon.__class__ is icon.ListIcon and self.siteType == "input":
-            self.setToIconSite(self.icon, "attrIcon")
-            return True
+        siteType = self.siteType
+        child = None
         # Just tear intervening icons to the end bracket (was this right?)
-        for parent in self.icon.parentage():
-            if parent.__class__ is icon.ListIcon:
+        for parent in self.icon.parentage(includeSelf=True):
+            if child is not None:
+                siteType = parent.typeOf(parent.siteOf(child))
+            if siteType == "input" and parent.__class__ is icon.ListIcon:
                 self.setToIconSite(parent, "attrIcon")
                 return True
+            child = parent
         return False
 
     def erase(self):
@@ -1256,7 +1285,7 @@ def parseEntryText(text, forAttrSite, window):
     if len(text) == 0:
         return "accept"
     if forAttrSite:
-        if attrPattern.fullmatch(text):
+        if text == '.' or attrPattern.fullmatch(text):
             return "accept"  # Legal attribute pattern
         if text in ("i", "a", "o", "an"):
             return "accept"  # Legal precursor characters to binary keyword operation
@@ -1278,6 +1307,8 @@ def parseEntryText(text, forAttrSite, window):
             return "comma"
         op = text[:-1]
         delim = text[-1]
+        if attrPattern.fullmatch(op):
+            return icon.AttrIcon(op[1:], window), delim
         if op in binaryOperators and opDelimPattern.match(delim):
             # Valid binary operator followed by allowable operand character
             if op == '/':
