@@ -645,9 +645,9 @@ class Window:
             if isinstance(ic, icon.UnaryOpIcon):
                 text = ic.operator
             elif isinstance(ic, icon.AttrIcon):
-                text = "." + ic.text
+                text = "." + ic.name
             else:
-                text = ic.text
+                text = ic.name
             parent = ic.parent()
             if parent is None:
                 self.entryIcon = typing.EntryIcon(None, None, initialString=text,
@@ -1298,16 +1298,18 @@ class Window:
                 tx, ty = prevIc.posOfSite('seqOut')
                 bx, by = ic.posOfSite('seqIn')
                 redrawRegion.add((tx-1, ty-1, tx+1, by+1))
-        # Find and unlink child icons from parents at deletion boundary
+        # Find and unlink child icons from parents at deletion boundary.  Note use of
+        # child icon rather than siteId in detachList because site names change as icons
+        # are removed from variable-length sequences.
         addTopIcons = []
         for topIcon in self.topIcons:
             nextIcon = topIcon.nextInSeq()
             if nextIcon is not None:
                 if topIcon in deletedSet and nextIcon not in deletedSet:
-                    detachList.append((topIcon, 'seqOut'))
+                    detachList.append((topIcon, nextIcon))
                     topIcon.layoutDirty = True
                 if topIcon not in deletedSet and nextIcon in deletedSet:
-                    detachList.append((topIcon, 'seqOut'))
+                    detachList.append((topIcon, nextIcon))
                     topIcon.layoutDirty = True
                     while True:
                         nextIcon = nextIcon.nextInSeq()
@@ -1319,19 +1321,19 @@ class Window:
             for ic in topIcon.traverse():
                 for child in ic.children():
                     if ic in deletedSet and child not in deletedSet:
-                        detachList.append((ic, ic.siteOf(child)))
+                        detachList.append((ic, child))
                         if child not in reconnectList:
                             addTopIcons.append(child)
                         redrawRegion.add(child.hierRect())
                     elif ic not in deletedSet and child in deletedSet:
-                        detachList.append((ic, ic.siteOf(child)))
+                        detachList.append((ic, child))
                         if ic.siteOf(child) == 'attrIcon':
                             for i in icon.traverseAttrs(ic, includeStart=False):
                                 if i not in deletedSet:
                                     reconnectList[i] = (ic, 'attrIcon')
                                     break
-        for ic, site in detachList:
-            ic.replaceChild(None, site)
+        for ic, child in detachList:
+            ic.replaceChild(None, ic.siteOf(child))
         for outIcon, inIcon in seqReconnectList:
             outIcon.replaceChild(inIcon, 'seqOut')
         for outIcon, (inIcon, site) in reconnectList.items():

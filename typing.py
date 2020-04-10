@@ -888,9 +888,9 @@ class EntryIcon(icon.Icon):
         return penImgWidth - PEN_MARGIN
 
 class CursorParenIcon(icon.Icon):
-    def __init__(self, window=None, location=None):
+    def __init__(self, closed=False, window=None, location=None):
         icon.Icon.__init__(self, window)
-        self.closed = False
+        self.closed = closed
         bodyWidth, bodyHeight = icon.globalFont.getsize("(")
         bodyWidth += 2 * icon.TEXT_MARGIN + 1
         bodyHeight += 2 * icon.TEXT_MARGIN + 1
@@ -905,6 +905,8 @@ class CursorParenIcon(icon.Icon):
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        if closed:
+            self.close()
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         needSeqSites = self.parent() is None and image is None
@@ -995,9 +997,21 @@ class CursorParenIcon(icon.Icon):
         return self.sites.argIcon.att.textRepr()
 
     def clipboardRepr(self, offset):
-        if self.sites.argIcon.att is None:
-            return ""
-        return self.sites.argIcon.att.clipboardRepr(offset)
+        location = self.rect[:2]
+        attr = self._clipboardReprForSite('attrIcon', offset) if self.closed else None
+        arg = self._clipboardReprForSite('argIcon', offset)
+        return ('typing.' + self.__class__.__name__,
+         (self.closed, icon.addPoints(location, offset), arg, attr))
+
+    @staticmethod
+    def fromClipboard(clipData, window, offset):
+        closed, location, arg, attr = clipData
+        ic = CursorParenIcon(closed, window, (icon.addPoints(location, offset)))
+        ic.sites.argIcon.attach(ic, icon.clipboardDataToIcons([arg], window, offset)[0])
+        if attr:
+            ic.sites.attrIcon.attach(ic,
+             icon.clipboardDataToIcons([attr], window, offset)[0])
+        return ic
 
     def execute(self):
         if not self.closed:
@@ -1325,7 +1339,7 @@ def parseEntryText(text, forAttrSite, window):
             # Unary operator
             return icon.UnaryOpIcon(text, window), None
         if text == '(':
-            return CursorParenIcon(window), None
+            return CursorParenIcon(False, window), None
         if text == ')':
             return "endParen"
         if text == '[':
@@ -1344,7 +1358,7 @@ def parseEntryText(text, forAttrSite, window):
             if text in ('+', '-', '~', "not"):
                 return icon.UnaryOpIcon(text, window), delim
             if text == '(':
-                return CursorParenIcon(window), delim
+                return CursorParenIcon(False, window), delim
             if text == '[':
                 return icon.ListIcon(window), delim
         if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
