@@ -4,8 +4,11 @@ import python_g
 import typing
 import math
 import operator
+import re
 
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
+
+isSeriesRe = re.compile(".*_\\d*$")
 
 binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7, '&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
@@ -53,7 +56,7 @@ LIST_EMPTY_ARG_WIDTH = 4
 
 # Pixels below input/output site to place function/list/tuple icons insertion site
 INSERT_SITE_X_OFFSET = 2
-INSERT_SITE_Y_OFFSET = 5 # sum(globalFont.getmetrics()) // 2
+INSERT_SITE_Y_OFFSET = 5
 
 # Pixels below input/output site to place attribute site
 # This should be based on font metrics, but for the moment, we have a hard-coded cursor
@@ -290,17 +293,16 @@ def iconsFromClipboardString(clipString, window, offset):
     return allIcons
 
 def clipboardDataToIcons(clipData, window, offset):
+    subclasses = _getIconClasses()
     pastedIcons = []
     for clipIcon in clipData:
         if clipIcon is None:
             pastedIcons.append(None)
         else:
-            iconClass, iconData = clipIcon
-            try:
-                parseMethod = eval(iconClass).fromClipboard
-            except:
-                continue
-            pastedIcons.append(parseMethod(iconData, window, offset))
+            iconClassName, *iconData = clipIcon
+            iconClass = subclasses[iconClassName]
+            iconData = (iconClass, *iconData)
+            pastedIcons.append(Icon.fromClipboard(iconData, window, offset))
     return pastedIcons
 
 def clipboardRepr(icons, offset):
@@ -641,16 +643,47 @@ class Icon:
     def calcLayout(self):
         pass
 
-    def _clipboardReprForSite(self, siteId, offset):
-        attached = getattr(self.sites, siteId).att
-        if attached is None:
-            return None
-        return attached.clipboardRepr(offset)
+    def _serialize(self, offset, **args):
+        currentSeries = None
+        children = []
+        for site in self.sites.childSites():
+            att = self.childAt(site.name)
+            childRepr = None if att is None else att.clipboardRepr(offset)
+            if isSeriesSiteId(site.name):
+                seriesName, idx = splitSeriesSiteId(site.name)
+                if currentSeries is None or seriesName != currentSeries[0]:
+                    if currentSeries is not None:
+                        children.append(currentSeries)
+                    currentSeries = [seriesName]
+                currentSeries.append(childRepr)
+            else:
+                if currentSeries is not None:
+                    children.append(currentSeries)
+                    currentSeries = None
+                children.append((site.name, childRepr))
+        if currentSeries is not None:
+            children.append(currentSeries)
+        return self.__class__.__name__, addPoints(self.rect[:2], offset), args, children
 
-    def _clipboardReprForSeries(self, seriesName, offset):
-        series = getattr(self.sites, seriesName)
-        return [None if site.att is None else site.att.clipboardRepr(offset)
-                for site in series]
+    def _restoreChildrenFromClipData(self, childrenClipData, window, offset):
+        for childData in childrenClipData:
+            siteName, *iconData = childData
+            if self.sites.isSeries(siteName):
+                self.insertChildren(clipboardDataToIcons(iconData, window, offset),
+                 siteName, 0)
+            else:
+                getattr(self.sites, siteName).attach(self,
+                 clipboardDataToIcons(iconData, window, offset)[0])
+
+    def clipboardRepr(self, offset):
+        return self._serialize(offset)
+
+    @staticmethod
+    def fromClipboard(clipData, window, offset):
+        iconClass, location, args, childData = clipData
+        ic = iconClass(**args, window=window, location = addPoints(location, offset))
+        ic._restoreChildrenFromClipData(childData, window, offset)
+        return ic
 
 class TextIcon(Icon):
     def __init__(self, text, window=None, location=None, hasAttrIn=True, minTxtHgt=None):
@@ -733,6 +766,9 @@ class TextIcon(Icon):
             raise IconExecException(self, err)
         return result
 
+    def clipboardRepr(self, offset):
+        return self._serialize(offset, text=self.text)
+
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
         _w, minTxtHgt = globalFont.getsize("Mg_")
@@ -747,16 +783,7 @@ class IdentifierIcon(TextIcon):
         raise IconExecException(self, self.name + " is not defined")
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset)
-        return self.__class__.__name__, (self.name, addPoints(location, offset), attr)
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        name, location, attr = clipData
-        ic = IdentifierIcon(name, window, (addPoints(location, offset)))
-        ic.sites.attrIcon.attach(ic, clipboardDataToIcons([attr], window, offset)[0])
-        return ic
+        return self._serialize(offset, name=self.name)
 
 class NumericIcon(TextIcon):
     def __init__(self, value, window=None, location=None):
@@ -772,13 +799,7 @@ class NumericIcon(TextIcon):
         return self.value
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        return self.__class__.__name__, (self.text, addPoints(location, offset))
-
-    @staticmethod
-    def fromClipboard(clipData, window, locationOffset):
-        valueStr, location = clipData
-        return NumericIcon(valueStr, window, (addPoints(location, locationOffset)))
+        return self._serialize(offset, value=self.value)
 
 class StringIcon(TextIcon):
     def __init__(self, string, window=None, location=None):
@@ -789,16 +810,7 @@ class StringIcon(TextIcon):
         return self.string
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset)
-        return self.__class__.__name__, (self.string, addPoints(location, offset), attr)
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        text, location, attr = clipData
-        ic = StringIcon(text, window, (addPoints(location, offset)))
-        ic.sites.attrIcon.attach(ic, clipboardDataToIcons([attr], window, offset)[0])
-        return ic
+        return self._serialize(offset, string=self.string)
 
 class AttrIcon(Icon):
     def __init__(self, name, window=None, location=None):
@@ -870,16 +882,7 @@ class AttrIcon(Icon):
         return result
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset)
-        return self.__class__.__name__, (self.name, addPoints(location, offset), attr)
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        name, location, attr = clipData
-        ic = AttrIcon(name, window, (addPoints(location, offset)))
-        ic.sites.attrIcon.attach(ic, clipboardDataToIcons([attr], window, offset)[0])
-        return ic
+        return self._serialize(offset, name=self.name)
 
 class UnaryOpIcon(Icon):
     def __init__(self, op, window, location=None):
@@ -966,16 +969,7 @@ class UnaryOpIcon(Icon):
         return self.operator + " " + argText
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        arg = self._clipboardReprForSite('argIcon', offset)
-        return self.__class__.__name__, (self.operator, addPoints(location, offset), arg)
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        op, location, arg = clipData
-        ic = UnaryOpIcon(op, window, (addPoints(location, offset)))
-        ic.sites.argIcon.attach(ic, clipboardDataToIcons([arg], window, offset)[0])
-        return ic
+        return self._serialize(offset, op=self.operator)
 
     def execute(self):
         if self.sites.argIcon.att is None:
@@ -1121,20 +1115,7 @@ class FnIcon(ListTypeIcon):
         return result
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset)
-        args = self._clipboardReprForSeries('argIcons', offset)
-        return (self.__class__.__name__, (self.name, addPoints(location, offset),
-         args, attr))
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        name, location, children, attr = clipData
-        ic = FnIcon(name, window, (addPoints(location, offset)))
-        for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
-            ic.insertChild(arg, "argIcons", i)
-        ic.sites.attrIcon.attach(ic, clipboardDataToIcons([attr], window, offset)[0])
-        return ic
+        return self._serialize(offset, name=self.name)
 
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
@@ -1152,21 +1133,6 @@ class ListIcon(ListTypeIcon):
             if site.att is None:
                 raise IconExecException(self, "Missing argument(s)")
         return [site.att.execute() for site in self.sites.argIcons]
-
-    def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset)
-        args = self._clipboardReprForSeries('argIcons', offset)
-        return (self.__class__.__name__, (addPoints(location, offset), args, attr))
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        location, children, attr = clipData
-        ic = ListIcon(window, (addPoints(location, offset)))
-        for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
-            ic.insertChild(arg, "argIcons", i)
-        ic.sites.attrIcon.attach(ic, clipboardDataToIcons([attr], window, offset)[0])
-        return ic
 
 class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, location=None):
@@ -1221,20 +1187,7 @@ class TupleIcon(ListTypeIcon):
         return tuple(argIcon.execute() for argIcon in argIcons)
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset)
-        args = self._clipboardReprForSeries('argIcons', offset)
-        return (self.__class__.__name__, (addPoints(location, offset), self.noParens,
-         args, attr))
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        location, noParens, children, attr = clipData
-        ic = TupleIcon(window, noParens, (addPoints(location, offset)))
-        for i, arg in enumerate(clipboardDataToIcons(children, window, offset)):
-            ic.insertChild(arg, "argIcons", i)
-        ic.sites.attrIcon.attach(ic, clipboardDataToIcons([attr], window, offset)[0])
-        return ic
+        return self._serialize(offset, noParens=self.noParens)
 
 class BinOpIcon(Icon):
     def __init__(self, op, window, location=None):
@@ -1468,21 +1421,7 @@ class BinOpIcon(Icon):
         return text
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        return (self.__class__.__name__, (self.operator, addPoints(location, offset),
-         (self._clipboardReprForSite('leftArg', offset),
-          self._clipboardReprForSite('rightArg', offset),
-          self._clipboardReprForSite('attrIcon', offset))))
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        op, location, children = clipData
-        ic = BinOpIcon(op, window, (addPoints(location, offset)))
-        leftArg, rightArg, attr = clipboardDataToIcons(children, window, offset)
-        ic.sites.leftArg.attach(ic, leftArg)
-        ic.sites.rightArg.attach(ic, rightArg)
-        ic.sites.attrIcon.attach(ic, attr)
-        return ic
+        return self._serialize(offset, op=self.operator)
 
     def locIsOnLeftParen(self, btnPressLoc):
         iconLeft = self.rect[0]
@@ -1508,7 +1447,7 @@ class BinOpIcon(Icon):
         return result
 
 class AssignIcon(Icon):
-    def __init__(self, window, location=None):
+    def __init__(self, numTargets=1, window=None, location=None):
         Icon.__init__(self, window)
         opWidth, opHeight = globalFont.getsize('=')
         opWidth += 2*TEXT_MARGIN + 1
@@ -1530,6 +1469,8 @@ class AssignIcon(Icon):
         else:
             x, y = location
         self.rect = (x, y, x + width, y + height)
+        for i in range(1, numTargets):
+            self.addTargetGroup(i)
 
     def _size(self):
         opWidth, opHeight = self.opSize
@@ -1707,31 +1648,10 @@ class AssignIcon(Icon):
         return layout
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        clipData = [addPoints(location, offset)]
-        for tgtList in self.tgtLists:
-            tgts = self._clipboardReprForSeries(tgtList.siteSeriesName, offset)
-            clipData.append(tuple(tgts))
-        clipData.append(tuple(self._clipboardReprForSeries('values', offset)))
-        return (self.__class__.__name__, tuple(clipData))
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        location = clipData[0]
-        values = clipData[-1]
-        targets = clipData[1:-1]
-        ic = AssignIcon(window, (addPoints(location, offset)))
-        if len(targets) > 1:
-            for i in range(1, len(targets)):
-                ic.addTargetGroup(i)
-        for i, tgt in enumerate(targets):
-            tgtIcons = clipboardDataToIcons(tgt, window, offset)
-            ic.insertChildren(tgtIcons, "targets%d" % i, 0)
-        ic.insertChildren(clipboardDataToIcons(values, window, offset), "values", 0)
-        return ic
+        return self._serialize(offset, numTargets=len(self.tgtLists))
 
 class DivideIcon(Icon):
-    def __init__(self, window, location=None, floorDiv=False):
+    def __init__(self, floorDiv=False, window=None, location=None):
         Icon.__init__(self, window)
         self.precedence = 11
         self.floorDiv = floorDiv
@@ -1883,22 +1803,7 @@ class DivideIcon(Icon):
         return text
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset)
-        topArg = self._clipboardReprForSite('topArg', offset)
-        bottomArg = self._clipboardReprForSite('bottomArg', offset)
-        return self.__class__.__name__, (addPoints(location, offset),
-         (topArg, bottomArg, attr))
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        location, children = clipData
-        ic = DivideIcon(window, (addPoints(location, offset)))
-        topArg, bottomArg, attr = clipboardDataToIcons(children, window, offset)
-        ic.sites.topArg.attach(ic, topArg)
-        ic.sites.bottomArg.attach(ic, bottomArg)
-        ic.sites.attrIcon.attach(ic, attr)
-        return ic
+        return self._serialize(offset, floorDiv=self.floorDiv)
 
     def leftAssoc(self):
         """Note that this is only used for text generation for copy/paste"""
@@ -1956,17 +1861,6 @@ class ImageIcon(Icon):
 
     def calcLayout(self):
         return Layout(self, self.image.width, self.image.height, 0)
-
-    def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        # ... base64 encode a jpeg
-        return "TextIcon", ("TODO", addPoints(location, offset))
-
-    @staticmethod
-    def fromClipboard(_clipData, _window, _locationOffset):
-        # ... base64 decode a jpeg
-        # image, location = clipData
-        return None
 
     def execute(self):
         return None
@@ -2627,6 +2521,9 @@ def findAttrOutputSite(ic):
 def makeSeriesSiteId(seriesName, seriesIdx):
     return seriesName + "_%d" % seriesIdx
 
+def isSeriesSiteId(siteId):
+    return isSeriesRe.match(siteId)
+
 def splitSeriesSiteId(siteId):
     splitName = siteId.split('_')
     if len(splitName) != 2:
@@ -2670,3 +2567,18 @@ def addPoints(p1, p2):
 def rectWithinXBounds(rect, leftBound, rightBound):
     left, top, right, bottom = rect
     return left > leftBound and right < rightBound
+
+def _allSubclasses(cls):
+    """Like the class.__subclass__ method, but returns all of the subclasses below cls"""
+    for subclass in cls.__subclasses__():
+        yield from _allSubclasses(subclass)
+        yield subclass
+
+def _getIconClasses():
+    """Returns a dictionary mapping Icon subclass names to classes.  This allows the
+    clipboard paste command to find and instantiate any icon by name, without requiring
+    the icon module to import every module that defines icons."""
+    if _getIconClasses.cachedDict is None:
+        _getIconClasses.cachedDict = {cls.__name__:cls for cls in _allSubclasses(Icon)}
+    return  _getIconClasses.cachedDict
+_getIconClasses.cachedDict = None

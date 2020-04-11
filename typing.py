@@ -997,21 +997,7 @@ class CursorParenIcon(icon.Icon):
         return self.sites.argIcon.att.textRepr()
 
     def clipboardRepr(self, offset):
-        location = self.rect[:2]
-        attr = self._clipboardReprForSite('attrIcon', offset) if self.closed else None
-        arg = self._clipboardReprForSite('argIcon', offset)
-        return ('typing.' + self.__class__.__name__,
-         (self.closed, icon.addPoints(location, offset), arg, attr))
-
-    @staticmethod
-    def fromClipboard(clipData, window, offset):
-        closed, location, arg, attr = clipData
-        ic = CursorParenIcon(closed, window, (icon.addPoints(location, offset)))
-        ic.sites.argIcon.attach(ic, icon.clipboardDataToIcons([arg], window, offset)[0])
-        if attr:
-            ic.sites.attrIcon.attach(ic,
-             icon.clipboardDataToIcons([attr], window, offset)[0])
-        return ic
+        return self._serialize(offset, closed=self.closed)
 
     def execute(self):
         if not self.closed:
@@ -1309,7 +1295,7 @@ def parseEntryText(text, forAttrSite, window):
             return "accept"  # Legal precursor characters to binary operation
         if text in binaryOperators:
             if text == '//':
-                return icon.DivideIcon(window, floorDiv=True), None
+                return icon.DivideIcon(True, window), None
             return icon.BinOpIcon(text, window), None
         if text == '(':
             return "makeFunction"  # Make a function from the attached icon
@@ -1326,12 +1312,12 @@ def parseEntryText(text, forAttrSite, window):
         if op in binaryOperators and opDelimPattern.match(delim):
             # Valid binary operator followed by allowable operand character
             if op == '/':
-                return icon.DivideIcon(window, floorDiv=False), delim
+                return icon.DivideIcon(False, window), delim
             elif op == '//':
-                return icon.DivideIcon(window, floorDiv=True), delim
+                return icon.DivideIcon(True, window), delim
             return icon.BinOpIcon(op, window), delim
         if op == '=':
-            return icon.AssignIcon(window), delim
+            return icon.AssignIcon(1, window), delim
         return "reject"
     else:
         # input site
@@ -1349,7 +1335,7 @@ def parseEntryText(text, forAttrSite, window):
         if text == ',':
             return "comma"
         if text == '=':
-            return icon.AssignIcon(window), None
+            return icon.AssignIcon(1, window), None
         if identPattern.fullmatch(text) or numPattern.fullmatch(text):
             return "accept"  # Nothing but legal identifier and numeric
         delim = text[-1]

@@ -119,7 +119,7 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "rightArg")
         return topIcon
     if iconClass is icon.DivideIcon:
-        topIcon = iconClass(window, (x, y), floorDiv=parsedExpr[1])
+        topIcon = iconClass(parsedExpr[1], window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "topArg")
         topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "bottomArg")
         return topIcon
@@ -129,11 +129,8 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon.insertChildren(childIcons, "argIcons", 0)
         return topIcon
     if iconClass is icon.AssignIcon:
-        topIcon = iconClass(window, (x, y))
         tgts = parsedExpr[1]
-        if len(tgts) > 1:
-            for i in range(1, len(tgts)):
-                topIcon.addTargetGroup(i)
+        topIcon = iconClass(len(tgts), window, (x, y))
         for i, tgt in enumerate(tgts):
             if tgt[0] is icon.TupleIcon:
                 tgtIcons = [makeIcons(t, window, x, y) for t in tgt[1:]]
