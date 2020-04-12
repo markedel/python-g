@@ -1004,7 +1004,10 @@ class CursorParenIcon(icon.Icon):
             raise icon.IconExecException(self, "Unclosed temporary paren")
         if self.sites.argIcon.att is None:
             raise icon.IconExecException(self, "Missing argument")
-        return self.sites.argIcon.att.execute()
+        result = self.sites.argIcon.att.execute()
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
+        return result
 
     def close(self):
         self.closed = True

@@ -81,6 +81,11 @@ attrOutPixmap = (
  "%%",
 )
 
+dimAttrOutPixmap = (
+ "oo",
+ "oo",
+)
+
 attrInPixmap = (
  "o.",
  "o.",
@@ -167,6 +172,90 @@ binRParenPixmap = (
  "o  83  o",
  "o  58 o.",
  "o 58  o.",
+ "o      o",
+ "oooooooo",
+)
+
+listLBktPixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o  %%% o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %7  o",
+ "o  %%% o",
+ "o      o",
+ "oooooooo",
+)
+
+listRBktPixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o %%%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7%  o",
+ "o  7% o.",
+ "o  7% o.",
+ "o %%%  o",
+ "o      o",
+ "oooooooo",
+)
+
+subscriptLBktPixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o  %%  o",
+ "o  %%  o",
+ "o  %   o",
+ "o  %   o",
+ "o  %   o",
+ "o  %   o",
+ "o  %   o",
+ "o  %   o",
+ "o  %   o",
+ "o  %%  o",
+ "o  %%  o",
+ "o      o",
+ "o      o",
+ "oooooooo",
+)
+
+subscriptRBktPixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o  %%  o",
+ "o  %%  o",
+ "o   %  o",
+ "o   %  o",
+ "o   %  o",
+ "o   %  o",
+ "o   %  o",
+ "o   %  o",
+ "o   %  o",
+ "o  %% o.",
+ "o  %% o.",
+ "o      o",
  "o      o",
  "oooooooo",
 )
@@ -360,6 +449,7 @@ outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
 attrOutImage = asciiToImage(attrOutPixmap)
 attrInImage = asciiToImage(attrInPixmap)
+dimAttrOutImage = asciiToImage(dimAttrOutPixmap)
 leftInSiteImage = asciiToImage(leftInSitePixmap)
 commaImage = asciiToImage(commaPixmap)
 binOutImage = asciiToImage(binOutPixmap)
@@ -368,6 +458,10 @@ lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
 tupleLParenImage = asciiToImage(tupleLParenPixmap)
 tupleRParenImage = asciiToImage(tupleRParenPixmap)
+listLBktImage = asciiToImage(listLBktPixmap)
+listRBktImage = asciiToImage(listRBktPixmap)
+subscriptLBktImage = asciiToImage(subscriptLBktPixmap)
+subscriptRBktImage = asciiToImage(subscriptRBktPixmap)
 inpSeqImage = asciiToImage(inpSeqPixmap)
 binInSeqImage = asciiToImage(binInSeqPixmap)
 assignDragImage = asciiToImage(assignDragPixmap)
@@ -764,6 +858,8 @@ class TextIcon(Icon):
             result = eval(self.text)
         except Exception as err:
             raise IconExecException(self, err)
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
         return result
 
     def clipboardRepr(self, offset):
@@ -777,10 +873,14 @@ class IdentifierIcon(TextIcon):
 
     def execute(self):
         if self.name in namedConsts:
-            return namedConsts[self.name]
+            value = namedConsts[self.name]
         elif self.name in globals():
-            return globals()[self.name]
-        raise IconExecException(self, self.name + " is not defined")
+            value = globals()[self.name]
+        else:
+            raise IconExecException(self, self.name + " is not defined")
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(value)
+        return value
 
     def clipboardRepr(self, offset):
         return self._serialize(offset, name=self.name)
@@ -807,6 +907,8 @@ class StringIcon(TextIcon):
         self.string = string
 
     def execute(self):
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(self.string)
         return self.string
 
     def clipboardRepr(self, offset):
@@ -872,17 +974,106 @@ class AttrIcon(Icon):
         return '.' + self.name
 
     def execute(self, attrOfValue):
-        # This execution method is a remnant from when the IdentIcon did numbers, strings,
-        # and identifiers, and is probably no longer appropriate.  Not sure if the current
-        # uses of naked text icons should even be executed at all
         try:
             result = getattr(attrOfValue, self.name)
         except Exception as err:
             raise IconExecException(self, err)
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
         return result
 
     def clipboardRepr(self, offset):
         return self._serialize(offset, name=self.name)
+
+
+class SubscriptIcon(Icon):
+    def __init__(self, window=None, location=None):
+        Icon.__init__(self, window)
+        leftWidth, leftHeight = subscriptLBktImage.size
+        attrY = leftHeight // 2 + ATTR_SITE_OFFSET
+        self.sites.add('attrOut', 'attrOut', 0, attrY)
+        self.sites.add('indexIcon', 'input',
+         leftWidth + ATTR_SITE_DEPTH - outSiteImage.width + 1, leftHeight//2)
+        self.argWidth = LIST_EMPTY_ARG_WIDTH
+        totalWidth, totalHeight = self._size()
+        self.sites.add('attrIcon', 'attrIn', totalWidth - ATTR_SITE_DEPTH, attrY)
+        if location is None:
+            x, y = 0, 0
+        else:
+            x, y = location
+        self.rect = (x, y, x + totalWidth, y + totalHeight)
+
+    def _size(self):
+        return subscriptLBktImage.width + self.argWidth + subscriptRBktImage.width -\
+         2 + ATTR_SITE_DEPTH, subscriptLBktImage.height
+
+    def draw(self, image=None, location=None, clip=None, colorErr=False):
+        if image is None:
+            image = self.window.image
+        if location is None:
+            location = self.rect[:2]
+        if self.cachedImage is None:
+            self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
+            # Left brace
+            leftImgX = dimAttrOutImage.width - 1
+            self.cachedImage.paste(subscriptLBktImage, (leftImgX, 0))
+            # attrOut site
+            self.cachedImage.paste(dimAttrOutImage,  (self.sites.attrOut.xOffset,
+             self.sites.attrOut.yOffset), mask=dimAttrOutImage)
+            # Index input site
+            inSiteX = dimAttrOutImage.width - 1 + subscriptLBktImage.width - \
+             inSiteImage.width
+            inSiteY = subscriptLBktImage.height // 2 - inSiteImage.height // 2
+            self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
+            # Right brace
+            parenX = inSiteX + self.argWidth + inSiteImage.width - 2
+            self.cachedImage.paste(subscriptRBktImage, (parenX, 0))
+        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
+         colorErr), location, clip)
+
+    def doLayout(self,  attrSiteX,  attrSiteY, layout):
+        self.argWidth = layout.indexWidth
+        layout.updateSiteOffsets(self.sites.attrOut)
+        top = attrSiteY - (subscriptLBktImage.height // 2 + ATTR_SITE_OFFSET)
+        width, height = self._size()
+        self.rect = (attrSiteX, top,  attrSiteX + width, top + height)
+        layout.doSubLayouts(self.sites.attrOut, attrSiteX, attrSiteY)
+        self.cachedImage = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = subscriptLBktImage.size
+        if self.sites.indexIcon.att is None:
+            indexLayout = None
+            indexWidth = LIST_EMPTY_ARG_WIDTH
+        else:
+            indexLayout = self.sites.indexIcon.att.calcLayout()
+            indexWidth = indexLayout.width
+        totalWidth = subscriptLBktImage.width + indexWidth + \
+         subscriptRBktImage.width - 2 + ATTR_SITE_DEPTH
+        layout = Layout(self, totalWidth, height, height // 2 + ATTR_SITE_OFFSET)
+        layout.addSubLayout(indexLayout, 'indexIcon', width - 1, -ATTR_SITE_OFFSET)
+        attrIcon = self.sites.attrIcon.att
+        attrLayout = None if attrIcon is None else attrIcon.calcLayout()
+        layout.addSubLayout(attrLayout, 'attrIcon', layout.width - ATTR_SITE_DEPTH - 1, 0)
+        layout.indexWidth = indexWidth
+        return layout
+
+    def textRepr(self):
+        indexIcon = self.sites.indexIcon.att
+        return '[' + '' if indexIcon is None else indexIcon.textRepr() + ']'
+
+    def execute(self, attrOfValue):
+        if self.sites.indexIcon.att is None:
+            raise IconExecException(self, "Missing argument")
+        indexValue = self.sites.indexIcon.att.execute()
+        try:
+            result = attrOfValue[indexValue]
+        except Exception as err:
+            raise IconExecException(self, err)
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
+        return result
 
 class UnaryOpIcon(Icon):
     def __init__(self, op, window, location=None):
@@ -1119,7 +1310,8 @@ class FnIcon(ListTypeIcon):
 
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
-        ListTypeIcon.__init__(self, '[', ']', window, location=location)
+        ListTypeIcon.__init__(self, '[', ']', window, location=location,
+         leftImg=listLBktImage, rightImg=listRBktImage)
 
     def argIcons(self):
         """Return list of list argument icons.  This is trivial, but exists to match
@@ -1132,7 +1324,10 @@ class ListIcon(ListTypeIcon):
         for site in self.sites.argIcons:
             if site.att is None:
                 raise IconExecException(self, "Missing argument(s)")
-        return [site.att.execute() for site in self.sites.argIcons]
+        result = [site.att.execute() for site in self.sites.argIcons]
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
+        return result
 
 class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, location=None):
@@ -1184,7 +1379,10 @@ class TupleIcon(ListTypeIcon):
         for argIcon in argIcons:
             if argIcon is None:
                 raise IconExecException(self, "Missing argument(s)")
-        return tuple(argIcon.execute() for argIcon in argIcons)
+        result = tuple(argIcon.execute() for argIcon in argIcons)
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
+        return result
 
     def clipboardRepr(self, offset):
         return self._serialize(offset, noParens=self.noParens)
@@ -1444,6 +1642,8 @@ class BinOpIcon(Icon):
             result = binOpFn[self.operator](leftValue, rightValue)
         except Exception as err:
             raise IconExecException(self, err)
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
         return result
 
 class AssignIcon(Icon):

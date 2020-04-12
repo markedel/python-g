@@ -97,6 +97,13 @@ def parseExpr(expr):
         return (icon.TupleIcon, *(parseExpr(e) for e in expr.elts))
     elif expr.__class__ == ast.Attribute:
         return (icon.AttrIcon, expr.attr, parseExpr(expr.value))
+    elif expr.__class__ == ast.Subscript:
+        if expr.slice.__class__ == ast.Index:
+            slice = [expr.slice.value, None, None]
+        elif expr.slice.__class__ == ast.Slice:
+            slice = [expr.slice.lower, expr.slice.upper, expr.slice.step]
+        parsedSlice = [None if e is None else parseExpr(e) for e in slice]
+        return (icon.SubscriptIcon, parsedSlice, parseExpr(expr.value))
     else:
         return (icon.IdentifierIcon, "**Couldn't Parse**")
 
@@ -148,5 +155,13 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = makeIcons(parsedExpr[2], window, x, y)
         parentIcon = icon.findLastAttrIcon(topIcon)
         parentIcon.replaceChild(attrIcon, "attrIcon")
+        return topIcon
+    if iconClass is icon.SubscriptIcon:
+        # Eventually, we'll care about the other slice components.  For now, just index
+        subscriptIcon = iconClass(window, (x, y))
+        subscriptIcon.replaceChild(makeIcons(parsedExpr[1][0], window, x, y), "indexIcon")
+        topIcon = makeIcons(parsedExpr[2], window, x, y)
+        parentIcon = icon.findLastAttrIcon(topIcon)
+        parentIcon.replaceChild(subscriptIcon, "attrIcon")
         return topIcon
     return icon.TextIcon("**Internal Parse Error**", window, (x,y))
