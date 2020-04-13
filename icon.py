@@ -1,7 +1,7 @@
 # Copyright Mark Edel  All rights reserved
 from PIL import Image, ImageDraw, ImageFont
 import python_g
-import typing
+import ast
 import math
 import operator
 import re
@@ -381,7 +381,7 @@ renderCache = {}
 
 def iconsFromClipboardString(clipString, window, offset):
     try:
-        clipData = eval(clipString)
+        clipData = ast.literal_eval(clipString)
     except:
         return None
     allIcons = []

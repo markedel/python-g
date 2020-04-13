@@ -1122,7 +1122,7 @@ class Window:
             lastResultIcon, lastResultPos = self.execResultPositions[outSitePos]
             if lastResultIcon is not None and lastResultIcon in self.topIcons and \
              lastResultPos == lastResultIcon.rect[:2]:
-                self.removeIcons([lastResultIcon])
+                self.removeIcons(list(lastResultIcon.traverse()))
             del self.execResultPositions[outSitePos]
         # Convert results to icon form
         resultIcons = compile_eval.parsePasted(repr(result), self, (0, 0))
