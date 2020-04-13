@@ -41,7 +41,7 @@ binaryOperators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '
  '>', '<=', '>=', '==', '!=']
 unaryOperators = ['+', '-', '~']
 emptyDelimiters = [' ', '\t', '\n', '\r', '\f', '\v']
-delimitChars = emptyDelimiters + ['(', ')', ']', '}', ':', '.', ';', '@', '=', ',',
+delimitChars = emptyDelimiters + ['(', ')', '[', ']', '}', ':', '.', ';', '@', '=', ',',
  '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!']
 keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
@@ -457,6 +457,9 @@ class EntryIcon(icon.Icon):
             if ic.__class__ is icon.AttrIcon:
                 self.attachedIcon.replaceChild(ic, "attrIcon")
                 cursor.setToIconSite(ic, "attrIcon")
+            elif ic.__class__ is icon.SubscriptIcon:
+                self.attachedIcon.replaceChild(ic, "attrIcon")
+                cursor.setToIconSite(ic, "indexIcon")
             else:
                 if not self.appendOperator(ic):
                     beep()
@@ -581,6 +584,9 @@ class EntryIcon(icon.Icon):
                 self.window.replaceTop(onIcon, tupleIcon)
             else:
                 parent.replaceChild(tupleIcon, parent.siteOf(onIcon))
+            attrIcon = onIcon.sites.attrIcon.att
+            onIcon.replaceChild(None, 'attrIcon')
+            tupleIcon.replaceChild(attrIcon, 'attrIcon')
             return True
         if onIcon.__class__ is icon.BinOpIcon and site == "leftArg":
             leftArg = None
@@ -627,6 +633,9 @@ class EntryIcon(icon.Icon):
                     self.window.replaceTop(parent, tupleIcon)
                 else:
                     parentParent.replaceChild(tupleIcon, parentParent.siteOf(parent))
+                attrIcon = parent.sites.attrIcon.att
+                parent.replaceChild(None, 'attrIcon')
+                tupleIcon.replaceChild(attrIcon, 'attrIcon')
                 return True
             if parent.__class__ is not icon.BinOpIcon:
                 return False
@@ -703,6 +712,9 @@ class EntryIcon(icon.Icon):
             self.window.replaceTop(ic, fnIcon)
         else:
             parent.replaceChild(fnIcon, parent.siteOf(ic))
+        if self.pendingAttr():
+            ic.replaceChild(None, 'attrIcon')
+            fnIcon.replaceChild(self.pendingAttr(), 'attrIcon')
         self.window.cursor.setToIconSite(fnIcon, "argIcons", 0)
         return True
 
@@ -1269,7 +1281,8 @@ class Cursor:
         for parent in self.icon.parentage(includeSelf=True):
             if child is not None:
                 siteType = parent.typeOf(parent.siteOf(child))
-            if siteType == "input" and parent.__class__ is icon.ListIcon:
+            if siteType == "input" and parent.__class__ in (icon.ListIcon,
+             icon.SubscriptIcon):
                 self.setToIconSite(parent, "attrIcon")
                 return True
             child = parent
@@ -1304,6 +1317,8 @@ def parseEntryText(text, forAttrSite, window):
             return "makeFunction"  # Make a function from the attached icon
         if text == ')':
             return "endParen"
+        if text == '[':
+            return icon.SubscriptIcon(window), None
         if text == ']':
             return "endBracket"
         if text == ',':

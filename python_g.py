@@ -270,6 +270,7 @@ class Window:
             # A single icon was selected.  Replace it and its children
             replaceIcon = selectedIcons[0]
             iconParent = replaceIcon.parent()
+            pendingAttr = replaceIcon.childAt('attrIcon')
             if iconParent is None:
                 # Icon is at top, but may be part of a sequence
                 self.entryIcon = typing.EntryIcon(None, None, window=self)
@@ -278,6 +279,7 @@ class Window:
                 self.entryIcon = typing.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
                  window=self)
                 iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
+            self.entryIcon.setPendingAttr(pendingAttr)
             self.cursor.setToEntryIcon()
             self.entryIcon.addText(char)
             self._redisplayChangedEntryIcon()
@@ -805,6 +807,9 @@ class Window:
         for i, arg in enumerate(argIcons):
             fromIcon.replaceChild(None, fromIcon.siteOf(arg))
             ic.insertChild(arg, "argIcons", i)
+        attrIcon = fromIcon.sites.attrIcon.att
+        fromIcon.replaceChild(None, 'attrIcon')
+        ic.replaceChild(attrIcon, 'attrIcon')
         parent = fromIcon.parent()
         if parent is None:
             self.replaceTop(fromIcon, ic)
@@ -1619,6 +1624,10 @@ class Window:
         else:
             parentIcon.replaceChild(argIcon, parentSite)
             argIcon.layoutDirty = True
+        attrIcon = ic.sites.attrIcon.att
+        ic.replaceChild(None, 'attrIcon')
+        if attrIcon is not None and hasattr(argIcon.sites, 'attrIcon'):
+            argIcon.replaceChild(attrIcon, 'attrIcon')
         # If the cursor was on the paren being removed, move it to the icon that has
         # taken its place (BinOp or CursorParen)
         if self.cursor.type == "icon" and self.cursor.icon is ic and \
