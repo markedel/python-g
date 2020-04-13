@@ -99,10 +99,12 @@ def parseExpr(expr):
         return (icon.AttrIcon, expr.attr, parseExpr(expr.value))
     elif expr.__class__ == ast.Subscript:
         if expr.slice.__class__ == ast.Index:
-            slice = [expr.slice.value, None, None]
+            slice = [expr.slice.value]
         elif expr.slice.__class__ == ast.Slice:
             slice = [expr.slice.lower, expr.slice.upper, expr.slice.step]
         parsedSlice = [None if e is None else parseExpr(e) for e in slice]
+        if len(slice) == 3 and parsedSlice[2] is None:
+            parsedSlice = parsedSlice[:2]
         return (icon.SubscriptIcon, parsedSlice, parseExpr(expr.value))
     else:
         return (icon.IdentifierIcon, "**Couldn't Parse**")
@@ -157,9 +159,15 @@ def makeIcons(parsedExpr, window, x, y):
         parentIcon.replaceChild(attrIcon, "attrIcon")
         return topIcon
     if iconClass is icon.SubscriptIcon:
-        # Eventually, we'll care about the other slice components.  For now, just index
-        subscriptIcon = iconClass(window, (x, y))
+        nSlices = len(parsedExpr[1])
+        subscriptIcon = iconClass(nSlices, window, (x, y))
         subscriptIcon.replaceChild(makeIcons(parsedExpr[1][0], window, x, y), "indexIcon")
+        if nSlices >= 2 and parsedExpr[1][1] is not None:
+            subscriptIcon.replaceChild(makeIcons(parsedExpr[1][1], window, x, y),
+                "upperIcon")
+        if nSlices >= 3 and parsedExpr[1][2] is not None:
+            subscriptIcon.replaceChild(makeIcons(parsedExpr[1][2], window, x, y),
+                "stepIcon")
         topIcon = makeIcons(parsedExpr[2], window, x, y)
         parentIcon = icon.findLastAttrIcon(topIcon)
         parentIcon.replaceChild(subscriptIcon, "attrIcon")

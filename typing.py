@@ -1318,7 +1318,7 @@ def parseEntryText(text, forAttrSite, window):
         if text == ')':
             return "endParen"
         if text == '[':
-            return icon.SubscriptIcon(window), None
+            return icon.SubscriptIcon(1, window), None
         if text == ']':
             return "endBracket"
         if text == ',':

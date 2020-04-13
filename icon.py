@@ -53,6 +53,7 @@ DEPTH_EXPAND = 4
 
 EMPTY_ARG_WIDTH = 11
 LIST_EMPTY_ARG_WIDTH = 4
+SLICE_EMPTY_ARG_WIDTH = 1
 
 # Pixels below input/output site to place function/list/tuple icons insertion site
 INSERT_SITE_X_OFFSET = 2
@@ -117,6 +118,21 @@ commaPixmap = (
  "ooooo",
 )
 commaImageSiteYOffset = 3
+
+colonPixmap = (
+ "ooooo",
+ "o   o",
+ "o %6o",
+ "o   o",
+ "o  o.",
+ "o o..",
+ "o  o.",
+ "o   o",
+ "o %6o",
+ "o   o",
+ "ooooo",
+)
+colonImageSiteYOffset = 5
 
 binOutPixmap = (
  "..ooo",
@@ -452,6 +468,7 @@ attrInImage = asciiToImage(attrInPixmap)
 dimAttrOutImage = asciiToImage(dimAttrOutPixmap)
 leftInSiteImage = asciiToImage(leftInSitePixmap)
 commaImage = asciiToImage(commaPixmap)
+colonImage = asciiToImage(colonPixmap)
 binOutImage = asciiToImage(binOutPixmap)
 floatInImage = asciiToImage(floatInPixmap)
 lParenImage = asciiToImage(binLParenPixmap)
@@ -987,14 +1004,14 @@ class AttrIcon(Icon):
 
 
 class SubscriptIcon(Icon):
-    def __init__(self, window=None, location=None):
+    def __init__(self, numSubscripts=1, window=None, location=None):
         Icon.__init__(self, window)
         leftWidth, leftHeight = subscriptLBktImage.size
         attrY = leftHeight // 2 + ATTR_SITE_OFFSET
         self.sites.add('attrOut', 'attrOut', 0, attrY)
         self.sites.add('indexIcon', 'input',
          leftWidth + ATTR_SITE_DEPTH - outSiteImage.width + 1, leftHeight//2)
-        self.argWidth = LIST_EMPTY_ARG_WIDTH
+        self.argWidths = [SLICE_EMPTY_ARG_WIDTH, 0, 0]
         totalWidth, totalHeight = self._size()
         self.sites.add('attrIcon', 'attrIn', totalWidth - ATTR_SITE_DEPTH, attrY)
         if location is None:
@@ -1002,10 +1019,11 @@ class SubscriptIcon(Icon):
         else:
             x, y = location
         self.rect = (x, y, x + totalWidth, y + totalHeight)
+        self.changenumSubscripts(numSubscripts)
 
     def _size(self):
-        return subscriptLBktImage.width + self.argWidth + subscriptRBktImage.width -\
-         2 + ATTR_SITE_DEPTH, subscriptLBktImage.height
+        return subscriptLBktImage.width + sum(self.argWidths) + \
+         subscriptRBktImage.width - 1 + ATTR_SITE_DEPTH, subscriptLBktImage.height
 
     def draw(self, image=None, location=None, clip=None, colorErr=False):
         if image is None:
@@ -1014,7 +1032,7 @@ class SubscriptIcon(Icon):
             location = self.rect[:2]
         if self.cachedImage is None:
             self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
-            # Left brace
+            # Left bracket
             leftImgX = dimAttrOutImage.width - 1
             self.cachedImage.paste(subscriptLBktImage, (leftImgX, 0))
             # attrOut site
@@ -1025,14 +1043,22 @@ class SubscriptIcon(Icon):
              inSiteImage.width
             inSiteY = subscriptLBktImage.height // 2 - inSiteImage.height // 2
             self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
-            # Right brace
-            parenX = inSiteX + self.argWidth + inSiteImage.width - 2
-            self.cachedImage.paste(subscriptRBktImage, (parenX, 0))
+            x = inSiteX + self.argWidths[0] + inSiteImage.width - 1
+            # Colons:
+            colonY = subscriptLBktImage.height // 2 - colonImage.height // 2
+            if hasattr(self.sites, 'upperIcon'):
+                self.cachedImage.paste(colonImage, (x, colonY))
+                x += self.argWidths[1]
+            if hasattr(self.sites, 'stepIcon'):
+                self.cachedImage.paste(colonImage, (x, colonY))
+                x += self.argWidths[2]
+            # Right bracket
+            self.cachedImage.paste(subscriptRBktImage, (x, 0))
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
-        self.argWidth = layout.indexWidth
+        self.argWidths = layout.argWidths
         layout.updateSiteOffsets(self.sites.attrOut)
         top = attrSiteY - (subscriptLBktImage.height // 2 + ATTR_SITE_OFFSET)
         width, height = self._size()
@@ -1042,35 +1068,108 @@ class SubscriptIcon(Icon):
         self.layoutDirty = False
 
     def calcLayout(self):
-        width, height = subscriptLBktImage.size
         if self.sites.indexIcon.att is None:
             indexLayout = None
-            indexWidth = LIST_EMPTY_ARG_WIDTH
+            indexWidth = SLICE_EMPTY_ARG_WIDTH
         else:
             indexLayout = self.sites.indexIcon.att.calcLayout()
-            indexWidth = indexLayout.width
-        totalWidth = subscriptLBktImage.width + indexWidth + \
+            indexWidth = indexLayout.width - 1
+        if hasattr(self.sites, 'upperIcon'):
+            if self.sites.upperIcon.att is None:
+                upperLayout = None
+                upperWidth = colonImage.width + SLICE_EMPTY_ARG_WIDTH - 2
+            else:
+                upperLayout = self.sites.upperIcon.att.calcLayout()
+                upperWidth = colonImage.width + upperLayout.width - 2
+        else:
+            upperWidth = 0
+        if hasattr(self.sites, 'stepIcon'):
+            if self.sites.stepIcon.att is None:
+                stepLayout = None
+                stepWidth = colonImage.width + SLICE_EMPTY_ARG_WIDTH - 2
+            else:
+                stepLayout = self.sites.stepIcon.att.calcLayout()
+                stepWidth = colonImage.width + stepLayout.width - 2
+        else:
+            stepWidth = 0
+        totalWidth = subscriptLBktImage.width + indexWidth + upperWidth + stepWidth + \
          subscriptRBktImage.width - 2 + ATTR_SITE_DEPTH
+        x, height = subscriptLBktImage.size
+        x -= 1  # Icon overlap
         layout = Layout(self, totalWidth, height, height // 2 + ATTR_SITE_OFFSET)
-        layout.addSubLayout(indexLayout, 'indexIcon', width - 1, -ATTR_SITE_OFFSET)
+        layout.addSubLayout(indexLayout, 'indexIcon', x, -ATTR_SITE_OFFSET)
+        x += indexWidth
+        if upperWidth > 0:
+            layout.addSubLayout(upperLayout, 'upperIcon', x + colonImage.width - 1,
+             -ATTR_SITE_OFFSET)
+            x += upperWidth
+        if stepWidth > 0:
+            layout.addSubLayout(stepLayout, 'stepIcon', x + colonImage.width - 1,
+             -ATTR_SITE_OFFSET)
         attrIcon = self.sites.attrIcon.att
         attrLayout = None if attrIcon is None else attrIcon.calcLayout()
         layout.addSubLayout(attrLayout, 'attrIcon', layout.width - ATTR_SITE_DEPTH - 1, 0)
-        layout.indexWidth = indexWidth
+        layout.argWidths = [indexWidth, upperWidth, stepWidth]
         return layout
+
+    def changenumSubscripts(self, n):
+        if n < 3 and hasattr(self.sites, 'stepIcon'):
+            self.sites.remove('stepIcon')
+        if n < 2 and hasattr(self.sites, 'upperIcon'):
+            self.sites.remove('upperIcon')
+        if n >= 2 and not hasattr(self.sites, 'upperIcon'):
+            self.sites.add('upperIcon', 'input')
+        if n == 3 and  not hasattr(self.sites, 'stepIcon'):
+            self.sites.add('stepIcon', 'input')
+        self.layoutDirty = True
 
     def textRepr(self):
         indexIcon = self.sites.indexIcon.att
-        return '[' + '' if indexIcon is None else indexIcon.textRepr() + ']'
+        indexText = "" if indexIcon is None else indexIcon.textRepr()
+        if hasattr(self.sites, 'upperIcon'):
+            if self.sites.upperIcon.att is None:
+                upperText = ":"
+            else:
+                upperText = ":" + self.sites.upperIcon.att.textRepr()
+            if hasattr(self.sites, 'stepIcon') and self.sites.stepIcon.att is not None:
+                stepText = ":" + self.sites.stepIcon.att.textRepr()
+            else:
+                stepText = ""
+        else:
+            upperText = stepText = ""
+        return '[' + indexText + upperText + stepText + ']'
+
+    def clipboardRepr(self, offset):
+        if not hasattr(self.sites, 'upperIcon'):
+            numSubscripts = 1
+        elif not hasattr(self.sites, 'stepIcon'):
+            numSubscripts = 2
+        else:
+            numSubscripts = 3
+        return self._serialize(offset, numSubscripts=numSubscripts)
 
     def execute(self, attrOfValue):
         if self.sites.indexIcon.att is None:
             raise IconExecException(self, "Missing argument")
         indexValue = self.sites.indexIcon.att.execute()
-        try:
-            result = attrOfValue[indexValue]
-        except Exception as err:
-            raise IconExecException(self, err)
+        if hasattr(self.sites, 'upperIcon'):
+            if self.sites.upperIcon.att is None:
+                upperValue = None
+            else:
+                upperValue = self.sites.upperIcon.att.execute()
+            if hasattr(self.sites, 'stepIcon') and self.sites.stepIcon.att is not None:
+                stepValue = self.sites.stepIcon.att.execute()
+            else:
+                stepValue = None
+            try:
+                result = attrOfValue[indexValue:upperValue:stepValue]
+            except Exception as err:
+                raise IconExecException(self, err)
+        else:
+            try:
+                result = attrOfValue[indexValue]
+            except Exception as err:
+                raise IconExecException(self, err)
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
