@@ -648,6 +648,8 @@ class Window:
                 text = ic.operator
             elif isinstance(ic, icon.AttrIcon):
                 text = "." + ic.name
+            elif isinstance(ic, icon.NumericIcon):
+                text = ic.text
             else:
                 text = ic.name
             parent = ic.parent()
@@ -685,6 +687,72 @@ class Window:
                 self.cursor.setToIconSite(ic, prevSite)
                 redrawRegion.add(self.layoutDirtyIcons())
                 self.refresh(redrawRegion.get())
+
+        elif isinstance(ic, icon.SubscriptIcon):
+            if self.cursor.site in ('indexIcon', 'attrIcon'):
+                # Try to remove whole subscript
+                if ic.childAt('indexIcon') or \
+                 hasattr(ic.sites, 'upperIcon') and ic.childAt('upperIcon') or \
+                 hasattr(ic.sites, 'stepIcon') and ic.childAt('stepIcon'):
+                    self._select(ic, op='hier')
+                else:
+                    parent = ic.parent()
+                    self.removeIcons([ic])
+                    if parent is not None:
+                        self.cursor.setToIconSite(parent, 'attrIcon')
+                return
+            # Site is after a colon.  Try to remove it
+            redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+            if self.cursor.site == 'upperIcon':
+                # Remove first colon
+                mergeSite1 = 'indexIcon'
+                mergeSite2 = 'upperIcon'
+            else:
+                # Remove second colon
+                mergeSite1 = 'upperIcon'
+                mergeSite2 = 'stepIcon'
+            mergeIcon1 = ic.childAt(mergeSite1)
+            mergeIcon2 = ic.childAt(mergeSite2)
+            if mergeIcon2 is None:
+                # Site after colon is empty (no need to merge)
+                pass
+            elif mergeIcon1 is None:
+                # Site before colon is empty, move the icon after the colon to it
+                ic.replaceChild(mergeIcon2, mergeSite1)
+            elif hasattr(mergeIcon1.sites, 'attrIcon'):
+                # Site before colon is not empty, but has site for entry icon
+                self.entryIcon = typing.EntryIcon(mergeIcon1, 'attrIcon', window=self)
+                self.entryIcon.setPendingArg(mergeIcon2)
+                mergeIcon1.replaceChild(self.entryIcon, 'attrIcon')
+            else:
+                # Can't safely remove the colon
+                typing.beep()
+                return
+            # If there is a step site that wasn't part of the merge, shift it.
+            if hasattr(ic.sites, 'stepIcon') and mergeSite2 != 'stepIcon':
+                moveIcon = ic.childAt('stepIcon')
+                ic.replaceChild(moveIcon, 'upperIcon')
+            # Clear the site to be removed (may not be necessary, but may be safer) and
+            # remove the colon (colonectomy)
+            if hasattr(ic.sites, 'stepIcon'):
+                ic.replaceChild(None, 'stepIcon')
+                ic.changeNumSubscripts(2)
+            else:
+                ic.replaceChild(None, 'upperIcon')
+                ic.changeNumSubscripts(1)
+            # Place the cursor or new entry icon, and redraw
+            if self.entryIcon is None:
+                if mergeIcon2 is None and mergeIcon1 is not None and \
+                 hasattr(mergeIcon1.sites, 'attrIcon'):
+                    self.cursor.setToIconSite(mergeIcon1, "attrIcon")
+                else:
+                    self.cursor.setToIconSite(ic, mergeSite1)
+                redrawRegion.add(self.layoutDirtyIcons())
+                self.refresh(redrawRegion.get())
+            else:
+                self.cursor.setToEntryIcon()
+                self._redisplayChangedEntryIcon(evt, redrawRegion.get())
+
         elif isinstance(ic, icon.BinOpIcon) or isinstance(ic, icon.DivideIcon):
             # Binary operations replace the icon with its left argument and attach the
             # entry icon to its attribute site, with the right argument as a pending
@@ -731,6 +799,7 @@ class Window:
                 ic.replaceChild(None, 'rightArg')
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt)
+
         elif isinstance(ic, icon.AssignIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)
             topIcon = ic.topLevelParent()

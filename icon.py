@@ -1011,7 +1011,7 @@ class SubscriptIcon(Icon):
         self.sites.add('attrOut', 'attrOut', 0, attrY)
         self.sites.add('indexIcon', 'input',
          leftWidth + ATTR_SITE_DEPTH - outSiteImage.width + 1, leftHeight//2)
-        self.argWidths = [SLICE_EMPTY_ARG_WIDTH, 0, 0]
+        self.argWidths = [LIST_EMPTY_ARG_WIDTH, 0, 0]
         totalWidth, totalHeight = self._size()
         self.sites.add('attrIcon', 'attrIn', totalWidth - ATTR_SITE_DEPTH, attrY)
         if location is None:
@@ -1019,7 +1019,7 @@ class SubscriptIcon(Icon):
         else:
             x, y = location
         self.rect = (x, y, x + totalWidth, y + totalHeight)
-        self.changenumSubscripts(numSubscripts)
+        self.changeNumSubscripts(numSubscripts)
 
     def _size(self):
         return subscriptLBktImage.width + sum(self.argWidths) + \
@@ -1070,7 +1070,11 @@ class SubscriptIcon(Icon):
     def calcLayout(self):
         if self.sites.indexIcon.att is None:
             indexLayout = None
-            indexWidth = SLICE_EMPTY_ARG_WIDTH
+            if hasattr(self.sites, 'upperIcon'):
+                indexWidth = SLICE_EMPTY_ARG_WIDTH
+            else:
+                # Emphasize missing argument(s)
+                indexWidth = LIST_EMPTY_ARG_WIDTH
         else:
             indexLayout = self.sites.indexIcon.att.calcLayout()
             indexWidth = indexLayout.width - 1
@@ -1112,15 +1116,22 @@ class SubscriptIcon(Icon):
         layout.argWidths = [indexWidth, upperWidth, stepWidth]
         return layout
 
-    def changenumSubscripts(self, n):
-        if n < 3 and hasattr(self.sites, 'stepIcon'):
+    def changeNumSubscripts(self, n):
+        if hasattr(self.sites, 'stepIcon'):
+            oldN = 3
+        elif hasattr(self.sites, 'upperIcon'):
+            oldN = 2
+        else:
+            oldN = 1
+        if n < 3 and oldN == 3:
             self.sites.remove('stepIcon')
-        if n < 2 and hasattr(self.sites, 'upperIcon'):
+        if n < 2 and oldN >= 2:
             self.sites.remove('upperIcon')
-        if n >= 2 and not hasattr(self.sites, 'upperIcon'):
+        if n >= 2 and oldN < 2:
             self.sites.add('upperIcon', 'input')
-        if n == 3 and  not hasattr(self.sites, 'stepIcon'):
+        if n == 3 and oldN < 3:
             self.sites.add('stepIcon', 'input')
+        self.window.undo.registerCallback(self.changeNumSubscripts, oldN)
         self.layoutDirty = True
 
     def textRepr(self):

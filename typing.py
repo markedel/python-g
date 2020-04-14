@@ -28,7 +28,7 @@ HORIZ_ARROW_Y_JUMP_MAX = 12
 # Minimum threshold (pixels) for cursor movement via arrow keys (to prevent minor
 # alignment issues from dominating the destination site choice
 VERT_ARROW_Y_JUMP_MIN = 5
-VERT_ARROW_X_JUMP_MIN = 3
+VERT_ARROW_X_JUMP_MIN = 1
 
 # Limits (pixels) for cursor movement via arrow key
 VERT_ARROW_MAX_DIST = 400
@@ -284,8 +284,11 @@ class EntryIcon(icon.Icon):
         self._setText(newText, self.cursorPos + len(char))
 
     def backspace(self):
-        newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
-        self._setText(newText, self.cursorPos-1)
+        if self.text == "":
+            self.remove()
+        else:
+            newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
+            self._setText(newText, self.cursorPos-1)
 
     def arrowAction(self, direction):
         newCursorPos = self.cursorPos
@@ -372,6 +375,10 @@ class EntryIcon(icon.Icon):
                     self.attachedSiteType = cursor.siteType
                     cursor.setToEntryIcon()
             else:
+                beep()
+            return
+        elif parseResult == "colon":
+            if not self.insertColon():
                 beep()
             return
         elif parseResult == "endBracket":
@@ -838,6 +845,64 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(topParent, cursorSite)
             return True
         return False
+
+    def insertColon(self):
+        # Look for an icon that supports colons (currently, only subscript)
+        for parent in self.attachedIcon.parentage(includeSelf=True):
+            if isinstance(parent, icon.SubscriptIcon):
+                subsIc = parent
+                break
+        else:
+            subsIc = None
+        if subsIc is not None and hasattr(subsIc.sites, 'stepIcon'):
+            subsIc = None
+        if subsIc is None:
+            # Icon not found or already has the maximum # of sites
+            cursorToIcon = self.attachedIcon
+            cursorToSite = self.attachedSite
+        else:
+            # Subscript icon accepting colon, found.  Add a new site to it
+            if hasattr(subsIc.sites, 'upperIcon'):
+                subsIc.changeNumSubscripts(3)
+                siteAdded = 'stepIcon'
+            else:
+                subsIc.changeNumSubscripts(2)
+                siteAdded = 'upperIcon'
+            # If the cursor was on the first site, may need to shift second-site icons
+            entrySite = subsIc.siteOf(self, recursive=True)
+            if entrySite == 'indexIcon' and siteAdded == "stepIcon":
+                toShift = subsIc.childAt('upperIcon')
+                subsIc.replaceChild(None, "upperIcon")
+                subsIc.replaceChild(toShift, 'stepIcon')
+                cursorToSite = 'upperIcon'
+            else:
+                cursorToSite = siteAdded
+            cursorToIcon = subsIc
+        # Decide on appropriate disposition for entry icon and cursor.  Try to remove
+        # entry icon if at all possible, even if the colon was rejected, since there
+        # won't be any text left in it.
+        cursorSiteType = cursorToIcon.typeOf(cursorToSite)
+        if self.pendingArg() and cursorSiteType == 'input' or \
+         self.pendingAttr() and cursorSiteType == 'attrIn':
+            # Entry icon has a pending argument which can be attached
+            self.attachedIcon.replaceChild(None, self.attachedSite)
+            self.window.entryIcon = None
+            pend = self.pendingArg() if cursorSiteType == "input" else self.pendingAttr()
+            cursorToIcon.replaceChild(pend, cursorToSite)
+            self.window.cursor.setToIconSite(cursorToIcon, cursorToSite)
+        elif self.pendingAttr() or self.pendingArg():
+            # Entry icon has a pending arg or attr which could not be attached
+            self.attachedIcon.replaceChild(None, self.attachedSite)
+            self.attachedIcon = cursorToIcon
+            self.attachedSite = cursorToSite
+            self.attachedSiteType = "input"
+            cursorToIcon.replaceChild(self, cursorToSite)
+        else:
+            # Entry icon has nothing pending and can safely be removed
+            self.attachedIcon.replaceChild(None, self.attachedSite)
+            self.window.entryIcon = None
+            self.window.cursor.setToIconSite(cursorToIcon, cursorToSite)
+        return subsIc is not None
 
     def click(self, evt):
         self.window.cursor.erase()
@@ -1323,6 +1388,8 @@ def parseEntryText(text, forAttrSite, window):
             return "endBracket"
         if text == ',':
             return "comma"
+        if text == ':':
+            return "colon"
         op = text[:-1]
         delim = text[-1]
         if attrPattern.fullmatch(op):
@@ -1352,6 +1419,8 @@ def parseEntryText(text, forAttrSite, window):
             return "endBracket"
         if text == ',':
             return "comma"
+        if text == ':':
+            return "colon"
         if text == '=':
             return icon.AssignIcon(1, window), None
         if identPattern.fullmatch(text) or numPattern.fullmatch(text):
