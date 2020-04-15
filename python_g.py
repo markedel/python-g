@@ -317,10 +317,9 @@ class Window:
     def _redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
         # ... This currently operates on all of the icons in the window, and needs to be
         #      narrowed to just the top icon that held the cursor
-        if self.entryIcon is None:
-            redrawRegion = AccumRects(oldLoc)
-        else:
-            redrawRegion = AccumRects(self.entryIcon.rect)
+        redrawRegion = AccumRects(oldLoc)
+        if self.entryIcon is not None:
+            redrawRegion.add(self.entryIcon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
         for ic in self.topIcons.copy():  # Copy because function can change list
@@ -629,8 +628,10 @@ class Window:
             elif self.cursor.type == "icon":
                 self._backspaceIcon(evt)
         else:
+            topIcon = self.entryIcon.topLevelParent()
+            redrawRect = topIcon.hierRect()
             self.entryIcon.backspace()
-            self._redisplayChangedEntryIcon()
+            self._redisplayChangedEntryIcon(evt, redrawRect)
 
     def _backspaceIcon(self, evt):
         if self.cursor.type != 'icon' or self.cursor.site in ('output', 'seqIn', 'seqOut'):
@@ -668,34 +669,83 @@ class Window:
                 self.entryIcon.setPendingAttr(ic.sites.attrIcon.att)
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt)
+
         elif isinstance(ic, icon.ListTypeIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)
-            if index == 0:
-                self.listPopupIcon = ic
-                self.listPopupVal.set('(' if isinstance(ic, icon.TupleIcon) else '[')
-                # Tkinter's pop-up grab does not allow accelerator keys to operate while
-                # up, which is unfortunate as you'd really like to type [ or (
-                self.listPopup.tk_popup(evt.x_root, evt.y_root, 0)
+            if self.cursor.site == "attrIcon" or index == 0:
+                # On backspace in to a list or tuple from the outside, or from the first
+                # argument site
+                argIcons = ic.argIcons()
+                if len([i for i in argIcons if i != None]) == 0:
+                    # Delete the list if it's empty
+                    parent = ic.parent()
+                    if parent is not None:
+                        parentSite = parent.siteOf(ic)
+                    self.removeIcons([ic])
+                    if parent is not None:
+                        self.cursor.setToIconSite(parent, parentSite)
+                elif self.cursor.site == "attrIcon":
+                    # Move in to the list if it's not empty and bs is from attribute site
+                    lastIdx = len(argIcons) - 1
+                    if argIcons[lastIdx] is None:
+                        self.cursor.setToIconSite(ic, "argIcons", lastIdx)
+                    else:
+                        rightmostIcon = icon.findLastAttrIcon(argIcons[lastIdx])
+                        rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                        self.cursor.setToIconSite(rightmostIcon, rightmostSite)
+                    return
+                else:
+                    # Pop up context menu to change type if it's not empty and bs is from
+                    # the first argument site
+                    self.listPopupIcon = ic
+                    self.listPopupVal.set('(' if isinstance(ic, icon.TupleIcon) else '[')
+                    # Tkinter's pop-up grab does not allow accelerator keys to operate
+                    # while up, which is unfortunate as you'd really like to type [ or (
+                    self.listPopup.tk_popup(evt.x_root, evt.y_root, 0)
             else:
+                # Cursor is on comma input.  Delete if empty or previous site is empty
                 prevSite = icon.makeSeriesSiteId(siteName, index-1)
-                if ic.childAt(prevSite):
+                childAtCursor = ic.childAt(self.cursor.site)
+                if childAtCursor and ic.childAt(prevSite):
                     typing.beep()
                     return
                 topIcon = ic.topLevelParent()
                 redrawRegion = AccumRects(topIcon.hierRect())
-                ic.removeEmptySeriesSite(prevSite)
-                self.cursor.setToIconSite(ic, prevSite)
+                if not ic.childAt(prevSite):
+                    ic.removeEmptySeriesSite(prevSite)
+                    self.cursor.setToIconSite(ic, prevSite)
+                else:
+                    rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
+                    rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                    ic.removeEmptySeriesSite(self.cursor.site)
+                    self.cursor.setToIconSite(rightmostIcon, rightmostSite)
                 redrawRegion.add(self.layoutDirtyIcons())
                 self.refresh(redrawRegion.get())
 
         elif isinstance(ic, icon.SubscriptIcon):
             if self.cursor.site in ('indexIcon', 'attrIcon'):
-                # Try to remove whole subscript
+                # Cursor is on attribute site or index site
                 if ic.childAt('indexIcon') or \
                  hasattr(ic.sites, 'upperIcon') and ic.childAt('upperIcon') or \
                  hasattr(ic.sites, 'stepIcon') and ic.childAt('stepIcon'):
-                    self._select(ic, op='hier')
+                    # Icon is not empty.
+                    if self.cursor.site == 'attrIcon':
+                        # If cursor is on attr site, move it to end of args
+                        for siteId in ('stepIcon', 'upperIcon', 'indexIcon'):
+                            if hasattr(ic.sites, siteId):
+                                break
+                        siteIcon = ic.childAt(siteId)
+                        if siteIcon:
+                            rightIcon = icon.findLastAttrIcon(siteIcon)
+                            rightIcon, rightSite = typing.rightmostSite(rightIcon)
+                            self.cursor.setToIconSite(rightIcon, rightSite)
+                        else:
+                            self.cursor.setToIconSite(ic, siteId)
+                    else:
+                        # If cursor is on the first subscript site, select it and children
+                        self._select(ic, op='hier')
                 else:
+                    # Icon is empty, remove
                     parent = ic.parent()
                     self.removeIcons([ic])
                     if parent is not None:
@@ -756,8 +806,8 @@ class Window:
         elif isinstance(ic, icon.BinOpIcon) or isinstance(ic, icon.DivideIcon):
             # Binary operations replace the icon with its left argument and attach the
             # entry icon to its attribute site, with the right argument as a pending
-            # argument.  Note that this takes advantage of the fact that a lot of
-            # things that shouldn't have attribute sites, do, which may be fragile.
+            # argument.
+            redrawRect = ic.topLevelParent().hierRect()
             parent = ic.parent()
             if isinstance(ic, icon.DivideIcon):
                 leftArg = ic.sites.topArg.att
@@ -768,11 +818,14 @@ class Window:
                 rightArg = ic.rightArg()
                 op = ic.operator
             if parent is None and leftArg is None:
-                self.entryIcon = typing.EntryIcon(None, None,
-                    initialString=op, window=self)
+                entryAttachedIcon, entryAttachedSite = None, None
+            elif parent is not None and leftArg is None:
+                entryAttachedIcon = parent
+                entryAttachedSite = parent.siteOf(ic)
             else:
-                self.entryIcon = typing.EntryIcon(leftArg, 'attrIcon',
-                    initialString=op, window=self)
+                entryAttachedIcon, entryAttachedSite = typing.rightmostSite(leftArg)
+            self.entryIcon = typing.EntryIcon(entryAttachedIcon, entryAttachedSite,
+                initialString=op, window=self)
             if leftArg is not None:
                 leftArg.replaceChild(None, 'output')
             if rightArg is not None:
@@ -783,14 +836,12 @@ class Window:
                     self.replaceTop(ic, self.entryIcon)
                 else:
                     self.replaceTop(ic, leftArg)
-                    leftArg.replaceChild(self.entryIcon, 'attrIcon')
+                    entryAttachedIcon.replaceChild(self.entryIcon, entryAttachedSite)
             else:
                 parentSite = parent.siteOf(ic)
-                if leftArg is None:
-                    parent.replaceChild(self.entryIcon, parent.siteOf(ic))
-                else:
-                    parent.replaceChild(leftArg, parentSite, parent.siteOf(ic))
-                    leftArg.replaceChild(self.entryIcon, 'attrIcon')
+                if leftArg is not None:
+                    parent.replaceChild(leftArg, parentSite)
+                entryAttachedIcon.replaceChild(self.entryIcon, entryAttachedSite)
             if isinstance(ic, icon.DivideIcon):
                 ic.replaceChild(None, 'topArg')
                 ic.replaceChild(None, 'bottomArg')
@@ -798,7 +849,7 @@ class Window:
                 ic.replaceChild(None, 'leftArg')
                 ic.replaceChild(None, 'rightArg')
             self.cursor.setToEntryIcon()
-            self._redisplayChangedEntryIcon(evt)
+            self._redisplayChangedEntryIcon(evt, redrawRect)
 
         elif isinstance(ic, icon.AssignIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)

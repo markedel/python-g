@@ -310,7 +310,7 @@ class EntryIcon(icon.Icon):
             elif self.pendingAttr() and self.attachedSiteType == "attrIn":
                 self.attachedIcon.replaceChild(self.pendingAttr(), self.attachedSite)
             else:
-                self.attachedIcon.replaceChild(None, self.attachedSite)
+                self.attachedIcon.replaceChild(None, self.attachedSite, leavePlace=True)
             if self.attachedIcon.hasSite(self.attachedSite):
                 self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
             else: # The last element of list can disappear when entry icon is removed
@@ -640,9 +640,10 @@ class EntryIcon(icon.Icon):
                     self.window.replaceTop(parent, tupleIcon)
                 else:
                     parentParent.replaceChild(tupleIcon, parentParent.siteOf(parent))
-                attrIcon = parent.sites.attrIcon.att
-                parent.replaceChild(None, 'attrIcon')
-                tupleIcon.replaceChild(attrIcon, 'attrIcon')
+                if hasattr(parent.sites, 'attrIcon'):
+                    attrIcon = parent.sites.attrIcon.att
+                    parent.replaceChild(None, 'attrIcon')
+                    tupleIcon.replaceChild(attrIcon, 'attrIcon')
                 return True
             if parent.__class__ is not icon.BinOpIcon:
                 return False
@@ -1128,6 +1129,10 @@ class Cursor:
             self.site = siteIdOrSeriesName
         else:
             self.site = icon.makeSeriesSiteId(siteIdOrSeriesName, seriesIndex)
+        if isinstance(ic, icon.BinOpIcon) and not ic.hasParens and self.site=='attrIcon':
+            # Some operations take advantage of the fact that BinOpIcons have an invisible
+            # attribute site.  This is almost always wrong.
+            self.icon, self.site = rightmostSite(ic)
         self.siteType = ic.typeOf(self.site)
         self.blinkState = True
         self.draw()
@@ -1605,3 +1610,18 @@ def searchForOpenCursorParen(ic, site):
         else:
             site = nextIc.siteOf(ic)
         ic = nextIc
+
+def rightmostSite(ic):
+    """Return the site that is rightmost on an icon.  For most icons, that is an attribute
+    site, but for unary or binary operations with the right operand missing, it can be an
+    input site.  While binary op icons may have a fake invisible attribute site, it should
+    be used carefully (if ever)."""
+    if isinstance(ic, icon.UnaryOpIcon):
+        if ic.arg() is None:
+            return ic, 'argIcon'
+        return rightmostSite(icon.findLastAttrIcon(ic.arg()))
+    elif isinstance(ic, icon.BinOpIcon) and not ic.hasParens:
+        if ic.rightArg() is None:
+            return ic, 'rightArg'
+        return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))
+    return ic, 'attrIcon'

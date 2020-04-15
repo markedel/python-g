@@ -1244,6 +1244,9 @@ class UnaryOpIcon(Icon):
         pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
          colorErr), location, clip)
 
+    def arg(self):
+        return self.sites.argIcon.att
+
     def doLayout(self, outSiteX, outSiteY, layout):
         width, height = self.bodySize
         width += outSiteImage.width - 1
@@ -1256,26 +1259,26 @@ class UnaryOpIcon(Icon):
         width, height = self.bodySize
         mySiteOffset = height // 2
         layout = Layout(self, width + EMPTY_ARG_WIDTH, height, mySiteOffset)
-        if self.sites.argIcon.att is None:
+        if self.arg() is None:
             layout.addSubLayout(None, 'argIcon', width, 0)
         else:
-            layout.addSubLayout(self.sites.argIcon.att.calcLayout(), 'argIcon', width, 0)
+            layout.addSubLayout(self.arg().calcLayout(), 'argIcon', width, 0)
         return layout
 
     def textRepr(self):
-        if self.sites.argIcon.att is None:
+        if self.arg() is None:
             argText = "None"
         else:
-            argText = self.sites.argIcon.att.textRepr()
+            argText = self.arg().textRepr()
         return self.operator + " " + argText
 
     def clipboardRepr(self, offset):
         return self._serialize(offset, op=self.operator)
 
     def execute(self):
-        if self.sites.argIcon.att is None:
+        if self.arg() is None:
             raise IconExecException(self, "Missing argument")
-        argValue = self.sites.argIcon.att.execute()
+        argValue = self.arg().execute()
         try:
             result = unaryOpFn[self.operator](argValue)
         except Exception as err:
