@@ -1604,16 +1604,17 @@ def searchForOpenCursorParen(ic, site):
             site = nextIc.siteOf(ic)
         ic = nextIc
 
-def rightmostSite(ic):
+def rightmostSite(ic, ignoreAutoParens=False):
     """Return the site that is rightmost on an icon.  For most icons, that is an attribute
     site, but for unary or binary operations with the right operand missing, it can be an
     input site.  While binary op icons may have a fake invisible attribute site, it should
-    be used carefully (if ever)."""
+    be used carefully (if ever).  ignoreAutoParens prevents choosing auto-paren attribute
+    site of BinOpIcon, even if it the rightmost."""
     if isinstance(ic, icon.UnaryOpIcon):
         if ic.arg() is None:
             return ic, 'argIcon'
         return rightmostSite(icon.findLastAttrIcon(ic.arg()))
-    elif isinstance(ic, icon.BinOpIcon) and not ic.hasParens:
+    elif isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ignoreAutoParens):
         if ic.rightArg() is None:
             return ic, 'rightArg'
         return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))

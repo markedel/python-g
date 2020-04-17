@@ -803,10 +803,38 @@ class Window:
                 self.cursor.setToEntryIcon()
                 self._redisplayChangedEntryIcon(evt, redrawRegion.get())
 
+        elif isinstance(ic, typing.CursorParenIcon):
+            arg = ic.sites.argIcon.att
+            if self.cursor.site == 'attrIcon':
+                # Cursor is on attribute site of right paren.  Move cursor in
+                if arg is None:
+                    cursIc = arg
+                    cursSite = 'argIcon'
+                else:
+                    cursIc, cursSite =  typing.rightmostSite(icon.findLastAttrIcon(arg))
+                self.cursor.setToIconSite(cursIc, cursSite)
+            else:
+                # Cursor is on argument site: remove if empty, otherwise, select
+                if arg is None:
+                    self.removeIcons([arg])
+                else:
+                    self._select(ic, op='hier')
+
         elif isinstance(ic, icon.BinOpIcon) or isinstance(ic, icon.DivideIcon):
             # Binary operations replace the icon with its left argument and attach the
             # entry icon to its attribute site, with the right argument as a pending
             # argument.
+            if self.cursor.site == 'attrIcon':
+                # Cursor is on attribute site of right paren.  Move cursor in
+                rightArg = ic.rightArg()
+                if rightArg is None:
+                    cursorIc = ic
+                    cursorSite = 'leftArg'
+                else:
+                    cursorIc, cursorSite = typing.rightmostSite(
+                     icon.findLastAttrIcon(rightArg))
+                self.cursor.setToIconSite(cursorIc, cursorSite)
+                return
             redrawRect = ic.topLevelParent().hierRect()
             parent = ic.parent()
             if isinstance(ic, icon.DivideIcon):
@@ -822,9 +850,10 @@ class Window:
             elif parent is not None and leftArg is None:
                 entryAttachedIcon = parent
                 entryAttachedSite = parent.siteOf(ic)
-            else:
+            else:  # leftArg is not None, attach to that
+                # Ignore auto parens because we are removing the supporting operator
                 entryAttachedIcon, entryAttachedSite = typing.rightmostSite(
-                 icon.findLastAttrIcon(leftArg))
+                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
             self.entryIcon = typing.EntryIcon(entryAttachedIcon, entryAttachedSite,
                 initialString=op, window=self)
             if leftArg is not None:
@@ -859,7 +888,7 @@ class Window:
             if index == 0:
                 if siteName == "targets0":
                     return
-                if siteName == "values" and not ic.hasSite('targets1'):
+                if siteName == "values" and not hasattr(ic.sites, 'targets1'):
                     # This is the only '=' in the assignment, convert it to a tuple
                     argIcons = [site.att for site in ic.sites.targets0]
                     numTargets = len(argIcons)
@@ -885,30 +914,43 @@ class Window:
                         srcSite = "targets%d" % removetgtGrpIdx
                         destSite = "values"
                         destIdx = 0
-                        cursorIdx = len(getattr(ic.sites, srcSite))
+                        cursorIdx = len(getattr(ic.sites, srcSite)) - 1
                     else:
                         srcSite = siteName
                         removetgtGrpIdx = int(siteName[7:])
                         destSite = siteName[:7] + str(removetgtGrpIdx - 1)
                         destIdx = len(getattr(ic.sites, destSite))
-                        cursorIdx = destIdx
+                        cursorIdx = destIdx - 1
                     argIcons = [site.att for site in getattr(ic.sites, srcSite)]
                     for i, arg in enumerate(argIcons):
                         ic.replaceChild(None, ic.siteOf(arg))
                         ic.insertChild(arg, destSite, destIdx + i)
                     ic.removeTargetGroup(removetgtGrpIdx)
                     cursorSite = icon.makeSeriesSiteId(destSite, cursorIdx)
-                    self.cursor.setToIconSite(ic, cursorSite)
+                    cursorIc = ic.childAt(cursorSite)
+                    if cursorIc is None:
+                        cursorIc = ic
+                    else:
+                        cursorIc, cursorSite = typing.rightmostSite(
+                         icon.findLastAttrIcon(cursorIc))
+                    self.cursor.setToIconSite(cursorIc, cursorSite)
             else:
-                # Delete empty comma site before cursor
+                # Cursor is on comma input.  Delete if empty or previous site is empty
                 prevSite = icon.makeSeriesSiteId(siteName, index-1)
-                if ic.childAt(prevSite):
+                childAtCursor = ic.childAt(self.cursor.site)
+                if childAtCursor and ic.childAt(prevSite):
                     typing.beep()
                     return
                 topIcon = ic.topLevelParent()
                 redrawRegion = AccumRects(topIcon.hierRect())
-                ic.removeEmptySeriesSite(prevSite)
-                self.cursor.setToIconSite(ic, prevSite)
+                if not ic.childAt(prevSite):
+                    ic.removeEmptySeriesSite(prevSite)
+                    self.cursor.setToIconSite(ic, prevSite)
+                else:
+                    rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
+                    rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                    ic.removeEmptySeriesSite(self.cursor.site)
+                    self.cursor.setToIconSite(rightmostIcon, rightmostSite)
             redrawRegion.add(self.layoutDirtyIcons())
             self.refresh(redrawRegion.get())
             self.undo.addBoundary()
