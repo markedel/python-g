@@ -256,28 +256,28 @@ class EntryIcon(icon.Icon):
             image.paste(penImage, box=(x, nibTop), mask=penImage)
 
     def setPendingArg(self, newArg):
-        if hasattr(self.sites, 'pendingAttr'):
+        if self.hasSite('pendingAttr'):
             self.sites.remove('pendingAttr')
-        if not hasattr(self.sites, 'pendingArg'):
+        if not self.hasSite('pendingArg'):
             x = self.sites.output.xOffset + self._width()
             y = self.sites.output.yOffset
             self.sites.add('pendingArg', 'input', x, y)
         self.sites.pendingArg.attach(self, newArg, "output")
 
     def pendingArg(self):
-        return self.sites.pendingArg.att if hasattr(self.sites, 'pendingArg') else None
+        return self.sites.pendingArg.att if self.hasSite('pendingArg') else None
 
     def setPendingAttr(self, newAttr):
-        if hasattr(self.sites, 'pendingArg'):
+        if self.hasSite('pendingArg'):
             self.sites.remove('pendingArg')
-        if not hasattr(self.sites, 'pendingAttr'):
+        if not self.hasSite('pendingAttr'):
             x = self.sites.output.xOffset + self._width()
             y = self.sites.output.yOffset + icon.ATTR_SITE_OFFSET
             self.sites.add('pendingAttr', 'attrIn', x, y)
         self.sites.pendingAttr.attach(self, newAttr, "attrOut")
 
     def pendingAttr(self):
-        return self.sites.pendingAttr.att if hasattr(self.sites, 'pendingAttr') else None
+        return self.sites.pendingAttr.att if self.hasSite('pendingAttr') else None
 
     def addText(self, char):
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
@@ -640,7 +640,7 @@ class EntryIcon(icon.Icon):
                     self.window.replaceTop(parent, tupleIcon)
                 else:
                     parentParent.replaceChild(tupleIcon, parentParent.siteOf(parent))
-                if hasattr(parent.sites, 'attrIcon'):
+                if parent.hasSite('attrIcon'):
                     attrIcon = parent.sites.attrIcon.att
                     parent.replaceChild(None, 'attrIcon')
                     tupleIcon.replaceChild(attrIcon, 'attrIcon')
@@ -855,7 +855,7 @@ class EntryIcon(icon.Icon):
                 break
         else:
             subsIc = None
-        if subsIc is not None and hasattr(subsIc.sites, 'stepIcon'):
+        if subsIc is not None and subsIc.hasSite('stepIcon'):
             subsIc = None
         if subsIc is None:
             # Icon not found or already has the maximum # of sites
@@ -863,7 +863,7 @@ class EntryIcon(icon.Icon):
             cursorToSite = self.attachedSite
         else:
             # Subscript icon accepting colon, found.  Add a new site to it
-            if hasattr(subsIc.sites, 'upperIcon'):
+            if subsIc.hasSite('upperIcon'):
                 subsIc.changeNumSubscripts(3)
                 siteAdded = 'stepIcon'
             else:
@@ -986,54 +986,51 @@ class CursorParenIcon(icon.Icon):
         if closed:
             self.close()
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        needSeqSites = self.parent() is None and image is None
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or image is not None)
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', (icon.rectWidth(self.rect),
-             icon.rectHeight(self.rect)), color=(0, 0, 0, 0))
+         self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            bodyWidth, bodyHeight = self.bodySize
+            img = Image.new('RGBA', (bodyWidth + icon.outSiteImage.width, bodyHeight),
+             color=(0, 0, 0, 0))
             textWidth, textHeight = icon.globalFont.getsize("(")
             bodyLeft = icon.outSiteImage.width - 1
-            draw = ImageDraw.Draw(self.cachedImage)
-            width = textWidth + 2 * icon.TEXT_MARGIN
+            draw = ImageDraw.Draw(img)
             height = textHeight + 2 * icon.TEXT_MARGIN
-            draw.rectangle((bodyLeft, 0, bodyLeft + width, height),
+            draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth-1, bodyHeight-1),
              fill=icon.ICON_BG_COLOR, outline=icon.OUTLINE_COLOR)
             if needSeqSites:
-                icon.drawSeqSites(self.cachedImage, bodyLeft, 0, height+1)
+                icon.drawSeqSites(img, bodyLeft, 0, bodyHeight)
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset
-            outImageY = outSiteY - icon.outSiteImage.height // 2
+            outImgY = outSiteY - icon.outSiteImage.height // 2
             if needOutSite:
-                self.cachedImage.paste(icon.outSiteImage, (outSiteX, outImageY),
-                 mask=icon.outSiteImage)
+                img.paste(icon.outSiteImage, (outSiteX, outImgY), mask=icon.outSiteImage)
             inSiteX = self.sites.argIcon.xOffset
             inImageY = self.sites.argIcon.yOffset - icon.inSiteImage.height // 2
-            self.cachedImage.paste(icon.inSiteImage, (inSiteX, inImageY))
-            textLeft = bodyLeft + icon.TEXT_MARGIN + 1
+            img.paste(icon.inSiteImage, (inSiteX, inImageY))
+            textLeft = bodyLeft + icon.TEXT_MARGIN
             draw.text((textLeft, icon.TEXT_MARGIN), "(",
              font=icon.globalFont, fill=(180, 180, 180, 255))
+            self.drawList = [((0, 0), img)]
             if self.closed:
-                bodyWidth, bodyHeight = self.bodySize
-                endParenLeft = self.cachedImage.width - bodyWidth - 1
-                draw.rectangle((endParenLeft, 0, endParenLeft + bodyWidth,
-                 bodyHeight-1), fill=icon.ICON_BG_COLOR, outline=icon.OUTLINE_COLOR)
-                textLeft = endParenLeft + icon.TEXT_MARGIN + 1
+                closeImg = Image.new('RGBA', (bodyWidth, bodyHeight))
+                draw = ImageDraw.Draw(closeImg)
+                draw.rectangle((0, 0, bodyWidth-1, bodyHeight-1), fill=icon.ICON_BG_COLOR,
+                 outline=icon.OUTLINE_COLOR)
+                textLeft = icon.TEXT_MARGIN
                 draw.text((textLeft, icon.TEXT_MARGIN), ")",
                     font=icon.globalFont, fill=(180, 180, 180, 255))
-                attrX = self.sites.attrIcon.xOffset
+                attrX = bodyWidth - 1 - icon.ATTR_SITE_DEPTH
                 attrY = self.sites.attrIcon.yOffset
-                self.cachedImage.paste(icon.attrInImage, (attrX, attrY))
+                closeImg.paste(icon.attrInImage, (attrX, attrY))
+                endParenLeft = icon.rectWidth(self.rect) - bodyWidth
+                self.drawList.append(((endParenLeft, 0), closeImg))
             else:
                 draw.line((bodyLeft, outSiteY, inSiteX, outSiteY),
                  fill=icon.ICON_BG_COLOR, width=3)
-        icon.pasteImageWithClip(image, icon.tintSelectedImage(self.cachedImage,
-         self.selected, colorErr), location, clip)
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         layout.updateSiteOffsets(self.sites.output)
@@ -1045,7 +1042,7 @@ class CursorParenIcon(icon.Icon):
             width = bodyWidth + icon.outSiteImage.width - 1
         top = outSiteY - self.sites.output.yOffset
         self.rect = (outSiteX, top, outSiteX + width, top + height)
-        self.cachedImage = None
+        self.drawList = None
 
     def calcLayout(self):
         singleParenWidth, height = self.bodySize
@@ -1063,7 +1060,7 @@ class CursorParenIcon(icon.Icon):
                 attrLayout = self.sites.attrIcon.att.calcLayout()
             else:
                 attrLayout = None
-            width += singleParenWidth
+            width += singleParenWidth - 1
             layout.width = width
             layout.addSubLayout(attrLayout, 'attrIcon', width - icon.ATTR_SITE_DEPTH,
              icon.ATTR_SITE_OFFSET)
@@ -1091,8 +1088,8 @@ class CursorParenIcon(icon.Icon):
         self.closed = True
         self.layoutDirty = True
         # Allow cursor to be set to the end paren before layout knows where it goes
-        self.sites.add('attrIcon', 'attrIn', icon.rectWidth(self.rect),
-         icon.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
+        self.sites.add('attrIcon', 'attrIn', icon.rectWidth(self.rect) -
+         icon.ATTR_SITE_DEPTH, icon.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
         self.window.undo.registerCallback(self.reopen)
 
     def reopen(self):
@@ -1129,10 +1126,6 @@ class Cursor:
             self.site = siteIdOrSeriesName
         else:
             self.site = icon.makeSeriesSiteId(siteIdOrSeriesName, seriesIndex)
-        if isinstance(ic, icon.BinOpIcon) and not ic.hasParens and self.site=='attrIcon':
-            # Some operations take advantage of the fact that BinOpIcons have an invisible
-            # attribute site.  This is almost always wrong.
-            self.icon, self.site = rightmostSite(ic)
         self.siteType = ic.typeOf(self.site)
         self.blinkState = True
         self.draw()

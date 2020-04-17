@@ -726,13 +726,13 @@ class Window:
             if self.cursor.site in ('indexIcon', 'attrIcon'):
                 # Cursor is on attribute site or index site
                 if ic.childAt('indexIcon') or \
-                 hasattr(ic.sites, 'upperIcon') and ic.childAt('upperIcon') or \
-                 hasattr(ic.sites, 'stepIcon') and ic.childAt('stepIcon'):
+                 ic.hasSite('upperIcon') and ic.childAt('upperIcon') or \
+                 ic.hasSite('stepIcon') and ic.childAt('stepIcon'):
                     # Icon is not empty.
                     if self.cursor.site == 'attrIcon':
                         # If cursor is on attr site, move it to end of args
                         for siteId in ('stepIcon', 'upperIcon', 'indexIcon'):
-                            if hasattr(ic.sites, siteId):
+                            if ic.hasSite(siteId):
                                 break
                         siteIcon = ic.childAt(siteId)
                         if siteIcon:
@@ -769,7 +769,7 @@ class Window:
             elif mergeIcon1 is None:
                 # Site before colon is empty, move the icon after the colon to it
                 ic.replaceChild(mergeIcon2, mergeSite1)
-            elif hasattr(mergeIcon1.sites, 'attrIcon'):
+            elif mergeIcon1.hasSite('attrIcon'):
                 # Site before colon is not empty, but has site for entry icon
                 self.entryIcon = typing.EntryIcon(mergeIcon1, 'attrIcon', window=self)
                 self.entryIcon.setPendingArg(mergeIcon2)
@@ -779,12 +779,12 @@ class Window:
                 typing.beep()
                 return
             # If there is a step site that wasn't part of the merge, shift it.
-            if hasattr(ic.sites, 'stepIcon') and mergeSite2 != 'stepIcon':
+            if ic.hasSite('stepIcon') and mergeSite2 != 'stepIcon':
                 moveIcon = ic.childAt('stepIcon')
                 ic.replaceChild(moveIcon, 'upperIcon')
             # Clear the site to be removed (may not be necessary, but may be safer) and
             # remove the colon (colonectomy)
-            if hasattr(ic.sites, 'stepIcon'):
+            if ic.hasSite('stepIcon'):
                 ic.replaceChild(None, 'stepIcon')
                 ic.changeNumSubscripts(2)
             else:
@@ -793,7 +793,7 @@ class Window:
             # Place the cursor or new entry icon, and redraw
             if self.entryIcon is None:
                 if mergeIcon2 is None and mergeIcon1 is not None and \
-                 hasattr(mergeIcon1.sites, 'attrIcon'):
+                 mergeIcon1.hasSite('attrIcon'):
                     self.cursor.setToIconSite(mergeIcon1, "attrIcon")
                 else:
                     self.cursor.setToIconSite(ic, mergeSite1)
@@ -823,7 +823,8 @@ class Window:
                 entryAttachedIcon = parent
                 entryAttachedSite = parent.siteOf(ic)
             else:
-                entryAttachedIcon, entryAttachedSite = typing.rightmostSite(leftArg)
+                entryAttachedIcon, entryAttachedSite = typing.rightmostSite(
+                 icon.findLastAttrIcon(leftArg))
             self.entryIcon = typing.EntryIcon(entryAttachedIcon, entryAttachedSite,
                 initialString=op, window=self)
             if leftArg is not None:
@@ -858,7 +859,7 @@ class Window:
             if index == 0:
                 if siteName == "targets0":
                     return
-                if siteName == "values" and not hasattr(ic.sites, 'targets1'):
+                if siteName == "values" and not ic.hasSite('targets1'):
                     # This is the only '=' in the assignment, convert it to a tuple
                     argIcons = [site.att for site in ic.sites.targets0]
                     numTargets = len(argIcons)
@@ -967,7 +968,7 @@ class Window:
             return  # Not on an icon
         # Find the top level icon associated with the icon at the cursor
         topIcon = self.cursor.icon.topLevelParent()
-        if topIcon is None or not hasattr(topIcon.sites, 'seqOut'):
+        if topIcon is None or not topIcon.hasSite('seqOut'):
             return
         self.cursor.setToIconSite(topIcon, 'seqOut')
         self._insertEntryIconAtCursor("")
@@ -1021,6 +1022,9 @@ class Window:
         # Dragging parent icons away from their children may require re-layout of the
         # (moving) parent icons
         topDraggingIcons = findTopIcons(self.dragging)
+        for ic in topDraggingIcons:
+            if isinstance(ic, icon.BinOpIcon) and ic.hasParens:
+                ic.layoutDirty = True  # BinOp icons need to check check auto-parens
         self.layoutDirtyIcons(topDraggingIcons)
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
@@ -1546,7 +1550,7 @@ class Window:
         # remaining (unattached) icons will be left at the end in addedIcons
         attachedSeqs = []
         for ic in addedIcons:
-            if hasattr(ic.sites, 'seqIn'):
+            if ic.hasSite('seqIn'):
                 prevIcon = ic.sites.seqIn.att
                 if prevIcon is not None and prevIcon not in addedIcons:
                     attachedSeqs.append((ic, prevIcon))
@@ -1650,7 +1654,7 @@ class Window:
         rest in the sequence will be moved up or down without additional checking."""
         redrawRegion = AccumRects()
         x, y = seqStartIcon.pos()
-        if not hasattr(seqStartIcon.sites, 'seqIn'):
+        if not seqStartIcon.hasSite('seqIn'):
             # Icon can not be laid out by sequence site.  Just lay it out by itself
             redrawRegion.add(seqStartIcon.hierRect())
             seqStartIcon.layout((x, y))
@@ -1666,7 +1670,7 @@ class Window:
                 # needs to be positioned.  If seqIc has an output site, parentSiteOffset
                 # of layout is to the output site and needs to be moved to the seqIn site.
                 yOffsetToSeqIn = layout.parentSiteOffset
-                if hasattr(seqIc.sites, 'output'):
+                if seqIc.hasSite('output'):
                     yOffsetToSeqIn += seqIc.sites.seqIn.yOffset-seqIc.sites.output.yOffset
             # At this point, y is the seqIn site position if it is the first icon in the
             # sequence.  Otherwise y is the bottom of the layout of the statement above.
@@ -1746,7 +1750,7 @@ class Window:
             argIcon.layoutDirty = True
         attrIcon = ic.sites.attrIcon.att
         ic.replaceChild(None, 'attrIcon')
-        if attrIcon is not None and hasattr(argIcon.sites, 'attrIcon'):
+        if attrIcon is not None and argIcon.hasSite('attrIcon'):
             argIcon.replaceChild(attrIcon, 'attrIcon')
         # If the cursor was on the paren being removed, move it to the icon that has
         # taken its place (BinOp or CursorParen)

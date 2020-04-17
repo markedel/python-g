@@ -432,19 +432,21 @@ def clipboardRepr(icons, offset):
         seqLists.append(sequence)
     return repr([[ic.clipboardRepr(offset) for ic in seqList] for seqList in seqLists])
 
-asciiMap = {'.':(0, 0, 0, 0), 'o':OUTLINE_COLOR, ' ':ICON_BG_COLOR, '%':BLACK}
-for i in range(1, 10):
-    pixel = int(int(i) * 255 * 0.1)
-    asciiMap[str(i)] = (pixel, pixel, pixel, 255)
-
 def asciiToImage(asciiPixmap):
+    if asciiToImage.asciiMap is None:
+        asciiToImage.asciiMap = {'.': (0, 0, 0, 0), 'o': OUTLINE_COLOR,
+         ' ': ICON_BG_COLOR, '%': BLACK}
+        for i in range(1, 10):
+            pixel = int(int(i) * 255 * 0.1)
+            asciiToImage.asciiMap[str(i)] = (pixel, pixel, pixel, 255)
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
     pixels = "".join(asciiPixmap)
-    colors = [asciiMap[pixel] for pixel in pixels]
+    colors = [asciiToImage.asciiMap[pixel] for pixel in pixels]
     image = Image.new('RGBA', (width, height))
     image.putdata(colors)
     return image
+asciiToImage.asciiMap = None
 
 def iconBoxedText(text, minHgt=None):
     if (text, minHgt) in renderCache:
@@ -494,7 +496,7 @@ class Icon:
         self.rect = None
         self.selected = False
         self.layoutDirty = False
-        self.cachedImage = None
+        self.drawList = None
         self.sites = IconSiteList()
         window.undo.registerIconCreated(self)
 
@@ -548,11 +550,16 @@ class Icon:
     def touchesPosition(self, x, y):
         # ... reevaluate whether it is always best to cache the whole image when
         #     we're drawing little bits of fully-overlapped icons
-        if not pointInRect((x, y), self.rect) or self.cachedImage is None:
+        if not pointInRect((x, y), self.rect) or self.drawList is None:
             return False
-        l, t = self.rect[:2]
-        pixel = self.cachedImage.getpixel((x - l, y - t))
-        return pixel[3] > 128
+        for imgOffset, img in self.drawList:
+            left, top = addPoints(self.rect[:2], imgOffset)
+            imgX = x - left
+            imgY = y - top
+            if pointInRect((imgX, imgY), (0, 0, img.width, img.height)):
+                pixel = img.getpixel((imgX, imgY))
+                return pixel[3] > 128
+        return False
 
     def touchesRect(self, rect):
         return python_g.rectsTouch(self.rect, rect)
@@ -737,7 +744,7 @@ class Icon:
 
     def becomeTopLevel(self, isTop):
         """Change top level status of icon (most icons add or remove sequence sites)."""
-        self.cachedImage = None  # Force change at next redraw
+        self.drawList = None  # Force change at next redraw
 
     def hasCoincidentSite(self):
         """If the icon has an input site in the same spot as its output site (done so
@@ -753,6 +760,14 @@ class Icon:
 
     def calcLayout(self):
         pass
+
+    def _drawFromDrawList(self, toDragImage, location, clip, colorErr):
+        if location is None:
+            location = self.rect[:2]
+        for imgOffset, img in self.drawList:
+            imgLoc = addPoints(location, imgOffset)
+            pasteImageWithClip(self.window.image if toDragImage is None else toDragImage,
+             tintSelectedImage(img, self.selected, colorErr), imgLoc, clip)
 
     def _serialize(self, offset, **args):
         currentSeries = None
@@ -819,31 +834,27 @@ class TextIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        needSeqSites = self.parent() is None and image is None
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or image is not None)
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
+         self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = iconBoxedText(self.text, self.bodySize[1])
-            self.cachedImage.paste(txtImg, (outSiteImage.width - 1, 0))
+            img.paste(txtImg, (outSiteImage.width - 1, 0))
             if needSeqSites:
-                drawSeqSites(self.cachedImage, outSiteImage.width-1, 0, txtImg.height)
+                drawSeqSites(img, outSiteImage.width-1, 0, txtImg.height)
             if needOutSite:
                 outX = self.sites.output.xOffset
                 outY = self.sites.output.yOffset - outSiteImage.height // 2
-                self.cachedImage.paste(outSiteImage, (outX, outY), mask=outSiteImage)
+                img.paste(outSiteImage, (outX, outY), mask=outSiteImage)
             if self.hasAttrIn:
                 attrX = self.sites.attrIcon.xOffset
                 attrY = self.sites.attrIcon.yOffset
-                self.cachedImage.paste(attrInImage, (attrX, attrY))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
-         colorErr), location, clip)
+                img.paste(attrInImage, (attrX, attrY))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         width, height = self.bodySize
@@ -851,7 +862,7 @@ class TextIcon(Icon):
         top = outSiteY - height // 2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-        self.cachedImage = None  # Draw or undraw sequence sites ... refine when sites added
+        self.drawList = None  # Draw or undraw sequence sites ... refine when sites added
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -949,24 +960,20 @@ class AttrIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + attrOutImage.width, y + bodyHeight)
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = iconBoxedText(self.name, self.bodySize[1])
-            self.cachedImage.paste(txtImg, (attrOutImage.width - 1, 0))
+            img.paste(txtImg, (attrOutImage.width - 1, 0))
             attrOutX = self.sites.attrOut.xOffset
             attrOutY = self.sites.attrOut.yOffset
-            self.cachedImage.paste(attrOutImage, (attrOutX, attrOutY), mask=attrOutImage)
+            img.paste(attrOutImage, (attrOutX, attrOutY), mask=attrOutImage)
             attrInX = self.sites.attrIcon.xOffset
             attrInY = self.sites.attrIcon.yOffset
-            self.cachedImage.paste(attrInImage, (attrInX, attrInY))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
-         colorErr), location, clip)
+            img.paste(attrInImage, (attrInX, attrInY))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
         width, height = self.bodySize
@@ -974,7 +981,7 @@ class AttrIcon(Icon):
         top = attrSiteY - (height // 2 + ATTR_SITE_OFFSET)
         self.rect = (attrSiteX, top,  attrSiteX + width, top + height)
         layout.doSubLayouts(self.sites.attrOut, attrSiteX, attrSiteY)
-        self.cachedImage = None
+        self.drawList = None
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -1025,37 +1032,34 @@ class SubscriptIcon(Icon):
         return subscriptLBktImage.width + sum(self.argWidths) + \
          subscriptRBktImage.width - 1 + ATTR_SITE_DEPTH, subscriptLBktImage.height
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if self.drawList is None:
+            leftBoxX = dimAttrOutImage.width - 1
+            leftBoxWidth, leftBoxHeight = subscriptLBktImage.size
+            leftImg = Image.new('RGBA', (leftBoxX + leftBoxWidth, leftBoxHeight),
+             color=(0, 0, 0, 0))
             # Left bracket
-            leftImgX = dimAttrOutImage.width - 1
-            self.cachedImage.paste(subscriptLBktImage, (leftImgX, 0))
+            leftImg.paste(subscriptLBktImage, (leftBoxX, 0))
             # attrOut site
-            self.cachedImage.paste(dimAttrOutImage,  (self.sites.attrOut.xOffset,
+            leftImg.paste(dimAttrOutImage,  (self.sites.attrOut.xOffset,
              self.sites.attrOut.yOffset), mask=dimAttrOutImage)
             # Index input site
-            inSiteX = dimAttrOutImage.width - 1 + subscriptLBktImage.width - \
-             inSiteImage.width
-            inSiteY = subscriptLBktImage.height // 2 - inSiteImage.height // 2
-            self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
+            inSiteX = leftBoxX + leftBoxWidth - inSiteImage.width
+            inSiteY = leftBoxHeight // 2 - inSiteImage.height // 2
+            leftImg.paste(inSiteImage, (inSiteX, inSiteY))
+            self.drawList = [((0, 0), leftImg)]
             x = inSiteX + self.argWidths[0] + inSiteImage.width - 1
             # Colons:
-            colonY = subscriptLBktImage.height // 2 - colonImage.height // 2
+            colonY = leftBoxHeight // 2 - colonImage.height // 2
             if hasattr(self.sites, 'upperIcon'):
-                self.cachedImage.paste(colonImage, (x, colonY))
+                self.drawList.append(((x, colonY), colonImage))
                 x += self.argWidths[1]
             if hasattr(self.sites, 'stepIcon'):
-                self.cachedImage.paste(colonImage, (x, colonY))
+                self.drawList.append(((x, colonY), colonImage))
                 x += self.argWidths[2]
             # Right bracket
-            self.cachedImage.paste(subscriptRBktImage, (x, 0))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
-         colorErr), location, clip)
+            self.drawList.append(((x, 0), subscriptRBktImage))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
         self.argWidths = layout.argWidths
@@ -1064,7 +1068,7 @@ class SubscriptIcon(Icon):
         width, height = self._size()
         self.rect = (attrSiteX, top,  attrSiteX + width, top + height)
         layout.doSubLayouts(self.sites.attrOut, attrSiteX, attrSiteY)
-        self.cachedImage = None
+        self.drawList = None
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -1206,31 +1210,27 @@ class UnaryOpIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        needSeqSites = self.parent() is None and image is None
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or image is not None)
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', (rectWidth(self.rect),
+         self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             width, height = globalFont.getsize(self.operator)
             bodyLeft = outSiteImage.width - 1
             bodyWidth = width + 2 * TEXT_MARGIN
             bodyHeight = height + 2 * TEXT_MARGIN
-            draw = ImageDraw.Draw(self.cachedImage)
+            draw = ImageDraw.Draw(img)
             draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth, bodyHeight),
              fill=ICON_BG_COLOR, outline=OUTLINE_COLOR)
             if needOutSite:
                 outImageY = self.sites.output.yOffset - outSiteImage.height // 2
-                self.cachedImage.paste(outSiteImage, (0, outImageY), mask=outSiteImage)
+                img.paste(outSiteImage, (0, outImageY), mask=outSiteImage)
             inImageY = self.sites.argIcon.yOffset - inSiteImage.height // 2
-            self.cachedImage.paste(inSiteImage, (self.sites.argIcon.xOffset, inImageY))
+            img.paste(inSiteImage, (self.sites.argIcon.xOffset, inImageY))
             if needSeqSites:
-                drawSeqSites(self.cachedImage, bodyLeft, 0, bodyHeight+1)
+                drawSeqSites(img, bodyLeft, 0, bodyHeight+1)
             if self.operator in ('+', '-', '~'):
                 # Raise unary operators up and move then to the left.  Not sure if this
                 # is safe for all fonts, but the Ariel font we're using pads on top.
@@ -1241,8 +1241,8 @@ class UnaryOpIcon(Icon):
                 textLeft = bodyLeft + TEXT_MARGIN + 1
             draw.text((textLeft, textTop), self.operator, font=globalFont,
              fill=(0, 0, 0, 255))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
-         colorErr), location, clip)
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
     def arg(self):
         return self.sites.argIcon.att
@@ -1316,39 +1316,37 @@ class ListTypeIcon(Icon):
         width += self.argList.width() + self.rightImg.width
         return width, height
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        needSeqSites = self.parent() is None and image is None
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or image is not None)
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.cachedImage is None:
-            self.cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
-            # Body
+         self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            # Left paren/bracket/brace
+            leftBoxWidth, leftBoxHeight = self.leftImg.size
             leftImgX = outSiteImage.width - 1
-            self.cachedImage.paste(self.leftImg, (leftImgX, 0))
+            leftImg = Image.new('RGBA', (leftBoxWidth + leftImgX, leftBoxHeight),
+             color=(0, 0, 0, 0))
+            leftImg.paste(self.leftImg, (leftImgX, 0))
             if needSeqSites:
-                drawSeqSites(self.cachedImage, leftImgX, 0, self.leftImg.height)
+                drawSeqSites(leftImg, leftImgX, 0, self.leftImg.height)
             # Output site
             if needOutSite:
                 outSiteX = self.sites.output.xOffset
                 outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
-                self.cachedImage.paste(outSiteImage, (outSiteX, outSiteY),
-                 mask=outSiteImage)
+                leftImg.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
             # Body input site
             inSiteX = outSiteImage.width - 1 + self.leftImg.width - inSiteImage.width
             inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
-            self.cachedImage.paste(inSiteImage, (inSiteX, inSiteY))
+            leftImg.paste(inSiteImage, (inSiteX, inSiteY))
+            self.drawList = [((0, 0), leftImg)]
             # Commas
-            self.argList.drawCommas(self.cachedImage, inSiteX, self.sites.output.yOffset)
-            # End paren/brace
+            self.drawList += self.argList.drawListCommas(inSiteX,
+             self.sites.output.yOffset)
+            # End paren/brace/bracket
             parenY = self.sites.output.yOffset - self.rightImg.height // 2
             parenX = inSiteX + self.argList.width() + inSiteImage.width - 2
-            self.cachedImage.paste(self.rightImg, (parenX, parenY))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
-         colorErr), location, clip)
+            self.drawList.append(((parenX, parenY), self.rightImg))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion to those representing actual attachment sites
@@ -1372,7 +1370,7 @@ class ListTypeIcon(Icon):
         x = outSiteX
         y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x + width, y + height)
-        self.cachedImage = None
+        self.drawList = None
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -1477,7 +1475,7 @@ class TupleIcon(ListTypeIcon):
         self.noParens = False
         self.leftImg = tupleLParenImage
         self.rightImg = tupleRParenImage
-        self.cachedImage = None
+        self.drawList = None
         self.layoutDirty = True
 
     def calcLayout(self):
@@ -1544,63 +1542,59 @@ class BinOpIcon(Icon):
     def rightArg(self):
         return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        cachedImage = self.cachedImage
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
         atTop = self.parent() is None
-        suppressSeqSites = image is not None and self.prevInSeq() is None
+        suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
         temporaryOutputSite = suppressSeqSites and atTop and self.leftArg() is None
         if temporaryOutputSite or suppressSeqSites:
-            # When image is specified the icon is being dragged, and it must display
+            # When toDragImage is specified the icon is being dragged, and it must display
             # something indicating where its output site is where it would otherwise
-            # not nor
-            cachedImage = None
-            self.cachedImage = None
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if cachedImage is None:
-            cachedImage = Image.new('RGBA', self._size(), color=(0, 0, 0, 0))
+            # not normally draw anything, but don't keep this in self.drawList because
+            # it's not for normal use and won't be used again for picking or drawing.
+            self.drawList = None
+        if self.drawList is None:
+            self.drawList = []
             # Output part (connector or paren)
             outSiteX = self.sites.output.xOffset
             siteY = self.sites.output.yOffset
             leftArgX = outSiteX + outSiteImage.width - 1
             if self.hasParens:
                 outSiteY = siteY - lParenImage.height // 2
-                cachedImage.paste(lParenImage, (outSiteX, outSiteY), mask=lParenImage)
+                self.drawList.append(((outSiteX, outSiteY), lParenImage))
                 leftArgX = outSiteX + lParenImage.width - 1
             elif temporaryOutputSite:
                 outSiteY = siteY - binOutImage.height // 2
-                cachedImage.paste(binOutImage, (outSiteX, outSiteY), mask=binOutImage)
+                self.drawList.append(((outSiteX, outSiteY), binOutImage))
             elif atTop and not suppressSeqSites:
                 outSiteY = siteY - binInSeqImage.height // 2
-                cachedImage.paste(binInSeqImage, (outSiteX, outSiteY), mask=binInSeqImage)
+                self.drawList.append(((outSiteX, outSiteY), binInSeqImage))
             # Body
             txtImg = iconBoxedText(self.operator)
+            opWidth, opHeight = self.opSize
+            opWidth = txtImg.width + self.depthWidth
+            img = Image.new('RGBA', (opWidth, opHeight), color=(0, 0, 0, 0))
             opX = leftArgX + self.leftArgWidth - 1
             opY = siteY - txtImg.height // 2
             if self.depthWidth > 0:
-                draw = ImageDraw.Draw(cachedImage)
-                opWidth = txtImg.width + self.depthWidth
-                draw.rectangle((opX, opY, opX + opWidth - 1, opY + txtImg.height - 1),
+                draw = ImageDraw.Draw(img)
+                draw.rectangle((0, 0, opWidth - 1, txtImg.height - 1),
                  outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
                 txtSubImg = txtImg.crop((1, 0, txtImg.width - 1, txtImg.height))
-                cachedImage.paste(txtSubImg, (opX + self.depthWidth // 2 + 1, opY))
+                img.paste(txtSubImg, (self.depthWidth // 2 + 1, opY))
             else:
-                opWidth = txtImg.width
-                cachedImage.paste(txtImg, (opX + self.depthWidth // 2, opY))
-            rInSiteX = opX + opWidth - inSiteImage.width
+                img.paste(txtImg, (self.depthWidth // 2, opY))
+            rInSiteX = opWidth - inSiteImage.width
             rInSiteY = siteY - inSiteImage.height // 2
-            cachedImage.paste(inSiteImage, (rInSiteX, rInSiteY))
+            img.paste(inSiteImage, (rInSiteX, rInSiteY))
+            self.drawList.append(((opX, 0), img))
             # End paren
             if self.hasParens:
                 rParenX = opX + opWidth - 1 + self.rightArgWidth - 1
                 rParenY = siteY - rParenImage.height // 2
-                cachedImage.paste(rParenImage, (rParenX, rParenY))
-        pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected,
-         colorErr), location, clip)
-        if not (temporaryOutputSite or suppressSeqSites):
-            self.cachedImage = cachedImage
+                self.drawList.append(((rParenX, rParenY), rParenImage))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryOutputSite or suppressSeqSites:
+            self.drawList = None  # Don't keep after drawing (see above)
 
     def touchesRect(self, rect):
         if not python_g.rectsTouch(self.rect, rect):
@@ -1674,7 +1668,7 @@ class BinOpIcon(Icon):
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x + width, y + height)
-        self.cachedImage = None
+        self.drawList = None
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -1793,47 +1787,43 @@ class AssignIcon(Icon):
         width += self.valueList.width()
         return width, inpSeqImage.height
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        cachedImage = self.cachedImage
-        if image is None:
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
             temporaryDragSite = False
-            image = self.window.image
         else:
             # When image is specified the icon is being dragged, and it must display
             # its sequence-insert snap site unless it is in a sequence and not the start.
-            cachedImage = None
-            self.cachedImage = None
+            self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
-        if location is None:
-            location = self.rect[:2]
-        if cachedImage is None:
+        if self.drawList is None:
+            self.drawList = []
             width, height = self._size()
-            cachedImage = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
             # Left site (seq site bar + 1st target input or drag-insert site
             tgtSiteX = self.sites.targets0[0].xOffset
             siteY = height // 2
             if temporaryDragSite:
                 y = siteY - assignDragImage.height // 2
-                cachedImage.paste(assignDragImage, (0, y), mask=assignDragImage)
+                self.drawList.append(((0, y), assignDragImage))
             else:
                 y = siteY - inpSeqImage.height // 2
-                cachedImage.paste(inpSeqImage, (tgtSiteX, y), mask=inpSeqImage)
-            opWidth, opHeight = self.opSize
+                self.drawList.append(((tgtSiteX, y), inpSeqImage))
+            # Commas and an = for each target group
+            txtImg = iconBoxedText('=')
+            opWidth, opHeight = txtImg.size
+            img = Image.new('RGBA', (opWidth, opHeight), color=(0, 0, 0, 0))
+            img.paste(txtImg, (0, 0))
+            rInSiteX = opWidth - inSiteImage.width
+            rInSiteY = opHeight // 2 - inSiteImage.height // 2
+            img.paste(inSiteImage, (rInSiteX, rInSiteY))
             for tgtList in self.tgtLists:
-                tgtList.drawCommas(cachedImage, tgtSiteX, siteY)
-                txtImg = iconBoxedText('=')
+                self.drawList += tgtList.drawListCommas(tgtSiteX, siteY)
                 tgtSiteX += tgtList.width() - 1
-                cachedImage.paste(txtImg, (tgtSiteX + OUTPUT_SITE_DEPTH,
-                (height-opHeight)//2))
+                self.drawList.append(((tgtSiteX + OUTPUT_SITE_DEPTH, (height-opHeight)//2), img))
                 tgtSiteX += opWidth - 1
-            rInSiteX = tgtSiteX
-            rInSiteY = siteY - inSiteImage.height // 2
-            cachedImage.paste(inSiteImage, (rInSiteX, rInSiteY))
-            self.valueList.drawCommas(cachedImage, rInSiteX, siteY)
-        pasteImageWithClip(image, tintSelectedImage(cachedImage, self.selected,
-         colorErr), location, clip)
-        if not temporaryDragSite:
-            self.cachedImage = cachedImage
+            self.drawList += self.valueList.drawListCommas(tgtSiteX, siteY)
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
 
     def addTargetGroup(self, idx):
         if idx < 0 or idx > len(self.tgtLists):
@@ -1943,7 +1933,7 @@ class AssignIcon(Icon):
         x = outSiteX - self.sites.seqIn.xOffset
         y = outSiteY - self.sites.seqIn.yOffset
         self.rect = (x, y, x + width, y + height)
-        self.cachedImage = None
+        self.drawList = None
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -1994,47 +1984,42 @@ class DivideIcon(Icon):
         height = topHeight + bottomHeight + 3
         return width, height
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        needSeqSites = self.parent() is None and image is None
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or image is not None)
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        if self.cachedImage is None:
-            width, height = self._size()
-            self.cachedImage = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
+         self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            self.drawList = []
             # Input sites
-            leftX = self.sites.output.xOffset
-            cntrY = self.sites.output.yOffset
             topArgX = self.sites.topArg.xOffset
             topArgY = self.sites.topArg.yOffset - floatInImage.height // 2
-            self.cachedImage.paste(floatInImage, (topArgX, topArgY))
+            self.drawList.append(((topArgX, topArgY), floatInImage))
             bottomArgX = self.sites.bottomArg.xOffset
             bottomArgY = self.sites.bottomArg.yOffset - floatInImage.height // 2
-            self.cachedImage.paste(floatInImage, (bottomArgX, bottomArgY))
+            self.drawList.append(((bottomArgX, bottomArgY), floatInImage))
             # Body
+            width, height = self._size()
             bodyLeft = outSiteImage.width - 1
             bodyRight = width - 1
-            bodyTop = cntrY - 5
-            bodyBottom = cntrY + 5
-            draw = ImageDraw.Draw(self.cachedImage)
-            draw.rectangle((bodyLeft, bodyTop, bodyRight, bodyBottom),
+            cntrY = 5
+            bodyHeight = 11
+            img = Image.new('RGBA', (width, bodyHeight), color=(0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            draw.rectangle((bodyLeft, 0, bodyRight, bodyHeight-1),
              outline=OUTLINE_COLOR, fill=ICON_BG_COLOR)
             if needSeqSites:
-                drawSeqSites(self.cachedImage, bodyLeft, bodyTop, bodyBottom-bodyTop+1)
+                drawSeqSites(img, bodyLeft, 0, bodyHeight)
             if self.floorDiv:
                 cntrX = (bodyLeft + bodyRight) // 2
                 draw.line((bodyLeft + 2, cntrY, cntrX - 1, cntrY), fill=BLACK)
                 draw.line((cntrX + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
             else:
                 draw.line((bodyLeft + 2, cntrY, bodyRight - 2, cntrY), fill=BLACK)
+            bodyTop = self.sites.output.yOffset - 5
             if needOutSite:
-                self.cachedImage.paste(outSiteImage,
-                 (leftX, cntrY - outSiteImage.height//2))
-        pasteImageWithClip(image, tintSelectedImage(self.cachedImage, self.selected,
-         colorErr), location, clip)
+                img.paste(outSiteImage, (0, cntrY - outSiteImage.height//2))
+            self.drawList.append(((0, bodyTop), img))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
     def touchesRect(self, rect):
         if not python_g.rectsTouch(self.rect, rect):
@@ -2061,7 +2046,7 @@ class DivideIcon(Icon):
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x + width, y + height)
-        self.cachedImage = None
+        self.drawList = None
         self.layoutDirty = False
 
     def calcLayout(self):
@@ -2145,22 +2130,19 @@ class DivideIcon(Icon):
 class ImageIcon(Icon):
     def __init__(self, image, window, location=None):
         Icon.__init__(self, window)
-        self.cachedImage = self.image = image.convert('RGBA')
+        self.image = image.convert('RGBA')
         if location is None:
             x, y = 0, 0
         else:
             x, y = location
         self.rect = (x, y, x + image.width, y + image.height)
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
-        if image is None:
-            image = self.window.image
-        if location is None:
-            location = self.rect[:2]
-        pasteImageWithClip(image, tintSelectedImage(self.image, self.selected,
-         colorErr), location, clip)
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if self.drawList is None:
+            self.drawList = [((0, 0), self.image)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
-    def snapLists(self):
+    def snapLists(self, forCursor=False):
         return {}
 
     def layout(self, location=None):
@@ -2663,11 +2645,10 @@ class HorizListMgr:
         self.emptyInOffsets = (0, LIST_EMPTY_ARG_WIDTH)
         self.inOffsets = self.emptyInOffsets
 
-    def drawCommas(self, image, leftSiteX, leftSiteY):
-        commaXOffset = leftSiteX + inSiteImage.width - commaImage.width
+    def drawListCommas(self, leftSiteX, leftSiteY):
+        commaX = leftSiteX + inSiteImage.width - commaImage.width
         commaY = leftSiteY - commaImageSiteYOffset
-        for inOff in self.inOffsets[1:-1]:
-            image.paste(commaImage, (inOff + commaXOffset, commaY))
+        return [((inOff + commaX, commaY), commaImage) for inOff in self.inOffsets[1:-1]]
 
     def width(self):
         return self.inOffsets[-1] + 1
@@ -2814,7 +2795,7 @@ def insertSeq(seqStartIc, atIc, before=False):
 def traverseAttrs(ic, includeStart=True):
     if includeStart:
         yield ic
-    while hasattr(ic.sites, 'attrIcon') and ic.sites.attrIcon.att != None:
+    while ic.hasSite('attrIcon') and ic.sites.attrIcon.att != None:
         ic = ic.sites.attrIcon.att
         yield ic
 
@@ -2824,10 +2805,10 @@ def findLastAttrIcon(ic):
     return i
 
 def findAttrOutputSite(ic):
-    if hasattr(ic.sites, 'output'):
+    if ic.hasSite('output'):
         return ic
     for i in ic.parentage():
-        if hasattr(i.sites, 'output'):
+        if i.hasSite('output'):
             return i
     return None
 
