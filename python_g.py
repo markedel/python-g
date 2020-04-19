@@ -9,7 +9,6 @@ import time
 import compile_eval
 import tkinter.messagebox
 
-#windowBgColor = (255, 255,255)
 windowBgColor = (128, 128, 128)
 defaultWindowSize = (800, 800)
 dragThreshold = 2
@@ -29,6 +28,9 @@ CURSOR_BLINK_RATE = 500
 SNAP_DIST = 8
 
 SITE_SELECT_DIST = 8
+
+# How far to the left of an icon does the statement select/drag band extend
+SEQ_SELECT_WIDTH = 12
 
 # How far to the right of icons to deposit the result of executing them
 RESULT_X_OFFSET = 5
@@ -179,6 +181,8 @@ class Window:
         self.lastDragImageRegion = None
         self.inRectSelect = False
         self.lastRectSelect = None
+        self.inStmtSelect = False
+        self.lastStmtHighlightRects = None
         self.rectSelectInitialStates = {}
 
         self.topIcons = []
@@ -335,31 +339,41 @@ class Window:
         self.undo.addBoundary()
 
     def _motionCb(self, evt):
+        if self.buttonDownTime is None or not (evt.state & LEFT_MOUSE_MASK):
+            return
         if self.dragging is not None:
             self._updateDrag(evt)
             return
-        if self.buttonDownTime is None or not (evt.state & LEFT_MOUSE_MASK):
-            return
-        if self.dragging is None and not self.inRectSelect:
-            btnX, btnY = self.buttonDownLoc
-            if abs(evt.x - btnX) + abs(evt.y - btnY) > dragThreshold:
-                ic = self.findIconAt(btnX, btnY)
-                if ic is None:
-                    # If nothing was clicked, start a rectangular selection
-                    self._startRectSelect(evt)
-                elif ic.selected:
-                    # If a selected icon was clicked, drag all of the selected icons
-                    self._startDrag(evt, self.selectedIcons())
-                else:
-                    # Otherwise, drag the icon that was clicked
-                    if self.doubleClickFlag:
-                        # double-click drag, ignores associativity and outer icon
-                        self._startDrag(evt, list(ic.traverse()))
-                    else:
-                        self._startDrag(evt, list(self.findLeftOuterIcon(
-                         self.assocGrouping(ic)).traverse()))
-        elif self.inRectSelect:
+        if self.inRectSelect:
             self._updateRectSelect(evt)
+            return
+        if self.inStmtSelect:
+            self._updateStmtSelect(evt)
+            return
+        # Not currently dragging, but button is down
+        btnX, btnY = self.buttonDownLoc
+        if abs(evt.x - btnX) + abs(evt.y - btnY) <= dragThreshold:
+            return  # Mouse has not moved sufficiently to start a drag
+        # Start a drag
+        ic = self.findIconAt(btnX, btnY)
+        if ic is None:
+            # If nothing was clicked, start a rectangular selection
+            seqSiteIc = self._leftOfSeq(evt.x, evt.y)
+            if seqSiteIc is not None:
+                self._startStmtSelect(seqSiteIc, evt)
+            else:
+                self._startRectSelect(evt)
+        elif ic.selected:
+            # If a selected icon was clicked, drag all of the selected icons
+            self._startDrag(evt, self.selectedIcons())
+        else:
+            # Otherwise, drag the icon that was clicked
+            if self.doubleClickFlag:
+                # double-click drag, ignores associativity and outer icon
+                self._startDrag(evt, list(ic.traverse()))
+            else:
+                self._startDrag(evt, list(self.findLeftOuterIcon(
+                 self.assocGrouping(ic)).traverse()))
 
     def _focusInCb(self, evt):
         pass
@@ -395,18 +409,26 @@ class Window:
         elif self.inRectSelect:
             self._endRectSelect()
             self.buttonDownTime = None
+        elif self.inStmtSelect:
+            self._endStmtSelect()
+            self.buttonDownTime = None
         elif self.doubleClickFlag:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
                 iconToExecute = self.findIconAt(*self.buttonDownLoc)
                 if iconToExecute is None:
-                    return
-                iconToExecute = self.findLeftOuterIcon(self.assocGrouping(iconToExecute))
-                if iconToExecute not in self.topIcons:
-                    self.doubleClickFlag = False
-                    self._delayedBtnUpActions(evt)
-                    return
-                self._execute(iconToExecute)
-
+                    ic = self._leftOfSeq(evt.x, evt.y)
+                    if ic is None:
+                        self.doubleClickFlag = False
+                        self._delayedBtnUpActions(evt)
+                        return
+                    self._select(ic, op="block")
+                else:
+                    iconToExecute = self.findLeftOuterIcon(self.assocGrouping(iconToExecute))
+                    if iconToExecute not in self.topIcons:
+                        self.doubleClickFlag = False
+                        self._delayedBtnUpActions(evt)
+                        return
+                    self._execute(iconToExecute)
             self.buttonDownTime = None
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
             # In order to handle double-click, button release actions are run not done
@@ -425,6 +447,10 @@ class Window:
         clickedIcon = self.findIconAt(evt.x, evt.y)
         if clickedIcon is None:
             # Clicked on window background, move cursor
+            ic = self._leftOfSeq(evt.x, evt.y)
+            if ic is not None and ic.posOfSite('seqOut')[1] >= evt.y:
+                self._select(ic, op="hier")
+                return
             if self.entryIcon is not None:  # Might want to flash entry icon, here
                 return
             siteIcon, site = self.siteSelected(evt)
@@ -1241,7 +1267,6 @@ class Window:
             combinedRegion = combineRects(newRect, self.lastRectSelect)
             self._eraseRectSelect()
         redrawRegion = AccumRects()
-        changedIcons = []
         for ic in self.findIconsInRegion(combinedRegion):
             if ic.touchesRect(newRect):
                 newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
@@ -1250,7 +1275,6 @@ class Window:
             if ic.selected != newSelect:
                 ic.selected = newSelect
                 redrawRegion.add(ic.rect)
-                changedIcons.append(ic)
         self.refresh(redrawRegion.get(), clear=False)
         l, t, r, b = newRect
         hLineImg = Image.new('RGB', (r - l, 1), color=(255, 255, 255, 255))
@@ -1271,6 +1295,79 @@ class Window:
     def _endRectSelect(self):
         self._eraseRectSelect()
         self.inRectSelect = False
+
+    def _startStmtSelect(self, seqSiteIc, evt):
+        self.unselectAll()
+        self.stmtSelectSeqStart = icon.findSeqStart(seqSiteIc)
+        self.inStmtSelect = True
+        self.lastStmtHighlightRects = None
+        self._updateStmtSelect(evt)
+
+    def _updateStmtSelect(self, evt):
+        anchorY = self.buttonDownLoc[1]
+        drawTop = min(anchorY, evt.y)
+        drawBottom = max(anchorY, evt.y)
+        # Trim selection top to start of sequence
+        seqTopY = self.stmtSelectSeqStart.posOfSite('seqIn')[1]
+        if drawTop < seqTopY:
+            drawTop = seqTopY
+        redrawRegion = AccumRects()
+        # Traverse sequence of icons, selecting those whose top icons touch new range
+        # and deselecting any that are selected and out of the range.  Also collect X
+        # coordinate change points within the range
+        xChangePoints = None
+        icBottom = None
+        for ic in icon.traverseSeq(self.stmtSelectSeqStart):
+            seqInX, seqInY = ic.posOfSite('seqIn')
+            seqOutX, seqOutY = ic.posOfSite('seqOut')
+            nextIc = ic.childAt('seqOut')
+            icBottom = seqOutY if nextIc is None  else nextIc.posOfSite('seqIn')[1]
+            if xChangePoints is None and drawTop < icBottom:
+                xChangePoints = [(seqInX, seqInY)]
+            needsSelect = drawBottom > seqInY and drawTop < seqOutY
+            if not ic.selected and needsSelect or ic.selected and not needsSelect:
+                for selIc in ic.traverse():
+                    selIc.selected = needsSelect
+                    redrawRegion.add(selIc.rect)
+            if seqInY < anchorY < seqOutY:
+                if drawTop > seqInY:  # If user started next to icon, highlight it fully
+                    drawTop = seqInY
+                if drawBottom  < seqOutY:
+                    drawBottom = seqOutY
+        # Trim selection bottom to end of sequence
+        if drawBottom > icBottom:
+            drawBottom = icBottom
+        # Compute the selection and deselection rectangles from the change points
+        drawRects = None
+        for x, y in xChangePoints:
+            if y <= drawTop and drawRects is None:
+                drawRects = [(x - SEQ_SELECT_WIDTH, drawTop, x, drawBottom)]
+            if  drawBottom < y < drawTop and drawRects is not None:
+                splitL, splitT, splitR, splitB = drawRects[-1]
+                drawRects[-1] = (splitL, splitT, splitR, y)
+                drawRects.append((x - SEQ_SELECT_WIDTH, y, drawTop, x, drawBottom))
+        # Refresh selection changes and clear erase areas
+        if self.lastStmtHighlightRects is not None:
+            for eraseRect in self.lastStmtHighlightRects:
+                redrawRegion.add(eraseRect)
+        self.refresh(redrawRegion.get(), clear=False)
+        # Draw the selection shading
+        for drawRect in drawRects:
+            image = self.image.crop(drawRect)
+            colorImg = Image.new('RGB', (image.width, image.height), color=(0, 0, 255)) # color=icon.SELECT_TINT)
+            selImg = Image.blend(image, colorImg, .15)
+            self.drawImage(selImg, drawRect[:2])
+        self.lastStmtHighlightRects = drawRects
+
+    def _endStmtSelect(self):
+        redrawRegion = AccumRects()
+        self.inStmtSelect = False
+        # Erase the shaded zone
+        if self.lastStmtHighlightRects is not None:
+            for eraseRect in self.lastStmtHighlightRects:
+                redrawRegion.add(eraseRect)
+        self.refresh(redrawRegion.get(), clear=False)
+        self.lastStmtHighlightRects = None
 
     def _execute(self, iconToExecute):
         # Execute the requested icon.  Icon execution methods will throw exception
@@ -1343,14 +1440,22 @@ class Window:
         changes the state of a single icon, 'add': adds a single icon to the selection,
         'hier': changes the selection to the icon and it's children, 'left': changes
         the selection to the icon and associated expression for which it is the
-        leftmost component"""
-        if op in ('select', 'hier', 'left'):
+        leftmost component, 'block' changes the selection to the entire code block
+        containing ic"""
+        if op in ('select', 'hier', 'left', 'block'):
             self.unselectAll()
         if ic is None or ic is self.entryIcon:
             return
         refreshRegion = AccumRects()
         if op == 'hier':
             changedIcons = list(ic.traverse())
+        elif op == 'block':
+            topParent = ic.topLevelParent()
+            changedIcons = []
+            for i in icon.traverseSeq(topParent, reverse=True):
+                changedIcons += list(i.traverse())
+            for i in icon.traverseSeq(topParent, includeStartingIcon=False):
+                changedIcons += list(i.traverse())
         elif op == 'left':
             changedIcons = list(self.findLeftOuterIcon(self.assocGrouping(ic)).traverse())
         else:
@@ -1436,6 +1541,24 @@ class Window:
         for ic in self.allIcons(order="pick"):
             if ic.touchesPosition(x, y):
                 return ic
+        return None
+
+    def _leftOfSeq(self, x, y):
+        """Return True if x,y is in the appropriate zone to start a statement-selection"""
+        for ic in self.topIcons:
+            if ic.hasSite('seqIn'):
+                seqInX, seqInY = ic.posOfSite('seqIn')
+                seqOutX, seqOutY = ic.posOfSite('seqOut')
+                if x > seqInX or x < seqInX - SEQ_SELECT_WIDTH or y < seqInY:
+                    continue
+                if seqInY <= y <= seqOutY:
+                    return ic  # Point is adjacent to icon body
+                nextIc = ic.nextInSeq()
+                if nextIc is None:
+                    continue
+                nextSeqInX, nextSeqInY = nextIc.posOfSite('seqIn')
+                if seqOutY <= y < nextSeqInY:
+                    return ic  # Point is adjacent to connector to next icon
         return None
 
     def findLeftOuterIcon(self, ic):
