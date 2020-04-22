@@ -1,15 +1,19 @@
 import ast, astpretty
 import icon
 
-binOps = {ast.Add:'+', ast.Sub:'-', ast.Mult:'*', ast.Div:'/', ast.FloorDiv:'//', ast.Mod:'%', ast.Pow:'**',
-        ast.LShift:'<<', ast.RShift:'>>', ast.BitOr:'|', ast.BitXor:'^', ast.BitAnd:'&', ast.MatMult:'@'}
+binOps = {ast.Add:'+', ast.Sub:'-', ast.Mult:'*', ast.Div:'/', ast.FloorDiv:'//',
+ ast.Mod:'%', ast.Pow:'**', ast.LShift:'<<', ast.RShift:'>>', ast.BitOr:'|',
+ ast.BitXor:'^', ast.BitAnd:'&', ast.MatMult:'@'}
 
 unaryOps = {ast.UAdd:'+', ast.USub:'-', ast.Not:'not', ast.Invert:'~'}
 
 boolOps = {ast.And:'and', ast.Or:'or'}
 
-compareOps = {ast.Eq:'==', ast.NotEq:'!=', ast.Lt:'<', ast.LtE:'<=', ast.Gt:'>', ast.GtE:'>=', ast.Is:'is',
-        ast.IsNot:'is not', ast.In:'in', ast.NotIn:'not in'}
+compareOps = {ast.Eq:'==', ast.NotEq:'!=', ast.Lt:'<', ast.LtE:'<=', ast.Gt:'>',
+ ast.GtE:'>=', ast.Is:'is', ast.IsNot:'is not', ast.In:'in', ast.NotIn:'not in'}
+
+blockStmts = {ast.If, ast.While, ast.For, ast.Try, ast.ExceptHandler, ast.With,
+ ast.FunctionDef, ast.ClassDef, ast.AsyncFor, ast.AsyncWith, ast.AsyncFunctionDef}
 
 def parsePasted(text, window, location):
     try:
@@ -20,27 +24,41 @@ def parsePasted(text, window, location):
         return None
     if len(modAst.body) == 0:
         return None
+    icons = parseCodeBlock(modAst.body, window, location)
+    if len(icons) == 0:
+        return None
+    window.layoutIconsInSeq(icons[0])
+    return icons
+
+def parseCodeBlock(bodyAst, window, location):
     x, y = location
     icons = []
     seqStartIcon = None
-    for stmt in modAst.body:
+    for stmt in bodyAst:
         if isinstance(stmt, ast.Expr):
             stmtIcon = makeIcons(parseExpr(stmt.value), window, x, y)
+            bodyIcons = None
+        elif stmt.__class__ in (blockStmts):
+            stmtIcon = makeIcons(parseStmt(stmt), window, x, y)
+            bodyIcons = parseCodeBlock(stmt.body, window, location)
+            if bodyIcons is not None:
+                blockEnd = stmtIcon.blockEnd
+                stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
+                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
+                bodyIcons.append(blockEnd)
         else:
             stmtIcon = makeIcons(parseStmt(stmt), window, x, y)
+            bodyIcons = None
         if seqStartIcon is None:
             seqStartIcon = stmtIcon
-        elif hasattr(icons[-1].sites, 'seqOut') and hasattr(stmtIcon.sites, 'seqIn'):
+        elif icons[-1].hasSite('seqOut') and stmtIcon.hasSite('seqIn'):
             # Link the statement to the previous statement
             icons[-1].sites.seqOut.attach(icons[-1], stmtIcon, 'seqIn')
         else:
-            layout = window.layoutIconsInSeq(seqStartIcon)
-            seqStartIcon = None
-            stmtX, stmtY = stmtIcon.pos()
-            y += stmtY + layout.height + 10
+            print('Cannot link icons (no sequence sites)') # Shouldn't happen
         icons.append(stmtIcon)
-    if seqStartIcon:
-        window.layoutIconsInSeq(seqStartIcon)
+        if bodyIcons is not None:
+            icons += bodyIcons
     return icons
 
 def parseExprToAst(text):  #... Not used. what is this for?
@@ -60,6 +78,8 @@ def parseStmt(stmt):
     if stmt.__class__ == ast.Assign:
         targets = [parseExpr(e) for e in stmt.targets]
         return (icon.AssignIcon, targets,  parseExpr(stmt.value))
+    if stmt.__class__ == ast.While:
+        return (icon.WhileIcon, parseExpr(stmt.test))
     return (icon.IdentifierIcon, "**Couldn't Parse**")
 
 def parseExpr(expr):
@@ -171,5 +191,9 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = makeIcons(parsedExpr[2], window, x, y)
         parentIcon = icon.findLastAttrIcon(topIcon)
         parentIcon.replaceChild(subscriptIcon, "attrIcon")
+        return topIcon
+    if iconClass is icon.WhileIcon:
+        topIcon = iconClass(window, (x, y))
+        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
         return topIcon
     return icon.TextIcon("**Internal Parse Error**", window, (x,y))

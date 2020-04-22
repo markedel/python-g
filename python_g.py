@@ -30,7 +30,7 @@ SNAP_DIST = 8
 SITE_SELECT_DIST = 8
 
 # How far to the left of an icon does the statement select/drag band extend
-SEQ_SELECT_WIDTH = 12
+SEQ_SELECT_WIDTH = 15
 
 # How far to the right of icons to deposit the result of executing them
 RESULT_X_OFFSET = 5
@@ -369,8 +369,27 @@ class Window:
         else:
             # Otherwise, drag the icon that was clicked
             if self.doubleClickFlag:
-                # double-click drag, ignores associativity and outer icon
-                self._startDrag(evt, list(ic.traverse()))
+                if hasattr(ic, 'blockEnd') or isinstance(ic, icon.BlockEnd):
+                    # Double-click drag of branch icons takes just the icon and its
+                    # children (without the code block)
+                    if isinstance(ic, icon.BlockEnd):
+                        ic = ic.primary
+                    icons = list(ic.traverse())
+                    icons.append(ic.blockEnd)
+                    self._startDrag(evt, icons)
+                else:
+                    # double-click drag, ignores associativity and outer icon
+                    self._startDrag(evt, list(ic.traverse()))
+            # It would seem natural to drag an entire sequence by the top icon, but that
+            # can also be done by double-clicking to the right of the icon then dragging.
+            # Prefer to reserve that gesture for dragging the icon and its block.
+            # elif ic.parent() is None and ic.hasSite('seqOut') and \
+            #  ic.childAt('seqOut') is not None and ic.childAt('seqIn') is None:
+            #     self._startDrag(evt, list(icon.traverseSeq(ic, hier=True)))
+            elif hasattr(ic, 'blockEnd'):
+                self._startDrag(evt, list(ic.traverseBlock(hier=True)))
+            elif isinstance(ic, icon.BlockEnd):
+                self._startDrag(evt, list(ic.primary.traverseBlock(hier=True)))
             else:
                 self._startDrag(evt, list(self.findLeftOuterIcon(
                  self.assocGrouping(ic)).traverse()))
@@ -489,6 +508,12 @@ class Window:
         singleSel = [clickedIcon]
         hierSel = list(clickedIcon.traverse())
         leftSel = list(self.findLeftOuterIcon(self.assocGrouping(clickedIcon)).traverse())
+        if hasattr(clickedIcon, 'blockEnd'):
+            singleSel.append(clickedIcon.blockEnd)
+            hierSel.append(clickedIcon.blockEnd)
+            blockSel = []
+        else:
+            blockSel = list(clickedIcon.traverseBlock())
         if not currentSel:
             if siteIcon is not None and (not siteSelected or site != self.cursor.site):
                 return "moveCursor"
@@ -500,11 +525,11 @@ class Window:
                 return "left"
             return "hier"
         if currentSel == hierSel:
+            if hasattr(clickedIcon, 'blockEnd'):
+                return "icAndblock"
             if leftSel == currentSel:
                 return "moveCursor"
             return "left"
-        if currentSel == leftSel:
-            return "moveCursor"
         return "moveCursor"
 
     def _destroyCb(self, evt):
@@ -1085,8 +1110,10 @@ class Window:
         self.dragging = icons
         # Remove the icons from the window image and handle the resulting detachments
         # re-layouts, and redrawing.
+        sequences = findSequences(icons)
         if needRemove:
             self.removeIcons(self.dragging)
+        restoreSequences(sequences)
         # Dragging parent icons away from their children may require re-layout of the
         # (moving) parent icons
         topDraggingIcons = findTopIcons(self.dragging)
@@ -1273,7 +1300,7 @@ class Window:
             else:
                 newSelect = self.rectSelectInitialStates[ic]
             if ic.selected != newSelect:
-                ic.selected = newSelect
+                ic.select(newSelect)
                 redrawRegion.add(ic.rect)
         self.refresh(redrawRegion.get(), clear=False)
         l, t, r, b = newRect
@@ -1324,10 +1351,12 @@ class Window:
             icBottom = seqOutY if nextIc is None  else nextIc.posOfSite('seqIn')[1]
             if xChangePoints is None and drawTop < icBottom:
                 xChangePoints = [(seqInX, seqInY)]
+            if xChangePoints is not None and seqInX != seqOutX and seqOutY <= drawBottom:
+                xChangePoints.append((seqOutX, seqOutY + 2))
             needsSelect = drawBottom > seqInY and drawTop < seqOutY
             if not ic.selected and needsSelect or ic.selected and not needsSelect:
                 for selIc in ic.traverse():
-                    selIc.selected = needsSelect
+                    selIc.select(needsSelect)
                     redrawRegion.add(selIc.rect)
             if seqInY < anchorY < seqOutY:
                 if drawTop > seqInY:  # If user started next to icon, highlight it fully
@@ -1338,14 +1367,17 @@ class Window:
         if drawBottom > icBottom:
             drawBottom = icBottom
         # Compute the selection and deselection rectangles from the change points
-        drawRects = None
+        prevX = None
         for x, y in xChangePoints:
-            if y <= drawTop and drawRects is None:
-                drawRects = [(x - SEQ_SELECT_WIDTH, drawTop, x, drawBottom)]
-            if  drawBottom < y < drawTop and drawRects is not None:
+            if y > drawTop:
+                break
+            prevX = x
+        drawRects = [(prevX - SEQ_SELECT_WIDTH, drawTop, prevX, drawBottom)]
+        for x, y in xChangePoints:
+            if drawBottom > y > drawTop and drawRects is not None:
                 splitL, splitT, splitR, splitB = drawRects[-1]
                 drawRects[-1] = (splitL, splitT, splitR, y)
-                drawRects.append((x - SEQ_SELECT_WIDTH, y, drawTop, x, drawBottom))
+                drawRects.append((x - SEQ_SELECT_WIDTH, y, x, drawBottom))
         # Refresh selection changes and clear erase areas
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
@@ -1412,7 +1444,7 @@ class Window:
         resultIcon.layout()
         resultRect = resultIcon.hierRect()
         for ic in resultIcon.traverse():
-            ic.selected = True
+            ic.select()
             ic.draw(clip=resultRect)
         self.refresh(resultRect, redraw=False)
         # For expressions that yield "None", show it, then automatically erase
@@ -1452,10 +1484,14 @@ class Window:
         elif op == 'block':
             topParent = ic.topLevelParent()
             changedIcons = []
-            for i in icon.traverseSeq(topParent, reverse=True):
+            seqStart = icon.findSeqStart(topParent, toStartOfBlock=True)
+            seqEnd = icon.findSeqEnd(topParent, toEndOfBlock=True)
+            for i in icon.traverseSeq(seqStart):
                 changedIcons += list(i.traverse())
-            for i in icon.traverseSeq(topParent, includeStartingIcon=False):
-                changedIcons += list(i.traverse())
+                if i is seqEnd:
+                    break
+        elif op == 'icAndblock':
+            changedIcons = list(ic.traverseBlock(hier=True))
         elif op == 'left':
             changedIcons = list(self.findLeftOuterIcon(self.assocGrouping(ic)).traverse())
         else:
@@ -1463,9 +1499,9 @@ class Window:
         for ic in changedIcons:
             refreshRegion.add(ic.rect)
             if op is 'toggle':
-                ic.selected = not ic.selected
+                ic.select(not ic.selected)
             else:
-                ic.selected = True
+                ic.select()
         self.refresh(refreshRegion.get(), clear=False)
         self.cursor.removeCursor()
 
@@ -1476,7 +1512,7 @@ class Window:
             return
         for ic in selectedIcons:
             refreshRegion.add(ic.rect)
-            ic.selected = False
+            ic.select(False)
         self.refresh(refreshRegion.get(), clear=False)
 
     def redraw(self, region=None, clear=True):
@@ -1495,6 +1531,8 @@ class Window:
                     ic.draw()
             if region is None or icon.seqConnectorTouches(topIcon, region):
                 icon.drawSeqSiteConnection(topIcon, clip=region)
+            if region is None or icon.seqRuleTouches(topIcon, region):
+                icon.drawSeqRule(topIcon, clip=region)
 
     def refresh(self, region=None, redraw=True, clear=True):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
@@ -1549,15 +1587,15 @@ class Window:
             if ic.hasSite('seqIn'):
                 seqInX, seqInY = ic.posOfSite('seqIn')
                 seqOutX, seqOutY = ic.posOfSite('seqOut')
-                if x > seqInX or x < seqInX - SEQ_SELECT_WIDTH or y < seqInY:
+                if y < seqInY:
                     continue
-                if seqInY <= y <= seqOutY:
+                if seqInY <= y <= seqOutY and seqInX - SEQ_SELECT_WIDTH <= x <= seqInX:
                     return ic  # Point is adjacent to icon body
                 nextIc = ic.nextInSeq()
                 if nextIc is None:
                     continue
                 nextSeqInX, nextSeqInY = nextIc.posOfSite('seqIn')
-                if seqOutY <= y < nextSeqInY:
+                if seqOutY <= y < nextSeqInY and seqOutX-SEQ_SELECT_WIDTH <= x <= seqOutX:
                     return ic  # Point is adjacent to connector to next icon
         return None
 
@@ -1856,7 +1894,7 @@ class Window:
                 seqIcNewRect = seqIc.hierRect()
                 redrawRegion.add(seqIcNewRect)
             y = seqIcNewRect[3] + 1
-            # ... loop and condition icons will adjust x
+            x = seqIc.posOfSite('seqOut')[0]
         return redrawRegion.get()
 
     def siteSelected(self, evt):
@@ -2003,6 +2041,34 @@ def findTopIcons(icons):
         for child in ic.children():
             iconDir[child] = False
     return [ic for ic, isTop in iconDir.items() if isTop]
+
+def findSequences(icons):
+    """Returns a list of groups of icons that appear on the same sequence (disregarding
+    intervening icons not in "icons", in the order that they appear in the sequence."""
+    topIcons = findTopIcons(icons)
+    unsequenced = set(topIcons)
+    sequences = []
+    for topIc in topIcons:
+        if topIc not in unsequenced:
+            continue
+        sequence = []
+        seqStart = icon.findSeqStart(topIc)
+        for ic in icon.traverseSeq(seqStart):
+            if ic in unsequenced:
+                sequence.append(ic)
+                unsequenced.remove(ic)
+        sequences.append(sequence)
+    return sequences
+
+def restoreSequences(sequences):
+    """Connect icons into sequences according to "sequences" in the format generated by
+     findSequences"""
+    for sequence in sequences:
+        prevIcon = None
+        for ic in sequence:
+            if ic.hasSite('seqOut'):
+                ic.replaceChild(prevIcon, 'seqIn')
+            prevIcon = ic
 
 if __name__ == '__main__':
     appData = App()

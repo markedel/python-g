@@ -48,6 +48,8 @@ GRAY_75 = (192, 192, 192, 255)
 GRAY_50 = (128, 128, 128, 255)
 GRAY_25 = (64, 64, 64, 255)
 BLACK = (0, 0, 0, 255)
+SEQ_RULE_COLOR = (165, 180, 165, 255)
+SEQ_CONNECT_COLOR = (70, 100, 70, 255)
 
 DEPTH_EXPAND = 4
 
@@ -58,6 +60,9 @@ SLICE_EMPTY_ARG_WIDTH = 1
 # Pixels below input/output site to place function/list/tuple icons insertion site
 INSERT_SITE_X_OFFSET = 2
 INSERT_SITE_Y_OFFSET = 5
+
+# Number of pixels to indent a code block
+BLOCK_INDENT = 16
 
 # Pixels below input/output site to place attribute site
 # This should be based on font metrics, but for the moment, we have a hard-coded cursor
@@ -358,6 +363,14 @@ inpSeqPixmap = (
  "o8o",
 )
 
+dragSeqPixmap = (
+ "..ooo",
+ ".o%%o",
+ "o%%%%",
+ ".o%%o",
+ "..ooo",
+)
+
 assignDragPixmap = (
  "......",
  "......",
@@ -375,6 +388,12 @@ assignDragPixmap = (
  "......",
  "......",
  "......",
+)
+
+branchFootPixmap = (
+ "ooooooooooooooooooo",
+ "o%o             o%o",
+ "ooooooooooooooooooo",
 )
 
 renderCache = {}
@@ -484,6 +503,8 @@ subscriptRBktImage = asciiToImage(subscriptRBktPixmap)
 inpSeqImage = asciiToImage(inpSeqPixmap)
 binInSeqImage = asciiToImage(binInSeqPixmap)
 assignDragImage = asciiToImage(assignDragPixmap)
+dragSeqImage = asciiToImage(dragSeqPixmap)
+branchFootImage = asciiToImage(branchFootPixmap)
 
 class IconExecException(Exception):
     def __init__(self, ic, exceptionText):
@@ -512,6 +533,11 @@ class Icon:
             return self.posOfSite('seqIn')
         else:
             return self.rect[:2]
+
+    def select(self, select=True):
+        """Use this method to select or unselect an icon (state can be read from .selected
+        member variable, but some icons need to take action on change)."""
+        self.selected = select
 
     def layout(self, location=None):
         """Compute layout and set locations for icon and its children (do not redraw).
@@ -547,9 +573,28 @@ class Icon:
         if includeSelf and order is "pick":
             yield self
 
+    def traverseBlock(self, includeSelf=True, hier=False):
+        """If the icon owns a code block return either all the icons in the code block
+        (if hier is True), or just the top level icons in the block (if hier is False)."""
+        if includeSelf:
+            if hier:
+                yield from self.traverse()
+            else:
+                yield self
+        if not hasattr(self, 'blockEnd'):
+            return
+        for ic in traverseSeq(self, includeStartingIcon=False):
+            if ic is self.blockEnd:
+                break
+            if hier:
+                yield from ic.traverse()
+            else:
+                yield ic
+        if includeSelf:
+            yield self.blockEnd
+
     def touchesPosition(self, x, y):
-        # ... reevaluate whether it is always best to cache the whole image when
-        #     we're drawing little bits of fully-overlapped icons
+        """Return True if any of the drawn part of the icon falls at x, y"""
         if not pointInRect((x, y), self.rect) or self.drawList is None:
             return False
         for imgOffset, img in self.drawList:
@@ -2127,6 +2172,119 @@ class DivideIcon(Icon):
             raise IconExecException(self, err)
         return result
 
+class BlockEnd(Icon):
+    def __init__(self, primary, location=None):
+        Icon.__init__(self, primary.window)
+        self.primary = primary
+        self.sites.add('seqIn', 'seqIn', 1 + BLOCK_INDENT, 1)
+        self.sites.add('seqOut', 'seqOut', 1, 1)
+        x, y = (0, 0)  if location is None else location
+        self.rect = (x, y, x + branchFootImage.width, y + branchFootImage.height)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if self.drawList is None:
+            self.drawList = [((0, 0), branchFootImage)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+
+    def select(self, select=True, selectPrimary=False):
+        if selectPrimary:
+            self.primary.selected = select
+
+    def primaryRect(self):
+        return self.primary.rect
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        seqSiteX = outSiteX - self.sites.seqIn.xOffset
+        seqSiteY = outSiteY - self.sites.seqIn.yOffset
+        width, height = branchFootImage.size
+        top = seqSiteY - 1
+        left = seqSiteX - 1
+        self.rect = (left, top, left + width, top + height)
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = branchFootImage.size
+        layout = Layout(self, width, height, 1)
+        return layout
+
+class WhileIcon(Icon):
+    def __init__(self, window, location):
+        Icon.__init__(self, window)
+        bodyWidth, bodyHeight = globalFont.getsize("while")
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        condXOffset = bodyWidth + dragSeqImage.width-1 - OUTPUT_SITE_DEPTH
+        self.sites.add('condIcon', 'input', condXOffset, siteYOffset)
+        seqX = dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth + dragSeqImage.width-1, y + bodyHeight)
+        self.blockEnd = BlockEnd(self, (x, y + bodyHeight + 2))
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText("while", self.bodySize[1])
+            img.paste(txtImg, (dragSeqImage.width - 1, 0))
+            cntrSiteY = self.sites.condIcon.yOffset
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (self.sites.condIcon.xOffset, inImageY))
+            drawSeqSites(img, dragSeqImage.width-1, 0, txtImg.height, indent="right")
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def select(self, select=True):
+        self.selected = select
+        self.blockEnd.selected = select
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        width, height = self.bodySize
+        width += dragSeqImage.width - 1
+        left = seqSiteX - self.sites.seqIn.xOffset - 1
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.seqIn, seqSiteX-1, seqSiteY-1)
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = self.bodySize
+        layout = Layout(self, width, height, 1)
+        condIcon = self.sites.condIcon.att
+        condXOff = width - 1
+        condYOff = height // 2 - 1
+        if condIcon is None:
+            layout.addSubLayout(None, 'condIcon', condXOff, condYOff)
+        else:
+            layout.addSubLayout(condIcon.calcLayout(), 'condIcon', condXOff, condYOff)
+        return layout
+
+    def textRepr(self):
+        return None  #... no idea what to do here, yet.
+
+    #... ClipboardRepr
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
 class ImageIcon(Icon):
     def __init__(self, image, window, location=None):
         Icon.__init__(self, window)
@@ -2327,17 +2485,27 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
                 return result
     return None
 
-def drawSeqSites(img, boxLeft, boxTop, boxHeight):
+def drawSeqSites(img, boxLeft, boxTop, boxHeight, indent=None):
     """Draw sequence (in and out) sites on a rectangular boxed icon"""
-    img.putpixel((boxLeft+1, boxTop+1), BLACK)
-    img.putpixel((boxLeft+2, boxTop+1), OUTLINE_COLOR)
-    img.putpixel((boxLeft+2, boxTop+2), OUTLINE_COLOR)
-    img.putpixel((boxLeft+1, boxTop+2), OUTLINE_COLOR)
+    topIndent = 0
+    bottomIndent = 0
+    if indent == "right":
+        bottomIndent = BLOCK_INDENT
+    elif indent == "left":
+        topIndent = BLOCK_INDENT
+    img.putpixel((topIndent + boxLeft + 1, boxTop+1), BLACK)
+    img.putpixel((topIndent + boxLeft + 2, boxTop+1), OUTLINE_COLOR)
+    img.putpixel((topIndent + boxLeft + 2, boxTop+2), OUTLINE_COLOR)
+    img.putpixel((topIndent + boxLeft + 1, boxTop+2), OUTLINE_COLOR)
     bottomSiteY = boxTop + boxHeight - 2
-    img.putpixel((boxLeft+1, bottomSiteY), BLACK)
-    img.putpixel((boxLeft+2, bottomSiteY), OUTLINE_COLOR)
-    img.putpixel((boxLeft+2, bottomSiteY-1), OUTLINE_COLOR)
-    img.putpixel((boxLeft+1, bottomSiteY-1), OUTLINE_COLOR)
+    img.putpixel((bottomIndent + boxLeft + 1, bottomSiteY), BLACK)
+    img.putpixel((bottomIndent + boxLeft + 2, bottomSiteY), OUTLINE_COLOR)
+    img.putpixel((bottomIndent + boxLeft + 2, bottomSiteY-1), OUTLINE_COLOR)
+    img.putpixel((bottomIndent + boxLeft + 1, bottomSiteY-1), OUTLINE_COLOR)
+    if indent == "right":
+        img.putpixel((bottomIndent + boxLeft, bottomSiteY), OUTLINE_COLOR)
+        img.putpixel((bottomIndent + boxLeft, bottomSiteY - 1), OUTLINE_COLOR)
+
 
 class IconSite:
     def __init__(self, siteName, siteType, xOffset=0, yOffset=0):
@@ -2730,7 +2898,7 @@ def drawSeqSiteConnection(toIcon, image=None, clip=None):
         draw = fromIcon.window.draw
     else:
         draw = ImageDraw.Draw(image)
-    draw.line((fromX, fromY, toX, toY), BLACK)
+    draw.line((fromX, fromY, toX, toY), SEQ_CONNECT_COLOR)
 
 def seqConnectorTouches(toIcon, rect):
     """Return True if the icon is connected via its seqIn site and the sequence site
@@ -2749,19 +2917,86 @@ def seqConnectorTouches(toIcon, rect):
         return False
     return True
 
-def findSeqStart(ic):
-    for seqStartIc in traverseSeq(ic, reverse=True):
-        pass
-    return seqStartIc
+def seqRuleTouches(ic, rect):
+    """Return True if the icon draws an indent rule line and it intersects rect"""
+    if not hasattr(ic, 'blockEnd'):
+        return False
+    x, toY = ic.blockEnd.posOfSite('seqOut')
+    fromY = ic.posOfSite('seqOut')[1]
+    l, t, r, b = rect
+    if x < l or x > r:
+        return False
+    if fromY < t and toY < t:
+        return False
+    if toY > b and fromY > b:
+        return False
+    return True
 
-def findSeqEnd(ic):
-    for seqEndIc in traverseSeq(ic):
-        pass
-    return seqEndIc
+def drawSeqRule(ic, clip=None):
+    """Draw connection line between ic's seqIn site and whatever it connects."""
+    if not hasattr(ic, 'blockEnd'):
+        return
+    x, toY = ic.blockEnd.posOfSite('seqOut')
+    fromY = ic.posOfSite('seqOut')[1] + 2
+    if clip is not None:
+        # Clip the line to within the clip rectangle (rules are always vertical and
+        # drawn downward and rectangles are ordered left, top, right, bottom).
+        l, t, r, b = clip
+        if x < l or x > r:
+            return
+        if fromY < t:
+            if toY < t:
+                return
+            fromY = t
+        if toY > b:
+            if fromY > b:
+                return
+            toY = b
+    ic.window.draw.line((x, fromY, x, toY), SEQ_RULE_COLOR)
 
-def traverseSeq(ic, includeStartingIcon=True, reverse=False):
+def findSeqStart(ic, toStartOfBlock=False):
+    if toStartOfBlock:
+        while True:
+            if not hasattr(ic.sites, 'seqIn'):
+                return ic
+            prevIc = ic.sites.seqIn.att
+            if prevIc is None:
+                return ic
+            if hasattr(prevIc, 'blockEnd'):
+                return ic
+            ic = prevIc
+            if isinstance(ic, BlockEnd):
+                ic = ic.primary
+    else:
+        for seqStartIc in traverseSeq(ic, reverse=True):
+            pass
+        return seqStartIc
+
+
+def findSeqEnd(ic, toEndOfBlock=False):
+    if toEndOfBlock:
+        while True:
+            if hasattr(ic, 'blockEnd'):
+                ic = ic.blockEnd
+            if not hasattr(ic.sites, 'seqOut'):
+                return ic
+            nextIc = ic.sites.seqOut.att
+            if nextIc is None:
+                return ic
+            if isinstance(nextIc, BlockEnd):
+                return ic
+            ic = nextIc
+    else:
+        for seqEndIc in traverseSeq(ic):
+            pass
+        return seqEndIc
+
+def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False):
     if includeStartingIcon:
-        yield ic
+        if hier:
+            yield from ic.traverse()
+        else:
+            yield ic
     if reverse:
         while True:
             if not hasattr(ic.sites, 'seqIn'):
@@ -2769,7 +3004,10 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False):
             if ic.sites.seqIn.att is None:
                 return
             ic = ic.sites.seqIn.att
-            yield ic
+            if hier:
+                yield from ic.traverse()
+            else:
+                yield ic
     else:
         while True:
             if not hasattr(ic.sites, 'seqOut'):
@@ -2777,7 +3015,10 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False):
             if ic.sites.seqOut.att is None:
                 return
             ic = ic.sites.seqOut.att
-            yield ic
+            if hier:
+                yield from ic.traverse()
+            else:
+                yield ic
 
 def insertSeq(seqStartIc, atIc, before=False):
     seqEndIc = findSeqEnd(seqStartIc)
