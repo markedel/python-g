@@ -556,7 +556,7 @@ class EntryIcon(icon.Icon):
             self.window.replaceTop(self, tupleIcon)
             return True
         siteType = onIcon.typeOf(site)
-        if onIcon.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon,
+        if onIcon.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
          icon.AssignIcon) and siteType == "input":
             # This is essentially ",,", which means leave a new space for an arg
             # Entry icon holds pending arguments
@@ -618,7 +618,7 @@ class EntryIcon(icon.Icon):
             rightArg = None
         child = onIcon
         for parent in onIcon.parentage():
-            if parent.__class__ in (icon.FnIcon, icon.ListIcon, icon.TupleIcon,
+            if parent.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
              icon.AssignIcon):
                 onIcon.layoutDirty = True
                 childSite = parent.siteOf(child)
@@ -711,19 +711,18 @@ class EntryIcon(icon.Icon):
         return matchingParen
 
     def makeFunction(self, ic):
-        if ic.__class__ is not icon.IdentifierIcon:
-            return False
-        parent = ic.parent()
-        fnIcon = icon.FnIcon(ic.name, window=self.window)
-        fnIcon.layoutDirty = True
-        if parent is None:
-            self.window.replaceTop(ic, fnIcon)
-        else:
-            parent.replaceChild(fnIcon, parent.siteOf(ic))
+        callIcon = icon.CallIcon(window=self.window)
+        ic.replaceChild(callIcon, 'attrIcon')
         if self.pendingAttr():
-            ic.replaceChild(None, 'attrIcon')
-            fnIcon.replaceChild(self.pendingAttr(), 'attrIcon')
-        self.window.cursor.setToIconSite(fnIcon, "argIcons", 0)
+            self.attachedSite = 'argIcons_0'
+            self.attachedIcon = callIcon
+            self.attachedSiteType = 'input'
+            callIcon.replaceChild(self, 'argIcons_0')
+            return True
+        if self.pendingArg():
+            callIcon.replaceChild(self.pendingArg(), 'argIcons_0')
+        self.window.entryIcon = None
+        self.window.cursor.setToIconSite(callIcon, "argIcons", 0)
         return True
 
     def appendOperator(self, newOpIcon):
@@ -1328,7 +1327,7 @@ class Cursor:
                 siteType = parent.typeOf(parent.siteOf(child))
             if siteType == "input" and (
              parent.__class__ is icon.BinOpIcon and parent.hasParens or
-             parent.__class__ in (icon.FnIcon, icon.TupleIcon) or
+             parent.__class__ in (icon.CallIcon, icon.TupleIcon) or
              parent.__class__ is CursorParenIcon and parent.closed):
                 self.setToIconSite(parent, "attrIcon")
                 return True

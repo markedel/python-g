@@ -12,9 +12,9 @@ isSeriesRe = re.compile(".*_\\d*$")
 
 binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7, '&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
- 'is':5, 'is not':5, '<':5, '<=':5, '>':5, '>=':5, '==':5, '!=':5, '=':-1}
+ 'is':5, 'is not':5, '<':5, '<=':5, '>':5, '>=':5, '==':5, '!=':5, '=':-1, ':':-1}
 
-unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4}
+unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4, '*':-1, '**':-1}
 
 binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.truediv,
  '//':operator.floordiv, '%':operator.mod, '**':operator.pow, '<<':operator.lshift,
@@ -24,7 +24,8 @@ binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.tr
  'is not':operator.is_not, '<':operator.lt, '<=':operator.le, '>':operator.gt,
  '>=':operator.ge, '==':operator.eq, '!=':operator.ne}
 
-unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_}
+unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_,
+ '*':lambda a:a, '**': lambda a:a}
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
@@ -116,8 +117,8 @@ commaPixmap = (
  "o  o.",
  "o   o",
  "o   o",
- "o %9o",
- "o8%9o",
+ "o %7o",
+ "o8%7o",
  "o%8 o",
  "o   o",
  "ooooo",
@@ -323,6 +324,48 @@ tupleRParenPixmap = (
  "oooooooo",
 )
 
+fnLParenPixmap = (
+ ".oooooooo",
+ ".o      o",
+ ".o      o",
+ ".o      o",
+ ".o    84o",
+ ".o   81 o",
+ ".o   28 o",
+ ".o  73  o",
+ ".o  56 o.",
+ ".o  48o..",
+ ".o  19 o.",
+ ".o  19  o",
+ ".o  18  o",
+ "oo  28  o",
+ "oo  68  o",
+ ".o      o",
+ ".o      o",
+ ".oooooooo",
+)
+
+fnRParenPixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o  82  o",
+ "o   29 o",
+ "o   38 o",
+ "o   37 o",
+ "o   37 o",
+ "o   38 o",
+ "o  829 o",
+ "o  74  o",
+ "o  38  o",
+ "o 65  o.",
+ "o85   o.",
+ "o      o",
+ "o      o",
+ "oooooooo",
+)
+
 binInSeqPixmap = (
  "o8o",
  "8%8",
@@ -496,6 +539,8 @@ lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
 tupleLParenImage = asciiToImage(tupleLParenPixmap)
 tupleRParenImage = asciiToImage(tupleRParenPixmap)
+fnLParenImage = asciiToImage(fnLParenPixmap)
+fnRParenImage = asciiToImage(fnRParenPixmap)
 listLBktImage = asciiToImage(listLBktPixmap)
 listRBktImage = asciiToImage(listRBktPixmap)
 subscriptLBktImage = asciiToImage(subscriptLBktPixmap)
@@ -1054,7 +1099,6 @@ class AttrIcon(Icon):
     def clipboardRepr(self, offset):
         return self._serialize(offset, name=self.name)
 
-
 class SubscriptIcon(Icon):
     def __init__(self, numSubscripts=1, window=None, location=None):
         Icon.__init__(self, window)
@@ -1330,6 +1374,14 @@ class UnaryOpIcon(Icon):
             raise IconExecException(self, err)
         return result
 
+class StarIcon(UnaryOpIcon):
+    def __init__(self, window=None, location=None):
+        UnaryOpIcon.__init__(self, '*', window, location)
+
+class StarStarIcon(UnaryOpIcon):
+    def __init__(self, window=None, location=None):
+        UnaryOpIcon.__init__(self, '**', window, location)
+
 class ListTypeIcon(Icon):
     def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
      location=None):
@@ -1442,28 +1494,6 @@ class ListTypeIcon(Icon):
             argText = argText[:-2]
         return self.leftText + argText + self.rightText
 
-class FnIcon(ListTypeIcon):
-    def __init__(self, name, window, location=None):
-        self.name = name
-        ListTypeIcon.__init__(self, name + '(', ')', window, location=location)
-
-    def execute(self):
-        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0] is None:
-            argValues = []
-        else:
-            for site in self.sites.argIcons:
-                if site.att is None:
-                    raise IconExecException(self, "Missing argument(s)")
-            argValues = [site.att.execute() for site in self.sites.argIcons]
-        try:
-            result = getattr(math, self.name)(*argValues)
-        except Exception as err:
-            raise IconExecException(self, err)
-        return result
-
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, name=self.name)
-
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
         ListTypeIcon.__init__(self, '[', ']', window, location=location,
@@ -1542,6 +1572,29 @@ class TupleIcon(ListTypeIcon):
 
     def clipboardRepr(self, offset):
         return self._serialize(offset, noParens=self.noParens)
+
+class DictIcon(ListTypeIcon):
+    def __init__(self, window, location=None):
+        ListTypeIcon.__init__(self, '{', '}', window, location=location)
+
+    def execute(self):
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            return {}
+        for site in self.sites.argIcons:
+            if site.att is None:
+                raise IconExecException(self, "Missing argument(s)")
+            if site.att.__class__ not in (StarStarIcon, DictElemIcon):
+                raise IconExecException(self, "Bad format for dictionary element")
+        result = {}
+        for site in self.sites.argIcons:
+            if isinstance(site.att, DictElemIcon):
+                key, value = site.att.execute()
+                result[key] = value
+            elif isinstance(site.att, StarStarIcon):
+                result = {**result, **site.att.execute()}
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
+        return result
 
 class BinOpIcon(Icon):
     def __init__(self, op, window, location=None):
@@ -1797,6 +1850,132 @@ class BinOpIcon(Icon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
+
+class CallIcon(Icon):
+    def __init__(self, window, location=None):
+        Icon.__init__(self, window)
+        leftWidth, leftHeight = fnLParenImage.size
+        attrSiteY = leftHeight // 2 + ATTR_SITE_OFFSET
+        self.sites.add('attrOut', 'attrOut', 0, attrSiteY)
+        self.argList = HorizListMgr(self, 'argIcons', leftWidth, leftHeight//2)
+        width, height = self._size()
+        self.sites.add('attrIcon', 'attrIn', width-1, attrSiteY)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + width, y + height)
+
+    def _size(self):
+        width, height = fnLParenImage.size
+        width += self.argList.width() + fnRParenImage.width - 1
+        return width, height
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if self.drawList is None:
+            # Left paren/bracket/brace
+            self.drawList = [((0, 0), fnLParenImage)]
+            # Commas
+            leftBoxWidth, leftBoxHeight = fnLParenImage.size
+            inSiteX = leftBoxWidth - OUTPUT_SITE_DEPTH - 1
+            self.drawList += self.argList.drawListCommas(inSiteX, leftBoxHeight//2)
+            # End paren/brace/bracket
+            parenX = leftBoxWidth + self.argList.width() - ATTR_SITE_DEPTH - 1
+            self.drawList.append(((parenX, 0), fnRParenImage))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+
+    def argIcons(self):
+        return [site.att for site in self.sites.argIcons]
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion to those representing actual attachment sites
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
+        return siteSnapLists
+
+    def doLayout(self, attrSiteX, attrSiteY, layout):
+        self.argList.doLayout(layout)
+        layout.updateSiteOffsets(self.sites.attrOut)
+        layout.doSubLayouts(self.sites.attrOut, attrSiteX, attrSiteY)
+        width, height = self._size()
+        x = attrSiteX
+        y = attrSiteY - self.sites.attrOut.yOffset
+        self.rect = (x, y, x + width, y + height)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight = fnLParenImage.size
+        bodyWidth -= ATTR_SITE_DEPTH
+        layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2 + ATTR_SITE_OFFSET)
+        argWidth = self.argList.calcLayout(layout, bodyWidth - 1, -ATTR_SITE_OFFSET)
+        # layout now incorporates argument layout sizes, but not end paren
+        layout.width = fnLParenImage.width + argWidth + fnRParenImage.width - 2
+        if self.sites.attrIcon.att:
+            attrLayout = self.sites.attrIcon.att.calcLayout()
+        else:
+            attrLayout = None
+        layout.addSubLayout(attrLayout, 'attrIcon', layout.width-ATTR_SITE_DEPTH, 0)
+        return layout
+
+    def textRepr(self):
+        argText = ""
+        for site in self.sites.argIcons:
+            if site.att is None:
+                argText = argText + "None, "
+            else:
+                argText = argText + site.att.textRepr() + ", "
+        if len(argText) > 0:
+            argText = argText[:-2]
+        return '(' + argText + ')'
+
+    def execute(self, attrOfValue):
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            return None
+        for site in self.sites.argIcons:
+            if site.att is None:
+                raise IconExecException(self, "Missing argument(s)")
+        args = []
+        kwArgs = {}
+        for site in self.sites.argIcons:
+            if isinstance(site.att, ArgAssignIcon):
+                key, val = site.att.execute()
+                kwArgs[key] = val
+            elif isinstance(site.att, StarIcon):
+                args += site.att.execute()
+            elif isinstance(site.att, StarStarIcon):
+                kwArgs = {**kwArgs, **site.att.execute()}
+            else:
+                args.append(site.att.execute())
+        result = attrOfValue(*args, **kwArgs)
+        if self.sites.attrIcon.att:
+            return self.sites.attrIcon.att.execute(result)
+        return result
+
+class ArgAssignIcon(BinOpIcon):
+    """Special assignment statement for use only in function argument lists"""
+    def __init__(self, window=None, location=None):
+        BinOpIcon.__init__(self, "=", window, location)
+
+    def execute(self):
+        if self.leftArg() is None:
+            raise IconExecException(self, "Missing argument name")
+        if self.rightArg() is None:
+            raise IconExecException(self, "Missing argument value")
+        if not isinstance(self.leftArg(), IdentifierIcon):
+            raise IconExecException(self, "Argument name is not identifier")
+        return self.leftArg().name, self.rightArg().execute()
+
+class DictElemIcon(BinOpIcon):
+    """Individual entry in a dictionary constant"""
+    def __init__(self, window=None, location=None):
+        BinOpIcon.__init__(self, ":", window, location)
+
+    def execute(self):
+        if self.leftArg() is None:
+            raise IconExecException(self, "Missing key")
+        if self.rightArg() is None:
+            raise IconExecException(self, "Missing value")
+        key = self.leftArg().execute()
+        value = self.rightArg().execute()
+        return key, value
 
 class AssignIcon(Icon):
     def __init__(self, numTargets=1, window=None, location=None):
@@ -2810,7 +2989,7 @@ class HorizListMgr:
         self.icon = ic
         self.siteSeriesName = siteSeriesName
         ic.sites.addSeries(siteSeriesName, 'input', 1, [(leftSiteX, leftSiteY)])
-        self.emptyInOffsets = (0, LIST_EMPTY_ARG_WIDTH)
+        self.emptyInOffsets = (0, 0)
         self.inOffsets = self.emptyInOffsets
 
     def drawListCommas(self, leftSiteX, leftSiteY):
@@ -2864,6 +3043,9 @@ class HorizListMgr:
                 width += childLayout.width - 1 + commaImage.width - 1
             inOffsets.append(width)
         inOffsets[-1] -= (commaImage.width - 1)
+        if len(siteSeries) == 1 and site.att is None:
+            # Empty Argument list leaves no space: (), [], {}
+            inOffsets = [0, 0]
         # Pass information doLayout will need to reconfigure
         setattr(layout, self.siteSeriesName + "InOffsets", inOffsets)
         return inOffsets[-1] + 1

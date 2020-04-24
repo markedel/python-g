@@ -721,7 +721,7 @@ class Window:
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt)
 
-        elif isinstance(ic, icon.ListTypeIcon):
+        elif isinstance(ic, icon.ListTypeIcon) or isinstance(ic, icon.CallIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)
             if self.cursor.site == "attrIcon" or index == 0:
                 # On backspace in to a list or tuple from the outside, or from the first

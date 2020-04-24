@@ -101,7 +101,9 @@ def parseExpr(expr):
          parseExpr(expr.comparators[0]))
     elif expr.__class__ == ast.Call:
         # No keywords or other cool stuff, yet
-        return (icon.FnIcon, expr.func.id, *(parseExpr(e) for e in expr.args))
+        args = (parseExpr(e) for e in expr.args)
+        keywords = {k.arg:parseExpr(k.value) for k in expr.keywords}
+        return (icon.CallIcon, parseExpr(expr.func), args, keywords)
     elif expr.__class__ == ast.Num:
         return (icon.NumericIcon, expr.n)
     elif expr.__class__ == ast.Str:
@@ -109,12 +111,18 @@ def parseExpr(expr):
     # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
     elif expr.__class__ == ast.Name:
         return (icon.IdentifierIcon, expr.id)
+    elif expr.__class__ == ast.Starred:
+        return (icon.StarIcon, parseExpr(expr.value))
     elif expr.__class__ == ast.NameConstant:
         return (icon.NumericIcon, expr.value)  # True and False as number is a bit weird
     elif expr.__class__ == ast.List:
         return (icon.ListIcon, *(parseExpr(e) for e in expr.elts))
     elif expr.__class__ == ast.Tuple:
         return (icon.TupleIcon, *(parseExpr(e) for e in expr.elts))
+    elif expr.__class__ == ast.Dict:
+        keys = [None if e is None else parseExpr(e) for e in expr.keys]
+        values = [parseExpr(e) for e in expr.values]
+        return (icon.DictIcon, keys, values)
     elif expr.__class__ == ast.Attribute:
         return (icon.AttrIcon, expr.attr, parseExpr(expr.value))
     elif expr.__class__ == ast.Subscript:
@@ -133,14 +141,33 @@ def makeIcons(parsedExpr, window, x, y):
     iconClass = parsedExpr[0]
     if iconClass in (icon.IdentifierIcon, icon.NumericIcon, icon.StringIcon):
         return iconClass(parsedExpr[1], window, (x, y))
-    if iconClass is icon.FnIcon:
-        topIcon = iconClass(parsedExpr[1], window, (x, y))
-        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[2:]]
-        topIcon.insertChildren(childIcons, "argIcons", 0)
+    if iconClass is icon.CallIcon:
+        func, args, keywords = parsedExpr[1:]
+        callIcon = iconClass(window, (x, y))
+        argIcons = [makeIcons(pe, window, x, y) for pe in args]
+        for key, val in keywords.items():
+            valueIcon = makeIcons(val, window, x, y)
+            if key is None:
+                starStarIcon = icon.StarStarIcon(window)
+                starStarIcon.replaceChild(valueIcon, 'argIcon')
+                argIcons.append(starStarIcon)
+            else:
+                kwIcon = icon.ArgAssignIcon(window)
+                kwIcon.replaceChild(icon.IdentifierIcon(key, window), 'leftArg')
+                kwIcon.replaceChild(valueIcon, 'rightArg')
+                argIcons.append(kwIcon)
+        topIcon = makeIcons(func, window, x, y)
+        parentIcon = icon.findLastAttrIcon(topIcon)
+        parentIcon.replaceChild(callIcon, "attrIcon")
+        callIcon.insertChildren(argIcons, "argIcons", 0)
         return topIcon
     if iconClass is icon.UnaryOpIcon:
         topIcon = iconClass(parsedExpr[1], window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "argIcon")
+        return topIcon
+    if iconClass is icon.StarIcon:
+        topIcon = iconClass(window, (x, y))
+        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), "argIcon")
         return topIcon
     if iconClass is icon.BinOpIcon:
         topIcon = iconClass(parsedExpr[1], window, (x, y))
@@ -156,6 +183,23 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = iconClass(window, location=(x, y))
         childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
         topIcon.insertChildren(childIcons, "argIcons", 0)
+        return topIcon
+    if iconClass is icon.DictIcon:
+        topIcon = iconClass(window, location=(x, y))
+        argIcons = []
+        values = parsedExpr[2]
+        for i, key in enumerate(parsedExpr[1]):
+            value = values[i]
+            if key is None:
+                starStar = icon.StarStarIcon(window, location=(x,y))
+                starStar.replaceChild(makeIcons(value, window, x, y), "argIcon")
+                argIcons.append(starStar)
+            else:
+                dictElem = icon.DictElemIcon(window, location=(x,y))
+                dictElem.replaceChild(makeIcons(key, window, x, y), "leftArg")
+                dictElem.replaceChild(makeIcons(value, window, x, y), "rightArg")
+                argIcons.append(dictElem)
+        topIcon.insertChildren(argIcons, "argIcons", 0)
         return topIcon
     if iconClass is icon.AssignIcon:
         tgts = parsedExpr[1]
