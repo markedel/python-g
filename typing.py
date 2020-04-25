@@ -557,7 +557,7 @@ class EntryIcon(icon.Icon):
             return True
         siteType = onIcon.typeOf(site)
         if onIcon.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
-         icon.AssignIcon) and siteType == "input":
+         icon.AssignIcon, icon.DefIcon) and siteType == "input":
             # This is essentially ",,", which means leave a new space for an arg
             # Entry icon holds pending arguments
             seriesName, seriesIndex = icon.splitSeriesSiteId(site)
@@ -619,7 +619,7 @@ class EntryIcon(icon.Icon):
         child = onIcon
         for parent in onIcon.parentage():
             if parent.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
-             icon.AssignIcon):
+             icon.AssignIcon, icon.DefIcon):
                 onIcon.layoutDirty = True
                 childSite = parent.siteOf(child)
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
@@ -1327,7 +1327,7 @@ class Cursor:
                 siteType = parent.typeOf(parent.siteOf(child))
             if siteType == "input" and (
              parent.__class__ is icon.BinOpIcon and parent.hasParens or
-             parent.__class__ in (icon.CallIcon, icon.TupleIcon) or
+             parent.__class__ in (icon.CallIcon, icon.TupleIcon, icon.DefIcon) or
              parent.__class__ is CursorParenIcon and parent.closed):
                 self.setToIconSite(parent, "attrIcon")
                 return True

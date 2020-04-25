@@ -80,6 +80,16 @@ def parseStmt(stmt):
         return (icon.AssignIcon, targets,  parseExpr(stmt.value))
     if stmt.__class__ == ast.While:
         return (icon.WhileIcon, parseExpr(stmt.test))
+    if stmt.__class__ in (ast.FunctionDef, ast.AsyncFunctionDef):
+        isAsync = stmt.__class__ is ast.AsyncFunctionDef
+        args = [arg.arg for arg in stmt.args.args]
+        defaults = [parseExpr(e) for e in stmt.args.defaults]
+        varArg = stmt.args.vararg.arg if stmt.args.vararg is not None else None
+        kwOnlyArgs = [arg.arg for arg in stmt.args.kwonlyargs]
+        kwDefaults = [parseExpr(e) for e in stmt.args.kw_defaults]
+        kwArg = stmt.args.kwarg.arg if stmt.args.kwarg is not None else None
+        return (icon.DefIcon, isAsync, stmt.name, args, defaults, varArg, kwOnlyArgs,
+         kwDefaults, kwArg)
     return (icon.IdentifierIcon, "**Couldn't Parse**")
 
 def parseExpr(expr):
@@ -100,8 +110,7 @@ def parseExpr(expr):
         return (icon.BinOpIcon, compareOps[expr.ops[0].__class__], parseExpr(expr.left),
          parseExpr(expr.comparators[0]))
     elif expr.__class__ == ast.Call:
-        # No keywords or other cool stuff, yet
-        args = (parseExpr(e) for e in expr.args)
+        args = [parseExpr(e) for e in expr.args]
         keywords = {k.arg:parseExpr(k.value) for k in expr.keywords}
         return (icon.CallIcon, parseExpr(expr.func), args, keywords)
     elif expr.__class__ == ast.Num:
@@ -240,4 +249,50 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = iconClass(window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
         return topIcon
+    if iconClass is icon.DefIcon:
+        isAsync, name, args, defaults, varArg, kwOnlyArgs, kwDefaults, kwArg = \
+         parsedExpr[1:]
+        defIcon = iconClass(isAsync, window, (x, y))
+        nameIcon = icon.IdentifierIcon(name, window)
+        defIcon.replaceChild(nameIcon, 'nameIcon')
+        if len(defaults) < len(args):
+            # Weird rule in defaults list for ast that defaults can be shorter than args
+            defaults = ([None] * (len(args) - len(defaults))) + defaults
+        for i, arg in enumerate(args):
+            default = defaults[i]
+            argNameIcon = icon.IdentifierIcon(arg, window)
+            if default is None:
+                defIcon.insertChild(argNameIcon, 'argIcons', i)
+            else:
+                defaultIcon = makeIcons(default, window, x, y)
+                argAssignIcon = icon.ArgAssignIcon(window)
+                argAssignIcon.replaceChild(argNameIcon, 'leftArg')
+                argAssignIcon.replaceChild(defaultIcon, 'rightArg')
+                defIcon.insertChild(argAssignIcon, "argIcons", i)
+        numArgs = len(args)
+        if varArg is not None:
+            argNameIcon = icon.IdentifierIcon(varArg, window)
+            starIcon = icon.StarIcon(window)
+            starIcon.replaceChild(argNameIcon, 'argIcon')
+            defIcon.insertChild(starIcon, 'argIcons', numArgs)
+            numArgs += 1
+        for i, arg in enumerate(kwOnlyArgs):
+            default = kwDefaults[i]
+            argNameIcon = icon.IdentifierIcon(arg, window)
+            if default is None:
+                defIcon.insertChild(argNameIcon, 'argIcons', i)
+            else:
+                defaultIcon = makeIcons(default, window, x, y)
+                argAssignIcon = icon.ArgAssignIcon(window)
+                argAssignIcon.replaceChild(argNameIcon, 'leftArg')
+                argAssignIcon.replaceChild(defaultIcon, 'rightArg')
+                defIcon.insertChild(argAssignIcon, "argIcons", numArgs + i)
+        numArgs += len(kwOnlyArgs)
+        if kwArg is not None:
+            argNameIcon = icon.IdentifierIcon(kwArg, window)
+            starStarIcon = icon.StarStarIcon(window)
+            starStarIcon.replaceChild(argNameIcon, 'argIcon')
+            defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
+        return defIcon
+
     return icon.TextIcon("**Internal Parse Error**", window, (x,y))

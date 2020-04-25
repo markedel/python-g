@@ -345,6 +345,27 @@ fnLParenPixmap = (
  ".oooooooo",
 )
 
+defLParenPixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o    84o",
+ "o   81 o",
+ "o   28 o",
+ "o  73  o",
+ "o  56 o.",
+ "o  48o..",
+ "o  19 o.",
+ "o  19  o",
+ "o  18  o",
+ "o  28  o",
+ "o  68  o",
+ "o      o",
+ "o      o",
+ "oooooooo",
+)
+
 fnRParenPixmap = (
  "oooooooo",
  "o      o",
@@ -361,6 +382,27 @@ fnRParenPixmap = (
  "o  38  o",
  "o 65  o.",
  "o85   o.",
+ "o      o",
+ "o      o",
+ "oooooooo",
+)
+
+defRParenPixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o  82  o",
+ "o   29 o",
+ "o   38 o",
+ "o   37 o",
+ "o   37 o",
+ "o   38 o",
+ "o  829 o",
+ "o  74  o",
+ "o  38  o",
+ "o 65   o",
+ "o85    o",
  "o      o",
  "o      o",
  "oooooooo",
@@ -541,6 +583,8 @@ tupleLParenImage = asciiToImage(tupleLParenPixmap)
 tupleRParenImage = asciiToImage(tupleRParenPixmap)
 fnLParenImage = asciiToImage(fnLParenPixmap)
 fnRParenImage = asciiToImage(fnRParenPixmap)
+defLParenImage = asciiToImage(defLParenPixmap)
+defRParenImage = asciiToImage(defRParenPixmap)
 listLBktImage = asciiToImage(listLBktPixmap)
 listRBktImage = asciiToImage(listRBktPixmap)
 subscriptLBktImage = asciiToImage(subscriptLBktPixmap)
@@ -2454,6 +2498,122 @@ class WhileIcon(Icon):
             layout.addSubLayout(None, 'condIcon', condXOff, condYOff)
         else:
             layout.addSubLayout(condIcon.calcLayout(), 'condIcon', condXOff, condYOff)
+        return layout
+
+    def textRepr(self):
+        return None  #... no idea what to do here, yet.
+
+    #... ClipboardRepr
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+class DefIcon(Icon):
+    def __init__(self, isAsync, window, location):
+        Icon.__init__(self, window)
+        self.text = "async def" if isAsync else "def"
+        bodyWidth = globalFont.getsize(self.text)[0] + 2 * TEXT_MARGIN + 1
+        bodyHeight = defLParenImage.height
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        nameXOffset = bodyWidth + dragSeqImage.width-1 - OUTPUT_SITE_DEPTH
+        self.sites.add('nameIcon', 'input', nameXOffset, siteYOffset)
+        seqX = dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        lParenWidth = defLParenImage.width
+        self.nameWidth = EMPTY_ARG_WIDTH
+        argX = dragSeqImage.width + bodyWidth + self.nameWidth + lParenWidth
+        self.argList = HorizListMgr(self, 'argIcons', argX, siteYOffset)
+        rParenWidth = defRParenImage.width
+        totalWidth = argX + self.argList.width() + rParenWidth - 3
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+        self.blockEnd = BlockEnd(self, (x, y + bodyHeight + 2))
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            bodyWidth, bodyHeight = self.bodySize
+            bodyOffset = dragSeqImage.width - 1
+            txtImg = iconBoxedText(self.text, bodyHeight)
+            img.paste(txtImg, (bodyOffset, 0))
+            cntrSiteY = self.sites.nameIcon.yOffset
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (self.sites.nameIcon.xOffset, inImageY))
+            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right")
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+            # Open Paren
+            lParenOffset = bodyOffset + bodyWidth - 1 + self.nameWidth - 1
+            self.drawList.append(((lParenOffset, 0), defLParenImage))
+            # Commas
+            argsOffset = lParenOffset + defLParenImage.width - 1
+            self.drawList += self.argList.drawListCommas(argsOffset - OUTPUT_SITE_DEPTH,
+             cntrSiteY)
+            # End Paren
+            rParenOffset = argsOffset - 1 + self.argList.width() - 1
+            self.drawList.append(((rParenOffset, 0), defRParenImage))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def argIcons(self):
+        return [site.att for site in self.sites.argIcons]
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
+        return siteSnapLists
+
+    def select(self, select=True):
+        self.selected = select
+        self.blockEnd.selected = select
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        self.argList.doLayout(layout)
+        self.nameWidth = layout.nameWidth
+        bodyWidth, bodyHeight = self.bodySize
+        width = dragSeqImage.width - 1 + bodyWidth - 1 + self.nameWidth - 1 + \
+         defLParenImage.width - 1 + self.argList.width() - 1 + defRParenImage.width
+        left = seqSiteX - self.sites.seqIn.xOffset - 1
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.seqIn, seqSiteX-1, seqSiteY-1)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight = self.bodySize
+        layout = Layout(self, bodyWidth, bodyHeight, 1)
+        nameIcon = self.sites.nameIcon.att
+        nameXOff = bodyWidth - 1
+        cntrYOff = bodyHeight // 2 - 1
+        if nameIcon is None:
+            layout.addSubLayout(None, 'nameIcon', nameXOff, cntrYOff)
+            nameWidth = EMPTY_ARG_WIDTH
+        else:
+            nameLayout = nameIcon.calcLayout()
+            layout.addSubLayout(nameLayout, 'nameIcon', nameXOff, cntrYOff)
+            nameWidth = nameLayout.width
+        argXOffset = bodyWidth - 1 + nameWidth - 1 + lParenImage.width
+        argWidth = self.argList.calcLayout(layout, argXOffset - OUTPUT_SITE_DEPTH, cntrYOff)
+        layout.width = argXOffset + argWidth + defRParenImage.width - 2
+        layout.nameWidth = nameWidth
         return layout
 
     def textRepr(self):
