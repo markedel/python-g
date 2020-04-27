@@ -65,6 +65,9 @@ INSERT_SITE_Y_OFFSET = 5
 # Number of pixels to indent a code block
 BLOCK_INDENT = 16
 
+# Number of pixels to the left of sequence site to start else and elif icons
+ELSE_DEDENT = 13
+
 # Pixels below input/output site to place attribute site
 # This should be based on font metrics, but for the moment, we have a hard-coded cursor
 ATTR_SITE_OFFSET = 4
@@ -481,6 +484,11 @@ branchFootPixmap = (
  "ooooooooooooooooooo",
 )
 
+seqSitePixmap = (
+ "ooo",
+ "o%o",
+ "ooo",
+)
 renderCache = {}
 
 def iconsFromClipboardString(clipString, window, offset):
@@ -594,6 +602,7 @@ binInSeqImage = asciiToImage(binInSeqPixmap)
 assignDragImage = asciiToImage(assignDragPixmap)
 dragSeqImage = asciiToImage(dragSeqPixmap)
 branchFootImage = asciiToImage(branchFootPixmap)
+seqSiteImage = asciiToImage(seqSitePixmap)
 
 class IconExecException(Exception):
     def __init__(self, ic, exceptionText):
@@ -2507,6 +2516,243 @@ class WhileIcon(Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+class IfIcon(Icon):
+    def __init__(self, window, location):
+        Icon.__init__(self, window)
+        bodyWidth, bodyHeight = globalFont.getsize("if   ")
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        condXOffset = bodyWidth + dragSeqImage.width-1 - OUTPUT_SITE_DEPTH
+        self.sites.add('condIcon', 'input', condXOffset, siteYOffset)
+        seqX = dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth + dragSeqImage.width-1, y + bodyHeight)
+        self.blockEnd = BlockEnd(self, (x, y + bodyHeight + 2))
+        self.elifIcons = []
+        self.elseIcon = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText("if   ", self.bodySize[1])
+            img.paste(txtImg, (dragSeqImage.width - 1, 0))
+            cntrSiteY = self.sites.condIcon.yOffset
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (self.sites.condIcon.xOffset, inImageY))
+            drawSeqSites(img, dragSeqImage.width-1, 0, txtImg.height, indent="right")
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def select(self, select=True, includeElses=False):
+        self.selected = select
+        self.blockEnd.selected = select
+        if includeElses:
+            if self.elseIcon is not None:
+                self.elseIcon.selected = select
+            for elifIc in self.elifIcons:
+                elifIc.selected = select
+
+    def addElse(self, ic):
+        if isinstance(ic, ElifIcon):
+            self.elifIcons.append(self)
+        else:
+            self.elseIcon = ic
+        ic.parentIf = self
+
+    def removeElse(self, ic):
+        if isinstance(ic, ElifIcon):
+            self.elifIcons.remove(self)
+        else:
+            self.elseIcon = None
+        ic.parentIf = None
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        width, height = self.bodySize
+        width += dragSeqImage.width - 1
+        left = seqSiteX - self.sites.seqIn.xOffset - 1
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.seqIn, seqSiteX-1, seqSiteY-1)
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = self.bodySize
+        layout = Layout(self, width, height, 1)
+        condIcon = self.sites.condIcon.att
+        condXOff = width - 1
+        condYOff = height // 2 - 1
+        if condIcon is None:
+            layout.addSubLayout(None, 'condIcon', condXOff, condYOff)
+        else:
+            layout.addSubLayout(condIcon.calcLayout(), 'condIcon', condXOff, condYOff)
+        return layout
+
+    def textRepr(self):
+        return None  #... no idea what to do here, yet.
+
+    #... ClipboardRepr
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+class ElifIcon(Icon):
+    def __init__(self, window, location):
+        Icon.__init__(self, window)
+        bodyWidth, bodyHeight = globalFont.getsize("elif")
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        condXOffset = bodyWidth + dragSeqImage.width - 1 - OUTPUT_SITE_DEPTH
+        self.sites.add('condIcon', 'input', condXOffset, siteYOffset)
+        seqX = dragSeqImage.width + ELSE_DEDENT
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth + dragSeqImage.width - 1, y + bodyHeight)
+        self.parentIf = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+            rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText("elif", self.bodySize[1])
+            boxLeft = dragSeqImage.width - 1
+            img.paste(txtImg, (boxLeft, 0))
+            cntrSiteY = self.sites.condIcon.yOffset
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (self.sites.condIcon.xOffset, inImageY))
+            seqSiteX = self.sites.seqIn.xOffset-1
+            img.paste(seqSiteImage, (seqSiteX, self.sites.seqIn.yOffset-1))
+            img.paste(seqSiteImage, (seqSiteX, self.sites.seqOut.yOffset-1))
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        width, height = self.bodySize
+        width += dragSeqImage.width - 1
+        left = seqSiteX - ELSE_DEDENT - dragSeqImage.width
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        # ... The parent site offsets need to be adjusted one pixel up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.seqIn, seqSiteX, seqSiteY-1)
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = self.bodySize
+        layout = Layout(self, width, height, 1)
+        condIcon = self.sites.condIcon.att
+        condXOff = width - 1 - ELSE_DEDENT
+        condYOff = height // 2 - 1
+        if condIcon is None:
+            layout.addSubLayout(None, 'condIcon', condXOff, condYOff)
+        else:
+            layout.addSubLayout(condIcon.calcLayout(), 'condIcon', condXOff, condYOff)
+        return layout
+
+    def textRepr(self):
+        return None  # ... no idea what to do here, yet.
+
+    # ... ClipboardRepr
+
+    def execute(self):
+        return None  # ... no idea what to do here, yet.
+
+class ElseIcon(Icon):
+    def __init__(self, window, location):
+        Icon.__init__(self, window)
+        bodyWidth, bodyHeight = globalFont.getsize("else")
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        seqX = dragSeqImage.width + ELSE_DEDENT
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
+        self.sites.add('seqInsert', 'seqInsert', 0, bodyHeight // 2)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth + dragSeqImage.width - 1, y + bodyHeight)
+        self.parentIf = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+            rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText("else", self.bodySize[1])
+            boxLeft = dragSeqImage.width - 1
+            img.paste(txtImg, (boxLeft, 0))
+            seqSiteX = self.sites.seqIn.xOffset-1
+            img.paste(seqSiteImage, (seqSiteX, self.sites.seqIn.yOffset-1))
+            img.paste(seqSiteImage, (seqSiteX, self.sites.seqOut.yOffset-1))
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, txtImg.height//2 - dragSeqImage.height//2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        width, height = self.bodySize
+        width += dragSeqImage.width - 1
+        left = seqSiteX - ELSE_DEDENT - dragSeqImage.width
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = self.bodySize
+        layout = Layout(self, width, height, 1)
+        return layout
+
+    def textRepr(self):
+        return None  # ... no idea what to do here, yet.
+
+    # ... ClipboardRepr
+
+    def execute(self):
+        return None  # ... no idea what to do here, yet.
 
 class DefIcon(Icon):
     def __init__(self, isAsync, window, location):

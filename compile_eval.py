@@ -41,11 +41,34 @@ def parseCodeBlock(bodyAst, window, location):
         elif stmt.__class__ in (blockStmts):
             stmtIcon = makeIcons(parseStmt(stmt), window, x, y)
             bodyIcons = parseCodeBlock(stmt.body, window, location)
-            if bodyIcons is not None:
-                blockEnd = stmtIcon.blockEnd
-                stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
-                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
-                bodyIcons.append(blockEnd)
+            stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
+            while stmt.__class__ is ast.If and len(stmt.orelse) == 1 and \
+             stmt.orelse[0].__class__ is ast.If:
+                # Process elif blocks.  The ast encodes these as a single if, nested
+                # in and else (nested as many levels deep as there are elif clauses).
+                elifIcon = icon.ElifIcon(window, location)
+                condIcon = makeIcons(parseExpr(stmt.orelse[0].test), window, x, y)
+                elifIcon.replaceChild(condIcon, 'condIcon')
+                elifBlockIcons = parseCodeBlock(stmt.orelse[0].body, window, location)
+                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elifIcon, 'seqIn')
+                bodyIcons.append(elifIcon)
+                elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
+                bodyIcons += elifBlockIcons
+                stmtIcon.addElse(elifIcon)
+                stmt = stmt.orelse[0]
+            if stmt.__class__ in (ast.If, ast.For, ast.While) and len(stmt.orelse) != 0:
+                # Process else block (note that after elif processing above, stmt may in
+                # some cases point to a nested statement being flattened out)
+                elseIcon = icon.ElseIcon(window, location)
+                elseBlockIcons = parseCodeBlock(stmt.orelse, window, location)
+                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elseIcon, 'seqIn')
+                bodyIcons.append(elseIcon)
+                elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
+                bodyIcons += elseBlockIcons
+                stmtIcon.addElse(elseIcon)
+            blockEnd = stmtIcon.blockEnd
+            bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
+            bodyIcons.append(blockEnd)
         else:
             stmtIcon = makeIcons(parseStmt(stmt), window, x, y)
             bodyIcons = None
@@ -80,6 +103,8 @@ def parseStmt(stmt):
         return (icon.AssignIcon, targets,  parseExpr(stmt.value))
     if stmt.__class__ == ast.While:
         return (icon.WhileIcon, parseExpr(stmt.test))
+    if stmt.__class__ == ast.If:
+        return (icon.IfIcon, parseExpr(stmt.test))
     if stmt.__class__ in (ast.FunctionDef, ast.AsyncFunctionDef):
         isAsync = stmt.__class__ is ast.AsyncFunctionDef
         args = [arg.arg for arg in stmt.args.args]
@@ -246,6 +271,10 @@ def makeIcons(parsedExpr, window, x, y):
         parentIcon.replaceChild(subscriptIcon, "attrIcon")
         return topIcon
     if iconClass is icon.WhileIcon:
+        topIcon = iconClass(window, (x, y))
+        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
+        return topIcon
+    if iconClass is icon.IfIcon:
         topIcon = iconClass(window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
         return topIcon
