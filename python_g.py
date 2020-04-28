@@ -721,7 +721,8 @@ class Window:
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt)
 
-        elif ic.__class__ in (icon.ListTypeIcon, icon.CallIcon, icon.DefIcon):
+        elif isinstance(ic, icon.ListTypeIcon) or ic.__class__ in (icon.CallIcon,
+         icon.DefIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)
             if self.cursor.site == "attrIcon" or index == 0:
                 # On backspace in to a list or tuple from the outside, or from the first
@@ -877,7 +878,10 @@ class Window:
             # argument.
             if self.cursor.site == 'attrIcon':
                 # Cursor is on attribute site of right paren.  Move cursor in
-                rightArg = ic.rightArg()
+                if isinstance(ic, icon.DivideIcon):
+                    rightArg = ic.sites.bottomArg.att
+                else:
+                    rightArg = ic.rightArg()
                 if rightArg is None:
                     cursorIc = ic
                     cursorSite = 'leftArg'
@@ -1139,29 +1143,34 @@ class Window:
         draggingOutputs = []
         draggingSeqInserts = []
         draggingAttrOuts = []
+        draggingConditionals = []
         for dragIcon in topDraggingIcons:
             dragSnapList = dragIcon.snapLists()
             for ic, (x, y), name in dragSnapList.get("output", []):
-                draggingOutputs.append(((x, y), ic))
+                draggingOutputs.append(((x, y), ic, name))
             for ic, (x, y), name in dragSnapList.get("seqInsert", []):
-                draggingSeqInserts.append(((x, y), ic))
+                draggingSeqInserts.append(((x, y), ic, name))
             for ic, (x, y), name in dragSnapList.get("attrOut", []):
-                draggingAttrOuts.append(((x, y), ic))
+                draggingAttrOuts.append(((x, y), ic, name))
+            for ic, (x, y), name, siteType, test in dragSnapList.get("conditional", []):
+                draggingConditionals.append(((x, y), ic, name, test))
         stationaryInputs = []
         for topIcon in self.topIcons:
             for winIcon in topIcon.traverse():
                 snapLists = winIcon.snapLists()
                 for ic, pos, name in snapLists.get("input", []):
-                    stationaryInputs.append((pos, 0, ic, "input", name))
+                    stationaryInputs.append((pos, 0, ic, "input", name, None))
                 for ic, pos, name in snapLists.get("insertInput", []):
-                    stationaryInputs.append((pos, 0, ic, "insertInput", name))
+                    stationaryInputs.append((pos, 0, ic, "insertInput", name, None))
                 for ic, pos, name in snapLists.get("attrIn", []):
-                    stationaryInputs.append((pos, 0, ic, "attrIn", name))
+                    stationaryInputs.append((pos, 0, ic, "attrIn", name, None))
                 for ic, pos, name in snapLists.get("insertAttr", []):
-                    stationaryInputs.append((pos, 0, ic, "insertAttr", name))
+                    stationaryInputs.append((pos, 0, ic, "insertAttr", name, None))
+                for ic, pos, name, siteType, test in snapLists.get("conditional", []):
+                    stationaryInputs.append((pos, 0, ic, siteType, name, test))
                 for ic, pos, name in snapLists.get("seqIn", []):
                     if ic.sites.seqIn.att is None:
-                        stationaryInputs.append((pos, 0, ic, "seqIn", name))
+                        stationaryInputs.append((pos, 0, ic, "seqIn", name, None))
                 for ic, pos, name in snapLists.get("seqOut", []):
                     nextIc = ic.sites.seqOut.att
                     if nextIc is None:
@@ -1169,19 +1178,29 @@ class Window:
                     else:
                         nextInX, nextInY = nextIc.posOfSite('seqIn')
                         sHgt = nextInY - pos[1]
-                    stationaryInputs.append((pos, sHgt, ic, "seqOut", name))
+                    stationaryInputs.append((pos, sHgt, ic, "seqOut", name, None))
         self.snapList = []
         for si in stationaryInputs:
-            (sx, sy), sh, sIcon, sSiteType, sSiteName = si
-            for (dx, dy), dIcon in draggingOutputs:
+            (sx, sy), sh, sIcon, sSiteType, sName, sTest = si
+            matingSites = []
+            for siteData in draggingOutputs:
                 if sSiteType in ('input', 'insertInput', 'seqIn', 'seqOut'):
-                    self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sSiteName))
-            for (dx, dy), dIcon in draggingAttrOuts:
+                    if sTest is None or sTest(sIcon, sName):
+                        matingSites.append(siteData)
+            for siteData in draggingAttrOuts:
                 if sSiteType in ('attrIn', 'insertAttr'):
-                    self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sSiteName))
-            for (dx, dy), dIcon in draggingSeqInserts:
+                    if sTest is None or sTest(sIcon, sName):
+                        matingSites.append(siteData)
+            for siteData in draggingSeqInserts:
                 if sSiteType in ('seqIn', 'seqOut'):
-                    self.snapList.append((sx - dx, sy - dy, sh, sIcon, dIcon, sSiteType, sSiteName))
+                    if sTest is None or sTest(sIcon, sName):
+                        matingSites.append(siteData)
+            for pos, ic, name, test in draggingConditionals:
+                if test(sIcon, sName):
+                    if sTest is None or sTest(ic, name):
+                        matingSites.append((pos, ic, name))
+            for (dx, dy), dIcon, dName in matingSites:
+                self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sName))
         self.snapped = None
         self._updateDrag(evt)
 

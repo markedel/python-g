@@ -1431,9 +1431,41 @@ class StarIcon(UnaryOpIcon):
     def __init__(self, window=None, location=None):
         UnaryOpIcon.__init__(self, '*', window, location)
 
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on being part of an argument or parameter list,
+        # list, tuple, or assignment
+        snapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def matingIcon(ic, siteId):
+            siteName, idx = splitSeriesSiteId(siteId)
+            if ic.__class__ in (CallIcon, DefIcon, ListIcon, TupleIcon):
+                return siteName == "argIcons"
+            if ic.__class__ is AssignIcon:
+                return siteName is not None and siteName[:7] in ("targets", "values")
+            return False
+        outSites = snapLists['output']
+        snapLists['output'] = []
+        snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
+        return snapLists
+
 class StarStarIcon(UnaryOpIcon):
     def __init__(self, window=None, location=None):
         UnaryOpIcon.__init__(self, '**', window, location)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on being part of an argument or parameter list,
+        # or dictionary
+        snapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def matingIcon(ic, siteId):
+            siteName, idx = splitSeriesSiteId(siteId)
+            return ic.__class__ in (CallIcon, DefIcon, DictIcon) and siteName == "argIcons"
+        outSites = snapLists['output']
+        snapLists['output'] = []
+        snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
+        return snapLists
 
 class ListTypeIcon(Icon):
     def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
@@ -2007,6 +2039,19 @@ class ArgAssignIcon(BinOpIcon):
     def __init__(self, window=None, location=None):
         BinOpIcon.__init__(self, "=", window, location)
 
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on being part of an argument or parameter list
+        snapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def matingIcon(ic, siteId):
+            siteName, siteIdx = splitSeriesSiteId(siteId)
+            return ic.__class__ in (CallIcon, DefIcon) and siteName == "argIcons"
+        outSites = snapLists['output']
+        snapLists['output'] = []
+        snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
+        return snapLists
+
     def execute(self):
         if self.leftArg() is None:
             raise IconExecException(self, "Missing argument name")
@@ -2020,6 +2065,19 @@ class DictElemIcon(BinOpIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
         BinOpIcon.__init__(self, ":", window, location)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on parent being a dictionary constant
+        snapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def matingIcon(ic, siteId):
+            siteName, siteIdx = splitSeriesSiteId(siteId)
+            return isinstance(ic, DictIcon) and siteName == "argIcons"
+        outSites = snapLists['output']
+        snapLists['output'] = []
+        snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
+        return snapLists
 
     def execute(self):
         if self.leftArg() is None:
@@ -3348,7 +3406,7 @@ class IconSiteList:
             # Omit any site whose attached icon has a site of the same type, at the
             # same location.  In such a case we want both dropped icons and typing to
             # go to the site of the innermost (most local) icon.
-            if isCoincidentSite(site.att, site.name):
+            if hasLowerCoincidentSite(ic, site.name):
                 continue
             # Numeric icons have attribute sites for cursor, only (no snapping)
             if site.type == 'attrIn' and not forCursor and isinstance(ic, NumericIcon):
@@ -3378,7 +3436,17 @@ class IconSiteList:
              site.name))
         return snapSites
 
+def hasLowerCoincidentSite(ic, siteId):
+    """Returns True if there is an icon lower in the hierarchy sharing this site of ic"""
+    if ic is None or ic.typeOf(siteId) != "input":
+        return False
+    attachedIcon = ic.childAt(siteId)
+    if attachedIcon is None:
+        return False
+    return attachedIcon.hasCoincidentSite() is not None
+
 def isCoincidentSite(ic, siteId):
+    """Returns True if siteId is a site of ic that is coincident with its output"""
     return ic is not None and siteId == ic.hasCoincidentSite()
 
 def highestCoincidentIcon(ic):
