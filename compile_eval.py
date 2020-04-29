@@ -163,6 +163,8 @@ def parseExpr(expr):
         return (icon.AttrIcon, expr.attr, parseExpr(expr.value))
     elif expr.__class__ is ast.Yield:
         return (icon.YieldIcon, parseExpr(expr.value))
+    elif expr.__class__ is ast.YieldFrom:
+        return (icon.YieldFromIcon, parseExpr(expr.value))
     elif expr.__class__ == ast.Subscript:
         if expr.slice.__class__ == ast.Index:
             slice = [expr.slice.value]
@@ -203,7 +205,7 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = iconClass(parsedExpr[1], window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "argIcon")
         return topIcon
-    if iconClass is icon.StarIcon:
+    if iconClass in (icon.StarIcon, icon.StarStarIcon, icon.YieldFromIcon):
         topIcon = iconClass(window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), "argIcon")
         return topIcon

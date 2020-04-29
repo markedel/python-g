@@ -14,7 +14,7 @@ binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7, '&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
  'is':5, 'is not':5, '<':5, '<=':5, '>':5, '>=':5, '==':5, '!=':5, '=':-1, ':':-1}
 
-unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4, '*':-1, '**':-1}
+unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4, '*':-1, '**':-1, 'yield from':-1}
 
 binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.truediv,
  '//':operator.floordiv, '%':operator.mod, '**':operator.pow, '<<':operator.lshift,
@@ -1466,6 +1466,10 @@ class StarStarIcon(UnaryOpIcon):
         snapLists['output'] = []
         snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
+
+class YieldFromIcon(UnaryOpIcon):
+    def __init__(self, window=None, location=None):
+        UnaryOpIcon.__init__(self, 'yield from', window, location)
 
 class ListTypeIcon(Icon):
     def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
