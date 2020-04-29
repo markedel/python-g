@@ -2928,6 +2928,166 @@ class DefIcon(Icon):
     def execute(self):
         return None  #... no idea what to do here, yet.
 
+class ReturnIcon(Icon):
+    def __init__(self, window, location):
+        Icon.__init__(self, window)
+        bodyWidth = globalFont.getsize("return")[0] + 2 * TEXT_MARGIN + 1
+        bodyHeight = defLParenImage.height
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        seqX = dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        totalWidth = dragSeqImage.width + bodyWidth
+        self.valueList = HorizListMgr(self, 'values', totalWidth, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            bodyWidth, bodyHeight = self.bodySize
+            bodyOffset = dragSeqImage.width - 1
+            txtImg = iconBoxedText("return", bodyHeight)
+            img.paste(txtImg, (bodyOffset, 0))
+            cntrSiteY = bodyHeight // 2
+            inImgX = bodyOffset + bodyWidth - inSiteImage.width
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (inImgX, inImageY))
+            drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+            # Commas
+            argsOffset = bodyOffset + bodyWidth - 1
+            self.drawList += self.valueList.drawListCommas(argsOffset - OUTPUT_SITE_DEPTH,
+             cntrSiteY)
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.valueList.makeInsertSnapList()
+        return siteSnapLists
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        self.valueList.doLayout(layout)
+        bodyWidth, bodyHeight = self.bodySize
+        width = dragSeqImage.width - 1 + bodyWidth + self.valueList.width()
+        left = seqSiteX - self.sites.seqIn.xOffset - 1
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.seqIn, seqSiteX-1, seqSiteY-1)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight = self.bodySize
+        layout = Layout(self, bodyWidth, bodyHeight, 1)
+        cntrYOff = bodyHeight // 2 - 1
+        self.valueList.calcLayout(layout, bodyWidth - 1, cntrYOff)
+        return layout
+
+    def textRepr(self):
+        return None  #... no idea what to do here, yet.
+
+    #... ClipboardRepr
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+class YieldIcon(Icon):
+    def __init__(self, window, location):
+        Icon.__init__(self, window)
+        bodyWidth = globalFont.getsize("yield")[0] + 2 * TEXT_MARGIN + 1
+        bodyHeight = defLParenImage.height
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        self.sites.add('output', 'output', 0, siteYOffset)
+        seqX = outSiteImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        totalWidth = outSiteImage.width - 1 + bodyWidth
+        self.valueList = HorizListMgr(self, 'values', totalWidth, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and toDragImage is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+         self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            bodyWidth, bodyHeight = self.bodySize
+            bodyOffset = outSiteImage.width - 1
+            txtImg = iconBoxedText("yield", bodyHeight)
+            img.paste(txtImg, (bodyOffset, 0))
+            cntrSiteY = bodyHeight // 2
+            inImgX = bodyOffset + bodyWidth - inSiteImage.width
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (inImgX, inImageY))
+            if needSeqSites:
+                drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            if needOutSite:
+                outImageY = self.sites.output.yOffset - outSiteImage.height // 2
+                img.paste(outSiteImage, (0, outImageY), mask=outSiteImage)
+            self.drawList = [((0, 0), img)]
+            # Commas
+            argsOffset = bodyOffset + bodyWidth - 1
+            self.drawList += self.valueList.drawListCommas(argsOffset - OUTPUT_SITE_DEPTH,
+             cntrSiteY)
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.valueList.makeInsertSnapList()
+        return siteSnapLists
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        self.valueList.doLayout(layout)
+        bodyWidth, bodyHeight = self.bodySize
+        width = outSiteImage.width - 1 + bodyWidth + self.valueList.width()
+        left = outSiteX - self.sites.output.xOffset
+        top = outSiteY - self.sites.output.yOffset
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.updateSiteOffsets(self.sites.output)
+        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight = self.bodySize
+        layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
+        self.valueList.calcLayout(layout, bodyWidth - 1, 0)
+        return layout
+
+    def textRepr(self):
+        return None  #... no idea what to do here, yet.
+
+    #... ClipboardRepr
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
 class ImageIcon(Icon):
     def __init__(self, image, window, location=None):
         Icon.__init__(self, window)

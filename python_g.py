@@ -704,22 +704,7 @@ class Window:
                 text = ic.text
             else:
                 text = ic.name
-            parent = ic.parent()
-            if parent is None:
-                self.entryIcon = typing.EntryIcon(None, None, initialString=text,
-                 window = self)
-                self.replaceTop(ic, self.entryIcon)
-            else:
-                parentSite = parent.siteOf(ic)
-                self.entryIcon = typing.EntryIcon(parent, parentSite,
-                 initialString=text, window=self)
-                parent.replaceChild(self.entryIcon, parentSite)
-            if isinstance(ic, icon.UnaryOpIcon) and ic.sites.argIcon.att:
-                self.entryIcon.setPendingArg(ic.sites.argIcon.att)
-            elif self.cursor.site == 'attrIcon' and ic.sites.attrIcon.att is not None:
-                self.entryIcon.setPendingAttr(ic.sites.attrIcon.att)
-            self.cursor.setToEntryIcon()
-            self._redisplayChangedEntryIcon(evt)
+            self._backspaceIconToEntry(evt, ic, text, self.cursor.site)
 
         elif isinstance(ic, icon.ListTypeIcon) or ic.__class__ in (icon.CallIcon,
          icon.DefIcon):
@@ -936,6 +921,65 @@ class Window:
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt, redrawRect)
 
+        elif ic.__class__ in (icon.YieldIcon, icon.ReturnIcon):
+            siteName, index = icon.splitSeriesSiteId(self.cursor.site)
+            if siteName == "values" and index is 0:
+                # Cursor is on first input site.  Remove icon and replace with cursor
+                valueIcons = [s.att for s in ic.sites.values if s.att is not None]
+                text = "return" if isinstance(ic, icon.ReturnIcon) else "yield"
+                if len(valueIcons) in (0, 1):
+                    # Zero or one argument, convert to entry icon (with pending arg if
+                    # there was an argument)
+                    if len(valueIcons) == 1:
+                        pendingArgSite = ic.siteOf(valueIcons[0])
+                    else:
+                        pendingArgSite = None
+                    self._backspaceIconToEntry(evt, ic, text, pendingArgSite)
+                else:
+                    # Multiple remaining arguments: convert to tuple with entry icon as
+                    # first element
+                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    valueIcons = [s.att for s in ic.sites.values]
+                    newTuple = icon.TupleIcon(window=self, noParens=True)
+                    self.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
+                     initialString= text, window=self)
+                    newTuple.replaceChild(self.entryIcon, "argIcons_0")
+                    for i, arg in enumerate(valueIcons):
+                        if i == 0:
+                            self.entryIcon.setPendingArg(arg)
+                        else:
+                            if arg is not None:
+                                ic.replaceChild(None, ic.siteOf(arg))
+                            newTuple.insertChild(arg, "argIcons", i)
+                    parent = ic.parent()
+                    if parent is None:
+                        self.replaceTop(ic, newTuple)
+                    else:
+                        parentSite = parent.siteOf(ic)
+                        parent.replaceChild(newTuple, parentSite)
+                    self.cursor.setToEntryIcon()
+                    self._redisplayChangedEntryIcon(evt, redrawRegion.get())
+            elif siteName == "values":
+                # Cursor is on comma input.  Delete if empty or previous site is empty
+                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                childAtCursor = ic.childAt(self.cursor.site)
+                if childAtCursor and ic.childAt(prevSite):
+                    typing.beep()
+                    return
+                topIcon = ic.topLevelParent()
+                redrawRegion = AccumRects(topIcon.hierRect())
+                if not ic.childAt(prevSite):
+                    ic.removeEmptySeriesSite(prevSite)
+                    self.cursor.setToIconSite(ic, prevSite)
+                else:
+                    rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
+                    rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                    ic.removeEmptySeriesSite(self.cursor.site)
+                    self.cursor.setToIconSite(rightmostIcon, rightmostSite)
+                redrawRegion.add(self.layoutDirtyIcons())
+                self.refresh(redrawRegion.get())
+                self.undo.addBoundary()
+
         elif isinstance(ic, icon.AssignIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)
             topIcon = ic.topLevelParent()
@@ -1009,6 +1053,31 @@ class Window:
             redrawRegion.add(self.layoutDirtyIcons())
             self.refresh(redrawRegion.get())
             self.undo.addBoundary()
+
+    def _backspaceIconToEntry(self, evt, ic, entryText, pendingArgSite=None):
+        """Replace the icon holding the cursor with the entry icon, pre-loaded with text,
+        entryText"""
+        redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+        parent = ic.parent()
+        if parent is None:
+            self.entryIcon = typing.EntryIcon(None, None, initialString=entryText,
+                window=self)
+            self.replaceTop(ic, self.entryIcon)
+        else:
+            parentSite = parent.siteOf(ic)
+            self.entryIcon = typing.EntryIcon(parent, parentSite,
+                initialString=entryText, window=self)
+            parent.replaceChild(self.entryIcon, parentSite)
+        if pendingArgSite is not None:
+            child = ic.childAt(pendingArgSite)
+            if child is not None:
+                siteType = ic.typeOf(pendingArgSite)
+                if siteType == "input":
+                    self.entryIcon.setPendingArg(child)
+                elif siteType == "attrIn":
+                    self.entryIcon.setPendingAttr(child)
+        self.cursor.setToEntryIcon()
+        self._redisplayChangedEntryIcon(evt, redrawRegion.get())
 
     def _listPopupCb(self):
         char = self.listPopupVal.get()

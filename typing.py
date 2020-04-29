@@ -557,7 +557,8 @@ class EntryIcon(icon.Icon):
             return True
         siteType = onIcon.typeOf(site)
         if onIcon.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
-         icon.AssignIcon, icon.DefIcon) and siteType == "input":
+         icon.AssignIcon, icon.DefIcon, icon.ReturnIcon, icon.YieldIcon) and \
+         siteType == "input":
             # This is essentially ",,", which means leave a new space for an arg
             # Entry icon holds pending arguments
             seriesName, seriesIndex = icon.splitSeriesSiteId(site)
@@ -619,7 +620,7 @@ class EntryIcon(icon.Icon):
         child = onIcon
         for parent in onIcon.parentage():
             if parent.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
-             icon.AssignIcon, icon.DefIcon):
+             icon.AssignIcon, icon.DefIcon, icon.ReturnIcon, icon.YieldIcon):
                 onIcon.layoutDirty = True
                 childSite = parent.siteOf(child)
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
