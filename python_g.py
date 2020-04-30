@@ -980,6 +980,76 @@ class Window:
                 self.refresh(redrawRegion.get())
                 self.undo.addBoundary()
 
+        elif isinstance(ic, icon.AugmentedAssignIcon):
+            siteName, index = icon.splitSeriesSiteId(self.cursor.site)
+            if siteName == "valueIcons" and index is 0:
+                # Cursor is on first input site.  Remove icon and replace with cursor
+                text = ic.op + '='
+                valueIcons = [s.att for s in ic.sites.valueIcons if s.att is not None]
+                targetIcon = ic.childAt("targetIcon")
+                if len(valueIcons) in (0, 1):
+                    # Zero or one argument, convert to entry icon (with pending arg if
+                    # there was an argument) attached to name icon
+                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    if ic.parent() is not None:
+                        print('AugmentedAssign has parent?????')
+                        return
+                    if targetIcon is None:
+                        self.entryIcon = typing.EntryIcon(None, None,
+                         initialString=text, window=self)
+                        self.replaceTop(ic, self.entryIcon)
+                    else:
+                        self.entryIcon =  typing.EntryIcon(targetIcon, 'attrIcon',
+                         initialString=text, window=self)
+                        self.replaceTop(ic, targetIcon)
+                        targetIcon.replaceChild(self.entryIcon, 'attrIcon')
+                    if len(valueIcons) == 1:
+                        self.entryIcon.setPendingArg(valueIcons[0])
+                else:
+                    # Multiple remaining arguments: convert to tuple with entry icon as
+                    # first element
+                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    valueIcons = [s.att for s in ic.sites.valueIcons if s.att is not None]
+                    newTuple = icon.TupleIcon(window=self, noParens=True)
+                    if targetIcon is None:
+                        self.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
+                         initialString=text, window=self)
+                        newTuple.replaceChild(self.entryIcon, "argIcons_0")
+                    else:
+                        self.entryIcon = typing.EntryIcon(targetIcon, 'attrIcon',
+                         initialString=text, window=self)
+                        targetIcon.replaceChild(self.entryIcon, 'attrIcon')
+                        newTuple.replaceChild(targetIcon, 'argIcons_0')
+                    for i, arg in enumerate(valueIcons):
+                        if i == 0:
+                            self.entryIcon.setPendingArg(arg)
+                        else:
+                            ic.replaceChild(None, ic.siteOf(arg))
+                            newTuple.insertChild(arg, "argIcons", i)
+                    self.replaceTop(ic, newTuple)
+                self.cursor.setToEntryIcon()
+                self._redisplayChangedEntryIcon(evt, redrawRegion.get())
+            elif siteName == "valueIcons":
+                # Cursor is on comma input.  Delete if empty or previous site is empty
+                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                childAtCursor = ic.childAt(self.cursor.site)
+                if childAtCursor and ic.childAt(prevSite):
+                    typing.beep()
+                    return
+                topIcon = ic.topLevelParent()
+                redrawRegion = AccumRects(topIcon.hierRect())
+                if not ic.childAt(prevSite):
+                    ic.removeEmptySeriesSite(prevSite)
+                    self.cursor.setToIconSite(ic, prevSite)
+                else:
+                    rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
+                    rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                    ic.removeEmptySeriesSite(self.cursor.site)
+                    self.cursor.setToIconSite(rightmostIcon, rightmostSite)
+                redrawRegion.add(self.layoutDirtyIcons())
+                self.refresh(redrawRegion.get())
+                self.undo.addBoundary()
+
         elif isinstance(ic, icon.AssignIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)
             topIcon = ic.topLevelParent()
@@ -1000,6 +1070,8 @@ class Window:
                     if parent is None:
                         self.replaceTop(ic, newTuple)
                     else:
+                        # I don't think this is possible, remove if print never appears
+                        print("Assign icon has parent?????")
                         parentSite = parent.siteOf(ic)
                         parent.replaceChild(newTuple, parentSite)
                     cursorSite = icon.makeSeriesSiteId('argIcons', numTargets)

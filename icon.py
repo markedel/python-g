@@ -2292,6 +2292,116 @@ class AssignIcon(Icon):
     def clipboardRepr(self, offset):
         return self._serialize(offset, numTargets=len(self.tgtLists))
 
+class AugmentedAssignIcon(Icon):
+    def __init__(self, op, window, location):
+        Icon.__init__(self, window)
+        self.op = op
+        bodyWidth = globalFont.getsize(self.op + '=')[0] + 2 * TEXT_MARGIN + 1
+        bodyHeight = defLParenImage.height
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        targetXOffset = dragSeqImage.width-1 - OUTPUT_SITE_DEPTH
+        self.sites.add('targetIcon', 'input', targetXOffset, siteYOffset)
+        seqX = dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        self.targetWidth = EMPTY_ARG_WIDTH
+        argX = dragSeqImage.width + self.targetWidth + bodyWidth
+        self.valuesList = HorizListMgr(self, 'valueIcons', argX, siteYOffset)
+        totalWidth = argX + self.valuesList.width() - 2
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            self.drawList = []
+            width, height = self.bodySize
+            # Left site (seq site bar + 1st target input or drag-insert site
+            tgtSiteX = self.sites.targetIcon.xOffset
+            siteY = height // 2
+            if temporaryDragSite:
+                y = siteY - assignDragImage.height // 2
+                self.drawList.append(((0, y), assignDragImage))
+            else:
+                y = siteY - inpSeqImage.height // 2
+                self.drawList.append(((tgtSiteX, y), inpSeqImage))
+            bodyWidth, bodyHeight = self.bodySize
+            img = Image.new('RGBA', (bodyWidth, bodyHeight), color=(0, 0, 0, 0))
+            targetOffset = dragSeqImage.width - 1
+            bodyOffset = targetOffset + self.targetWidth - 1
+            txtImg = iconBoxedText(self.op + '=', bodyHeight)
+            img.paste(txtImg, (0, 0))
+            cntrSiteY = self.sites.targetIcon.yOffset
+            inImageX = bodyWidth - inSiteImage.width
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (inImageX, inImageY))
+            self.drawList.append(((bodyOffset, 0), img))
+            # Commas
+            argsOffset = bodyOffset + bodyWidth - 1
+            self.drawList += self.valuesList.drawListCommas(
+             argsOffset - OUTPUT_SITE_DEPTH, cntrSiteY)
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.valuesList.makeInsertSnapList()
+        return siteSnapLists
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        self.valuesList.doLayout(layout)
+        self.targetWidth = layout.targetWidth
+        bodyWidth, bodyHeight = self.bodySize
+        width = dragSeqImage.width - 1 + bodyWidth - 1 + self.targetWidth - 1 + \
+         self.valuesList.width() - 1
+        left = seqSiteX - self.sites.seqIn.xOffset - 1
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.seqIn, seqSiteX-1, seqSiteY-1)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight = self.bodySize
+        layout = Layout(self, bodyWidth, bodyHeight, 1)
+        targetIcon = self.sites.targetIcon.att
+        targetXOff = inpSeqImage.width - 1
+        cntrYOff = bodyHeight // 2 - 1
+        if targetIcon is None:
+            layout.addSubLayout(None, 'targetIcon', targetXOff, cntrYOff)
+            targetWidth = EMPTY_ARG_WIDTH
+        else:
+            targetLayout = targetIcon.calcLayout()
+            layout.addSubLayout(targetLayout, 'targetIcon', targetXOff, cntrYOff)
+            targetWidth = targetLayout.width
+        valuesXOffset = inpSeqImage.width - 1 + targetWidth - 1 + bodyWidth - 1
+        valuesWidth = self.valuesList.calcLayout(layout,
+         valuesXOffset - OUTPUT_SITE_DEPTH, cntrYOff)
+        layout.width = valuesXOffset + valuesWidth - 1
+        layout.targetWidth = targetWidth
+        return layout
+
+    def textRepr(self):
+        return None  #... no idea what to do here, yet.
+
+    #... ClipboardRepr
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
 class DivideIcon(Icon):
     def __init__(self, floorDiv=False, window=None, location=None):
         Icon.__init__(self, window)
@@ -3262,6 +3372,12 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
     # has claimed itself to be the leftmost operand of an expression
     if fromIcon.__class__ is AssignIcon:
         leftSiteIcon = fromIcon.sites.targets0[0].att
+        if leftSiteIcon is not None:
+            left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
+            if left is leftSiteIcon:
+                return fromIcon  # Claim outermost status for this icon
+    if fromIcon.__class__ is AugmentedAssignIcon:
+        leftSiteIcon = fromIcon.sites.targetIcon.att
         if leftSiteIcon is not None:
             left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
             if left is leftSiteIcon:

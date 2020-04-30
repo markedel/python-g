@@ -101,6 +101,10 @@ def parseStmt(stmt):
     if stmt.__class__ == ast.Assign:
         targets = [parseExpr(e) for e in stmt.targets]
         return (icon.AssignIcon, targets,  parseExpr(stmt.value))
+    if stmt.__class__ == ast.AugAssign:
+        tgt = stmt.target.id
+        op = binOps[stmt.op.__class__]
+        return (icon.AugmentedAssignIcon, tgt, op, parseExpr(stmt.value))
     if stmt.__class__ == ast.While:
         return (icon.WhileIcon, parseExpr(stmt.test))
     if stmt.__class__ == ast.If:
@@ -256,6 +260,16 @@ def makeIcons(parsedExpr, window, x, y):
         else:
             topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "values_0")
         return topIcon
+    if iconClass is icon.AugmentedAssignIcon:
+        assignIcon = iconClass(parsedExpr[2], window, (x, y))
+        targetIcon = icon.IdentifierIcon(parsedExpr[1], window)
+        assignIcon.replaceChild(targetIcon, "targetIcon")
+        if parsedExpr[3][0] is icon.TupleIcon:
+            valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[3][1:]]
+            assignIcon.insertChildren(valueIcons, "valueIcons", 0)
+        else:
+            assignIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "valueIcons_0")
+        return assignIcon
     if iconClass in (icon.ReturnIcon, icon.YieldIcon):
         topIcon = iconClass(window, (x, y))
         if parsedExpr[1][0] is icon.TupleIcon:
