@@ -451,6 +451,27 @@ inpSeqPixmap = (
  "o8o",
 )
 
+inpOptionalSeqPixmap = (
+ "ooo",
+ "o o",
+ "o o",
+ "o o",
+ "o o",
+ "o o",
+ "o o",
+ "oo.",
+ "o..",
+ "...",
+ "o..",
+ "oo.",
+ "o o",
+ "o o",
+ "o o",
+ "o o",
+ "o o",
+ "ooo",
+)
+
 dragSeqPixmap = (
  "..ooo",
  ".o%%o",
@@ -598,11 +619,13 @@ listRBktImage = asciiToImage(listRBktPixmap)
 subscriptLBktImage = asciiToImage(subscriptLBktPixmap)
 subscriptRBktImage = asciiToImage(subscriptRBktPixmap)
 inpSeqImage = asciiToImage(inpSeqPixmap)
+inpOptionalSeqImage = asciiToImage(inpOptionalSeqPixmap)
 binInSeqImage = asciiToImage(binInSeqPixmap)
 assignDragImage = asciiToImage(assignDragPixmap)
 dragSeqImage = asciiToImage(dragSeqPixmap)
 branchFootImage = asciiToImage(branchFootPixmap)
 seqSiteImage = asciiToImage(seqSitePixmap)
+emptyImage = Image.new('RGBA', (0, 0))
 
 class IconExecException(Exception):
     def __init__(self, ic, exceptionText):
@@ -693,9 +716,11 @@ class Icon:
 
     def touchesPosition(self, x, y):
         """Return True if any of the drawn part of the icon falls at x, y"""
-        if not pointInRect((x, y), self.rect) or self.drawList is None:
+        if not pointInRect((x, y), self.rect):
             return False
         for imgOffset, img in self.drawList:
+            if img is commaImage:
+                continue
             left, top = addPoints(self.rect[:2], imgOffset)
             imgX = x - left
             imgY = y - top
@@ -704,8 +729,28 @@ class Icon:
                 return pixel[3] > 128
         return False
 
-    def touchesRect(self, rect):
-        return python_g.rectsTouch(self.rect, rect)
+    def inRectSelect(self, rect):
+        """Return True if rect overlaps any visible part of the icon (commas excepted).
+        Note that this is not as thorough as touchesPosition, which answers at the level
+        of pixels.  This only answers at the level of rectangles in which the icon
+        draws something."""
+        if not python_g.rectsTouch(self.rect, rect):
+            return False
+        for imgOffset, img in self.drawList:
+            if img is commaImage:
+                continue
+            left, top = addPoints(self.rect[:2], imgOffset)
+            right = left + img.width
+            bottom = top + img.height
+            if python_g.rectsTouch((left, top, right, bottom), rect):
+                return True
+        return False
+
+    def selectionRect(self):
+        """Return the area of the icon that constitutes the selected portion of the icon.
+        This is used for extending existing selections (Shift+select), and typically
+        excludes tiny connectors and snap sites"""
+        return self.rect
 
     def hierRect(self):
         """Return a rectangle covering this icon and its children"""
@@ -1540,13 +1585,17 @@ class ListTypeIcon(Icon):
         siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
         return siteSnapLists
 
-    def touchesRect(self, rect):
-        if not python_g.rectsTouch(self.rect, rect):
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch both parens to be considered selected
+        if not Icon.inRectSelect(self, rect):
             return False
-        # If the rectangle is entirely contained within the argument space (ignoring
-        # commas), then we will call it not touching
-        bodyRight = self.rect[0] + self.leftImg.width
-        return not rectWithinXBounds(rect, bodyRight, bodyRight + self.argList.width())
+        selLeft, selTop, selRight, selBottom = rect
+        icLeft, icTop, icRight, icBottom = self.rect
+        if selLeft > icLeft + self.leftImg.width:
+            return False
+        if selRight < icRight - self.rightImg.width:
+            return False
+        return True
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.argList.doLayout(layout)
@@ -1607,8 +1656,8 @@ class ListIcon(ListTypeIcon):
 class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, location=None):
         if noParens:
-            leftImg = inpSeqImage
-            rightImg = Image.new('RGBA', (0, 0))
+            leftImg = inpOptionalSeqImage
+            rightImg = emptyImage
         else:
             leftImg = tupleLParenImage
             rightImg = tupleRParenImage
@@ -1641,6 +1690,17 @@ class TupleIcon(ListTypeIcon):
         self.rightImg = tupleRParenImage
         self.drawList = None
         self.layoutDirty = True
+        self.window.undo.registerCallback(self.removeParens)
+
+    def removeParens(self):
+        if self.noParens:
+            return
+        self.noParens = True
+        self.leftImg = inpOptionalSeqImage
+        self.rightImg = emptyImage
+        self.drawList = None
+        self.layoutDirty = True
+        self.window.undo.registerCallback(self.restoreParens)
 
     def calcLayout(self):
         # If the icon is no longer at the top level and needs its parens restored, do so
@@ -1783,32 +1843,6 @@ class BinOpIcon(Icon):
         if temporaryOutputSite or suppressSeqSites:
             self.drawList = None  # Don't keep after drawing (see above)
 
-    def touchesRect(self, rect):
-        if not python_g.rectsTouch(self.rect, rect):
-            return False
-        leftArgLeft = self.rect[0] + self.sites.output.xOffset + outSiteImage.width - 1
-        opWidth = self.opSize[0] + self.depthWidth
-        if self.hasParens:
-            # If rectangle passes vertically within one of the argument slots, it is
-            # considered to not be touching
-            leftArgLeft += lParenImage.width
-            leftArgRight = leftArgLeft + self.leftArgWidth - 1
-            if rectWithinXBounds(rect, leftArgLeft, leftArgRight):
-                return False
-            rightArgLeft = leftArgRight + opWidth
-            rightArgRight = rightArgLeft + self.rightArgWidth - 1
-            if rectWithinXBounds(rect, rightArgLeft, rightArgRight):
-                return False
-        else:
-            # If the rectangle is entirely left of or right of the icon body, it is
-            # considered not touching
-            bodyLeft = leftArgLeft + self.leftArgWidth - 1
-            bodyRight = bodyLeft + opWidth
-            rectLeft, rectTop, rectRight, rectBottom = rect
-            if rectRight < bodyLeft or rectLeft > bodyRight:
-                return False
-        return True
-
     def depth(self, lDepth=None, rDepth=None):
         """Calculate factor which decides how much to pad the operator to help indicate
         its level in the icon hierarchy.  The function does not expand the operator icon
@@ -1940,6 +1974,21 @@ class BinOpIcon(Icon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def selectionRect(self):
+        # Limit selection rectangle for extending selection to op itself
+        opWidth, opHeight = self.opSize
+        opWidth += self.depthWidth
+        rightOffset = self.sites.rightArg.xOffset + OUTPUT_SITE_DEPTH
+        leftOffset = rightOffset - opWidth
+        x, top = self.rect[:2]
+        left = x + leftOffset
+        return left, top, left + opWidth, top + opHeight
+
+    def inRectSelect(self, rect):
+        if not python_g.rectsTouch(rect, self.rect):
+            return False
+        return python_g.rectsTouch(rect, self.selectionRect())
+
 class CallIcon(Icon):
     def __init__(self, window, location=None):
         Icon.__init__(self, window)
@@ -2037,6 +2086,18 @@ class CallIcon(Icon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch both parens to be considered selected
+        if not Icon.inRectSelect(self, rect):
+            return False
+        selLeft, selTop, selRight, selBottom = rect
+        icLeft, icTop, icRight, icBottom = self.rect
+        if selLeft > icLeft + fnLParenImage.width:
+            return False
+        if selRight < icRight - fnRParenImage.width:
+            return False
+        return True
 
 class ArgAssignIcon(BinOpIcon):
     """Special assignment statement for use only in function argument lists"""
@@ -2470,19 +2531,6 @@ class DivideIcon(Icon):
             self.drawList.append(((0, bodyTop), img))
         self._drawFromDrawList(toDragImage, location, clip, colorErr)
 
-    def touchesRect(self, rect):
-        if not python_g.rectsTouch(self.rect, rect):
-            return False
-        # If rectangle passes horizontally above or below the central body of the icon,
-        # it is considered to not be touching
-        rectLeft, rectTop, rectRight, rectBottom = rect
-        centerY = self.rect[1] + self.sites.output.yOffset
-        iconTop = centerY - 5
-        iconBottom = centerY + 5
-        if rectBottom < iconTop or rectTop > iconBottom:
-            return False
-        return True
-
     def doLayout(self, outSiteX, outSiteY, layout):
         self.topArgSize = layout.topArgSize
         self.bottomArgSize = layout.bottomArgSize
@@ -2610,6 +2658,12 @@ class BlockEnd(Icon):
         width, height = branchFootImage.size
         layout = Layout(self, width, height, 1)
         return layout
+
+    def inRectSelect(self, rect):
+        return False
+
+    def selectionRect(self):
+        return None
 
 class WhileIcon(Icon):
     def __init__(self, window, location):
@@ -2959,10 +3013,10 @@ class DefIcon(Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (rectWidth(self.rect),
-             rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = dragSeqImage.width - 1
+            img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
+             color=(0, 0, 0, 0))
             txtImg = iconBoxedText(self.text, bodyHeight)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = self.sites.nameIcon.yOffset
@@ -3041,6 +3095,16 @@ class DefIcon(Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch icon body
+        if not Icon.inRectSelect(self, rect):
+            return False
+        icLeft, icTop = self.rect[:2]
+        bodyLeft = icLeft + dragSeqImage.width - 1
+        bodyWidth, bodyHeight = self.bodySize
+        bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
+        return python_g.rectsTouch(rect, bodyRect)
 
 class ReturnIcon(Icon):
     def __init__(self, window, location):
@@ -3382,6 +3446,12 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
             left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
             if left is leftSiteIcon:
                 return fromIcon  # Claim outermost status for this icon
+    if fromIcon.__class__ is TupleIcon and fromIcon.noParens:
+        leftSiteIcon = fromIcon.childAt('argIcons_0')
+        if leftSiteIcon is not None:
+            left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
+            if left is leftSiteIcon:
+                return fromIcon  # Claim outermost status for this icon
     if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg() is not None:
         left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg(), btnPressLoc)
         if left is fromIcon.leftArg():
@@ -3521,17 +3591,14 @@ class IconSiteList:
             site = getattr(self, siteId)
             if isinstance(site, IconSite):
                 return site
-            print("site lookup failed 1")
             return None
         # If it is a series site, split the name up in to the series name and index
         # and return the site by-index from the series
         seriesName, seriesIndex = splitSeriesSiteId(siteId)
         if seriesName is None:
-            print("site lookup failed 2")
             return None
         series = getattr(self, seriesName)
         if not isinstance(series, IconSiteSeries) or seriesIndex >= len(series):
-            print("site lookup failed 3")
             return None
         return series[seriesIndex]
 

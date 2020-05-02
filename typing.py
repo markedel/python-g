@@ -56,20 +56,6 @@ attrPattern = re.compile('^\\.[a-zA-z_][a-zA-Z_\\d]*$')
 opDelimPattern = re.compile('[a-zA-z\\d_.\\(\\[\\{\\s+-~]')
 
 inputSiteCursorPixmap = (
-    "..   ",
-    ".. % ",
-    ".. % ",
-    ". % .",
-    " % ..",
-    ". % .",
-    ".. % ",
-    ".. % ",
-    ".. % ",
-    ".. % ",
-    ".. % ",
-    "..   ",
-)
-inputSiteCursorPixmap = (
     "..% ",
     "..% ",
     "..% ",
@@ -1108,6 +1094,11 @@ class Cursor:
         self.siteType = None
         self.lastDrawRect = None
         self.blinkState = False
+        self.anchorIc = None
+        self.anchorSite = None
+        self.anchorLine = None
+        self.lastSelIc = None
+        self.lastSelSite = None
 
     def setToWindowPos(self, pos):
         if self.type is not None:
@@ -1136,6 +1127,134 @@ class Cursor:
         self.type = "text"
         self.blinkState = True
         self.draw()
+
+    def moveToIconSite(self, ic, site, evt):
+        """Place the cursor at an icon site, paying attention to keyboard modifiers"""
+        shiftPressed = evt.state & python_g.SHIFT_MASK
+        if shiftPressed:
+            self.selectToCursor(ic, site, evt.keysym)
+        else:
+            self.setToIconSite(ic, site)
+
+    def selectToCursor(self, ic, site, direction):
+        """Modify selection based on cursor movement (presumably with Shift key held)"""
+        selectedIcons = set(self.window.selectedIcons())
+        redrawRect = python_g.AccumRects()
+        if len(selectedIcons) == 0 and self.type is "icon":
+            # This is a new cursor-based selection
+            self.anchorIc = self.icon
+            self.anchorSite = self.site
+        elif self.anchorIc is not None or self.anchorLine is not None:
+            # There is a current recorded selection, but verify that it is valid by
+            # matching it with the current actual selection
+            lastSelIcons = set(self._iconsBetween(self.lastSelIc, self.lastSelSite))
+            diffIcons = selectedIcons.difference(lastSelIcons)
+            if len({i for i in diffIcons if not isinstance(i, icon.BlockEnd)}):
+                self.anchorIc = None
+                self.anchorLine = None
+        if self.anchorIc is None and self.anchorLine is None:
+            # The current selection is not valid, assume it was made via mouse.  Choose
+            # an anchor line as the farthest side of the selection rectangle from the
+            # cursor using the direction of arrow motion to choose horiz/vert
+            selectedRect = python_g.AccumRects()
+            for i in selectedIcons:
+                selectedRect.add(i.selectionRect())
+            left, top, right, bottom = selectedRect.get()
+            left += 3    # Inset rectangle to avoid overlaps and protruding sites
+            right -= 3
+            top += 1
+            bottom -= 1
+            siteX, siteY = ic.posOfSite(site)
+            if direction in ("Left", "Right"):
+                anchorX = right if abs(siteX - left) <= abs(siteX - right) else left
+                self.anchorLine = (anchorX, top, anchorX, bottom)
+            else:
+                anchorY = bottom if abs(siteY - top) <= abs(siteY - bottom) else top
+                self.anchorLine = (left, anchorY, right, anchorY)
+        select = set(self._iconsBetween(ic, site))
+        erase = selectedIcons.difference(select)
+        select = select.difference(selectedIcons)
+        for i in erase:
+            redrawRect.add(i.hierRect())
+            i.select(False)
+        for i in select:
+            redrawRect.add(i.hierRect())
+            i.select()
+        self.window.refresh(redrawRect.get())
+        self.setToIconSite(ic, site)
+        self.lastSelIc = ic
+        self.lastSelSite = site
+
+    def _iconsBetween(self, ic, site):
+        """Find the icons that should be selected by shift-select between the current
+        anchor (self.anchorIc and Pos, or self.anchorLine) and cursor at ic, site."""
+        siteX, siteY = ic.posOfSite(site)
+        siteType = ic.typeOf(site)
+        if siteType in ("attrIn", "attrOut"):
+            siteY -= icon.ATTR_SITE_OFFSET
+        elif siteType in ("seqIn", "seqOut"):
+            seqInX, seqInY = ic.posOfSite("seqIn")
+            seqOutX, seqOutY = ic.posOfSite("seqOut")
+            siteY = (seqInY + seqOutY) // 2
+        if self.anchorIc is not None:
+            anchorX, anchorY = self.anchorIc.posOfSite(self.anchorSite)
+            anchorSiteType = self.anchorIc.typeOf(self.anchorSite)
+            if anchorSiteType in ("attrIn", "attrOut"):
+                anchorY -= icon.ATTR_SITE_OFFSET
+            elif anchorSiteType in ("seqIn", "seqOut"):
+                seqInX, seqInY = self.anchorIc.posOfSite("seqIn")
+                seqOutX, seqOutY = self.anchorIc.posOfSite("seqOut")
+                anchorY = (seqInY + seqOutY) // 2
+            if anchorX < siteX:
+                anchorX += 4  # Avoid overlapped icons and sites
+                siteX -= 3
+            elif siteX < anchorX:
+                siteX += 4
+                anchorX -= 3
+            selectRect = python_g.AccumRects((anchorX, anchorY - 3, anchorX, anchorY + 3))
+            selectRect.add((siteX, siteY - 3, siteX, siteY + 3))
+        else:
+            if self.anchorLine[0] == self.anchorLine[2]:
+                anchorX = self.anchorLine[0]
+                if anchorX < siteX:
+                    self.anchorLine = python_g.offsetRect(self.anchorLine, 4, 0)
+                    siteX -= 3
+                elif siteX < anchorX:
+                    siteX += 4
+                    icon.moveRect(self.anchorLine, (-3, 0))
+            selectRect = python_g.AccumRects(self.anchorLine)
+            selectRect.add((siteX, siteY, siteX, siteY))
+        # Get the icons that would be covered by a rectangular selection of the box
+        iconsToSelect = self.window.findIconsInRegion(selectRect.get())
+        iconsToSelect = [ic for ic in iconsToSelect if ic.inRectSelect(selectRect.get())]
+        # If the selection spans multiple statements, change to statement-level selection
+        topIcons = {ic.topLevelParent() for ic in iconsToSelect}
+        if len(topIcons) <= 1:
+            return iconsToSelect
+        else:
+            return self._seqIconsBetween(topIcons)
+
+    def _seqIconsBetween(self, topIcons):
+        """Return all of the icons in the sequence including topIcons (filling in gaps,
+        and adding all of the icons in the statement hierarchy)"""
+        # Note that we can cheat, here for efficiency, knowing that the caller is working
+        # geometrically, so we can order the sequence by icon position
+        topIconSet = set(topIcons)
+        sortedTopIcons = sorted(topIcons, key=lambda i: i.pos()[1])
+        iconsInSeq = set()
+        for ic in icon.traverseSeq(sortedTopIcons[0]):
+            iconsInSeq.add(ic)
+            if ic is sortedTopIcons[-1]:
+                break
+        else:
+            iconsInSeq = set()
+        # Fail softly if something bad happend in the geometric ordering, and make sure
+        # that at least all statements passed in are represented
+        if not topIconSet.issubset(iconsInSeq):
+            print("Did your last cursor movement leave a gap in selected statments?")
+            iconsInSeq.union(topIconSet)
+        # return the full hierarchy
+        return [i for ic in iconsInSeq for i in ic.traverse()]
 
     def removeCursor(self):
         if self.type is not None:
@@ -1192,7 +1311,8 @@ class Cursor:
         self.window.drawImage(cursorDrawImg, (x, y))
         self.lastDrawRect = cursorRegion
 
-    def processArrowKey(self, direction):
+    def processArrowKey(self, evt):
+        direction = evt.keysym
         if self.type is None:
             return
         elif self.type == "text":
@@ -1212,13 +1332,26 @@ class Cursor:
                 self.draw()
             return
         elif self.type == "icon":
-            self._processIconArrowKey(direction)
+            self._processIconArrowKey(evt)
 
-    def arrowKeyWithSelection(self, direction, selectedIcons):
-        """Process arrow key pressed with no cursor but selected icons.  Icons have been
-        unselected before this is called, but passed in via the selectedIcons parameter"""
-        cursorSites = []
+    def arrowKeyWithSelection(self, evt, selectedIcons):
+        """Process arrow key pressed with no cursor but selected icons."""
+        direction = evt.keysym
+        shiftPressed = evt.state & python_g.SHIFT_MASK
+        if not shiftPressed:
+            self.window.unselectAll()
+        selectedRects = python_g.AccumRects()
         for ic in selectedIcons:
+            selectedRects.add(ic.selectionRect())
+        selectedRect = selectedRects.get()
+        l, t, r, b = selectedRect
+        l -= 10
+        t -= 10
+        r += 10
+        b += 10
+        searchRect = l, t, r, b
+        cursorSites = []
+        for ic in self.window.findIconsInRegion(searchRect):
             snapLists = ic.snapLists(forCursor=True)
             for ic, (x, y), name in snapLists.get("input", []):
                 cursorSites.append((x, y, ic, name))
@@ -1229,31 +1362,45 @@ class Cursor:
                 cursorSites.append((*outSites[0][1], ic, "output"))
         if len(cursorSites) == 0:
             return  # It is possible to have icons with no viable cursor sites
-        if direction == "Left":
-            cursorSites.sort(key=itemgetter(0))
-        elif direction == "Right":
-            cursorSites.sort(key=itemgetter(0), reverse=True)
-        elif direction == "Up":
-            cursorSites.sort(key=itemgetter(1))
-        elif direction == "Down":
-            cursorSites.sort(key=itemgetter(1), reverse=True)
-        x, y, ic, site = cursorSites[0]
+        selLeft, selTop, selRight, selBottom = selectedRect
+        bestDist = None
+        for siteData in cursorSites:
+            x, y = siteData[:2]
+            if direction == "Left":  # distance from left edge
+                dist = abs(x - selLeft) + max(0, selBottom-y) + max(0, y-selTop)
+            elif direction == "Right":  # distance from right edge
+                dist = abs(x - selRight) + max(0, selBottom-y) + max(0, y-selTop)
+            elif direction == "Up":  # distance from top edge
+                dist = abs(y - selTop) + max(0, selLeft-x) + max(0, x-selRight)
+            elif direction == "Down":  # distance from bottom edge
+                dist = abs(y - selBottom) + max(0, selLeft-x) + max(0, x-selRight)
+            if bestDist is None or dist < bestDist:
+                bestSiteData = siteData
+                bestDist = dist
+        x, y, ic, site = bestSiteData
         if site == "output":
             parent = ic.parent()
             if parent is not None:
                 self.setToIconSite(parent, parent.siteOf(ic))
                 return
-        self.setToIconSite(ic, site)
+        self.moveToIconSite(ic, site, evt)
 
-    def _processIconArrowKey(self, direction):
+    def _processIconArrowKey(self, evt):
         """For cursor on icon site, set new site based on arrow direction"""
         # Build a list of possible destination cursor positions, normalizing attribute
         # site positions to the center of the cursor (in/out site position).
+        direction = evt.keysym
         cursorX, cursorY = self.icon.posOfSite(self.site)
         searchRect = (cursorX-HORIZ_ARROW_MAX_DIST, cursorY-VERT_ARROW_MAX_DIST,
          cursorX+HORIZ_ARROW_MAX_DIST, cursorY+VERT_ARROW_MAX_DIST)
+        cursorTopIcon = self.icon.topLevelParent()
+        cursorPrevIcon = cursorTopIcon.prevInSeq()
+        cursorNextIcon = cursorTopIcon.nextInSeq()
         cursorSites = []
         for winIcon in self.window.findIconsInRegion(searchRect):
+            topIcon = winIcon.topLevelParent()
+            if topIcon not in (cursorTopIcon, cursorPrevIcon, cursorNextIcon):
+                continue  # Limit statement jumps to a single statement
             snapLists = winIcon.snapLists(forCursor=True)
             hasOutSite = len(snapLists.get("output", [])) > 0
             for ic, (x, y), name in snapLists.get('input', []):
@@ -1295,14 +1442,14 @@ class Cursor:
             for xDist, x, y, ic, site in choices:
                 if xDist > VERT_ARROW_X_JUMP_MIN:
                     if abs(y - cursorY) < HORIZ_ARROW_Y_JUMP_MAX:
-                        self.setToIconSite(ic, site)
+                        self.moveToIconSite(ic, site, evt)
                         return
         else:  # Up, Down
             # For vertical movement, do a second round of ranking.  This time add y
             # distance to weighted X distance (ranking x jumps as further away)
             bestRank = None
             for yDist, x, y, ic, site in choices:
-                if yDist > VERT_ARROW_Y_JUMP_MIN:
+                if yDist > VERT_ARROW_Y_JUMP_MIN or isinstance(ic, icon.BlockEnd):
                     rank = yDist + VERT_ARROW_X_WEIGHT*abs(x-cursorX)
                     if bestRank is None or rank < bestRank[0]:
                         bestRank = (rank, ic, site)
@@ -1316,7 +1463,7 @@ class Cursor:
                 if prevIcon:
                     ic = prevIcon
                     site = 'seqOut'
-            self.setToIconSite(ic, site)
+            self.moveToIconSite(ic, site, evt)
 
     def movePastEndParen(self):
         if self.type is not "icon":

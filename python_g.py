@@ -363,6 +363,8 @@ class Window:
                 self._startStmtSelect(seqSiteIc, evt)
             else:
                 self._startRectSelect(evt)
+        elif evt.state & SHIFT_MASK:
+            self._startRectSelect(evt)
         elif ic.selected:
             # If a selected icon was clicked, drag all of the selected icons
             self._startDrag(evt, self.selectedIcons())
@@ -416,7 +418,8 @@ class Window:
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
         ic = self.findIconAt(evt.x, evt.y)
-        if (ic is None or not ic.selected) and not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
+        if (ic is None or not ic.selected) and not (evt.state & SHIFT_MASK or \
+         evt.state & CTRL_MASK):
             self.unselectAll()
 
     def _buttonReleaseCb(self, evt):
@@ -1183,11 +1186,11 @@ class Window:
         if self.cursor.type is None:
             selected = self.selectedIcons()
             if selected:
-                self.unselectAll()
-                self.cursor.arrowKeyWithSelection(evt.keysym, selected)
+                self.cursor.arrowKeyWithSelection(evt, selected)
             return
-        self.unselectAll()
-        self.cursor.processArrowKey(evt.keysym)
+        if not evt.state & SHIFT_MASK:
+            self.unselectAll()
+        self.cursor.processArrowKey(evt)
 
     def _cancelCb(self, evt=None):
         if self.entryIcon is not None:
@@ -1255,12 +1258,12 @@ class Window:
         self.dragging = icons
         # Remove the icons from the window image and handle the resulting detachments
         # re-layouts, and redrawing.
-        sequences = findSequences(icons)
+        sequences = findSeries(icons)
         if needRemove:
             self.removeIcons(self.dragging)
-        restoreSequences(sequences)
         # Dragging parent icons away from their children may require re-layout of the
-        # (moving) parent icons
+        # (moving) parent icons, and in some cases adding icons to keep lists intact
+        self.dragging += restoreSeries(sequences)
         topDraggingIcons = findTopIcons(self.dragging)
         for ic in topDraggingIcons:
             if isinstance(ic, icon.BinOpIcon) and ic.hasParens:
@@ -1397,12 +1400,26 @@ class Window:
             redrawRegion.add(statIcon.hierRect())
             if siteType != "insertInput" and statIcon.childAt(siteName):
                 redrawRegion.add(movIcon.hierRect())
-            if siteType in ("input", "attrIn"):
+            if siteType == "input":
+                topDraggedIcons.remove(movIcon)
+                if icon.isSeriesSiteId(siteName) and isinstance(movIcon, icon.TupleIcon) \
+                 and movIcon.noParens:  # Splice in naked tuple
+                    statIcon.replaceChild(None, siteName)
+                    seriesName, seriesIdx = icon.splitSeriesSiteId(siteName)
+                    statIcon.insertChildren(movIcon.argIcons(), seriesName, seriesIdx)
+                else:
+                    statIcon.replaceChild(movIcon, siteName)
+            elif siteType == "attrIn":
                 topDraggedIcons.remove(movIcon)
                 statIcon.replaceChild(movIcon, siteName)
             elif siteType == "insertInput":
                 topDraggedIcons.remove(movIcon)
-                statIcon.insertChild(movIcon, siteName)
+                if icon.isSeriesSiteId(siteName) and isinstance(movIcon, icon.TupleIcon) \
+                 and movIcon.noParens:  # Splice in naked tuple
+                    seriesName, seriesIdx = icon.splitSeriesSiteId(siteName)
+                    statIcon.insertChildren(movIcon.argIcons(), seriesName, seriesIdx)
+                else:
+                    statIcon.insertChild(movIcon, siteName)
             elif siteType == "insertAttr":
                 topDraggedIcons.remove(movIcon)
                 statIcon.insertAttr(movIcon)
@@ -1455,7 +1472,7 @@ class Window:
             self._eraseRectSelect()
         redrawRegion = AccumRects()
         for ic in self.findIconsInRegion(combinedRegion):
-            if ic.touchesRect(newRect):
+            if ic.inRectSelect(newRect):
                 newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
             else:
                 newSelect = self.rectSelectInitialStates[ic]
@@ -1830,6 +1847,13 @@ class Window:
             outIcon.replaceChild(inIcon, 'seqOut')
         for outIcon, (inIcon, site) in reconnectList.items():
             inIcon.replaceChild(outIcon, site)
+        # Remove unsightly "naked tuples" left behind empty by deletion of their children
+        for ic, child in detachList:
+            if child in deletedSet and isinstance(ic, icon.TupleIcon) and \
+             ic.noParens and len(ic.children()) == 0 and ic.parent() is None and \
+             ic.nextInSeq() is None and ic.prevInSeq() is None and ic in self.topIcons:
+                redrawRegion.add(ic.rect)
+                self.removeTop(ic)
         # Update the window's top-icon list to remove deleted icons and add those that
         # have become top icons via deletion of their parents (bring those to the front)
         self.removeTop([ic for ic in self.topIcons if ic in deletedSet])
@@ -2202,9 +2226,12 @@ def findTopIcons(icons):
             iconDir[child] = False
     return [ic for ic, isTop in iconDir.items() if isTop]
 
-def findSequences(icons):
-    """Returns a list of groups of icons that appear on the same sequence (disregarding
-    intervening icons not in "icons", in the order that they appear in the sequence."""
+def findSeries(icons):
+    """Returns a list of groups of icons that appear on the same sequence, list, tuple,
+    set, parameter list, or dictionary(disregarding intervening icons not in "icons", in
+    the order that they appear in the series, and tagged with the type of series."""
+    # Sequences
+    series = {}
     topIcons = findTopIcons(icons)
     unsequenced = set(topIcons)
     sequences = []
@@ -2218,17 +2245,55 @@ def findSequences(icons):
                 sequence.append(ic)
                 unsequenced.remove(ic)
         sequences.append(sequence)
-    return sequences
+    series['sequences'] = sequences
+    # Other series types (these all return as naked tuples)
+    # Record icons in the list whose parents are not in the list, and cull those to
+    # icons whose parents have multiple children from the same series.
+    allIcons = set(icons)
+    missingParents = {}
+    for ic in icons:
+        parent = ic.parent()
+        if parent is None or parent in allIcons:
+            continue
+        if parent not in missingParents:
+            missingParents[parent] = []
+        missingParents[parent].append((ic, parent.siteOf(ic)))
+    listSeries = []
+    for parent, children in missingParents.items():
+        if len(children) < 2:
+            continue
+        argGrps = {}
+        for child, parentSite in children:
+            if not icon.isSeriesSiteId(parentSite):
+                continue
+            seriesName, idx = icon.splitSeriesSiteId(parentSite)
+            if seriesName not in argGrps:
+                argGrps[seriesName] = []
+            argGrps[seriesName].append(child)
+        for seriesName, argGrp in argGrps.items():
+            if len(argGrp) < 2:
+                continue
+            listSeries.append(argGrp)
+    series['list'] = listSeries
+    return series
 
-def restoreSequences(sequences):
+def restoreSeries(series):
     """Connect icons into sequences according to "sequences" in the format generated by
-     findSequences"""
-    for sequence in sequences:
+     findSeries"""
+    for sequence in series['sequences']:
         prevIcon = None
         for ic in sequence:
             if ic.hasSite('seqOut'):
                 ic.replaceChild(prevIcon, 'seqIn')
             prevIcon = ic
+    newIcons = []
+    for icons in series['list']:
+        newTuple = icon.TupleIcon(icons[0].window, noParens=True,
+         location=icons[0].rect[:2])
+        newTuple.insertChildren(icons, 'argIcons', 0)
+        newTuple.select(icons[0].selected)
+        newIcons.append(newTuple)
+    return newIcons
 
 if __name__ == '__main__':
     appData = App()
