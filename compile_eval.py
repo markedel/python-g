@@ -299,17 +299,17 @@ def makeIcons(parsedExpr, window, x, y):
         parentIcon.replaceChild(subscriptIcon, "attrIcon")
         return topIcon
     if iconClass is icon.WhileIcon:
-        topIcon = iconClass(window, (x, y))
+        topIcon = iconClass(window=window, location=(x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
         return topIcon
     if iconClass is icon.IfIcon:
-        topIcon = iconClass(window, (x, y))
+        topIcon = iconClass(window=window, location=(x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
         return topIcon
     if iconClass is icon.DefIcon:
         isAsync, name, args, defaults, varArg, kwOnlyArgs, kwDefaults, kwArg = \
          parsedExpr[1:]
-        defIcon = iconClass(isAsync, window, (x, y))
+        defIcon = iconClass(isAsync, window=window, location=(x, y))
         nameIcon = icon.IdentifierIcon(name, window)
         defIcon.replaceChild(nameIcon, 'nameIcon')
         if len(defaults) < len(args):

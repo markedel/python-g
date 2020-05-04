@@ -521,12 +521,24 @@ def iconsFromClipboardString(clipString, window, offset):
     for clipSeq in clipData:
         prevIc = None
         seqIcons = clipboardDataToIcons(clipSeq, window, offset)
+        branchStack = []
         for ic in seqIcons:
             if prevIc is not None:
                 ic.replaceChild(prevIc, 'seqIn')
             prevIc = ic
-        for ic in seqIcons:
-            ic.layout()
+            if hasattr(ic, 'blockEnd'):
+                branchStack.append(ic)
+            elif isinstance(ic, BlockEnd):
+                if len(branchStack) == 0:
+                    print("Unbalanced branches in clipboard data")
+                else:
+                    branchIc = branchStack.pop()
+                    branchIc.blockEnd = ic
+                    ic.primary = branchIc
+            ic.layoutDirty = True
+        if len(branchStack) != 0:
+            print("Unbalanced branches in clipboard data")
+        window.layoutIconsInSeq(seqIcons[0], checkAllForDirty=True)
         allIcons += seqIcons
     return allIcons
 
@@ -545,25 +557,36 @@ def clipboardDataToIcons(clipData, window, offset):
 
 def clipboardRepr(icons, offset):
     """Top level function for converting icons into their serialized string representation
-    for copying to the clipboard.  icons should be a list of just the top-level icons of
-    each hierarchy to be copied."""
-    remainingIcons = set(icons)
+    for copying to the clipboard.  icons should be a list of icons to be copied."""
+    seriesLists = python_g.findSeries(icons)
+    iconsToCopy = set(icons)
     seqLists = []
-    while len(remainingIcons) > 0:
-        ic = next(iter(remainingIcons))  # Get an icon from remainingIcons
-        sequence = []
-        seqStartIc = ic
-        for seqIc in traverseSeq(ic, reverse=True):
-            if seqIc not in remainingIcons:
-                break
-            seqStartIc = seqIc
-        for seqIc in traverseSeq(seqStartIc):
-            if seqIc not in remainingIcons:
-                break
-            sequence.append(seqIc)
-            remainingIcons.remove(seqIc)
-        seqLists.append(sequence)
-    return repr([[ic.clipboardRepr(offset) for ic in seqList] for seqList in seqLists])
+    for sequence in seriesLists['sequences']:
+        seqLists.append([ic.clipboardRepr(offset, iconsToCopy) for ic in sequence])
+    for series in seriesLists['lists']:
+        children = ["argIcons"] + [ic.clipboardRepr(offset, iconsToCopy) for ic in series]
+        seqLists.append([("TupleIcon", addPoints(series[0].rect[:2], (0, 5)),
+         {'noParens':True}, [children])])
+    for ic in seriesLists['individual']:
+        seqLists.append([ic.clipboardRepr(offset, iconsToCopy)])
+    return repr(seqLists)
+
+def textRepr(icons):
+    topIcons = python_g.findTopIcons(icons)
+    branchDepth = 0
+    clipText = []
+    for ic in topIcons:
+        if isinstance(ic, BlockEnd):
+            branchDepth -= 1
+        else:
+            if ic.__class__ in (ElifIcon, ElseIcon):
+                indent = "    " * max(0, branchDepth-1)
+            else:
+                indent = "    " * max(0, branchDepth)
+            if hasattr(ic, 'blockEnd'):
+                branchDepth += 1
+            clipText.append(indent + ic.textRepr())
+    return "\n".join(clipText)
 
 def asciiToImage(asciiPixmap):
     if asciiToImage.asciiMap is None:
@@ -957,12 +980,14 @@ class Icon:
             pasteImageWithClip(self.window.image if toDragImage is None else toDragImage,
              tintSelectedImage(img, self.selected, colorErr), imgLoc, clip)
 
-    def _serialize(self, offset, **args):
+    def _serialize(self, offset, iconsToCopy, **args):
         currentSeries = None
         children = []
         for site in self.sites.childSites():
             att = self.childAt(site.name)
-            childRepr = None if att is None else att.clipboardRepr(offset)
+            if att is not None and att not in iconsToCopy:
+                continue
+            childRepr = None if att is None else att.clipboardRepr(offset, iconsToCopy)
             if isSeriesSiteId(site.name):
                 seriesName, idx = splitSeriesSiteId(site.name)
                 if currentSeries is None or seriesName != currentSeries[0]:
@@ -989,13 +1014,13 @@ class Icon:
                 getattr(self.sites, siteName).attach(self,
                  clipboardDataToIcons(iconData, window, offset)[0])
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy)
 
     @staticmethod
     def fromClipboard(clipData, window, offset):
         iconClass, location, args, childData = clipData
-        ic = iconClass(**args, window=window, location = addPoints(location, offset))
+        ic = iconClass(**args, window=window, location=addPoints(location, offset))
         ic._restoreChildrenFromClipData(childData, window, offset)
         return ic
 
@@ -1064,7 +1089,7 @@ class TextIcon(Icon):
         return layout
 
     def textRepr(self):
-        return self.text
+        return self.text + _attrTextRepr(self)
 
     def execute(self):
         # This execution method is a remnant from when the IdentIcon did numbers, strings,
@@ -1078,8 +1103,8 @@ class TextIcon(Icon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, text=self.text)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, text=self.text)
 
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
@@ -1098,8 +1123,8 @@ class IdentifierIcon(TextIcon):
             return self.sites.attrIcon.att.execute(value)
         return value
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, name=self.name)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, name=self.name)
 
 class NumericIcon(TextIcon):
     def __init__(self, value, window=None, location=None):
@@ -1114,8 +1139,8 @@ class NumericIcon(TextIcon):
     def execute(self):
         return self.value
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, value=self.value)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, value=self.value)
 
 class StringIcon(TextIcon):
     def __init__(self, string, window=None, location=None):
@@ -1127,8 +1152,8 @@ class StringIcon(TextIcon):
             return self.sites.attrIcon.att.execute(self.string)
         return self.string
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, string=self.string)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, string=self.string)
 
 class AttrIcon(Icon):
     def __init__(self, name, window=None, location=None):
@@ -1183,7 +1208,7 @@ class AttrIcon(Icon):
         return layout
 
     def textRepr(self):
-        return '.' + self.name
+        return '.' + self.name + _attrTextRepr(self)
 
     def execute(self, attrOfValue):
         try:
@@ -1194,8 +1219,8 @@ class AttrIcon(Icon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, name=self.name)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, name=self.name)
 
 class SubscriptIcon(Icon):
     def __init__(self, numSubscripts=1, window=None, location=None):
@@ -1339,16 +1364,16 @@ class SubscriptIcon(Icon):
                 stepText = ""
         else:
             upperText = stepText = ""
-        return '[' + indexText + upperText + stepText + ']'
+        return '[' + indexText + upperText + stepText + ']' + _attrTextRepr(self)
 
-    def clipboardRepr(self, offset):
+    def clipboardRepr(self, offset, iconsToCopy):
         if not hasattr(self.sites, 'upperIcon'):
             numSubscripts = 1
         elif not hasattr(self.sites, 'stepIcon'):
             numSubscripts = 2
         else:
             numSubscripts = 3
-        return self._serialize(offset, numSubscripts=numSubscripts)
+        return self._serialize(offset, iconsToCopy, numSubscripts=numSubscripts)
 
     def execute(self, attrOfValue):
         if self.sites.indexIcon.att is None:
@@ -1453,14 +1478,10 @@ class UnaryOpIcon(Icon):
         return layout
 
     def textRepr(self):
-        if self.arg() is None:
-            argText = "None"
-        else:
-            argText = self.arg().textRepr()
-        return self.operator + " " + argText
+        return self.operator + _singleArgTextRepr(self.sites.argIcon)
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, op=self.operator)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, op=self.operator)
 
     def execute(self):
         if self.arg() is None:
@@ -1494,6 +1515,10 @@ class StarIcon(UnaryOpIcon):
         snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
 
+    def clipboardRepr(self, offset, iconsToCopy):
+        # Parent UnaryOp specifies op keyword, which this does not have
+        return self._serialize(offset, iconsToCopy)
+
 class StarStarIcon(UnaryOpIcon):
     def __init__(self, window=None, location=None):
         UnaryOpIcon.__init__(self, '**', window, location)
@@ -1512,9 +1537,17 @@ class StarStarIcon(UnaryOpIcon):
         snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
 
+    def clipboardRepr(self, offset, iconsToCopy):
+        # Superclass UnaryOp specifies op keyword, which this does not have
+        return self._serialize(offset, iconsToCopy)
+
 class YieldFromIcon(UnaryOpIcon):
     def __init__(self, window=None, location=None):
         UnaryOpIcon.__init__(self, 'yield from', window, location)
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        # Superclass UnaryOp specifies op keyword, which this does not have
+        return self._serialize(offset, iconsToCopy)
 
 class ListTypeIcon(Icon):
     def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
@@ -1622,15 +1655,8 @@ class ListTypeIcon(Icon):
         return layout
 
     def textRepr(self):
-        argText = ""
-        for site in self.sites.argIcons:
-            if site.att is None:
-                argText = argText + "None, "
-            else:
-                argText = argText + site.att.textRepr() + ", "
-        if len(argText) > 0:
-            argText = argText[:-2]
-        return self.leftText + argText + self.rightText
+        argText = _seriesTextRepr(self.sites.argIcons)
+        return self.leftText + argText + self.rightText + _attrTextRepr(self)
 
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
@@ -1719,8 +1745,8 @@ class TupleIcon(ListTypeIcon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, noParens=self.noParens)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, noParens=self.noParens)
 
 class DictIcon(ListTypeIcon):
     def __init__(self, window, location=None):
@@ -1939,15 +1965,15 @@ class BinOpIcon(Icon):
         return siteSnapLists
 
     def textRepr(self):
-        leftArgText = "None" if self.leftArg() is None else self.leftArg().textRepr()
-        rightArgText = "None" if self.rightArg() is None else self.rightArg().textRepr()
+        leftArgText = _singleArgTextRepr(self.sites.leftArg)
+        rightArgText = _singleArgTextRepr(self.sites.rightArg)
         text = leftArgText + " " + self.operator + " " + rightArgText
         if self.hasParens:
-            return "(" + text + ")"
+            return "(" + text + ")" + _attrTextRepr(self)
         return text
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, op=self.operator)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, op=self.operator)
 
     def locIsOnLeftParen(self, btnPressLoc):
         iconLeft = self.rect[0]
@@ -2054,15 +2080,7 @@ class CallIcon(Icon):
         return layout
 
     def textRepr(self):
-        argText = ""
-        for site in self.sites.argIcons:
-            if site.att is None:
-                argText = argText + "None, "
-            else:
-                argText = argText + site.att.textRepr() + ", "
-        if len(argText) > 0:
-            argText = argText[:-2]
-        return '(' + argText + ')'
+        return '(' + _seriesTextRepr(self.sites.argIcons) + ')' + _attrTextRepr(self)
 
     def execute(self, attrOfValue):
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
@@ -2126,6 +2144,10 @@ class ArgAssignIcon(BinOpIcon):
             raise IconExecException(self, "Argument name is not identifier")
         return self.leftArg().name, self.rightArg().execute()
 
+    def clipboardRepr(self, offset, iconsToCopy):
+        # Superclass BinOpIcon specifies op keyword, which this does not have
+        return self._serialize(offset, iconsToCopy)
+
 class DictElemIcon(BinOpIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
@@ -2152,6 +2174,10 @@ class DictElemIcon(BinOpIcon):
         key = self.leftArg().execute()
         value = self.rightArg().execute()
         return key, value
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        # Superclass BinOpIcon specifies op keyword, which this does not have
+        return self._serialize(offset, iconsToCopy)
 
 class AssignIcon(Icon):
     def __init__(self, numTargets=1, window=None, location=None):
@@ -2350,8 +2376,14 @@ class AssignIcon(Icon):
         self.valueList.calcLayout(layout, x, y)
         return layout
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, numTargets=len(self.tgtLists))
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, numTargets=len(self.tgtLists))
+
+    def textRepr(self):
+        text = ""
+        for tgtList in self.tgtLists:
+            text += _seriesTextRepr(getattr(self.sites, tgtList.siteSeriesName)) + " = "
+        return text +  _seriesTextRepr(self.sites.values)
 
 class AugmentedAssignIcon(Icon):
     def __init__(self, op, window, location):
@@ -2456,9 +2488,15 @@ class AugmentedAssignIcon(Icon):
         return layout
 
     def textRepr(self):
-        return None  #... no idea what to do here, yet.
+        if self.sites.targetIcon.att is None:
+            target = " "
+        else:
+            target = self.sites.targetIcon.att.textRepr()
+        argText = _seriesTextRepr(self.sites.valueIcons)
+        return target + ' ' + self.op + '=' + ' ' + argText
 
-    #... ClipboardRepr
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, op=self.op)
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -2583,22 +2621,16 @@ class DivideIcon(Icon):
         return layout
 
     def textRepr(self):
-        if self.sites.topArg.att is None:
-            topArgText = "None"
-        else:
-            topArgText = self.sites.topArg.att.textRepr()
-        if self.sites.bottomArg.att is None:
-            bottomArgText = "None"
-        else:
-            bottomArgText = self.sites.bottomArg.att.textRepr()
+        topArgText = _singleArgTextRepr(self.sites.topArg)
+        bottomArgText = _singleArgTextRepr(self.sites.bottomArg)
         op = '//' if self.floorDiv else '/'
         text = topArgText + " " + op + " " + bottomArgText
         if needsParens(self, forText=True):
-            return "(" + text + ")"
+            return "(" + text + ")" + _attrTextRepr(self)
         return text
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, floorDiv=self.floorDiv)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, floorDiv=self.floorDiv)
 
     def leftAssoc(self):
         """Note that this is only used for text generation for copy/paste"""
@@ -2625,8 +2657,8 @@ class DivideIcon(Icon):
         return result
 
 class BlockEnd(Icon):
-    def __init__(self, primary, location=None):
-        Icon.__init__(self, primary.window)
+    def __init__(self, primary, window=None, location=None):
+        Icon.__init__(self, window)
         self.primary = primary
         self.sites.add('seqIn', 'seqIn', 1 + BLOCK_INDENT, 1)
         self.sites.add('seqOut', 'seqOut', 1, 1)
@@ -2665,8 +2697,11 @@ class BlockEnd(Icon):
     def selectionRect(self):
         return None
 
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, primary=None)
+
 class WhileIcon(Icon):
-    def __init__(self, window, location):
+    def __init__(self, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
         bodyWidth, bodyHeight = globalFont.getsize("while")
         bodyWidth += 2 * TEXT_MARGIN + 1
@@ -2681,7 +2716,9 @@ class WhileIcon(Icon):
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + dragSeqImage.width-1, y + bodyHeight)
-        self.blockEnd = BlockEnd(self, (x, y + bodyHeight + 2))
+        self.blockEnd = None
+        if createBlockEnd:
+            self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
 
     def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
         if toDragImage is None:
@@ -2736,15 +2773,16 @@ class WhileIcon(Icon):
         return layout
 
     def textRepr(self):
-        return None  #... no idea what to do here, yet.
+        return "while " + _singleArgTextRepr(self.sites.condIcon) + ":"
 
-    #... ClipboardRepr
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
     def execute(self):
         return None  #... no idea what to do here, yet.
 
 class IfIcon(Icon):
-    def __init__(self, window, location):
+    def __init__(self, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
         bodyWidth, bodyHeight = globalFont.getsize("if   ")
         bodyWidth += 2 * TEXT_MARGIN + 1
@@ -2759,7 +2797,9 @@ class IfIcon(Icon):
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + dragSeqImage.width-1, y + bodyHeight)
-        self.blockEnd = BlockEnd(self, (x, y + bodyHeight + 2))
+        self.blockEnd = None
+        if createBlockEnd:
+            self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
         self.elifIcons = []
         self.elseIcon = None
 
@@ -2835,9 +2875,10 @@ class IfIcon(Icon):
         return layout
 
     def textRepr(self):
-        return None  #... no idea what to do here, yet.
+        return "if " + _singleArgTextRepr(self.sites.condIcon) + ":"
 
-    #... ClipboardRepr
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -2912,9 +2953,7 @@ class ElifIcon(Icon):
         return layout
 
     def textRepr(self):
-        return None  # ... no idea what to do here, yet.
-
-    # ... ClipboardRepr
+        return "elif " + _singleArgTextRepr(self.sites.condIcon) + ":"
 
     def execute(self):
         return None  # ... no idea what to do here, yet.
@@ -2973,18 +3012,17 @@ class ElseIcon(Icon):
         return layout
 
     def textRepr(self):
-        return None  # ... no idea what to do here, yet.
-
-    # ... ClipboardRepr
+        return "else:"
 
     def execute(self):
         return None  # ... no idea what to do here, yet.
 
 class DefIcon(Icon):
-    def __init__(self, isAsync, window, location):
+    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
-        self.text = "async def" if isAsync else "def"
-        bodyWidth = globalFont.getsize(self.text)[0] + 2 * TEXT_MARGIN + 1
+        self.isAsync = isAsync
+        text = "async def" if isAsync else "def"
+        bodyWidth = globalFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3002,7 +3040,9 @@ class DefIcon(Icon):
         totalWidth = argX + self.argList.width() + rParenWidth - 3
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
-        self.blockEnd = BlockEnd(self, (x, y + bodyHeight + 2))
+        self.blockEnd = None
+        if createBlockEnd:
+            self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
 
     def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
         if toDragImage is None:
@@ -3017,7 +3057,7 @@ class DefIcon(Icon):
             bodyOffset = dragSeqImage.width - 1
             img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
              color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.text, bodyHeight)
+            txtImg = iconBoxedText("async def" if self.isAsync else "def", bodyHeight)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = self.sites.nameIcon.yOffset
             inImageY = cntrSiteY - inSiteImage.height // 2
@@ -3089,9 +3129,14 @@ class DefIcon(Icon):
         return layout
 
     def textRepr(self):
-        return None  #... no idea what to do here, yet.
+        text = "async def" if self.isAsync else "def"
+        nameIcon = self.sites.nameIcon.att
+        name = " " if nameIcon is None else nameIcon.textRepr()
+        return text + " " + name + "(" + _seriesTextRepr(self.sites.argIcons) + "):"
 
-    #... ClipboardRepr
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
+         createBlockEnd=False)
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -3181,9 +3226,7 @@ class ReturnIcon(Icon):
         return layout
 
     def textRepr(self):
-        return None  #... no idea what to do here, yet.
-
-    #... ClipboardRepr
+        return "return " + _seriesTextRepr(self.sites.values)
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -3258,10 +3301,9 @@ class YieldIcon(Icon):
         self.valueList.calcLayout(layout, bodyWidth - 1, 0)
         return layout
 
-    def textRepr(self):
-        return None  #... no idea what to do here, yet.
 
-    #... ClipboardRepr
+    def textRepr(self):
+        return "yield " + _seriesTextRepr(self.sites.values)
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -4120,3 +4162,24 @@ def _getIconClasses():
         _getIconClasses.cachedDict = {cls.__name__:cls for cls in _allSubclasses(Icon)}
     return  _getIconClasses.cachedDict
 _getIconClasses.cachedDict = None
+
+def _singleArgTextRepr(site):
+    if site.att is None:
+        return "None"
+    return site.att.textRepr()
+
+def _seriesTextRepr(seriesSite):
+    argText = ""
+    for site in seriesSite:
+        if site.att is None:
+            argText = argText + "None, "
+        else:
+            argText = argText + site.att.textRepr() + ", "
+    if len(argText) > 0:
+        argText = argText[:-2]
+    return argText
+
+def _attrTextRepr(ic):
+    if ic.sites.attrIcon.att is None:
+        return ""
+    return ic.sites.attrIcon.att.textRepr()
