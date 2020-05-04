@@ -56,7 +56,8 @@ def parseCodeBlock(bodyAst, window, location):
                 bodyIcons += elifBlockIcons
                 stmtIcon.addElse(elifIcon)
                 stmt = stmt.orelse[0]
-            if stmt.__class__ in (ast.If, ast.For, ast.While) and len(stmt.orelse) != 0:
+            if stmt.__class__ in (ast.If, ast.For, ast.AsyncFor, ast.While) and \
+             len(stmt.orelse) != 0:
                 # Process else block (note that after elif processing above, stmt may in
                 # some cases point to a nested statement being flattened out)
                 elseIcon = icon.ElseIcon(window, location)
@@ -107,6 +108,9 @@ def parseStmt(stmt):
         return (icon.AugmentedAssignIcon, tgt, op, parseExpr(stmt.value))
     if stmt.__class__ == ast.While:
         return (icon.WhileIcon, parseExpr(stmt.test))
+    if stmt.__class__ in (ast.For, ast.AsyncFor):
+        isAsync = stmt.__class__ is ast.AsyncFor
+        return (icon.ForIcon, isAsync, parseExpr(stmt.target), parseExpr(stmt.iter))
     if stmt.__class__ == ast.If:
         return (icon.IfIcon, parseExpr(stmt.test))
     if stmt.__class__ in (ast.FunctionDef, ast.AsyncFunctionDef):
@@ -301,6 +305,20 @@ def makeIcons(parsedExpr, window, x, y):
     if iconClass is icon.WhileIcon:
         topIcon = iconClass(window=window, location=(x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
+        return topIcon
+    if iconClass is icon.ForIcon:
+        isAsync, tgt, iters = parsedExpr[1:]
+        topIcon = iconClass(isAsync, window=window, location=(x, y))
+        if tgt[0] is icon.TupleIcon:
+            tgtIcons = [makeIcons(t, window, x, y) for t in tgt[1:]]
+            topIcon.insertChildren(tgtIcons, "targets", 0)
+        else:
+            topIcon.replaceChild(makeIcons(tgt, window, x, y), "targets_0")
+        if iters[0] is icon.TupleIcon:
+            iterIcons = [makeIcons(i, window, x, y) for i in iters[1:]]
+            topIcon.insertChildren(iterIcons, "argIcons", 0)
+        else:
+            topIcon.replaceChild(makeIcons(iters, window, x, y), "argIcons_0")
         return topIcon
     if iconClass is icon.IfIcon:
         topIcon = iconClass(window=window, location=(x, y))

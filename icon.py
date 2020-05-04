@@ -332,17 +332,17 @@ fnLParenPixmap = (
  ".o      o",
  ".o      o",
  ".o      o",
- ".o    84o",
- ".o   81 o",
- ".o   28 o",
- ".o  73  o",
- ".o  56 o.",
- ".o  48o..",
- ".o  19 o.",
- ".o  19  o",
- ".o  18  o",
- "oo  28  o",
- "oo  68  o",
+ ".o   84 o",
+ ".o  81  o",
+ ".o  28  o",
+ ".o 73   o",
+ ".o 56  o.",
+ ".o 48 o..",
+ ".o 19  o.",
+ ".o 19   o",
+ ".o 18   o",
+ "oo 28   o",
+ "oo 68   o",
  ".o      o",
  ".o      o",
  ".oooooooo",
@@ -353,17 +353,17 @@ defLParenPixmap = (
  "o      o",
  "o      o",
  "o      o",
- "o    84o",
- "o   81 o",
- "o   28 o",
- "o  73  o",
- "o  56 o.",
- "o  48o..",
- "o  19 o.",
- "o  19  o",
- "o  18  o",
+ "o   84 o",
+ "o  81  o",
  "o  28  o",
- "o  68  o",
+ "o 73   o",
+ "o 56  o.",
+ "o 48 o..",
+ "o 19  o.",
+ "o 19   o",
+ "o 18   o",
+ "o 28   o",
+ "o 68   o",
  "o      o",
  "o      o",
  "oooooooo",
@@ -2071,7 +2071,7 @@ class CallIcon(Icon):
         layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2 + ATTR_SITE_OFFSET)
         argWidth = self.argList.calcLayout(layout, bodyWidth - 1, -ATTR_SITE_OFFSET)
         # layout now incorporates argument layout sizes, but not end paren
-        layout.width = fnLParenImage.width + argWidth + fnRParenImage.width - 2
+        layout.width = fnLParenImage.width - 1 + argWidth - 1 + fnRParenImage.width - 1
         if self.sites.attrIcon.att:
             attrLayout = self.sites.attrIcon.att.calcLayout()
         else:
@@ -2780,6 +2780,145 @@ class WhileIcon(Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+class ForIcon(Icon):
+    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
+        Icon.__init__(self, window)
+        self.isAsync = isAsync
+        text = "async for" if isAsync else "for"
+        bodyWidth = globalFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
+        bodyHeight = defLParenImage.height
+        inWidth = globalFont.getsize("in")[0] + 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight, inWidth)
+        siteYOffset = bodyHeight // 2
+        targetXOffset = bodyWidth + dragSeqImage.width-1 - OUTPUT_SITE_DEPTH
+        self.tgtList = HorizListMgr(self, 'targets', targetXOffset, siteYOffset)
+        seqX = dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        lParenWidth = defLParenImage.width
+        argX = dragSeqImage.width + bodyWidth + self.tgtList.width() + lParenWidth
+        self.argList = HorizListMgr(self, 'argIcons', argX, siteYOffset)
+        rParenWidth = defRParenImage.width
+        totalWidth = argX + self.argList.width() + rParenWidth - 3
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+        self.elseIcon = None
+        self.blockEnd = None
+        if createBlockEnd:
+            self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            bodyWidth, bodyHeight, inWidth = self.bodySize
+            bodyOffset = dragSeqImage.width - 1
+            img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
+             color=(0, 0, 0, 0))
+            txtImg = iconBoxedText("async for" if self.isAsync else "for", bodyHeight)
+            img.paste(txtImg, (bodyOffset, 0))
+            cntrSiteY = self.sites.seqInsert.yOffset
+            inImgX = bodyOffset + bodyWidth - 1 - inSiteImage.width
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (inImgX, inImageY))
+            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right")
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+            # Target list commas
+            tgtListOffset = bodyWidth + bodyOffset - 1 - OUTPUT_SITE_DEPTH
+            self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
+            # "in"
+            txtImg = iconBoxedText("in", bodyHeight)
+            img = Image.new('RGBA', (txtImg.width, bodyHeight), color=(0, 0, 0, 0))
+            img.paste(txtImg, (0, 0))
+            inImgX = txtImg.width - inSiteImage.width
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (inImgX, inImageY))
+            inOffset = bodyOffset + bodyWidth - 1 + self.tgtList.width() - 1
+            self.drawList.append(((inOffset, 0), img))
+            # Commas
+            argsOffset = inOffset + inWidth - 1 - OUTPUT_SITE_DEPTH
+            self.drawList += self.argList.drawListCommas(argsOffset, cntrSiteY)
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def addElse(self, ic):
+        self.elseIcon = ic
+        ic.parentIf = self
+
+    def removeElse(self, ic):
+        self.elseIcon = None
+        ic.parentIf = None
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.tgtList.makeInsertSnapList() + \
+         self.argList.makeInsertSnapList()
+        return siteSnapLists
+
+    def select(self, select=True):
+        self.selected = select
+        self.blockEnd.selected = select
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        self.tgtList.doLayout(layout)
+        self.argList.doLayout(layout)
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        width = dragSeqImage.width - 1 + bodyWidth - 1 + self.tgtList.width() - 1 + \
+         defLParenImage.width - 1 + self.argList.width() - 1 + defRParenImage.width
+        left = seqSiteX - self.sites.seqIn.xOffset - 1
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.updateSiteOffsets(self.sites.seqIn)
+        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
+        #     the child icons to draw in the right place, but I have no idea why.
+        layout.doSubLayouts(self.sites.seqIn, seqSiteX-1, seqSiteY-1)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        layout = Layout(self, bodyWidth, bodyHeight, 1)
+        tgtXOff = bodyWidth - 1
+        cntrYOff = bodyHeight // 2 - 1
+        tgtWidth = self.tgtList.calcLayout(layout, tgtXOff, cntrYOff)
+        argXOff = bodyWidth - 1 + tgtWidth - 1 + inWidth - 1
+        argWidth = self.argList.calcLayout(layout, argXOff, cntrYOff)
+        layout.width = argXOff + argWidth + defRParenImage.width - 2
+        return layout
+
+    def textRepr(self):
+        text = "async for" if self.isAsync else "for"
+        tgtText = _seriesTextRepr(self.sites.targets)
+        argText = _seriesTextRepr(self.sites.argIcons)
+        return text + " " + tgtText + " in " + argText + "):"
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
+         createBlockEnd=False)
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch icon body
+        if not Icon.inRectSelect(self, rect):
+            return False
+        icLeft, icTop = self.rect[:2]
+        bodyLeft = icLeft + dragSeqImage.width - 1
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
+        return python_g.rectsTouch(rect, bodyRect)
 
 class IfIcon(Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
