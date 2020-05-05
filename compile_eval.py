@@ -125,7 +125,7 @@ def parseStmt(stmt):
         return (icon.DefIcon, isAsync, stmt.name, args, defaults, varArg, kwOnlyArgs,
          kwDefaults, kwArg)
     if stmt.__class__ is ast.Return:
-        return (icon.ReturnIcon, parseExpr(stmt.value))
+        return (icon.ReturnIcon, None if stmt.value is None else parseExpr(stmt.value))
     return (icon.IdentifierIcon, "**Couldn't Parse**")
 
 def parseExpr(expr):
@@ -171,7 +171,7 @@ def parseExpr(expr):
     elif expr.__class__ == ast.Attribute:
         return (icon.AttrIcon, expr.attr, parseExpr(expr.value))
     elif expr.__class__ is ast.Yield:
-        return (icon.YieldIcon, parseExpr(expr.value))
+        return (icon.YieldIcon, None if expr.value is None else parseExpr(expr.value))
     elif expr.__class__ is ast.YieldFrom:
         return (icon.YieldFromIcon, parseExpr(expr.value))
     elif expr.__class__ == ast.Subscript:
@@ -277,6 +277,8 @@ def makeIcons(parsedExpr, window, x, y):
         return assignIcon
     if iconClass in (icon.ReturnIcon, icon.YieldIcon):
         topIcon = iconClass(window, (x, y))
+        if parsedExpr[1] is None:
+            return topIcon
         if parsedExpr[1][0] is icon.TupleIcon:
             valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[1][1:]]
             topIcon.insertChildren(valueIcons, "values", 0)
@@ -292,7 +294,9 @@ def makeIcons(parsedExpr, window, x, y):
     if iconClass is icon.SubscriptIcon:
         nSlices = len(parsedExpr[1])
         subscriptIcon = iconClass(nSlices, window, (x, y))
-        subscriptIcon.replaceChild(makeIcons(parsedExpr[1][0], window, x, y), "indexIcon")
+        if parsedExpr[1][0] is not None:
+            subscriptIcon.replaceChild(makeIcons(parsedExpr[1][0], window, x, y),
+                "indexIcon")
         if nSlices >= 2 and parsedExpr[1][1] is not None:
             subscriptIcon.replaceChild(makeIcons(parsedExpr[1][1], window, x, y),
                 "upperIcon")

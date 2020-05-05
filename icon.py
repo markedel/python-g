@@ -3303,7 +3303,7 @@ class ReturnIcon(Icon):
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         totalWidth = dragSeqImage.width + bodyWidth
-        self.valueList = HorizListMgr(self, 'values', totalWidth, siteYOffset)
+        self.valueList = HorizListMgr(self, 'values', bodyWidth+1, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
@@ -3384,7 +3384,7 @@ class YieldIcon(Icon):
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         totalWidth = outSiteImage.width - 1 + bodyWidth
-        self.valueList = HorizListMgr(self, 'values', totalWidth, siteYOffset)
+        self.valueList = HorizListMgr(self, 'values', bodyWidth-1, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
