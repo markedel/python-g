@@ -103,9 +103,10 @@ def parseStmt(stmt):
         targets = [parseExpr(e) for e in stmt.targets]
         return (icon.AssignIcon, targets,  parseExpr(stmt.value))
     if stmt.__class__ == ast.AugAssign:
-        tgt = stmt.target.id
+        target = parseExpr(stmt.target)
         op = binOps[stmt.op.__class__]
-        return (icon.AugmentedAssignIcon, tgt, op, parseExpr(stmt.value))
+        value = parseExpr(stmt.value)
+        return (icon.AugmentedAssignIcon, target, op, value)
     if stmt.__class__ == ast.While:
         return (icon.WhileIcon, parseExpr(stmt.test))
     if stmt.__class__ in (ast.For, ast.AsyncFor):
@@ -266,7 +267,7 @@ def makeIcons(parsedExpr, window, x, y):
         return topIcon
     if iconClass is icon.AugmentedAssignIcon:
         assignIcon = iconClass(parsedExpr[2], window, (x, y))
-        targetIcon = icon.IdentifierIcon(parsedExpr[1], window)
+        targetIcon = makeIcons(parsedExpr[1], window, x, y)
         assignIcon.replaceChild(targetIcon, "targetIcon")
         if parsedExpr[3][0] is icon.TupleIcon:
             valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[3][1:]]
@@ -316,9 +317,9 @@ def makeIcons(parsedExpr, window, x, y):
             topIcon.replaceChild(makeIcons(tgt, window, x, y), "targets_0")
         if iters[0] is icon.TupleIcon:
             iterIcons = [makeIcons(i, window, x, y) for i in iters[1:]]
-            topIcon.insertChildren(iterIcons, "argIcons", 0)
+            topIcon.insertChildren(iterIcons, "iterIcons", 0)
         else:
-            topIcon.replaceChild(makeIcons(iters, window, x, y), "argIcons_0")
+            topIcon.replaceChild(makeIcons(iters, window, x, y), "iterIcons_0")
         return topIcon
     if iconClass is icon.IfIcon:
         topIcon = iconClass(window=window, location=(x, y))

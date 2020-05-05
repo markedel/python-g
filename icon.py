@@ -42,6 +42,7 @@ siteDepths = {'input':OUTPUT_SITE_DEPTH, 'output':OUTPUT_SITE_DEPTH,
 
 TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
+#OUTLINE_COLOR = (255, 255, 255, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
 SELECT_TINT = (0, 0, 255, 0)
 ERR_TINT = (255, 0, 0, 0)
@@ -2798,10 +2799,10 @@ class ForIcon(Icon):
         self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         lParenWidth = defLParenImage.width
-        argX = dragSeqImage.width + bodyWidth + self.tgtList.width() + lParenWidth
-        self.argList = HorizListMgr(self, 'argIcons', argX, siteYOffset)
+        iterX = dragSeqImage.width + bodyWidth + self.tgtList.width() + lParenWidth
+        self.iterList = HorizListMgr(self, 'iterIcons', iterX, siteYOffset)
         rParenWidth = defRParenImage.width
-        totalWidth = argX + self.argList.width() + rParenWidth - 3
+        totalWidth = iterX + self.iterList.width() + rParenWidth - 3
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
         self.elseIcon = None
@@ -2845,8 +2846,8 @@ class ForIcon(Icon):
             inOffset = bodyOffset + bodyWidth - 1 + self.tgtList.width() - 1
             self.drawList.append(((inOffset, 0), img))
             # Commas
-            argsOffset = inOffset + inWidth - 1 - OUTPUT_SITE_DEPTH
-            self.drawList += self.argList.drawListCommas(argsOffset, cntrSiteY)
+            iterOffset = inOffset + inWidth - 1 - OUTPUT_SITE_DEPTH
+            self.drawList += self.iterList.drawListCommas(iterOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, colorErr)
         if temporaryDragSite:
             self.drawList = None
@@ -2863,7 +2864,7 @@ class ForIcon(Icon):
         # Add snap sites for insertion
         siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
         siteSnapLists['insertInput'] = self.tgtList.makeInsertSnapList() + \
-         self.argList.makeInsertSnapList()
+         self.iterList.makeInsertSnapList()
         return siteSnapLists
 
     def select(self, select=True):
@@ -2872,10 +2873,10 @@ class ForIcon(Icon):
 
     def doLayout(self, seqSiteX, seqSiteY, layout):
         self.tgtList.doLayout(layout)
-        self.argList.doLayout(layout)
+        self.iterList.doLayout(layout)
         bodyWidth, bodyHeight, inWidth = self.bodySize
         width = dragSeqImage.width - 1 + bodyWidth - 1 + self.tgtList.width() - 1 + \
-         defLParenImage.width - 1 + self.argList.width() - 1 + defRParenImage.width
+         defLParenImage.width - 1 + self.iterList.width() - 1 + defRParenImage.width
         left = seqSiteX - self.sites.seqIn.xOffset - 1
         top = seqSiteY - self.sites.seqIn.yOffset - 1
         self.rect = (left, top, left + width, top + bodyHeight)
@@ -2892,16 +2893,16 @@ class ForIcon(Icon):
         tgtXOff = bodyWidth - 1
         cntrYOff = bodyHeight // 2 - 1
         tgtWidth = self.tgtList.calcLayout(layout, tgtXOff, cntrYOff)
-        argXOff = bodyWidth - 1 + tgtWidth - 1 + inWidth - 1
-        argWidth = self.argList.calcLayout(layout, argXOff, cntrYOff)
-        layout.width = argXOff + argWidth + defRParenImage.width - 2
+        iterXOff = bodyWidth - 1 + tgtWidth - 1 + inWidth - 1
+        iterWidth = self.iterList.calcLayout(layout, iterXOff, cntrYOff)
+        layout.width = iterXOff + iterWidth + defRParenImage.width - 2
         return layout
 
     def textRepr(self):
         text = "async for" if self.isAsync else "for"
         tgtText = _seriesTextRepr(self.sites.targets)
-        argText = _seriesTextRepr(self.sites.argIcons)
-        return text + " " + tgtText + " in " + argText + "):"
+        iterText = _seriesTextRepr(self.sites.iterIcons)
+        return text + " " + tgtText + " in " + iterText + "):"
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
