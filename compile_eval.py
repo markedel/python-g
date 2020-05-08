@@ -126,6 +126,18 @@ def parseStmt(stmt):
          kwDefaults, kwArg)
     if stmt.__class__ is ast.Return:
         return (icon.ReturnIcon, None if stmt.value is None else parseExpr(stmt.value))
+    if stmt.__class__ is ast.Delete:
+        return (icon.DelIcon, [parseExpr(e) for e in stmt.targets])
+    if stmt.__class__ is ast.Pass:
+        return (icon.PassIcon,)
+    if stmt.__class__ is ast.Continue:
+        return (icon.ContinueIcon,)
+    if stmt.__class__ is ast.Break:
+        return (icon.BreakIcon,)
+    if stmt.__class__ is ast.Global:
+        return (icon.GlobalIcon, stmt.names)
+    if stmt.__class__ is ast.Nonlocal:
+        return (icon.NonlocalIcon, stmt.names)
     return (icon.IdentifierIcon, "**Couldn't Parse**")
 
 def parseExpr(expr):
@@ -174,6 +186,8 @@ def parseExpr(expr):
         return (icon.YieldIcon, None if expr.value is None else parseExpr(expr.value))
     elif expr.__class__ is ast.YieldFrom:
         return (icon.YieldFromIcon, parseExpr(expr.value))
+    elif expr.__class__ is ast.Await:
+        return (icon.AwaitIcon, parseExpr(expr.value))
     elif expr.__class__ == ast.Subscript:
         if expr.slice.__class__ == ast.Index:
             slice = [expr.slice.value]
@@ -206,6 +220,8 @@ def parseExpr(expr):
 
 def makeIcons(parsedExpr, window, x, y):
     iconClass = parsedExpr[0]
+    if iconClass in (icon.PassIcon, icon.ContinueIcon, icon.BreakIcon):
+        return iconClass(window, (x, y))
     if iconClass in (icon.IdentifierIcon, icon.NumericIcon, icon.StringIcon):
         return iconClass(parsedExpr[1], window, (x, y))
     if iconClass is icon.CallIcon:
@@ -232,7 +248,8 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = iconClass(parsedExpr[1], window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "argIcon")
         return topIcon
-    if iconClass in (icon.StarIcon, icon.StarStarIcon, icon.YieldFromIcon):
+    if iconClass in (icon.StarIcon, icon.StarStarIcon, icon.YieldFromIcon,
+     icon.AwaitIcon):
         topIcon = iconClass(window, (x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), "argIcon")
         return topIcon
@@ -302,6 +319,16 @@ def makeIcons(parsedExpr, window, x, y):
             topIcon.insertChildren(valueIcons, "values", 0)
         else:
             topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), "values_0")
+        return topIcon
+    if iconClass is icon.DelIcon:
+        topIcon = iconClass(window, (x, y))
+        targets = [makeIcons(t, window, x, y) for t in parsedExpr[1]]
+        topIcon.insertChildren(targets, "values", 0)
+        return topIcon
+    if iconClass in (icon.GlobalIcon, icon.NonlocalIcon):
+        topIcon = iconClass(window, (x, y))
+        nameIcons = [icon.IdentifierIcon(name, window, (x,y)) for name in parsedExpr[1]]
+        topIcon.insertChildren(nameIcons, "values", 0)
         return topIcon
     if iconClass is icon.AttrIcon:
         attrIcon = iconClass(parsedExpr[1], window)

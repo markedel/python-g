@@ -14,7 +14,8 @@ binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7, '&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
  'is':5, 'is not':5, '<':5, '<=':5, '>':5, '>=':5, '==':5, '!=':5, '=':-1, ':':-1}
 
-unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4, '*':-1, '**':-1, 'yield from':-1}
+unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4, '*':-1, '**':-1, 'yield from':-1,
+ 'await':-1}
 
 binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.truediv,
  '//':operator.floordiv, '%':operator.mod, '**':operator.pow, '<<':operator.lshift,
@@ -25,7 +26,7 @@ binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.tr
  '>=':operator.ge, '==':operator.eq, '!=':operator.ne}
 
 unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_,
- '*':lambda a:a, '**': lambda a:a}
+ '*':lambda a:a, '**': lambda a:a, 'await': lambda a:a}
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
@@ -1483,7 +1484,8 @@ class UnaryOpIcon(Icon):
         return layout
 
     def textRepr(self):
-        return self.operator + _singleArgTextRepr(self.sites.argIcon)
+        addSpace = " " if self.operator[-1].isalpha() else ""
+        return self.operator + addSpace + _singleArgTextRepr(self.sites.argIcon)
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.operator)
@@ -1549,6 +1551,14 @@ class StarStarIcon(UnaryOpIcon):
 class YieldFromIcon(UnaryOpIcon):
     def __init__(self, window=None, location=None):
         UnaryOpIcon.__init__(self, 'yield from', window, location)
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        # Superclass UnaryOp specifies op keyword, which this does not have
+        return self._serialize(offset, iconsToCopy)
+
+class AwaitIcon(UnaryOpIcon):
+    def __init__(self, window=None, location=None):
+        UnaryOpIcon.__init__(self, 'await', window, location)
 
     def clipboardRepr(self, offset, iconsToCopy):
         # Superclass UnaryOp specifies op keyword, which this does not have
@@ -3453,10 +3463,80 @@ class DefIcon(Icon):
         bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
         return python_g.rectsTouch(rect, bodyRect)
 
-class ReturnIcon(Icon):
-    def __init__(self, window, location):
+class NoArgStmtIcon(Icon):
+    def __init__(self, stmt, window, location):
         Icon.__init__(self, window)
-        bodyWidth = globalFont.getsize("return")[0] + 2 * TEXT_MARGIN + 1
+        self.stmt = stmt
+        bodyWidth = globalFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
+        bodyHeight = defLParenImage.height
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        seqX = dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        totalWidth = dragSeqImage.width + bodyWidth
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (rectWidth(self.rect),
+             rectHeight(self.rect)), color=(0, 0, 0, 0))
+            bodyWidth, bodyHeight = self.bodySize
+            bodyOffset = dragSeqImage.width - 1
+            txtImg = iconBoxedText(self.stmt, bodyHeight)
+            img.paste(txtImg, (bodyOffset, 0))
+            drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            if temporaryDragSite:
+                img.paste(dragSeqImage, (0, bodyHeight//2 - dragSeqImage.height//2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, seqSiteX, seqSiteY, layout):
+        bodyWidth, bodyHeight = self.bodySize
+        width = dragSeqImage.width - 1 + bodyWidth
+        left = seqSiteX - self.sites.seqIn.xOffset - 1
+        top = seqSiteY - self.sites.seqIn.yOffset - 1
+        self.rect = (left, top, left + width, top + bodyHeight)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        return Layout(self, *self.bodySize, 1)
+
+    def textRepr(self):
+        return self.stmt
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+class PassIcon(NoArgStmtIcon):
+    def __init__(self, window, location):
+        NoArgStmtIcon.__init__(self, "pass", window, location)
+
+class ContinueIcon(NoArgStmtIcon):
+    def __init__(self, window, location):
+        NoArgStmtIcon.__init__(self, "continue", window, location)
+
+class BreakIcon(NoArgStmtIcon):
+    def __init__(self, window, location):
+        NoArgStmtIcon.__init__(self, "break", window, location)
+
+class SeriesStmtIcon(Icon):
+    def __init__(self, stmt, window, location):
+        Icon.__init__(self, window)
+        self.stmt = stmt
+        bodyWidth = globalFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3482,7 +3562,7 @@ class ReturnIcon(Icon):
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = dragSeqImage.width - 1
-            txtImg = iconBoxedText("return", bodyHeight)
+            txtImg = iconBoxedText(self.stmt, bodyHeight)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = bodyHeight // 2
             inImgX = bodyOffset + bodyWidth - inSiteImage.width
@@ -3528,10 +3608,26 @@ class ReturnIcon(Icon):
         return layout
 
     def textRepr(self):
-        return "return " + _seriesTextRepr(self.sites.values)
+        return self.stmt + " " + _seriesTextRepr(self.sites.values)
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+class ReturnIcon(SeriesStmtIcon):
+    def __init__(self, window, location):
+        SeriesStmtIcon.__init__(self, "return", window, location)
+
+class DelIcon(SeriesStmtIcon):
+    def __init__(self, window, location):
+        SeriesStmtIcon.__init__(self, "del", window, location)
+
+class GlobalIcon(SeriesStmtIcon):
+    def __init__(self, window, location):
+        SeriesStmtIcon.__init__(self, "global", window, location)
+
+class NonlocalIcon(SeriesStmtIcon):
+    def __init__(self, window, location):
+        SeriesStmtIcon.__init__(self, "nonlocal", window, location)
 
 class YieldIcon(Icon):
     def __init__(self, window, location):
