@@ -11,6 +11,7 @@ import tkinter.messagebox
 
 windowBgColor = (128, 128, 128)
 windowBgColor = (160, 160, 160)
+#windowBgColor = (255, 255, 255)
 defaultWindowSize = (800, 800)
 dragThreshold = 2
 
@@ -1287,6 +1288,7 @@ class Window:
         draggingOutputs = []
         draggingSeqInserts = []
         draggingAttrOuts = []
+        draggingCprhOuts = []
         draggingConditionals = []
         for dragIcon in topDraggingIcons:
             dragSnapList = dragIcon.snapLists()
@@ -1296,6 +1298,8 @@ class Window:
                 draggingSeqInserts.append(((x, y), ic, name))
             for ic, (x, y), name in dragSnapList.get("attrOut", []):
                 draggingAttrOuts.append(((x, y), ic, name))
+            for ic, (x, y), name in dragSnapList.get("cprhOut", []):
+                draggingCprhOuts.append(((x, y), ic, name))
             for ic, (x, y), name, siteType, test in dragSnapList.get("conditional", []):
                 draggingConditionals.append(((x, y), ic, name, test))
         stationaryInputs = []
@@ -1310,6 +1314,10 @@ class Window:
                     stationaryInputs.append((pos, 0, ic, "attrIn", name, None))
                 for ic, pos, name in snapLists.get("insertAttr", []):
                     stationaryInputs.append((pos, 0, ic, "insertAttr", name, None))
+                for ic, pos, name in snapLists.get("cprhIn", []):
+                    stationaryInputs.append((pos, 0, ic, "cprhIn", name, None))
+                for ic, pos, name in snapLists.get("insertCprh", []):
+                    stationaryInputs.append((pos, 0, ic, "insertCprh", name, None))
                 for ic, pos, name, siteType, test in snapLists.get("conditional", []):
                     stationaryInputs.append((pos, 0, ic, siteType, name, test))
                 for ic, pos, name in snapLists.get("seqIn", []):
@@ -1333,6 +1341,10 @@ class Window:
                         matingSites.append(siteData)
             for siteData in draggingAttrOuts:
                 if sSiteType in ('attrIn', 'insertAttr'):
+                    if sTest is None or sTest(sIcon, sName):
+                        matingSites.append(siteData)
+            for siteData in draggingCprhOuts:
+                if sSiteType in ('cprhIn', 'insertCprh'):
                     if sTest is None or sTest(sIcon, sName):
                         matingSites.append(siteData)
             for siteData in draggingSeqInserts:
@@ -1423,6 +1435,12 @@ class Window:
             elif siteType == "insertAttr":
                 topDraggedIcons.remove(movIcon)
                 statIcon.insertAttr(movIcon)
+            elif siteType == "cprhIn":
+                topDraggedIcons.remove(movIcon)
+                statIcon.replaceChild(movIcon, siteName)
+            elif siteType == "insertCprh":
+                topDraggedIcons.remove(movIcon)
+                statIcon.insertChild(movIcon, siteName)
             elif siteType == 'seqOut':
                 icon.insertSeq(movIcon, statIcon)
             elif siteType == 'seqIn':

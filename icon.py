@@ -29,16 +29,18 @@ unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operato
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
-parentSiteTypes = {'output', 'attrOut'}
-childSiteTypes = {'input', 'attrIn'}
+parentSiteTypes = {'output', 'attrOut', 'cprhOut'}
+childSiteTypes = {'input', 'attrIn', 'cprhIn'}
 matingSiteType = {'output':'input', 'input':'output', 'attrOut':'attrIn',
- 'attrIn':'attrOut', 'seqOut':'seqIn', 'seqIn':'seqOut'}
+ 'attrIn':'attrOut', 'seqOut':'seqIn', 'seqIn':'seqOut', 'cprhIn':'cprhOut',
+ 'cprhOut':'cprhIn'}
 
 ATTR_SITE_DEPTH = 1
 OUTPUT_SITE_DEPTH = 2
 SEQ_SITE_DEPTH = -1  # Icons extend 1 pixel to the left of the sequence site
 siteDepths = {'input':OUTPUT_SITE_DEPTH, 'output':OUTPUT_SITE_DEPTH,
- 'attrOut':ATTR_SITE_DEPTH, 'attrIn':ATTR_SITE_DEPTH, 'seqIn':SEQ_SITE_DEPTH}
+ 'attrOut':ATTR_SITE_DEPTH, 'attrIn':ATTR_SITE_DEPTH, 'seqIn':SEQ_SITE_DEPTH,
+ 'cprhIn':0, 'cprhOut':0}
 
 TEXT_MARGIN = 2
 OUTLINE_COLOR = (220, 220, 220, 255)
@@ -511,6 +513,17 @@ seqSitePixmap = (
  "o%o",
  "ooo",
 )
+
+cphSitePixmap = (
+ "oo",
+ ".o",
+ ".o",
+ ".o",
+ ".o",
+ ".o",
+ "oo",
+)
+
 renderCache = {}
 
 def iconsFromClipboardString(clipString, window, offset):
@@ -649,6 +662,7 @@ assignDragImage = asciiToImage(assignDragPixmap)
 dragSeqImage = asciiToImage(dragSeqPixmap)
 branchFootImage = asciiToImage(branchFootPixmap)
 seqSiteImage = asciiToImage(seqSitePixmap)
+cphSiteImage = asciiToImage(cphSitePixmap)
 emptyImage = Image.new('RGBA', (0, 0))
 
 class IconExecException(Exception):
@@ -700,6 +714,8 @@ class Icon:
             self.doLayout(x+self.sites.seqIn.xOffset, y+self.sites.seqIn.yOffset, lo)
         elif hasattr(self.sites, 'attrOut'):
             self.doLayout(x+self.sites.attrOut.xOffset, y+self.sites.attrOut.yOffset, lo)
+        elif hasattr(self.sites, 'cprhOut'):
+            self.doLayout(x+self.sites.cprhOut.xOffset, y+self.sites.cprhOut.yOffset, lo)
         else:
             self.doLayout(x, y, lo)
         return lo
@@ -1082,11 +1098,7 @@ class TextIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, height // 2)
-        if self.sites.attrIcon.att is None:
-            attrLayout = None
-        else:
-            attrLayout = self.sites.attrIcon.att.calcLayout()
-        layout.addSubLayout(attrLayout, 'attrIcon', width, ATTR_SITE_OFFSET)
+        _singleSiteSublayout(self, layout, 'attrIcon', width, ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
@@ -1201,11 +1213,7 @@ class AttrIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, height // 2 + ATTR_SITE_OFFSET)
-        if self.sites.attrIcon.att is None:
-            attrLayout = None
-        else:
-            attrLayout = self.sites.attrIcon.att.calcLayout()
-        layout.addSubLayout(attrLayout, 'attrIcon', width, 0)
+        _singleSiteSublayout(self, layout, 'attrIcon',  width, 0)
         return layout
 
     def textRepr(self):
@@ -1470,12 +1478,8 @@ class UnaryOpIcon(Icon):
 
     def calcLayout(self):
         width, height = self.bodySize
-        mySiteOffset = height // 2
-        layout = Layout(self, width + EMPTY_ARG_WIDTH, height, mySiteOffset)
-        if self.arg() is None:
-            layout.addSubLayout(None, 'argIcon', width, 0)
-        else:
-            layout.addSubLayout(self.arg().calcLayout(), 'argIcon', width, 0)
+        layout = Layout(self, width, height, height // 2)
+        _singleSiteSublayout(self, layout, 'argIcon', width, 0)
         return layout
 
     def textRepr(self):
@@ -1648,11 +1652,7 @@ class ListTypeIcon(Icon):
         argWidth = self.argList.calcLayout(layout, bodyWidth - 1, 0)
         # layout now incorporates argument layout sizes, but not end paren/brace/bracket
         layout.width = bodyWidth + outSiteImage.width + argWidth + self.rightImg.width - 5
-        if self.sites.attrIcon.att:
-            attrLayout = self.sites.attrIcon.att.calcLayout()
-        else:
-            attrLayout = None
-        layout.addSubLayout(attrLayout, 'attrIcon', layout.width-1, ATTR_SITE_OFFSET)
+        _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1, ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
@@ -1771,6 +1771,283 @@ class DictIcon(ListTypeIcon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
+
+class CprhIcon(Icon):
+    def __init__(self, cprhType, window, location=None):
+        Icon.__init__(self, window)
+        self.leftText, self.rightText, self.leftImg, self.rightImg = {
+            'list':('[', ']', listLBktImage, listRBktImage),
+            'gen': ('(', ')', tupleLParenImage, tupleRParenImage),
+            'dict':('{', '}', iconBoxedText('{'), iconBoxedText('}'))}[cprhType]
+        self.type = cprhType
+        leftWidth, height = self.leftImg.size
+        self.sites.add('output', 'output', 0, height // 2)
+        self.sites.add('exprIcon', 'input', 0, height // 2)
+        self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)])
+        width = outSiteImage.width - 1 + leftWidth - 1 + self.rightImg.width - 1
+        self.sites.add('attrIcon', 'attrIn', width-1,
+         self.sites.output.yOffset + ATTR_SITE_OFFSET)
+        seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, height-2)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + width, y + height)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        needSeqSites = self.parent() is None and toDragImage is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+         self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            # Left paren/bracket/brace
+            leftBoxWidth, leftBoxHeight = self.leftImg.size
+            leftImgX = outSiteImage.width - 1
+            leftImg = Image.new('RGBA', (leftBoxWidth + leftImgX, leftBoxHeight),
+             color=(0, 0, 0, 0))
+            leftImg.paste(self.leftImg, (leftImgX, 0))
+            if needSeqSites:
+                drawSeqSites(leftImg, leftImgX, 0, self.leftImg.height)
+            # Output site
+            if needOutSite:
+                outSiteX = self.sites.output.xOffset
+                outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
+                leftImg.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
+            # Body input site
+            inSiteX = outSiteImage.width - 1 + self.leftImg.width - inSiteImage.width
+            inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
+            leftImg.paste(inSiteImage, (inSiteX, inSiteY))
+            self.drawList = [((0, 0), leftImg)]
+            # End paren/brace/bracket
+            rightImg = Image.new('RGBA', self.rightImg.size, color=(0, 0, 0, 0))
+            rightImg.paste(self.rightImg, (0, 0))
+            cphYOff = self.sites.output.yOffset - cphSiteImage.height // 2
+            rightImg.paste(cphSiteImage, (0, cphYOff))
+            parenY = self.sites.output.yOffset - self.rightImg.height // 2
+            parenX = self.sites.cprhIcons[-1].xOffset
+            self.drawList.append(((parenX, parenY), rightImg))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+
+    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
+        # The generic version of insertChild is intended for series with commas.  Without
+        # commas we need to never leave an empty site, except for the last one, which
+        # must always exist and remain empty
+        if child is None:
+            return
+        if seriesIdx is None:
+            seriesName, seriesIdx = splitSeriesSiteId(siteIdOrSeriesName)
+        else:
+            seriesName = siteIdOrSeriesName
+        self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, seriesIdx)
+        self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
+        self.layoutDirty = True
+
+    def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
+        # Generic version of insertChild is intended for series with commas.  Never leave
+        # an empty site when there is no way to see or access it
+        siteName, seriesIdx = splitSeriesSiteId(siteId)
+        if siteName == 'cprhIcons' and seriesIdx == len(self.sites.cprhIcons) - 1:
+            self.insertChild(newChild, siteName, seriesIdx)
+        else:
+            Icon.replaceChild(self, newChild, siteId, leavePlace=False,
+             childSite=childSite)
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for inserting comprehension clauses
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return siteSnapLists
+        x = self.rect[0] + INSERT_SITE_X_OFFSET
+        y = self.rect[1] + self.sites.cprhIcons[0].yOffset + INSERT_SITE_Y_OFFSET
+        siteSnapLists['insertCprh'] = \
+         [(self, (x + site.xOffset, y), site.name) for site in self.sites.cprhIcons[:-1]]
+        return siteSnapLists
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch both parens to be considered selected
+        if not Icon.inRectSelect(self, rect):
+            return False
+        selLeft, selTop, selRight, selBottom = rect
+        icLeft, icTop, icRight, icBottom = self.rect
+        if selLeft > icLeft + self.leftImg.width:
+            return False
+        if selRight < icRight - self.rightImg.width:
+            return False
+        return True
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        layout.updateSiteOffsets(self.sites.output)
+        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        height = self.leftImg.height
+        width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
+        x = outSiteX
+        y = outSiteY - self.sites.output.yOffset
+        self.rect = (x, y, x + width, y + height)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight = self.leftImg.size
+        layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
+        exprLayout = _singleSiteSublayout(self, layout, 'exprIcon', layout.width-1, 0)
+        exprWidth = 0 if exprLayout is None else exprLayout.width
+        cprhWidth = 0
+        leftCprhX = bodyWidth - 1 + exprWidth - 1
+        cprhY = 0
+        for site in self.sites.cprhIcons:
+            cprhLayout = _singleSiteSublayout(self, layout, site.name,
+             leftCprhX + cprhWidth, cprhY)
+            cprhWidth += 0 if cprhLayout is None else cprhLayout.width - 1
+        # layout now incorporates argument layout sizes, but not end paren/brace/bracket
+        layout.width = bodyWidth + outSiteImage.width + cprhWidth + self.rightImg.width - 5
+        _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1, ATTR_SITE_OFFSET)
+        return layout
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, cprhType=self.type)
+
+    def textRepr(self):
+        cprhText = ""
+        for site in self.sites.cprhIcons[:-1]:
+            cprhText += " " + site.att.textRepr()
+        return self.leftText + cprhText + self.rightText + _attrTextRepr(self)
+
+class CprhIfIcon(Icon):
+    def __init__(self, window, location=None):
+        Icon.__init__(self, window)
+        bodyWidth, bodyHeight = globalFont.getsize(" if")
+        bodyWidth += 2 * TEXT_MARGIN + 1
+        bodyHeight += 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        self.sites.add('cprhOut', 'cprhOut', 0, siteYOffset)
+        self.sites.add('testIcon', 'input', bodyWidth - 1, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if self.drawList is None:
+            bodyWidth, bodyHeight = self.bodySize
+            img = Image.new('RGBA', (bodyWidth, bodyHeight), color=(0, 0, 0, 0))
+            img.paste(iconBoxedText(" if"), (0, 0))
+            cphYOff = bodyHeight // 2 - cphSiteImage.height // 2
+            img.paste(cphSiteImage, (0, cphYOff))
+            inImageY = self.sites.testIcon.yOffset - inSiteImage.height // 2
+            img.paste(inSiteImage, (self.sites.testIcon.xOffset, inImageY))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+
+    def doLayout(self, cprhX, cprhY, layout):
+        width, height = self.bodySize
+        top = cprhY - height // 2
+        self.rect = (cprhX, top, cprhX + width, top + height)
+        layout.doSubLayouts(self.sites.cprhOut, cprhX - OUTPUT_SITE_DEPTH, cprhY)
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        width, height = self.bodySize
+        layout = Layout(self, width, height, height // 2)
+        _singleSiteSublayout(self, layout, 'testIcon', width, 0)
+        return layout
+
+    def textRepr(self):
+        return "if " + _singleArgTextRepr(self.sites.testIcon)
+
+class CprhForIcon(Icon):
+    def __init__(self, isAsync, window=None, location=None):
+        Icon.__init__(self, window)
+        self.isAsync = isAsync
+        text = " async for" if isAsync else " for"
+        bodyWidth = globalFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
+        bodyHeight = defLParenImage.height
+        inWidth = globalFont.getsize("in")[0] + 2 * TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight, inWidth)
+        siteYOffset = bodyHeight // 2
+        targetXOffset = bodyWidth - OUTPUT_SITE_DEPTH
+        self.tgtList = HorizListMgr(self, 'targets', targetXOffset, siteYOffset)
+        self.sites.add('cprhOut', 'cprhOut', 0, siteYOffset)
+        iterX = bodyWidth-1 + self.tgtList.width()-1 + inWidth-1
+        self.sites.add('iterIcon', 'input', iterX, siteYOffset)
+        totalWidth = iterX
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        if self.drawList is None:
+            bodyWidth, bodyHeight, inWidth = self.bodySize
+            img = Image.new('RGBA', (bodyWidth, bodyHeight),
+             color=(0, 0, 0, 0))
+            txtImg = iconBoxedText(" async for" if self.isAsync else " for", bodyHeight)
+            img.paste(txtImg, (0, 0))
+            cntrSiteY = bodyHeight // 2
+            cphYOff = cntrSiteY - cphSiteImage.height // 2
+            img.paste(cphSiteImage, (0, cphYOff))
+            inImgX = bodyWidth - 1 - inSiteImage.width
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (inImgX, inImageY))
+            self.drawList = [((0, 0), img)]
+            # Target list commas
+            tgtListOffset = bodyWidth - 1 - OUTPUT_SITE_DEPTH
+            self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
+            # "in"
+            txtImg = iconBoxedText("in", bodyHeight)
+            img = Image.new('RGBA', (txtImg.width, bodyHeight), color=(0, 0, 0, 0))
+            img.paste(txtImg, (0, 0))
+            inImgX = txtImg.width - inSiteImage.width
+            inImageY = cntrSiteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (inImgX, inImageY))
+            inOffset = bodyWidth - 1 + self.tgtList.width() - 1
+            self.drawList.append(((inOffset, 0), img))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.tgtList.makeInsertSnapList()
+        return siteSnapLists
+
+    def doLayout(self, cprhX, cprhY, layout):
+        self.tgtList.doLayout(layout)
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        width = bodyWidth-1 + self.tgtList.width()-1 + inWidth
+        left = cprhX
+        top = cprhY - bodyHeight // 2
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.updateSiteOffsets(self.sites.cprhOut)
+        layout.doSubLayouts(self.sites.cprhOut, cprhX, cprhY)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
+        tgtXOff = bodyWidth - 1
+        tgtWidth = self.tgtList.calcLayout(layout, tgtXOff, 0)
+        iterXOff = bodyWidth - 1 + tgtWidth - 1 + inWidth - 1
+        iterLayout = _singleSiteSublayout(self, layout, 'iterIcon', iterXOff, 0)
+        iterWidth = 0 if iterLayout is None else iterLayout.width
+        layout.width = iterXOff + iterWidth
+        return layout
+
+    def textRepr(self):
+        text = "async for" if self.isAsync else "for"
+        tgtText = _seriesTextRepr(self.sites.targets)
+        iterText = _singleArgTextRepr(self.sites.iterIcon)
+        return text + " " + tgtText + " in " + iterText + "):"
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, isAsync=self.isAsync)
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch icon body
+        if not Icon.inRectSelect(self, rect):
+            return False
+        icLeft, icTop = self.rect[:2]
+        bodyLeft = icLeft - 1
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
+        return python_g.rectsTouch(rect, bodyRect)
 
 class BinOpIcon(Icon):
     def __init__(self, op, window, location=None):
@@ -1929,32 +2206,17 @@ class BinOpIcon(Icon):
         opWidth, opHeight = self.opSize
         layout = Layout(self, opWidth, opHeight, opHeight // 2)
         layout.hasParens = hasParens
-        if self.leftArg() is None:
-            lArgLayout = None
-            lArgWidth = EMPTY_ARG_WIDTH
-        else:
-            lArgLayout = self.leftArg().calcLayout()
-            lArgWidth = lArgLayout.width
+        lArgLayout = _singleSiteSublayout(self, layout, "leftArg", lParenWidth, 0)
+        lArgWidth = EMPTY_ARG_WIDTH if lArgLayout is None else lArgLayout.width
         layout.lArgWidth = lArgWidth
-        layout.addSubLayout(lArgLayout, "leftArg", lParenWidth, 0)
-        if self.rightArg() is None:
-            rArgLayout = None
-            rArgWidth = EMPTY_ARG_WIDTH
-        else:
-            rArgLayout = self.rightArg().calcLayout()
-            rArgWidth = rArgLayout.width
-        layout.rArgWidth = rArgWidth
         depthWidth = self.depth() * DEPTH_EXPAND
         layout.depthWidth = depthWidth
         rArgSiteX = lParenWidth + lArgWidth + opWidth + depthWidth
-        layout.addSubLayout(rArgLayout, "rightArg", rArgSiteX, 0)
+        rArgLayout = _singleSiteSublayout(self, layout, "rightArg", rArgSiteX, 0)
+        rArgWidth = EMPTY_ARG_WIDTH if rArgLayout is None else rArgLayout.width
+        layout.rArgWidth = rArgWidth
         layout.width = rArgSiteX + rArgWidth + rParenWidth
-        parent = self.parent()
-        if self.sites.attrIcon.att is not None:
-            attrLayout = self.sites.attrIcon.att.calcLayout()
-        else:
-            attrLayout = None
-        layout.addSubLayout(attrLayout, 'attrIcon', layout.width - ATTR_SITE_DEPTH,
+        _singleSiteSublayout(self, layout, 'attrIcon', layout.width - ATTR_SITE_DEPTH,
          ATTR_SITE_OFFSET)
         return layout
 
@@ -2073,11 +2335,7 @@ class CallIcon(Icon):
         argWidth = self.argList.calcLayout(layout, bodyWidth - 1, -ATTR_SITE_OFFSET)
         # layout now incorporates argument layout sizes, but not end paren
         layout.width = fnLParenImage.width - 1 + argWidth - 1 + fnRParenImage.width - 1
-        if self.sites.attrIcon.att:
-            attrLayout = self.sites.attrIcon.att.calcLayout()
-        else:
-            attrLayout = None
-        layout.addSubLayout(attrLayout, 'attrIcon', layout.width-ATTR_SITE_DEPTH, 0)
+        _singleSiteSublayout(self, layout, 'attrIcon', layout.width-ATTR_SITE_DEPTH, 0)
         return layout
 
     def textRepr(self):
@@ -2471,21 +2729,15 @@ class AugmentedAssignIcon(Icon):
     def calcLayout(self):
         bodyWidth, bodyHeight = self.bodySize
         layout = Layout(self, bodyWidth, bodyHeight, 1)
-        targetIcon = self.sites.targetIcon.att
         targetXOff = inpSeqImage.width - 1
         cntrYOff = bodyHeight // 2 - 1
-        if targetIcon is None:
-            layout.addSubLayout(None, 'targetIcon', targetXOff, cntrYOff)
-            targetWidth = EMPTY_ARG_WIDTH
-        else:
-            targetLayout = targetIcon.calcLayout()
-            layout.addSubLayout(targetLayout, 'targetIcon', targetXOff, cntrYOff)
-            targetWidth = targetLayout.width
-        valuesXOffset = inpSeqImage.width - 1 + targetWidth - 1 + bodyWidth - 1
+        tgtLayout = _singleSiteSublayout(self, layout, 'targetIcon', targetXOff, cntrYOff)
+        tgtWidth = EMPTY_ARG_WIDTH if tgtLayout is None else tgtLayout.width
+        valuesXOffset = inpSeqImage.width - 1 + tgtWidth - 1 + bodyWidth - 1
         valuesWidth = self.valuesList.calcLayout(layout,
          valuesXOffset - OUTPUT_SITE_DEPTH, cntrYOff)
         layout.width = valuesXOffset + valuesWidth - 1
-        layout.targetWidth = targetWidth
+        layout.targetWidth = tgtWidth
         return layout
 
     def textRepr(self):
@@ -2614,11 +2866,7 @@ class DivideIcon(Icon):
          - tArgHeight + tArgSiteOffset - 1)
         layout.addSubLayout(bArgLayout, 'bottomArg', (width - bArgWidth) // 2,
          + bArgSiteOffset + 2)
-        if self.sites.attrIcon.att is not None:
-            attrLayout = self.sites.attrIcon.att.calcLayout()
-        else:
-            attrLayout = None
-        layout.addSubLayout(attrLayout, 'attrIcon', width, ATTR_SITE_OFFSET)
+        _singleSiteSublayout(self, layout, 'attrIcon', width, ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
@@ -2764,13 +3012,9 @@ class WhileIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, 1)
-        condIcon = self.sites.condIcon.att
         condXOff = width - 1
         condYOff = height // 2 - 1
-        if condIcon is None:
-            layout.addSubLayout(None, 'condIcon', condXOff, condYOff)
-        else:
-            layout.addSubLayout(condIcon.calcLayout(), 'condIcon', condXOff, condYOff)
+        _singleSiteSublayout(self, layout, 'condIcon', condXOff, condYOff)
         return layout
 
     def textRepr(self):
@@ -2798,11 +3042,9 @@ class ForIcon(Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
-        lParenWidth = defLParenImage.width
-        iterX = dragSeqImage.width + bodyWidth + self.tgtList.width() + lParenWidth
+        iterX = dragSeqImage.width + bodyWidth-1 + self.tgtList.width()-1 + inWidth-1
         self.iterList = HorizListMgr(self, 'iterIcons', iterX, siteYOffset)
-        rParenWidth = defRParenImage.width
-        totalWidth = iterX + self.iterList.width() + rParenWidth - 3
+        totalWidth = iterX + self.iterList.width() - 1
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
         self.elseIcon = None
@@ -2875,8 +3117,7 @@ class ForIcon(Icon):
         self.tgtList.doLayout(layout)
         self.iterList.doLayout(layout)
         bodyWidth, bodyHeight, inWidth = self.bodySize
-        width = dragSeqImage.width - 1 + bodyWidth - 1 + self.tgtList.width() - 1 + \
-         defLParenImage.width - 1 + self.iterList.width() - 1 + defRParenImage.width
+        width = dragSeqImage.width-1 + bodyWidth-1 + self.tgtList.width()-1 + inWidth
         left = seqSiteX - self.sites.seqIn.xOffset - 1
         top = seqSiteY - self.sites.seqIn.yOffset - 1
         self.rect = (left, top, left + width, top + bodyHeight)
@@ -3005,13 +3246,7 @@ class IfIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, 1)
-        condIcon = self.sites.condIcon.att
-        condXOff = width - 1
-        condYOff = height // 2 - 1
-        if condIcon is None:
-            layout.addSubLayout(None, 'condIcon', condXOff, condYOff)
-        else:
-            layout.addSubLayout(condIcon.calcLayout(), 'condIcon', condXOff, condYOff)
+        _singleSiteSublayout(self, layout, 'condIcon', width - 1, height // 2 - 1)
         return layout
 
     def textRepr(self):
@@ -3083,13 +3318,9 @@ class ElifIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, 1)
-        condIcon = self.sites.condIcon.att
         condXOff = width - 1 - ELSE_DEDENT
         condYOff = height // 2 - 1
-        if condIcon is None:
-            layout.addSubLayout(None, 'condIcon', condXOff, condYOff)
-        else:
-            layout.addSubLayout(condIcon.calcLayout(), 'condIcon', condXOff, condYOff)
+        _singleSiteSublayout(self, layout, 'condIcon', condXOff, condYOff)
         return layout
 
     def textRepr(self):
@@ -3252,19 +3483,13 @@ class DefIcon(Icon):
     def calcLayout(self):
         bodyWidth, bodyHeight = self.bodySize
         layout = Layout(self, bodyWidth, bodyHeight, 1)
-        nameIcon = self.sites.nameIcon.att
         nameXOff = bodyWidth - 1
         cntrYOff = bodyHeight // 2 - 1
-        if nameIcon is None:
-            layout.addSubLayout(None, 'nameIcon', nameXOff, cntrYOff)
-            nameWidth = EMPTY_ARG_WIDTH
-        else:
-            nameLayout = nameIcon.calcLayout()
-            layout.addSubLayout(nameLayout, 'nameIcon', nameXOff, cntrYOff)
-            nameWidth = nameLayout.width
-        argXOffset = bodyWidth - 1 + nameWidth - 1 + lParenImage.width
-        argWidth = self.argList.calcLayout(layout, argXOffset - OUTPUT_SITE_DEPTH, cntrYOff)
-        layout.width = argXOffset + argWidth + defRParenImage.width - 2
+        nameLayout = _singleSiteSublayout(self, layout, 'nameIcon', nameXOff, cntrYOff)
+        nameWidth = EMPTY_ARG_WIDTH if nameLayout is None else nameLayout.width
+        argXOff = bodyWidth - 1 + nameWidth - 1 + lParenImage.width
+        argWidth = self.argList.calcLayout(layout, argXOff - OUTPUT_SITE_DEPTH, cntrYOff)
+        layout.width = argXOff + argWidth + defRParenImage.width - 2
         layout.nameWidth = nameWidth
         return layout
 
@@ -3440,7 +3665,6 @@ class YieldIcon(Icon):
         layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
         self.valueList.calcLayout(layout, bodyWidth - 1, 0)
         return layout
-
 
     def textRepr(self):
         return "yield " + _seriesTextRepr(self.sites.values)
@@ -4323,3 +4547,15 @@ def _attrTextRepr(ic):
     if ic.sites.attrIcon.att is None:
         return ""
     return ic.sites.attrIcon.att.textRepr()
+
+def _singleSiteSublayout(ic, layout, siteId, xOffset, yOffset):
+    """Calculate the layout for an icon attached at siteId and then add it to layout.
+    (for convenience, since this sequence is repeated so often in icon definitions)."""
+    attachedIcon = ic.sites.lookup(siteId).att
+    if attachedIcon is None:
+        subLayout = None
+    else:
+        subLayout = attachedIcon.calcLayout()
+    layout.addSubLayout(subLayout, siteId, xOffset, yOffset)
+    return subLayout
+

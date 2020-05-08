@@ -183,6 +183,22 @@ def parseExpr(expr):
         if len(slice) == 3 and parsedSlice[2] is None:
             parsedSlice = parsedSlice[:2]
         return (icon.SubscriptIcon, parsedSlice, parseExpr(expr.value))
+    elif expr.__class__ in (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp):
+        compType = {ast.ListComp:"list", ast.SetComp:"dict", ast.GeneratorExp:"gen",
+         ast.DictComp:"dict"}[expr.__class__]
+        if expr.__class__ is ast.DictComp:
+            tgt = parseExpr(expr.value)
+            key = parseExpr(expr.key)
+        else:
+            tgt = parseExpr(expr.elt)
+            key = None
+        generators = []
+        for gen in expr.generators:
+            genTarget = parseExpr(gen.target)
+            genIter = parseExpr(gen.iter)
+            genIfs = [parseExpr(i) for i in gen.ifs]
+            generators.append((genTarget, genIter, genIfs, gen.is_async))
+        return (icon.CprhIcon, compType, tgt, key, generators)
     else:
         return (icon.IdentifierIcon, "**Couldn't Parse**")
 
@@ -306,6 +322,34 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = makeIcons(parsedExpr[2], window, x, y)
         parentIcon = icon.findLastAttrIcon(topIcon)
         parentIcon.replaceChild(subscriptIcon, "attrIcon")
+        return topIcon
+    if iconClass is icon.CprhIcon:
+        cprhType, tgt, key, generators = parsedExpr[1:]
+        topIcon = iconClass(cprhType, window, (x, y))
+        if key is None:
+            topIcon.replaceChild(makeIcons(tgt, window, x, y), 'exprIcon')
+        else:
+            dictElem = icon.DictElemIcon(window)
+            dictElem.replaceChild(makeIcons(key, window, x, y), "leftArg")
+            dictElem.replaceChild(makeIcons(tgt, window, x, y), "rightArg")
+            topIcon.replaceChild(dictElem, 'exprIcon')
+        clauseIdx = 0
+        for tgt, iter, ifs, isAsync in generators:
+            forIcon = icon.CprhForIcon(isAsync, window)
+            if tgt[0] is icon.TupleIcon:
+                tgtIcons = [makeIcons(t, window, x, y) for t in tgt[1:]]
+                forIcon.insertChildren(tgtIcons, "targets", 0)
+            else:
+                forIcon.insertChild(makeIcons(tgt, window, x, y), "targets", 0)
+            forIcon.replaceChild(makeIcons(iter, window, x, y), 'iterIcon')
+            topIcon.insertChild(forIcon, "cprhIcons", clauseIdx)
+            clauseIdx += 1
+            for i in ifs:
+                ifIcon = icon.CprhIfIcon(window)
+                testIcon = makeIcons(i, window, x, y)
+                ifIcon.replaceChild(testIcon, 'testIcon')
+                topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
+                clauseIdx += 1
         return topIcon
     if iconClass is icon.WhileIcon:
         topIcon = iconClass(window=window, location=(x, y))
