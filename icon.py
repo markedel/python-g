@@ -1568,10 +1568,11 @@ class ListTypeIcon(Icon):
             self.rightImg.paste(attrInImage, (attrInX, attrInY))
         else:
             self.rightImg = rightImg
-        leftWidth, leftHeight = self.leftImg.size
-        self.sites.add('output', 'output', 0, leftHeight // 2)
-        self.argList = HorizListMgr(self, 'argIcons', leftWidth-1, leftHeight//2)
-        width, height = self._size()
+        leftWidth, height = self.leftImg.size
+        self.sites.add('output', 'output', 0, height // 2)
+        self.argList = HorizListMgr(self, 'argIcons', leftWidth-1, height//2)
+        self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)])
+        width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
         self.sites.add('attrIcon', 'attrIn', width-1,
          self.sites.output.yOffset + ATTR_SITE_OFFSET)
         seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
@@ -1579,11 +1580,6 @@ class ListTypeIcon(Icon):
         self.sites.add('seqOut', 'seqOut', seqX, height-2)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
-
-    def _size(self):
-        width, height = self.leftImg.size
-        width += self.argList.width() + self.rightImg.width
-        return width, height
 
     def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
         needSeqSites = self.parent() is None and toDragImage is None
@@ -1612,15 +1608,74 @@ class ListTypeIcon(Icon):
             self.drawList += self.argList.drawListCommas(inSiteX,
              self.sites.output.yOffset)
             # End paren/brace/bracket
+            rightImg = Image.new('RGBA', self.rightImg.size, color=(0, 0, 0, 0))
+            rightImg.paste(self.rightImg, (0, 0))
+            if self.acceptsComprehension():
+                cphYOff = self.sites.output.yOffset - cphSiteImage.height // 2
+                rightImg.paste(cphSiteImage, (0, cphYOff))
             parenY = self.sites.output.yOffset - self.rightImg.height // 2
-            parenX = inSiteX + self.argList.width() + inSiteImage.width - 2
-            self.drawList.append(((parenX, parenY), self.rightImg))
+            parenX = self.sites.cprhIcons[-1].xOffset
+            self.drawList.append(((parenX, parenY), rightImg))
         self._drawFromDrawList(toDragImage, location, clip, colorErr)
+
+    def isComprehension(self):
+        return len(self.sites.cprhIcons) > 1
+
+    def acceptsComprehension(self):
+        return len(self.sites.argIcons) <= 1
+
+    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
+        # Checks and special rules for comprehension series with no commas.
+        if seriesIdx is None:
+            seriesName, idx = splitSeriesSiteId(siteIdOrSeriesName)
+        else:
+            seriesName = siteIdOrSeriesName
+            idx = seriesIdx
+        if seriesName == "argIcons":
+            if self.isComprehension():
+                print('Attempt to add elements to comprehension')
+                return
+        if seriesName != 'cprhIcons':
+            Icon.insertChild(self, child, siteIdOrSeriesName, seriesIdx, childSite)
+            return
+        if len(self.sites.argIcons) > 1:
+            print("Can't add comprehension to multi-element list")
+            return
+        #  Without commas we need to never leave an empty site, except for the last one,
+        #  which must always exist and remain empty
+        if child is None:
+            return
+        self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, idx)
+        self.sites.lookupSeries(seriesName)[idx].attach(self, child, childSite)
+        self.layoutDirty = True
+
+    def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
+        # Checks and special rules for comprehension series with no commas.
+        siteName, seriesIdx = splitSeriesSiteId(siteId)
+        if siteName == 'cprhIcons':
+            # Generic version of insertChild is intended for series with commas.  Never
+            # leave an empty site when there is no way to see or access it
+            if seriesIdx == len(self.sites.cprhIcons) - 1:
+                self.insertChild(newChild, siteName, seriesIdx)
+            else:
+                Icon.replaceChild(self, newChild, siteId, False, childSite)
+        else:
+            Icon.replaceChild(self, newChild, siteId, leavePlace, childSite)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion to those representing actual attachment sites
         siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
-        siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
+        if self.isComprehension():
+            if forCursor:
+                return siteSnapLists
+            x = self.rect[0] + INSERT_SITE_X_OFFSET
+            y = self.rect[1] + self.sites.cprhIcons[0].yOffset + INSERT_SITE_Y_OFFSET
+            siteSnapLists['insertCprh'] = [(self, (x + site.xOffset, y), site.name)
+             for site in self.sites.cprhIcons[:-1]]
+        else:
+            siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
+            if not self.acceptsComprehension():
+                del siteSnapLists['cprhIn']
         return siteSnapLists
 
     def inRectSelect(self, rect):
@@ -1639,7 +1694,8 @@ class ListTypeIcon(Icon):
         self.argList.doLayout(layout)
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-        width, height = self._size()
+        height = self.leftImg.height
+        width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
         x = outSiteX
         y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x + width, y + height)
@@ -1647,17 +1703,26 @@ class ListTypeIcon(Icon):
         self.layoutDirty = False
 
     def calcLayout(self):
-        bodyWidth, bodyHeight = self.leftImg.size
-        layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
-        argWidth = self.argList.calcLayout(layout, bodyWidth - 1, 0)
-        # layout now incorporates argument layout sizes, but not end paren/brace/bracket
-        layout.width = bodyWidth + outSiteImage.width + argWidth + self.rightImg.width - 5
+        leftWidth, height = self.leftImg.size
+        layout = Layout(self, leftWidth, height, height // 2)
+        argWidth = self.argList.calcLayout(layout, leftWidth - 1, 0)
+        cprhWidth = 0
+        leftCprhX = leftWidth - 1 + argWidth - 1
+        cprhY = 0
+        for site in self.sites.cprhIcons:
+            cprhLayout = _singleSiteSublayout(self, layout, site.name,
+             leftCprhX + cprhWidth, cprhY)
+            cprhWidth += 0 if cprhLayout is None else cprhLayout.width - 1
+        layout.width = leftWidth - 1 + argWidth - 1 + cprhWidth + self.rightImg.width
         _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1, ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
         argText = _seriesTextRepr(self.sites.argIcons)
-        return self.leftText + argText + self.rightText + _attrTextRepr(self)
+        cprhText = ""
+        for site in self.sites.cprhIcons[:-1]:
+            cprhText += " " + site.att.textRepr()
+        return self.leftText + argText + cprhText+ self.rightText + _attrTextRepr(self)
 
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
@@ -1670,6 +1735,8 @@ class ListIcon(ListTypeIcon):
         return [site.att for site in self.sites.argIcons]
 
     def execute(self):
+        if self.isComprehension():
+            return eval(self.textRepr())
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
             return []
         for site in self.sites.argIcons:
@@ -1729,6 +1796,10 @@ class TupleIcon(ListTypeIcon):
         self.layoutDirty = True
         self.window.undo.registerCallback(self.restoreParens)
 
+    def acceptsComprehension(self):
+        # Redefine to add prohibition on no-paren tuple becoming generator comprehension
+        return len(self.sites.argIcons) <= 1 and not self.noParens
+
     def calcLayout(self):
         # If the icon is no longer at the top level and needs its parens restored, do so
         # before calculating the layout (would be better to do this elsewhere).
@@ -1737,6 +1808,8 @@ class TupleIcon(ListTypeIcon):
         return ListTypeIcon.calcLayout(self)
 
     def execute(self):
+        if self.isComprehension():
+            return eval(self.textRepr())
         argIcons = self.argIcons()
         for argIcon in argIcons:
             if argIcon is None:
@@ -1754,6 +1827,8 @@ class DictIcon(ListTypeIcon):
         ListTypeIcon.__init__(self, '{', '}', window, location=location)
 
     def execute(self):
+        if self.isComprehension():
+            return eval(self.textRepr())
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
             return {}
         for site in self.sites.argIcons:
@@ -1771,144 +1846,6 @@ class DictIcon(ListTypeIcon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
-
-class CprhIcon(Icon):
-    def __init__(self, cprhType, window, location=None):
-        Icon.__init__(self, window)
-        self.leftText, self.rightText, self.leftImg, self.rightImg = {
-            'list':('[', ']', listLBktImage, listRBktImage),
-            'gen': ('(', ')', tupleLParenImage, tupleRParenImage),
-            'dict':('{', '}', iconBoxedText('{'), iconBoxedText('}'))}[cprhType]
-        self.type = cprhType
-        leftWidth, height = self.leftImg.size
-        self.sites.add('output', 'output', 0, height // 2)
-        self.sites.add('exprIcon', 'input', 0, height // 2)
-        self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)])
-        width = outSiteImage.width - 1 + leftWidth - 1 + self.rightImg.width - 1
-        self.sites.add('attrIcon', 'attrIn', width-1,
-         self.sites.output.yOffset + ATTR_SITE_OFFSET)
-        seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, height-2)
-        x, y = (0, 0) if location is None else location
-        self.rect = (x, y, x + width, y + height)
-
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or toDragImage is not None)
-        if self.drawList is None:
-            # Left paren/bracket/brace
-            leftBoxWidth, leftBoxHeight = self.leftImg.size
-            leftImgX = outSiteImage.width - 1
-            leftImg = Image.new('RGBA', (leftBoxWidth + leftImgX, leftBoxHeight),
-             color=(0, 0, 0, 0))
-            leftImg.paste(self.leftImg, (leftImgX, 0))
-            if needSeqSites:
-                drawSeqSites(leftImg, leftImgX, 0, self.leftImg.height)
-            # Output site
-            if needOutSite:
-                outSiteX = self.sites.output.xOffset
-                outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
-                leftImg.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
-            # Body input site
-            inSiteX = outSiteImage.width - 1 + self.leftImg.width - inSiteImage.width
-            inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
-            leftImg.paste(inSiteImage, (inSiteX, inSiteY))
-            self.drawList = [((0, 0), leftImg)]
-            # End paren/brace/bracket
-            rightImg = Image.new('RGBA', self.rightImg.size, color=(0, 0, 0, 0))
-            rightImg.paste(self.rightImg, (0, 0))
-            cphYOff = self.sites.output.yOffset - cphSiteImage.height // 2
-            rightImg.paste(cphSiteImage, (0, cphYOff))
-            parenY = self.sites.output.yOffset - self.rightImg.height // 2
-            parenX = self.sites.cprhIcons[-1].xOffset
-            self.drawList.append(((parenX, parenY), rightImg))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
-
-    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
-        # The generic version of insertChild is intended for series with commas.  Without
-        # commas we need to never leave an empty site, except for the last one, which
-        # must always exist and remain empty
-        if child is None:
-            return
-        if seriesIdx is None:
-            seriesName, seriesIdx = splitSeriesSiteId(siteIdOrSeriesName)
-        else:
-            seriesName = siteIdOrSeriesName
-        self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, seriesIdx)
-        self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
-        self.layoutDirty = True
-
-    def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
-        # Generic version of insertChild is intended for series with commas.  Never leave
-        # an empty site when there is no way to see or access it
-        siteName, seriesIdx = splitSeriesSiteId(siteId)
-        if siteName == 'cprhIcons' and seriesIdx == len(self.sites.cprhIcons) - 1:
-            self.insertChild(newChild, siteName, seriesIdx)
-        else:
-            Icon.replaceChild(self, newChild, siteId, leavePlace=False,
-             childSite=childSite)
-
-    def snapLists(self, forCursor=False):
-        # Add snap sites for inserting comprehension clauses
-        siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
-        if forCursor:
-            return siteSnapLists
-        x = self.rect[0] + INSERT_SITE_X_OFFSET
-        y = self.rect[1] + self.sites.cprhIcons[0].yOffset + INSERT_SITE_Y_OFFSET
-        siteSnapLists['insertCprh'] = \
-         [(self, (x + site.xOffset, y), site.name) for site in self.sites.cprhIcons[:-1]]
-        return siteSnapLists
-
-    def inRectSelect(self, rect):
-        # Require selection rectangle to touch both parens to be considered selected
-        if not Icon.inRectSelect(self, rect):
-            return False
-        selLeft, selTop, selRight, selBottom = rect
-        icLeft, icTop, icRight, icBottom = self.rect
-        if selLeft > icLeft + self.leftImg.width:
-            return False
-        if selRight < icRight - self.rightImg.width:
-            return False
-        return True
-
-    def doLayout(self, outSiteX, outSiteY, layout):
-        layout.updateSiteOffsets(self.sites.output)
-        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-        height = self.leftImg.height
-        width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
-        x = outSiteX
-        y = outSiteY - self.sites.output.yOffset
-        self.rect = (x, y, x + width, y + height)
-        self.drawList = None
-        self.layoutDirty = False
-
-    def calcLayout(self):
-        bodyWidth, bodyHeight = self.leftImg.size
-        layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
-        exprLayout = _singleSiteSublayout(self, layout, 'exprIcon', layout.width-1, 0)
-        exprWidth = 0 if exprLayout is None else exprLayout.width
-        cprhWidth = 0
-        leftCprhX = bodyWidth - 1 + exprWidth - 1
-        cprhY = 0
-        for site in self.sites.cprhIcons:
-            cprhLayout = _singleSiteSublayout(self, layout, site.name,
-             leftCprhX + cprhWidth, cprhY)
-            cprhWidth += 0 if cprhLayout is None else cprhLayout.width - 1
-        # layout now incorporates argument layout sizes, but not end paren/brace/bracket
-        layout.width = bodyWidth + outSiteImage.width + cprhWidth + self.rightImg.width - 5
-        _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1, ATTR_SITE_OFFSET)
-        return layout
-
-    def clipboardRepr(self, offset, iconsToCopy):
-        return self._serialize(offset, iconsToCopy, cprhType=self.type)
-
-    def textRepr(self):
-        cprhText = ""
-        for site in self.sites.cprhIcons[:-1]:
-            cprhText += " " + site.att.textRepr()
-        return self.leftText + cprhText + self.rightText + _attrTextRepr(self)
 
 class CprhIfIcon(Icon):
     def __init__(self, window, location=None):
@@ -2031,7 +1968,7 @@ class CprhForIcon(Icon):
         text = "async for" if self.isAsync else "for"
         tgtText = _seriesTextRepr(self.sites.targets)
         iterText = _singleArgTextRepr(self.sites.iterIcon)
-        return text + " " + tgtText + " in " + iterText + "):"
+        return text + " " + tgtText + " in " + iterText
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync)
@@ -3143,7 +3080,7 @@ class ForIcon(Icon):
         text = "async for" if self.isAsync else "for"
         tgtText = _seriesTextRepr(self.sites.targets)
         iterText = _seriesTextRepr(self.sites.iterIcons)
-        return text + " " + tgtText + " in " + iterText + "):"
+        return text + " " + tgtText + " in " + iterText + ":"
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,

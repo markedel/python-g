@@ -184,8 +184,8 @@ def parseExpr(expr):
             parsedSlice = parsedSlice[:2]
         return (icon.SubscriptIcon, parsedSlice, parseExpr(expr.value))
     elif expr.__class__ in (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp):
-        compType = {ast.ListComp:"list", ast.SetComp:"dict", ast.GeneratorExp:"gen",
-         ast.DictComp:"dict"}[expr.__class__]
+        compType = {ast.ListComp:icon.ListIcon, ast.SetComp:icon.DictIcon,
+         ast.GeneratorExp:icon.TupleIcon, ast.DictComp:icon.DictIcon}[expr.__class__]
         if expr.__class__ is ast.DictComp:
             tgt = parseExpr(expr.value)
             key = parseExpr(expr.key)
@@ -198,7 +198,9 @@ def parseExpr(expr):
             genIter = parseExpr(gen.iter)
             genIfs = [parseExpr(i) for i in gen.ifs]
             generators.append((genTarget, genIter, genIfs, gen.is_async))
-        return (icon.CprhIcon, compType, tgt, key, generators)
+        return ("comprehension", compType, tgt, key, generators)
+    elif expr.__class__ is ast.Set:
+        return ("set", [parseExpr(e) for e in expr.elts])
     else:
         return (icon.IdentifierIcon, "**Couldn't Parse**")
 
@@ -323,16 +325,16 @@ def makeIcons(parsedExpr, window, x, y):
         parentIcon = icon.findLastAttrIcon(topIcon)
         parentIcon.replaceChild(subscriptIcon, "attrIcon")
         return topIcon
-    if iconClass is icon.CprhIcon:
+    if iconClass == "comprehension":
         cprhType, tgt, key, generators = parsedExpr[1:]
-        topIcon = iconClass(cprhType, window, (x, y))
+        topIcon = cprhType(window=window, location=(x, y))
         if key is None:
-            topIcon.replaceChild(makeIcons(tgt, window, x, y), 'exprIcon')
+            topIcon.replaceChild(makeIcons(tgt, window, x, y), 'argIcons_0')
         else:
             dictElem = icon.DictElemIcon(window)
             dictElem.replaceChild(makeIcons(key, window, x, y), "leftArg")
             dictElem.replaceChild(makeIcons(tgt, window, x, y), "rightArg")
-            topIcon.replaceChild(dictElem, 'exprIcon')
+            topIcon.replaceChild(dictElem, 'argIcons_0')
         clauseIdx = 0
         for tgt, iter, ifs, isAsync in generators:
             forIcon = icon.CprhForIcon(isAsync, window)
@@ -350,6 +352,11 @@ def makeIcons(parsedExpr, window, x, y):
                 ifIcon.replaceChild(testIcon, 'testIcon')
                 topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
                 clauseIdx += 1
+        return topIcon
+    if iconClass == "set":
+        topIcon = icon.DictIcon(window, (x, y))
+        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1]]
+        topIcon.insertChildren(childIcons, "argIcons", 0)
         return topIcon
     if iconClass is icon.WhileIcon:
         topIcon = iconClass(window=window, location=(x, y))
@@ -418,5 +425,4 @@ def makeIcons(parsedExpr, window, x, y):
             starStarIcon.replaceChild(argNameIcon, 'argIcon')
             defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
         return defIcon
-
     return icon.TextIcon("**Internal Parse Error**", window, (x,y))
