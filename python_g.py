@@ -516,9 +516,6 @@ class Window:
         if hasattr(clickedIcon, 'blockEnd'):
             singleSel.append(clickedIcon.blockEnd)
             hierSel.append(clickedIcon.blockEnd)
-            blockSel = []
-        else:
-            blockSel = list(clickedIcon.traverseBlock())
         if not currentSel:
             if siteIcon is not None and (not siteSelected or site != self.cursor.site):
                 return "moveCursor"

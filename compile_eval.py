@@ -126,6 +126,14 @@ def parseStmt(stmt):
          kwDefaults, kwArg)
     if stmt.__class__ is ast.Return:
         return (icon.ReturnIcon, None if stmt.value is None else parseExpr(stmt.value))
+    if stmt.__class__ in (ast.With, ast.AsyncWith):
+        withItems = []
+        for item in stmt.items:
+            contextExpr = parseExpr(item.context_expr)
+            optVars = None if item.optional_vars is None else parseExpr(item.optional_vars)
+            withItems.append((contextExpr, optVars))
+        isAsync = isinstance(stmt, ast.AsyncWith)
+        return (icon.WithIcon, isAsync, withItems)
     if stmt.__class__ is ast.Delete:
         return (icon.DelIcon, [parseExpr(e) for e in stmt.targets])
     if stmt.__class__ is ast.Pass:
@@ -324,6 +332,19 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon = iconClass(window, (x, y))
         targets = [makeIcons(t, window, x, y) for t in parsedExpr[1]]
         topIcon.insertChildren(targets, "values", 0)
+        return topIcon
+    if iconClass is icon.WithIcon:
+        isAsync, withItems = parsedExpr[1:]
+        topIcon = iconClass(isAsync, window=window, location=(x, y))
+        for idx, (contextExpr, optVars) in enumerate(withItems):
+            contextIcon = makeIcons(contextExpr, window, x, y)
+            if optVars is None:
+                topIcon.insertChild(contextIcon, "values", idx)
+            else:
+                asIcon = icon.WithAsIcon(window)
+                asIcon.replaceChild(contextIcon, "leftArg")
+                asIcon.replaceChild(makeIcons(optVars, window, x, y), "rightArg")
+                topIcon.insertChild(asIcon, "values", idx)
         return topIcon
     if iconClass in (icon.GlobalIcon, icon.NonlocalIcon):
         topIcon = iconClass(window, (x, y))

@@ -6,6 +6,33 @@ import math
 import operator
 import re
 
+# Some general notes on drawing and layout:
+#
+# PIL (Pillow) uses pixel grid coordinates, as opposed to pixel centered, meaning that
+# 0,0 is at the top left corner of the top left pixel, not in the center of the pixel.
+#
+# An icon's rectangle (rect) is a rectangle covering the entire drawn area of the icon.
+# It is used to determine whether the icon should be involved in any drawing operation
+# at a particular location in a window.  If redrawing is needed outside of the icon's
+# rectangle, the icon can safely be ignored.
+#
+# Icons also have a selection rectangle (.selectionRect()) which defines the "primary"
+# area of the icon for the purpose of extending a selection from it, and various calls
+# for more precisely determining whether a clicked or dragged point is on the icon.
+#
+# Layout coordinates (used in calcLayout) are simplified to boxes with attachment sites
+# along their edges.  An icon's layout provides a width and height that it and its
+# children wish to occupy, but omits protruding sites that can be safely overlaid by
+# another icon.
+#
+# A confusing aspect of the code is that mating icons are intended to overlap by one
+# pixel at the edges, so size calculations are peppered with -1 (the convention in the
+# code is to explicitly write a -1 for each overlap, rather than coalescing them in to
+# a single constant).
+#
+# This prototype code, is much more pixel-oriented than it should be, given the current
+# variety of higher density displays, which may make it difficult to port to such an
+# environment.
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 
 isSeriesRe = re.compile(".*_\\d*$")
@@ -1099,7 +1126,7 @@ class TextIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, height // 2)
-        _singleSiteSublayout(self, layout, 'attrIcon', width, ATTR_SITE_OFFSET)
+        _singleSiteSublayout(self, layout, 'attrIcon', width-1, ATTR_SITE_OFFSET)
         return layout
 
     def textRepr(self):
@@ -1214,7 +1241,7 @@ class AttrIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, height // 2 + ATTR_SITE_OFFSET)
-        _singleSiteSublayout(self, layout, 'attrIcon',  width, 0)
+        _singleSiteSublayout(self, layout, 'attrIcon',  width-1, 0)
         return layout
 
     def textRepr(self):
@@ -1338,7 +1365,7 @@ class SubscriptIcon(Icon):
              -ATTR_SITE_OFFSET)
         attrIcon = self.sites.attrIcon.att
         attrLayout = None if attrIcon is None else attrIcon.calcLayout()
-        layout.addSubLayout(attrLayout, 'attrIcon', layout.width - ATTR_SITE_DEPTH - 1, 0)
+        layout.addSubLayout(attrLayout, 'attrIcon', layout.width - 1, 0)
         layout.argWidths = [indexWidth, upperWidth, stepWidth]
         return layout
 
@@ -1480,7 +1507,7 @@ class UnaryOpIcon(Icon):
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, height // 2)
-        _singleSiteSublayout(self, layout, 'argIcon', width, 0)
+        _singleSiteSublayout(self, layout, 'argIcon', width-1, 0)
         return layout
 
     def textRepr(self):
@@ -1857,6 +1884,17 @@ class DictIcon(ListTypeIcon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def snapLists(self, forCursor=False):
+        siteSnapLists = ListTypeIcon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return siteSnapLists
+        # Add back versions of sites that were filtered out for having more local
+        # snap targets (such as left arg of BinOpIcon).  The ones added back are highly
+        # conditional on the icons that have to be connected directly to the call icon
+        # argument list (*, **, =).
+        _restoreConditionalTargets(self, siteSnapLists, (DictElemIcon, StarStarIcon))
+        return siteSnapLists
+
 class CprhIfIcon(Icon):
     def __init__(self, window, location=None):
         Icon.__init__(self, window)
@@ -1866,7 +1904,7 @@ class CprhIfIcon(Icon):
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
         self.sites.add('cprhOut', 'cprhOut', 0, siteYOffset)
-        self.sites.add('testIcon', 'input', bodyWidth - 1, siteYOffset)
+        self.sites.add('testIcon', 'input', bodyWidth-1 - OUTPUT_SITE_DEPTH, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth, y + bodyHeight)
 
@@ -1886,13 +1924,13 @@ class CprhIfIcon(Icon):
         width, height = self.bodySize
         top = cprhY - height // 2
         self.rect = (cprhX, top, cprhX + width, top + height)
-        layout.doSubLayouts(self.sites.cprhOut, cprhX - OUTPUT_SITE_DEPTH, cprhY)
+        layout.doSubLayouts(self.sites.cprhOut, cprhX, cprhY)
         self.layoutDirty = False
 
     def calcLayout(self):
         width, height = self.bodySize
         layout = Layout(self, width, height, height // 2)
-        _singleSiteSublayout(self, layout, 'testIcon', width, 0)
+        _singleSiteSublayout(self, layout, 'testIcon', width-1, 0)
         return layout
 
     def textRepr(self):
@@ -2019,9 +2057,9 @@ class BinOpIcon(Icon):
         # Note that the attrIcon site is only usable when parens are displayed
         self.sites.add("attrIcon", "attrIn",
          self.leftArgWidth + opWidth - ATTR_SITE_DEPTH, siteYOffset)
-        # Indicates that input site falls directly on top of output site
         self.sites.add('seqIn', 'seqIn', - SEQ_SITE_DEPTH, 1)
         self.sites.add('seqOut', 'seqOut', - SEQ_SITE_DEPTH, height-2)
+        # Indicates that input site falls directly on top of output site
         self.coincidentSite = 'leftArg'
 
     def _size(self):
@@ -2259,9 +2297,17 @@ class CallIcon(Icon):
         return [site.att for site in self.sites.argIcons]
 
     def snapLists(self, forCursor=False):
-        # Add snap sites for insertion to those representing actual attachment sites
         siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return siteSnapLists
+        # Add snap sites for insertion to those representing actual attachment sites
         siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
+        # Add back versions of sites that were filtered out for having more local
+        # snap targets (such as left arg of BinOpIcon).  The ones added back are highly
+        # conditional on the icons that have to be connected directly to the call icon
+        # argument list (*, **, =).
+        _restoreConditionalTargets(self, siteSnapLists,
+         (StarIcon, StarStarIcon, ArgAssignIcon))
         return siteSnapLists
 
     def doLayout(self, attrSiteX, attrSiteY, layout):
@@ -2282,7 +2328,7 @@ class CallIcon(Icon):
         argWidth = self.argList.calcLayout(layout, bodyWidth - 1, -ATTR_SITE_OFFSET)
         # layout now incorporates argument layout sizes, but not end paren
         layout.width = fnLParenImage.width - 1 + argWidth - 1 + fnRParenImage.width - 1
-        _singleSiteSublayout(self, layout, 'attrIcon', layout.width-ATTR_SITE_DEPTH, 0)
+        _singleSiteSublayout(self, layout, 'attrIcon', layout.width - 1, 0)
         return layout
 
     def textRepr(self):
@@ -2323,67 +2369,174 @@ class CallIcon(Icon):
             return False
         return True
 
-class ArgAssignIcon(BinOpIcon):
+class TwoArgIcon(Icon):
+    def __init__(self, op, window, location=None):
+        Icon.__init__(self, window)
+        self.operator = op
+        self.leftArgWidth = EMPTY_ARG_WIDTH
+        opWidth, opHeight = globalFont.getsize(self.operator)
+        opWidth += 2*TEXT_MARGIN + 1
+        opHeight += 2*TEXT_MARGIN + 1
+        self.opSize = (opWidth, opHeight)
+        x, y = (0, 0) if location is None else location
+        width = self.leftArgWidth - 1 + opWidth
+        self.rect = (x, y, x + width, y + opHeight)
+        siteYOffset = opHeight // 2
+        self.sites.add('output', 'output', 0, siteYOffset)
+        self.sites.add('leftArg', 'input', 0, siteYOffset)
+        self.sites.add('rightArg', 'input', self.leftArgWidth + opWidth, siteYOffset)
+        self.sites.add('seqIn', 'seqIn', - SEQ_SITE_DEPTH, 1)
+        self.sites.add('seqOut', 'seqOut', - SEQ_SITE_DEPTH, opHeight-2)
+        # Indicates that input site falls directly on top of output site
+        self.coincidentSite = 'leftArg'
+
+    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+        atTop = self.parent() is None
+        suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
+        temporaryOutputSite = suppressSeqSites and atTop and self.sites.leftArg.att is None
+        if temporaryOutputSite or suppressSeqSites:
+            # When toDragImage is specified the icon is being dragged, and it must display
+            # something indicating where its output site is where it would otherwise
+            # not normally draw anything, but don't keep this in self.drawList because
+            # it's not for normal use and won't be used again for picking or drawing.
+            self.drawList = None
+        if self.drawList is None:
+            self.drawList = []
+            # Output part (connector or paren)
+            outSiteX = self.sites.output.xOffset
+            siteY = self.sites.output.yOffset
+            leftArgX = outSiteX + outSiteImage.width - 1
+            if temporaryOutputSite:
+                outSiteY = siteY - binOutImage.height // 2
+                self.drawList.append(((outSiteX, outSiteY), binOutImage))
+            elif atTop and not suppressSeqSites:
+                outSiteY = siteY - binInSeqImage.height // 2
+                self.drawList.append(((outSiteX, outSiteY), binInSeqImage))
+            # Body
+            opWidth, opHeight = self.opSize
+            img = Image.new('RGBA', (opWidth, opHeight), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText(self.operator)
+            img.paste(txtImg, (0, 0))
+            rInSiteX = opWidth - inSiteImage.width
+            rInSiteY = siteY - inSiteImage.height // 2
+            img.paste(inSiteImage, (rInSiteX, rInSiteY))
+            opX = leftArgX + self.leftArgWidth - 1
+            self.drawList.append(((opX, 0), img))
+        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        if temporaryOutputSite or suppressSeqSites:
+            self.drawList = None  # Don't keep after drawing (see above)
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        self.leftArgWidth = layout.lArgWidth
+        layout.updateSiteOffsets(self.sites.output)
+        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        opWidth, height = self.opSize
+        width = opWidth + self.leftArgWidth - 1
+        x = outSiteX - self.sites.output.xOffset
+        y = outSiteY - self.sites.output.yOffset
+        self.rect = (x, y, x + width, y + height)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayout(self):
+        opWidth, opHeight = self.opSize
+        layout = Layout(self, opWidth, opHeight, opHeight // 2)
+        lArgLayout = _singleSiteSublayout(self, layout, "leftArg", 0, 0)
+        lArgWidth = EMPTY_ARG_WIDTH if lArgLayout is None else lArgLayout.width
+        layout.lArgWidth = lArgWidth
+        layout.width = lArgWidth - 1 + opWidth
+        _singleSiteSublayout(self, layout, "rightArg", layout.width - 1, 0)
+        return layout
+
+    def textRepr(self):
+        leftArgText = _singleArgTextRepr(self.sites.leftArg)
+        rightArgText = _singleArgTextRepr(self.sites.rightArg)
+        return leftArgText + " " + self.operator + " " + rightArgText
+
+    def selectionRect(self):
+        # Limit selection rectangle for extending selection to op itself
+        opWidth, opHeight = self.opSize
+        rightOffset = self.sites.rightArg.xOffset + OUTPUT_SITE_DEPTH
+        leftOffset = rightOffset - opWidth
+        x, top = self.rect[:2]
+        left = x + leftOffset
+        return left, top, left + opWidth, top + opHeight
+
+    def inRectSelect(self, rect):
+        if not python_g.rectsTouch(rect, self.rect):
+            return False
+        return python_g.rectsTouch(rect, self.selectionRect())
+
+class ArgAssignIcon(TwoArgIcon):
     """Special assignment statement for use only in function argument lists"""
     def __init__(self, window=None, location=None):
-        BinOpIcon.__init__(self, "=", window, location)
+        TwoArgIcon.__init__(self, "=", window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on being part of an argument or parameter list
         snapLists = Icon.snapLists(self, forCursor=forCursor)
         if forCursor:
             return snapLists
-        def matingIcon(ic, siteId):
+        def snapFn(ic, siteId):
             siteName, siteIdx = splitSeriesSiteId(siteId)
             return ic.__class__ in (CallIcon, DefIcon) and siteName == "argIcons"
         outSites = snapLists['output']
         snapLists['output'] = []
-        snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
+        snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
         return snapLists
 
     def execute(self):
-        if self.leftArg() is None:
+        if self.sites.leftArg.att is None:
             raise IconExecException(self, "Missing argument name")
-        if self.rightArg() is None:
+        if self.sites.rightArg.att is None:
             raise IconExecException(self, "Missing argument value")
-        if not isinstance(self.leftArg(), IdentifierIcon):
+        if not isinstance(self.sites.leftArg.att, IdentifierIcon):
             raise IconExecException(self, "Argument name is not identifier")
-        return self.leftArg().name, self.rightArg().execute()
+        return self.sites.leftArg.att.name, self.sites.rightArg.att.execute()
 
-    def clipboardRepr(self, offset, iconsToCopy):
-        # Superclass BinOpIcon specifies op keyword, which this does not have
-        return self._serialize(offset, iconsToCopy)
-
-class DictElemIcon(BinOpIcon):
+class DictElemIcon(TwoArgIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
-        BinOpIcon.__init__(self, ":", window, location)
+        TwoArgIcon.__init__(self, ":", window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent being a dictionary constant
         snapLists = Icon.snapLists(self, forCursor=forCursor)
         if forCursor:
             return snapLists
-        def matingIcon(ic, siteId):
+        def snapFn(ic, siteId):
             siteName, siteIdx = splitSeriesSiteId(siteId)
             return isinstance(ic, DictIcon) and siteName == "argIcons"
         outSites = snapLists['output']
         snapLists['output'] = []
-        snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
+        snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
         return snapLists
 
     def execute(self):
-        if self.leftArg() is None:
-            raise IconExecException(self, "Missing key")
-        if self.rightArg() is None:
-            raise IconExecException(self, "Missing value")
-        key = self.leftArg().execute()
-        value = self.rightArg().execute()
+        if self.sites.leftArg.att is None:
+            raise IconExecException(self, "Missing argument name")
+        if self.sites.rightArg.att is None:
+            raise IconExecException(self, "Missing argument value")
+        key = self.sites.leftArg.att.execute()
+        value = self.sites.rightArg.att.execute()
         return key, value
 
-    def clipboardRepr(self, offset, iconsToCopy):
-        # Superclass BinOpIcon specifies op keyword, which this does not have
-        return self._serialize(offset, iconsToCopy)
+class WithAsIcon(TwoArgIcon):
+    def __init__(self, window=None, location=None):
+        TwoArgIcon.__init__(self, "as", window, location)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on parent being a "with" statement
+        snapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def snapFn(ic, siteId):
+            siteName, siteIdx = splitSeriesSiteId(siteId)
+            return isinstance(ic, WithIcon) and siteName == "argIcons"
+        outSites = snapLists['output']
+        snapLists['output'] = []
+        snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
+        return snapLists
 
 class AssignIcon(Icon):
     def __init__(self, numTargets=1, window=None, location=None):
@@ -3402,9 +3555,17 @@ class DefIcon(Icon):
         return [site.att for site in self.sites.argIcons]
 
     def snapLists(self, forCursor=False):
-        # Add snap sites for insertion
         siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return siteSnapLists
+        # Add snap sites for insertion to those representing actual attachment sites
         siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
+        # Add back versions of sites that were filtered out for having more local
+        # snap targets (such as left arg of BinOpIcon).  The ones added back are highly
+        # conditional on the icons that have to be connected directly to the call icon
+        # argument list (*, **, =).
+        _restoreConditionalTargets(self, siteSnapLists,
+         (StarIcon, StarStarIcon, ArgAssignIcon))
         return siteSnapLists
 
     def select(self, select=True):
@@ -3533,21 +3694,24 @@ class BreakIcon(NoArgStmtIcon):
         NoArgStmtIcon.__init__(self, "break", window, location)
 
 class SeriesStmtIcon(Icon):
-    def __init__(self, stmt, window, location):
+    def __init__(self, stmt, window, seqIndent=False, location=None):
         Icon.__init__(self, window)
         self.stmt = stmt
+        self.drawIndent = seqIndent
         bodyWidth = globalFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
         seqX = dragSeqImage.width
         self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqOutIndent = BLOCK_INDENT if seqIndent else 0
+        self.sites.add('seqOut', 'seqOut', seqX + seqOutIndent, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         totalWidth = dragSeqImage.width + bodyWidth
         self.valueList = HorizListMgr(self, 'values', bodyWidth+1, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
 
     def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
         if toDragImage is None:
@@ -3568,7 +3732,8 @@ class SeriesStmtIcon(Icon):
             inImgX = bodyOffset + bodyWidth - inSiteImage.width
             inImageY = cntrSiteY - inSiteImage.height // 2
             img.paste(inSiteImage, (inImgX, inImageY))
-            drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            indentType = "right" if self.drawIndent else None
+            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent=indentType)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
@@ -3615,19 +3780,34 @@ class SeriesStmtIcon(Icon):
 
 class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window, location):
-        SeriesStmtIcon.__init__(self, "return", window, location)
+        SeriesStmtIcon.__init__(self, "return", window, location=location)
 
 class DelIcon(SeriesStmtIcon):
     def __init__(self, window, location):
-        SeriesStmtIcon.__init__(self, "del", window, location)
+        SeriesStmtIcon.__init__(self, "del", window, location=location)
+
+class WithIcon(SeriesStmtIcon):
+    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
+        stmt = "async with" if isAsync else "with"
+        SeriesStmtIcon.__init__(self, stmt, window, seqIndent=True, location=location)
+        self.blockEnd = None
+        if createBlockEnd:
+            self.blockEnd = BlockEnd(self, window)
+
+    def select(self, select=True):
+        self.selected = select
+        self.blockEnd.selected = select
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
 class GlobalIcon(SeriesStmtIcon):
     def __init__(self, window, location):
-        SeriesStmtIcon.__init__(self, "global", window, location)
+        SeriesStmtIcon.__init__(self, "global", window, location=location)
 
 class NonlocalIcon(SeriesStmtIcon):
     def __init__(self, window, location):
-        SeriesStmtIcon.__init__(self, "nonlocal", window, location)
+        SeriesStmtIcon.__init__(self, "nonlocal", window, location=location)
 
 class YieldIcon(Icon):
     def __init__(self, window, location):
@@ -3752,7 +3932,7 @@ class Layout:
         self.siteOffsets = {}
 
     def addSubLayout(self, subLayout, siteName, xSiteOffset, ySiteOffset):
-        """Incorporate the area of subLayout as positioned at (xSiteOffset, ySiteOffset)
+        """Incorporate the area of child layout positioned at (xSiteOffset, ySiteOffset)
         relative to the implied site of the current layout.  subLayout can also be
         passed as None, in which case add a None to the sublayouts list."""
         self.subLayouts[siteName] = subLayout
@@ -3764,7 +3944,7 @@ class Layout:
          subLayout.height - subLayout.parentSiteOffset)
         self.height = heightAbove + heightBelow
         self.parentSiteOffset = heightAbove
-        self.width = max(self.width, xSiteOffset + subLayout.width-1)
+        self.width = max(self.width, xSiteOffset + subLayout.width)
 
     def updateSiteOffsets(self, parentSite):
         parentSiteDepth = siteDepths[parentSite.type]
@@ -3937,7 +4117,6 @@ def drawSeqSites(img, boxLeft, boxTop, boxHeight, indent=None):
     if indent == "right":
         img.putpixel((bottomIndent + boxLeft, bottomSiteY), OUTLINE_COLOR)
         img.putpixel((bottomIndent + boxLeft, bottomSiteY - 1), OUTLINE_COLOR)
-
 
 class IconSite:
     def __init__(self, siteName, siteType, xOffset=0, yOffset=0):
@@ -4592,3 +4771,17 @@ def _singleSiteSublayout(ic, layout, siteId, xOffset, yOffset):
     layout.addSubLayout(subLayout, siteId, xOffset, yOffset)
     return subLayout
 
+def _restoreConditionalTargets(ic, snapLists, directAttachmentClasses):
+    """Add back versions of sites that were filtered out for having more local snap
+    targets (such as left arg of BinOpIcon).  The ones added back are conditional on
+    icon types that must be directly connected (directAttachmentClasses)."""
+    snapFn = lambda ic, s: ic.__class__ in directAttachmentClasses
+    if 'conditional' not in snapLists:
+        snapLists['conditional'] = []
+    for site in ic.sites.argIcons:
+        for i, pos, name in snapLists.get("input", []):
+            if name == site.name:
+                break
+        else:
+            snapLists['conditional'].append((ic, ic.posOfSite(site.name),
+            site.name, site.type, snapFn))
