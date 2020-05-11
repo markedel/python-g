@@ -124,6 +124,10 @@ def parseStmt(stmt):
         kwArg = stmt.args.kwarg.arg if stmt.args.kwarg is not None else None
         return (icon.DefIcon, isAsync, stmt.name, args, defaults, varArg, kwOnlyArgs,
          kwDefaults, kwArg)
+    if stmt.__class__ is ast.ClassDef:
+        bases = [parseExpr(base) for base in stmt.bases]
+        keywords = [(kwd.arg, parseExpr(kwd.value)) for kwd in stmt.keywords]
+        return (icon.ClassDefIcon, stmt.name, bases, keywords)
     if stmt.__class__ is ast.Return:
         return (icon.ReturnIcon, None if stmt.value is None else parseExpr(stmt.value))
     if stmt.__class__ in (ast.With, ast.AsyncWith):
@@ -427,6 +431,24 @@ def makeIcons(parsedExpr, window, x, y):
     if iconClass is icon.IfIcon:
         topIcon = iconClass(window=window, location=(x, y))
         topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
+        return topIcon
+    if iconClass is icon.ClassDefIcon:
+        name, bases, kwds = parsedExpr[1:]
+        hasArgs = len(bases) + len(kwds) > 0
+        topIcon = iconClass(hasArgs, window=window)
+        nameIcon = icon.IdentifierIcon(name, window)
+        topIcon.replaceChild(nameIcon, 'nameIcon')
+        baseIcons = [makeIcons(base, window, x, y) for base in bases]
+        topIcon.insertChildren(baseIcons, "argIcons", 0)
+        kwdIcons = []
+        for idx, (kwd, value) in enumerate(kwds):
+            argAssignIcon = icon.ArgAssignIcon(window)
+            kwdIcon = icon.IdentifierIcon(kwd, window)
+            valueIcon = makeIcons(value, window, x, y)
+            argAssignIcon.replaceChild(kwdIcon, 'leftArg')
+            argAssignIcon.replaceChild(valueIcon, 'rightArg')
+            kwdIcons.append(argAssignIcon)
+        topIcon.insertChildren(kwdIcons, "argIcons", len(baseIcons))
         return topIcon
     if iconClass is icon.DefIcon:
         isAsync, name, args, defaults, varArg, kwOnlyArgs, kwDefaults, kwArg = \

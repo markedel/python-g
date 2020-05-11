@@ -2479,7 +2479,8 @@ class ArgAssignIcon(TwoArgIcon):
             return snapLists
         def snapFn(ic, siteId):
             siteName, siteIdx = splitSeriesSiteId(siteId)
-            return ic.__class__ in (CallIcon, DefIcon) and siteName == "argIcons"
+            return ic.__class__ in (CallIcon, DefIcon, ClassDefIcon) and \
+             siteName == "argIcons"
         outSites = snapLists['output']
         snapLists['output'] = []
         snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
@@ -3488,12 +3489,11 @@ class ElseIcon(Icon):
     def execute(self):
         return None  # ... no idea what to do here, yet.
 
-class DefIcon(Icon):
-    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
+class DefOrClassIcon(Icon):
+    def __init__(self, text, hasArgs, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
-        self.isAsync = isAsync
-        text = "async def" if isAsync else "def"
-        bodyWidth = globalFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
+        self.text = text
+        bodyWidth = globalFont.getsize(self.text)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3503,12 +3503,16 @@ class DefIcon(Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
-        lParenWidth = defLParenImage.width
-        self.nameWidth = EMPTY_ARG_WIDTH
-        argX = dragSeqImage.width + bodyWidth + self.nameWidth + lParenWidth
-        self.argList = HorizListMgr(self, 'argIcons', argX, siteYOffset)
-        rParenWidth = defRParenImage.width
-        totalWidth = argX + self.argList.width() + rParenWidth - 3
+        if hasArgs:
+            lParenWidth = defLParenImage.width
+            self.nameWidth = EMPTY_ARG_WIDTH
+            argX = dragSeqImage.width + bodyWidth + self.nameWidth + lParenWidth
+            self.argList = HorizListMgr(self, 'argIcons', argX, siteYOffset)
+            rParenWidth = defRParenImage.width
+            totalWidth = argX + self.argList.width() + rParenWidth - 3
+        else:
+            totalWidth = bodyWidth + dragSeqImage.width
+            self.argList = None
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
         self.blockEnd = None
@@ -3528,7 +3532,7 @@ class DefIcon(Icon):
             bodyOffset = dragSeqImage.width - 1
             img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
              color=(0, 0, 0, 0))
-            txtImg = iconBoxedText("async def" if self.isAsync else "def", bodyHeight)
+            txtImg = iconBoxedText(self.text, bodyHeight)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = self.sites.nameIcon.yOffset
             inImageY = cntrSiteY - inSiteImage.height // 2
@@ -3537,26 +3541,29 @@ class DefIcon(Icon):
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
-            # Open Paren
-            lParenOffset = bodyOffset + bodyWidth - 1 + self.nameWidth - 1
-            self.drawList.append(((lParenOffset, 0), defLParenImage))
-            # Commas
-            argsOffset = lParenOffset + defLParenImage.width - 1
-            self.drawList += self.argList.drawListCommas(argsOffset - OUTPUT_SITE_DEPTH,
-             cntrSiteY)
-            # End Paren
-            rParenOffset = argsOffset - 1 + self.argList.width() - 1
-            self.drawList.append(((rParenOffset, 0), defRParenImage))
+            if self.argList is not None:
+                # Open Paren
+                lParenOffset = bodyOffset + bodyWidth - 1 + self.nameWidth - 1
+                self.drawList.append(((lParenOffset, 0), defLParenImage))
+                # Commas
+                argsOffset = lParenOffset + defLParenImage.width - 1
+                self.drawList += self.argList.drawListCommas(argsOffset - OUTPUT_SITE_DEPTH,
+                 cntrSiteY)
+                # End Paren
+                rParenOffset = argsOffset - 1 + self.argList.width() - 1
+                self.drawList.append(((rParenOffset, 0), defRParenImage))
         self._drawFromDrawList(toDragImage, location, clip, colorErr)
         if temporaryDragSite:
             self.drawList = None
 
     def argIcons(self):
+        if self.argList is None:
+            return []
         return [site.att for site in self.sites.argIcons]
 
     def snapLists(self, forCursor=False):
         siteSnapLists = Icon.snapLists(self, forCursor=forCursor)
-        if forCursor:
+        if forCursor or not self.argList is not None:
             return siteSnapLists
         # Add snap sites for insertion to those representing actual attachment sites
         siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
@@ -3573,11 +3580,13 @@ class DefIcon(Icon):
         self.blockEnd.selected = select
 
     def doLayout(self, seqSiteX, seqSiteY, layout):
-        self.argList.doLayout(layout)
         self.nameWidth = layout.nameWidth
         bodyWidth, bodyHeight = self.bodySize
-        width = dragSeqImage.width - 1 + bodyWidth - 1 + self.nameWidth - 1 + \
-         defLParenImage.width - 1 + self.argList.width() - 1 + defRParenImage.width
+        width = dragSeqImage.width - 1 + bodyWidth - 1 + self.nameWidth
+        if self.argList is not None:
+            self.argList.doLayout(layout)
+            width += defLParenImage.width - 1 + self.argList.width() - 1 +\
+             defRParenImage.width
         left = seqSiteX - self.sites.seqIn.xOffset - 1
         top = seqSiteY - self.sites.seqIn.yOffset - 1
         self.rect = (left, top, left + width, top + bodyHeight)
@@ -3595,24 +3604,19 @@ class DefIcon(Icon):
         cntrYOff = bodyHeight // 2 - 1
         nameLayout = _singleSiteSublayout(self, layout, 'nameIcon', nameXOff, cntrYOff)
         nameWidth = EMPTY_ARG_WIDTH if nameLayout is None else nameLayout.width
-        argXOff = bodyWidth - 1 + nameWidth - 1 + lParenImage.width
-        argWidth = self.argList.calcLayout(layout, argXOff - OUTPUT_SITE_DEPTH, cntrYOff)
-        layout.width = argXOff + argWidth + defRParenImage.width - 2
         layout.nameWidth = nameWidth
+        if self.argList is not None:
+            argXOff = bodyWidth - 1 + nameWidth - 1 + lParenImage.width
+            argWidth = self.argList.calcLayout(layout, argXOff - OUTPUT_SITE_DEPTH, cntrYOff)
+            layout.width = argXOff + argWidth + defRParenImage.width - 2
         return layout
 
     def textRepr(self):
-        text = "async def" if self.isAsync else "def"
         nameIcon = self.sites.nameIcon.att
-        name = " " if nameIcon is None else nameIcon.textRepr()
-        return text + " " + name + "(" + _seriesTextRepr(self.sites.argIcons) + "):"
-
-    def clipboardRepr(self, offset, iconsToCopy):
-        return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
-         createBlockEnd=False)
-
-    def execute(self):
-        return None  #... no idea what to do here, yet.
+        text = self.text + " " + ("" if nameIcon is None else nameIcon.textRepr())
+        if self.argList is None:
+            return text
+        return text + "(" + _seriesTextRepr(self.sites.argIcons) + "):"
 
     def inRectSelect(self, rect):
         # Require selection rectangle to touch icon body
@@ -3623,6 +3627,41 @@ class DefIcon(Icon):
         bodyWidth, bodyHeight = self.bodySize
         bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
         return python_g.rectsTouch(rect, bodyRect)
+
+    def addArgs(self):
+        if self.argList is not None:
+            return
+        argX = rectWidth(self.rect)
+        argY = self.sites.nameIcon.yOffset
+        self.argList = HorizListMgr(self, 'argIcons', argX, argY)
+        self.window.undo.registerCallback(self.removeArgs)
+
+    def removeArgs(self):
+        if self.argList is None:
+            return
+        if len(self.argIcons()) > 0:
+            print("trying to remove non-empty argument list")
+            return
+        self.argList = None
+        self.window.undo.registerCallback(self.addArgs)
+
+class ClassDefIcon(DefOrClassIcon):
+    def __init__(self, hasArgs, createBlockEnd=True, window=None, location=None):
+        DefOrClassIcon.__init__(self, "class", hasArgs, createBlockEnd, window, location)
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, hasArgs=self.argList is not None,
+         createBlockEnd=False)
+
+class DefIcon(DefOrClassIcon):
+    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
+        self.isAsync = isAsync
+        text = "async def" if isAsync else "def"
+        DefOrClassIcon.__init__(self, text, True, createBlockEnd, window, location)
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
+         createBlockEnd=False)
 
 class NoArgStmtIcon(Icon):
     def __init__(self, stmt, window, location):
