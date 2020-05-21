@@ -1,5 +1,5 @@
 # Copyright Mark Edel  All rights reserved
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageMath, ImageChops
 import python_g
 import ast
 import math
@@ -34,6 +34,7 @@ import re
 # variety of higher density displays, which may make it difficult to port to such an
 # environment.
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
+boldFont = ImageFont.truetype('c:/Windows/fonts/arialbd.ttf', 12)
 
 isSeriesRe = re.compile(".*_\\d*$")
 
@@ -71,8 +72,14 @@ siteDepths = {'input':OUTPUT_SITE_DEPTH, 'output':OUTPUT_SITE_DEPTH,
  'cprhIn':0, 'cprhOut':0}
 
 TEXT_MARGIN = 2
-OUTLINE_COLOR = (220, 220, 220, 255)
-#OUTLINE_COLOR = (255, 255, 255, 255)
+# Outline color is currently set to white with a minimal non-zero alpha to allow
+# a rendering trick to make outlines appear on demand.  This is sub-optimal because it
+# does not allow any sort of variable coloring or shading in outlines.
+OUTLINE_COLOR = (255, 255, 255, 1)
+# The rendered color for outlines when drawn
+SHOW_OUTLINE_TINT = (220, 220, 220, 255)
+
+KEYWORD_COLOR = (48, 0, 128, 255)
 ICON_BG_COLOR = (255, 255, 255, 255)
 SELECT_TINT = (0, 0, 255, 0)
 ERR_TINT = (255, 0, 0, 0)
@@ -94,10 +101,10 @@ INSERT_SITE_X_OFFSET = 2
 INSERT_SITE_Y_OFFSET = 5
 
 # Number of pixels to indent a code block
-BLOCK_INDENT = 16
+BLOCK_INDENT = 24
 
 # Number of pixels to the left of sequence site to start else and elif icons
-ELSE_DEDENT = 13
+ELSE_DEDENT = 21
 
 # Pixels below input/output site to place attribute site
 # This should be based on font metrics, but for the moment, we have a hard-coded cursor
@@ -162,17 +169,34 @@ commaImageSiteYOffset = 3
 colonPixmap = (
  "ooooo",
  "o   o",
- "o %6o",
  "o   o",
- "o  o.",
+ "o%% o",
+ "o%%o.",
  "o o..",
  "o  o.",
- "o   o",
- "o %6o",
+ "o%% o",
+ "o%% o",
  "o   o",
  "ooooo",
 )
 colonImageSiteYOffset = 5
+
+
+argAssignPixmap = (
+ "ooooooooo",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o %%%%% o",
+ "o      o.",
+ "o     o..",
+ "o %%%%%o.",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o       o",
+ "ooooooooo",
+)
 
 binOutPixmap = (
  "..ooo",
@@ -198,6 +222,7 @@ binLParenPixmap = (
  "..ooooooo",
  "..o     o",
  "..o     o",
+ "..o     o",
  "..o  85 o",
  "..o 85  o",
  "..o 38  o",
@@ -210,11 +235,13 @@ binLParenPixmap = (
  "..o 85  o",
  "..o  85 o",
  "..o     o",
+ "..o     o",
  "..ooooooo",
 )
 
 binRParenPixmap = (
  "oooooooo",
+ "o      o",
  "o      o",
  "o      o",
  "o 58   o",
@@ -228,6 +255,7 @@ binRParenPixmap = (
  "o  83  o",
  "o  58 o.",
  "o 58  o.",
+ "o      o",
  "o      o",
  "oooooooo",
 )
@@ -275,45 +303,45 @@ listRBktPixmap = (
 )
 
 subscriptLBktPixmap = (
- "oooooooo",
- "o      o",
- "o      o",
- "o      o",
- "o  %%  o",
- "o  %%  o",
- "o  %   o",
- "o  %   o",
- "o  %   o",
- "o  %   o",
- "o  %   o",
- "o  %   o",
- "o  %   o",
- "o  %%  o",
- "o  %%  o",
- "o      o",
- "o      o",
- "oooooooo",
+ "oooooo",
+ "o    o",
+ "o    o",
+ "o    o",
+ "o %% o",
+ "o %% o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %% o",
+ "o %% o",
+ "o    o",
+ "o    o",
+ "oooooo",
 )
 
 subscriptRBktPixmap = (
- "oooooooo",
- "o      o",
- "o      o",
- "o      o",
- "o  %%  o",
- "o  %%  o",
- "o   %  o",
- "o   %  o",
- "o   %  o",
- "o   %  o",
- "o   %  o",
- "o   %  o",
- "o   %  o",
- "o  %% o.",
- "o  %% o.",
- "o      o",
- "o      o",
- "oooooooo",
+ "oooooo",
+ "o    o",
+ "o    o",
+ "o    o",
+ "o%%  o",
+ "o%%  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o %  o",
+ "o%% o.",
+ "o%% o.",
+ "o    o",
+ "o    o",
+ "oooooo",
 )
 
 tupleLParenPixmap = (
@@ -338,24 +366,24 @@ tupleLParenPixmap = (
 )
 
 tupleRParenPixmap = (
- "oooooooo",
- "o      o",
- "o      o",
- "o  5   o",
- "o  67  o",
- "o  74  o",
- "o  8%  o",
- "o  8%9 o",
- "o  8%8 o",
- "o  8%8 o",
- "o  8%8 o",
- "o  8%9 o",
- "o  8%  o",
- "o  74 o.",
- "o  67 o.",
- "o  5   o",
- "o      o",
- "oooooooo",
+ "ooooooo",
+ "o     o",
+ "o     o",
+ "o 5   o",
+ "o 67  o",
+ "o 74  o",
+ "o 8%  o",
+ "o 8%9 o",
+ "o 8%8 o",
+ "o 8%8 o",
+ "o 8%8 o",
+ "o 8%9 o",
+ "o 8%  o",
+ "o 74 o.",
+ "o 67 o.",
+ "o 5   o",
+ "o     o",
+ "ooooooo",
 )
 
 fnLParenPixmap = (
@@ -443,9 +471,9 @@ defRParenPixmap = (
 )
 
 binInSeqPixmap = (
- "o8o",
- "8%8",
- "o8o",
+ "ooo",
+ "o%o",
+ "ooo",
  "o o",
  "o o",
  "o o",
@@ -456,15 +484,15 @@ binInSeqPixmap = (
  "oo.",
  "o o",
  "o o",
- "o8o",
- "8%8",
- "o8o",
+ "ooo",
+ "o%o",
+ "ooo",
 )
 
 inpSeqPixmap = (
- "o8o",
- "8%8",
- "o8o",
+ "ooo",
+ "ooo",
+ "ooo",
  "o o",
  "o o",
  "o o",
@@ -477,9 +505,9 @@ inpSeqPixmap = (
  "o o",
  "o o",
  "o o",
- "o8o",
- "8%8",
- "o8o",
+ "ooo",
+ "ooo",
+ "ooo",
 )
 
 inpOptionalSeqPixmap = (
@@ -531,14 +559,14 @@ assignDragPixmap = (
 )
 
 branchFootPixmap = (
- "ooooooooooooooooooo",
- "o%o             o%o",
- "ooooooooooooooooooo",
+ "ooooooooooooooooooooooooooo",
+ "ooo                     ooo",
+ "ooooooooooooooooooooooooooo",
 )
 
 seqSitePixmap = (
  "ooo",
- "o%o",
+ "ooo",
  "ooo",
 )
 
@@ -646,19 +674,20 @@ def asciiToImage(asciiPixmap):
     return image
 asciiToImage.asciiMap = None
 
-def iconBoxedText(text, minHgt=None):
-    if (text, minHgt) in renderCache:
-        return renderCache[(text, minHgt)]
-    width, height = globalFont.getsize(text)
+def iconBoxedText(text, font=globalFont, color=BLACK):
+
+    if (text, font, color) in renderCache:
+        return renderCache[(text, font, color)]
+    width, height = font.getsize(text)
+    if height < minTxtHgt:
+        height = minTxtHgt
     width += 2 * TEXT_MARGIN + 1
     height += 2 * TEXT_MARGIN + 1
-    if minHgt is not None and height < minHgt:
-        height = minHgt
     txtImg = Image.new('RGBA', (width, height), color=ICON_BG_COLOR)
     draw = ImageDraw.Draw(txtImg)
-    draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=globalFont, fill=(0, 0, 0, 255))
+    draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=font, fill=color)
     draw.rectangle((0, 0, width-1, height-1), fill=None, outline=OUTLINE_COLOR)
-    renderCache[(text, minHgt)] = txtImg
+    renderCache[(text, font, color)] = txtImg
     return txtImg
 
 outSiteImage = asciiToImage(outSitePixmap)
@@ -669,6 +698,7 @@ dimAttrOutImage = asciiToImage(dimAttrOutPixmap)
 leftInSiteImage = asciiToImage(leftInSitePixmap)
 commaImage = asciiToImage(commaPixmap)
 colonImage = asciiToImage(colonPixmap)
+argAssignImage = asciiToImage(argAssignPixmap)
 binOutImage = asciiToImage(binOutPixmap)
 floatInImage = asciiToImage(floatInPixmap)
 lParenImage = asciiToImage(binLParenPixmap)
@@ -692,6 +722,12 @@ branchFootImage = asciiToImage(branchFootPixmap)
 seqSiteImage = asciiToImage(seqSitePixmap)
 cphSiteImage = asciiToImage(cphSitePixmap)
 emptyImage = Image.new('RGBA', (0, 0))
+
+# Sadly, hand drawn components are drawn in pixels rather than being dynamically based
+# on font size, so the font can not be arbitrarily enlarged or reduced without hurting
+# appearance.  The eventual, non-prototype, version of this will need to have higher
+# resolution pixmaps for these, and scale them to match the chosen font.
+minTxtHgt = tupleLParenImage.height - 2 * TEXT_MARGIN - 1
 
 class IconExecException(Exception):
     def __init__(self, ic, exceptionText):
@@ -1017,13 +1053,13 @@ class Icon:
     def calcLayout(self):
         pass
 
-    def _drawFromDrawList(self, toDragImage, location, clip, colorErr):
+    def _drawFromDrawList(self, toDragImage, location, clip, style):
         if location is None:
             location = self.rect[:2]
         for imgOffset, img in self.drawList:
             imgLoc = addPoints(location, imgOffset)
             pasteImageWithClip(self.window.image if toDragImage is None else toDragImage,
-             tintSelectedImage(img, self.selected, colorErr), imgLoc, clip)
+             tintSelectedImage(img, self.selected, style), imgLoc, clip)
 
     def _serialize(self, offset, iconsToCopy, **args):
         currentSeries = None
@@ -1070,13 +1106,12 @@ class Icon:
         return ic
 
 class TextIcon(Icon):
-    def __init__(self, text, window=None, location=None, hasAttrIn=True, minTxtHgt=None):
+    def __init__(self, text, window=None, location=None, hasAttrIn=True):
         Icon.__init__(self, window)
         self.text = text
         self.hasAttrIn = hasAttrIn
         bodyWidth, bodyHeight = globalFont.getsize(self.text)
-        if minTxtHgt is not None and minTxtHgt > bodyHeight:
-            bodyHeight = minTxtHgt
+        bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -1092,14 +1127,14 @@ class TextIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
         if self.drawList is None:
             img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.text, self.bodySize[1])
+            txtImg = iconBoxedText(self.text)
             img.paste(txtImg, (outSiteImage.width - 1, 0))
             if needSeqSites:
                 drawSeqSites(img, outSiteImage.width-1, 0, txtImg.height)
@@ -1112,7 +1147,7 @@ class TextIcon(Icon):
                 attrY = self.sites.attrIcon.yOffset
                 img.paste(attrInImage, (attrX, attrY))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         width, height = self.bodySize
@@ -1150,7 +1185,7 @@ class TextIcon(Icon):
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
         _w, minTxtHgt = globalFont.getsize("Mg_")
-        TextIcon.__init__(self, name, window, location, minTxtHgt=minTxtHgt)
+        TextIcon.__init__(self, name, window, location)
         self.name = name
 
     def execute(self):
@@ -1203,7 +1238,7 @@ class AttrIcon(Icon):
         bodyWidth, _h = globalFont.getsize(self.name)
         _w, bodyHeight = globalFont.getsize("Mg_")
         bodyWidth += 2 * TEXT_MARGIN + 1
-        bodyHeight += 2 * TEXT_MARGIN + 1
+        bodyHeight = max(bodyHeight, minTxtHgt) + 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
         self.sites.add('attrOut', 'attrOut', 0, bodyHeight // 2 + ATTR_SITE_OFFSET)
         self.sites.add('attrIcon', 'attrIn', bodyWidth - ATTR_SITE_DEPTH,
@@ -1214,11 +1249,11 @@ class AttrIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + attrOutImage.width, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.name, self.bodySize[1])
+            txtImg = iconBoxedText(self.name)
             img.paste(txtImg, (attrOutImage.width - 1, 0))
             attrOutX = self.sites.attrOut.xOffset
             attrOutY = self.sites.attrOut.yOffset
@@ -1227,7 +1262,7 @@ class AttrIcon(Icon):
             attrInY = self.sites.attrIcon.yOffset
             img.paste(attrInImage, (attrInX, attrInY))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
         width, height = self.bodySize
@@ -1281,7 +1316,7 @@ class SubscriptIcon(Icon):
         return subscriptLBktImage.width + sum(self.argWidths) + \
          subscriptRBktImage.width - 1 + ATTR_SITE_DEPTH, subscriptLBktImage.height
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             leftBoxX = dimAttrOutImage.width - 1
             leftBoxWidth, leftBoxHeight = subscriptLBktImage.size
@@ -1308,7 +1343,7 @@ class SubscriptIcon(Icon):
                 x += self.argWidths[2]
             # Right bracket
             self.drawList.append(((x, 0), subscriptRBktImage))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
         self.argWidths = layout.argWidths
@@ -1459,7 +1494,7 @@ class UnaryOpIcon(Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + outSiteImage.width, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -1491,7 +1526,7 @@ class UnaryOpIcon(Icon):
             draw.text((textLeft, textTop), self.operator, font=globalFont,
              fill=(0, 0, 0, 255))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def arg(self):
         return self.sites.argIcon.att
@@ -1618,7 +1653,7 @@ class ListTypeIcon(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -1653,7 +1688,7 @@ class ListTypeIcon(Icon):
             parenY = self.sites.output.yOffset - self.rightImg.height // 2
             parenX = self.sites.cprhIcons[-1].xOffset
             self.drawList.append(((parenX, parenY), rightImg))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def isComprehension(self):
         return len(self.sites.cprhIcons) > 1
@@ -1908,17 +1943,17 @@ class CprhIfIcon(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             bodyWidth, bodyHeight = self.bodySize
             img = Image.new('RGBA', (bodyWidth, bodyHeight), color=(0, 0, 0, 0))
-            img.paste(iconBoxedText(" if"), (0, 0))
+            img.paste(iconBoxedText(" if", boldFont, KEYWORD_COLOR), (0, 0))
             cphYOff = bodyHeight // 2 - cphSiteImage.height // 2
             img.paste(cphSiteImage, (0, cphYOff))
             inImageY = self.sites.testIcon.yOffset - inSiteImage.height // 2
             img.paste(inSiteImage, (self.sites.testIcon.xOffset, inImageY))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self, cprhX, cprhY, layout):
         width, height = self.bodySize
@@ -1955,12 +1990,13 @@ class CprhForIcon(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             bodyWidth, bodyHeight, inWidth = self.bodySize
             img = Image.new('RGBA', (bodyWidth, bodyHeight),
              color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(" async for" if self.isAsync else " for", bodyHeight)
+            txt = " async for" if self.isAsync else " for"
+            txtImg = iconBoxedText(txt, color=KEYWORD_COLOR)
             img.paste(txtImg, (0, 0))
             cntrSiteY = bodyHeight // 2
             cphYOff = cntrSiteY - cphSiteImage.height // 2
@@ -1973,7 +2009,7 @@ class CprhForIcon(Icon):
             tgtListOffset = bodyWidth - 1 - OUTPUT_SITE_DEPTH
             self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
             # "in"
-            txtImg = iconBoxedText("in", bodyHeight)
+            txtImg = iconBoxedText("in", color=KEYWORD_COLOR)
             img = Image.new('RGBA', (txtImg.width, bodyHeight), color=(0, 0, 0, 0))
             img.paste(txtImg, (0, 0))
             inImgX = txtImg.width - inSiteImage.width
@@ -1981,7 +2017,7 @@ class CprhForIcon(Icon):
             img.paste(inSiteImage, (inImgX, inImageY))
             inOffset = bodyWidth - 1 + self.tgtList.width() - 1
             self.drawList.append(((inOffset, 0), img))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -2078,7 +2114,7 @@ class BinOpIcon(Icon):
     def rightArg(self):
         return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         atTop = self.parent() is None
         suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
         temporaryOutputSite = suppressSeqSites and atTop and self.leftArg() is None
@@ -2128,7 +2164,7 @@ class BinOpIcon(Icon):
                 rParenX = opX + opWidth - 1 + self.rightArgWidth - 1
                 rParenY = siteY - rParenImage.height // 2
                 self.drawList.append(((rParenX, rParenY), rParenImage))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryOutputSite or suppressSeqSites:
             self.drawList = None  # Don't keep after drawing (see above)
 
@@ -2280,7 +2316,7 @@ class CallIcon(Icon):
         width += self.argList.width() + fnRParenImage.width - 1
         return width, height
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             # Left paren/bracket/brace
             self.drawList = [((0, 0), fnLParenImage)]
@@ -2291,7 +2327,7 @@ class CallIcon(Icon):
             # End paren/brace/bracket
             parenX = leftBoxWidth + self.argList.width() - ATTR_SITE_DEPTH - 1
             self.drawList.append(((parenX, 0), fnRParenImage))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def argIcons(self):
         return [site.att for site in self.sites.argIcons]
@@ -2370,27 +2406,31 @@ class CallIcon(Icon):
         return True
 
 class TwoArgIcon(Icon):
-    def __init__(self, op, window, location=None):
+    def __init__(self, op, opImg=None, window=None, location=None):
         Icon.__init__(self, window)
         self.operator = op
+        if opImg is None:
+            opTxt = iconBoxedText(op)
+            opImg = Image.new('RGBA', opTxt.size, color=(0, 0, 0, 0))
+            opImg.paste(opTxt, (0, 0))
+            rInSiteX = opTxt.width - inSiteImage.width
+            rInSiteY = opTxt.height // 2 - inSiteImage.height // 2
+            opImg.paste(inSiteImage, (rInSiteX, rInSiteY))
+        self.opImg = opImg
         self.leftArgWidth = EMPTY_ARG_WIDTH
-        opWidth, opHeight = globalFont.getsize(self.operator)
-        opWidth += 2*TEXT_MARGIN + 1
-        opHeight += 2*TEXT_MARGIN + 1
-        self.opSize = (opWidth, opHeight)
         x, y = (0, 0) if location is None else location
-        width = self.leftArgWidth - 1 + opWidth
-        self.rect = (x, y, x + width, y + opHeight)
-        siteYOffset = opHeight // 2
+        width = self.leftArgWidth - 1 + opImg.width
+        self.rect = (x, y, x + width, y + opImg.height)
+        siteYOffset = opImg.height // 2
         self.sites.add('output', 'output', 0, siteYOffset)
         self.sites.add('leftArg', 'input', 0, siteYOffset)
-        self.sites.add('rightArg', 'input', self.leftArgWidth + opWidth, siteYOffset)
+        self.sites.add('rightArg', 'input', self.leftArgWidth + opImg.width, siteYOffset)
         self.sites.add('seqIn', 'seqIn', - SEQ_SITE_DEPTH, 1)
-        self.sites.add('seqOut', 'seqOut', - SEQ_SITE_DEPTH, opHeight-2)
+        self.sites.add('seqOut', 'seqOut', - SEQ_SITE_DEPTH, opImg.height-2)
         # Indicates that input site falls directly on top of output site
         self.coincidentSite = 'leftArg'
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         atTop = self.parent() is None
         suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
         temporaryOutputSite = suppressSeqSites and atTop and self.sites.leftArg.att is None
@@ -2413,16 +2453,8 @@ class TwoArgIcon(Icon):
                 outSiteY = siteY - binInSeqImage.height // 2
                 self.drawList.append(((outSiteX, outSiteY), binInSeqImage))
             # Body
-            opWidth, opHeight = self.opSize
-            img = Image.new('RGBA', (opWidth, opHeight), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.operator)
-            img.paste(txtImg, (0, 0))
-            rInSiteX = opWidth - inSiteImage.width
-            rInSiteY = siteY - inSiteImage.height // 2
-            img.paste(inSiteImage, (rInSiteX, rInSiteY))
-            opX = leftArgX + self.leftArgWidth - 1
-            self.drawList.append(((opX, 0), img))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+            self.drawList.append(((leftArgX + self.leftArgWidth - 1, 0), self.opImg))
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryOutputSite or suppressSeqSites:
             self.drawList = None  # Don't keep after drawing (see above)
 
@@ -2430,7 +2462,7 @@ class TwoArgIcon(Icon):
         self.leftArgWidth = layout.lArgWidth
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-        opWidth, height = self.opSize
+        opWidth, height = self.opImg.size
         width = opWidth + self.leftArgWidth - 1
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
@@ -2439,7 +2471,7 @@ class TwoArgIcon(Icon):
         self.layoutDirty = False
 
     def calcLayout(self):
-        opWidth, opHeight = self.opSize
+        opWidth, opHeight = self.opImg.size
         layout = Layout(self, opWidth, opHeight, opHeight // 2)
         lArgLayout = _singleSiteSublayout(self, layout, "leftArg", 0, 0)
         lArgWidth = EMPTY_ARG_WIDTH if lArgLayout is None else lArgLayout.width
@@ -2455,7 +2487,7 @@ class TwoArgIcon(Icon):
 
     def selectionRect(self):
         # Limit selection rectangle for extending selection to op itself
-        opWidth, opHeight = self.opSize
+        opWidth, opHeight = self.opImg.size
         rightOffset = self.sites.rightArg.xOffset + OUTPUT_SITE_DEPTH
         leftOffset = rightOffset - opWidth
         x, top = self.rect[:2]
@@ -2470,7 +2502,7 @@ class TwoArgIcon(Icon):
 class ArgAssignIcon(TwoArgIcon):
     """Special assignment statement for use only in function argument lists"""
     def __init__(self, window=None, location=None):
-        TwoArgIcon.__init__(self, "=", window, location)
+        TwoArgIcon.__init__(self, "=", argAssignImage, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on being part of an argument or parameter list
@@ -2498,7 +2530,7 @@ class ArgAssignIcon(TwoArgIcon):
 class DictElemIcon(TwoArgIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
-        TwoArgIcon.__init__(self, ":", window, location)
+        TwoArgIcon.__init__(self, ":", colonImage, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent being a dictionary constant
@@ -2524,7 +2556,7 @@ class DictElemIcon(TwoArgIcon):
 
 class WithAsIcon(TwoArgIcon):
     def __init__(self, window=None, location=None):
-        TwoArgIcon.__init__(self, "as", window, location)
+        TwoArgIcon.__init__(self, "as", None, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent being a "with" statement
@@ -2573,7 +2605,7 @@ class AssignIcon(Icon):
         width += self.valueList.width()
         return width, inpSeqImage.height
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -2607,7 +2639,7 @@ class AssignIcon(Icon):
                 self.drawList.append(((tgtSiteX + OUTPUT_SITE_DEPTH, (height-opHeight)//2), img))
                 tgtSiteX += opWidth - 1
             self.drawList += self.valueList.drawListCommas(tgtSiteX, siteY)
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -2766,7 +2798,7 @@ class AugmentedAssignIcon(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -2790,7 +2822,7 @@ class AugmentedAssignIcon(Icon):
             img = Image.new('RGBA', (bodyWidth, bodyHeight), color=(0, 0, 0, 0))
             targetOffset = dragSeqImage.width - 1
             bodyOffset = targetOffset + self.targetWidth - 1
-            txtImg = iconBoxedText(self.op + '=', bodyHeight)
+            txtImg = iconBoxedText(self.op + '=')
             img.paste(txtImg, (0, 0))
             cntrSiteY = self.sites.targetIcon.yOffset
             inImageX = bodyWidth - inSiteImage.width
@@ -2801,7 +2833,7 @@ class AugmentedAssignIcon(Icon):
             argsOffset = bodyOffset + bodyWidth - 1
             self.drawList += self.valuesList.drawListCommas(
              argsOffset - OUTPUT_SITE_DEPTH, cntrSiteY)
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -2886,7 +2918,7 @@ class DivideIcon(Icon):
         height = topHeight + bottomHeight + 3
         return width, height
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -2921,7 +2953,7 @@ class DivideIcon(Icon):
             if needOutSite:
                 img.paste(outSiteImage, (0, cntrY - outSiteImage.height//2))
             self.drawList.append(((0, bodyTop), img))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.topArgSize = layout.topArgSize
@@ -3015,10 +3047,10 @@ class BlockEnd(Icon):
         x, y = (0, 0)  if location is None else location
         self.rect = (x, y, x + branchFootImage.width, y + branchFootImage.height)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             self.drawList = [((0, 0), branchFootImage)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def select(self, select=True, selectPrimary=False):
         if selectPrimary:
@@ -3053,7 +3085,7 @@ class BlockEnd(Icon):
 class WhileIcon(Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = globalFont.getsize("while")
+        bodyWidth, bodyHeight = boldFont.getsize("while")
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -3070,7 +3102,7 @@ class WhileIcon(Icon):
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3081,16 +3113,17 @@ class WhileIcon(Icon):
         if self.drawList is None:
             img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText("while", self.bodySize[1])
+            txtImg = iconBoxedText("while", boldFont, KEYWORD_COLOR)
             img.paste(txtImg, (dragSeqImage.width - 1, 0))
             cntrSiteY = self.sites.condIcon.yOffset
             inImageY = cntrSiteY - inSiteImage.height // 2
             img.paste(inSiteImage, (self.sites.condIcon.xOffset, inImageY))
-            drawSeqSites(img, dragSeqImage.width-1, 0, txtImg.height, indent="right")
+            drawSeqSites(img, dragSeqImage.width-1, 0, txtImg.height, indent="right",
+             extendWidth=txtImg.width)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3132,9 +3165,9 @@ class ForIcon(Icon):
         Icon.__init__(self, window)
         self.isAsync = isAsync
         text = "async for" if isAsync else "for"
-        bodyWidth = globalFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = boldFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
-        inWidth = globalFont.getsize("in")[0] + 2 * TEXT_MARGIN + 1
+        inWidth = boldFont.getsize("in")[0] + 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight, inWidth)
         siteYOffset = bodyHeight // 2
         targetXOffset = bodyWidth + dragSeqImage.width-1 - OUTPUT_SITE_DEPTH
@@ -3153,7 +3186,7 @@ class ForIcon(Icon):
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3164,15 +3197,17 @@ class ForIcon(Icon):
         if self.drawList is None:
             bodyWidth, bodyHeight, inWidth = self.bodySize
             bodyOffset = dragSeqImage.width - 1
-            img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
-             color=(0, 0, 0, 0))
-            txtImg = iconBoxedText("async for" if self.isAsync else "for", bodyHeight)
+            img = Image.new('RGBA', (max(BLOCK_INDENT + 3, bodyWidth) + bodyOffset,
+             bodyHeight), color=(0, 0, 0, 0))
+            txt = "async for" if self.isAsync else "for"
+            txtImg = iconBoxedText(txt, boldFont, KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = self.sites.seqInsert.yOffset
             inImgX = bodyOffset + bodyWidth - 1 - inSiteImage.width
             inImageY = cntrSiteY - inSiteImage.height // 2
             img.paste(inSiteImage, (inImgX, inImageY))
-            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right")
+            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right",
+             extendWidth=txtImg.width)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
@@ -3180,7 +3215,7 @@ class ForIcon(Icon):
             tgtListOffset = bodyWidth + bodyOffset - 1 - OUTPUT_SITE_DEPTH
             self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
             # "in"
-            txtImg = iconBoxedText("in", bodyHeight)
+            txtImg = iconBoxedText("in", boldFont, KEYWORD_COLOR)
             img = Image.new('RGBA', (txtImg.width, bodyHeight), color=(0, 0, 0, 0))
             img.paste(txtImg, (0, 0))
             inImgX = txtImg.width - inSiteImage.width
@@ -3191,7 +3226,7 @@ class ForIcon(Icon):
             # Commas
             iterOffset = inOffset + inWidth - 1 - OUTPUT_SITE_DEPTH
             self.drawList += self.iterList.drawListCommas(iterOffset, cntrSiteY)
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3266,7 +3301,8 @@ class ForIcon(Icon):
 class IfIcon(Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = globalFont.getsize("if   ")
+        bodyWidth, bodyHeight = boldFont.getsize("if")
+        bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -3278,14 +3314,15 @@ class IfIcon(Icon):
         self.sites.add('seqOut', 'seqOut', seqX + BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         x, y = (0, 0) if location is None else location
-        self.rect = (x, y, x + bodyWidth + dragSeqImage.width-1, y + bodyHeight)
+        width = max(seqX + BLOCK_INDENT + 1, bodyWidth + dragSeqImage.width-1)
+        self.rect = (x, y, x + width, y + bodyHeight)
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
         self.elifIcons = []
         self.elseIcon = None
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3296,16 +3333,18 @@ class IfIcon(Icon):
         if self.drawList is None:
             img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText("if   ", self.bodySize[1])
-            img.paste(txtImg, (dragSeqImage.width - 1, 0))
+            boxLeft = dragSeqImage.width - 1
+            txtImg = iconBoxedText("if", boldFont, KEYWORD_COLOR)
+            img.paste(txtImg, (boxLeft, 0))
             cntrSiteY = self.sites.condIcon.yOffset
             inImageY = cntrSiteY - inSiteImage.height // 2
             img.paste(inSiteImage, (self.sites.condIcon.xOffset, inImageY))
-            drawSeqSites(img, dragSeqImage.width-1, 0, txtImg.height, indent="right")
+            drawSeqSites(img, boxLeft, 0, txtImg.height, indent="right",
+             extendWidth=txtImg.width)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3333,12 +3372,12 @@ class IfIcon(Icon):
         ic.parentIf = None
 
     def doLayout(self, seqSiteX, seqSiteY, layout):
+        layout.updateSiteOffsets(self.sites.seqIn)
         width, height = self.bodySize
-        width += dragSeqImage.width - 1
+        width = max(BLOCK_INDENT + 3, width) + dragSeqImage.width - 1
         left = seqSiteX - self.sites.seqIn.xOffset - 1
         top = seqSiteY - self.sites.seqIn.yOffset - 1
         self.rect = (left, top, left + width, top + height)
-        layout.updateSiteOffsets(self.sites.seqIn)
         # ... The parent site offsets need to be adjusted one pixel left and up, here, for
         #     the child icons to draw in the right place, but I have no idea why.
         layout.doSubLayouts(self.sites.seqIn, seqSiteX-1, seqSiteY-1)
@@ -3362,7 +3401,8 @@ class IfIcon(Icon):
 class ElifIcon(Icon):
     def __init__(self, window, location):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = globalFont.getsize("elif")
+        bodyWidth, bodyHeight = boldFont.getsize("elif ")
+        bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -3377,7 +3417,7 @@ class ElifIcon(Icon):
         self.rect = (x, y, x + bodyWidth + dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3388,7 +3428,7 @@ class ElifIcon(Icon):
         if self.drawList is None:
             img = Image.new('RGBA', (rectWidth(self.rect),
             rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText("elif", self.bodySize[1])
+            txtImg = iconBoxedText("elif ", boldFont, KEYWORD_COLOR)
             boxLeft = dragSeqImage.width - 1
             img.paste(txtImg, (boxLeft, 0))
             cntrSiteY = self.sites.condIcon.yOffset
@@ -3400,7 +3440,7 @@ class ElifIcon(Icon):
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3433,7 +3473,8 @@ class ElifIcon(Icon):
 class ElseIcon(Icon):
     def __init__(self, window, location):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = globalFont.getsize("else")
+        bodyWidth, bodyHeight = boldFont.getsize("else")
+        bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -3445,7 +3486,7 @@ class ElseIcon(Icon):
         self.rect = (x, y, x + bodyWidth + dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3456,7 +3497,7 @@ class ElseIcon(Icon):
         if self.drawList is None:
             img = Image.new('RGBA', (rectWidth(self.rect),
             rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = iconBoxedText("else", self.bodySize[1])
+            txtImg = iconBoxedText("else", boldFont, KEYWORD_COLOR)
             boxLeft = dragSeqImage.width - 1
             img.paste(txtImg, (boxLeft, 0))
             seqSiteX = self.sites.seqIn.xOffset-1
@@ -3465,7 +3506,7 @@ class ElseIcon(Icon):
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, txtImg.height//2 - dragSeqImage.height//2))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3493,7 +3534,7 @@ class DefOrClassIcon(Icon):
     def __init__(self, text, hasArgs, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
         self.text = text
-        bodyWidth = globalFont.getsize(self.text)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = boldFont.getsize(self.text)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3511,7 +3552,7 @@ class DefOrClassIcon(Icon):
             rParenWidth = defRParenImage.width
             totalWidth = argX + self.argList.width() + rParenWidth - 3
         else:
-            totalWidth = bodyWidth + dragSeqImage.width
+            totalWidth = max(bodyWidth, BLOCK_INDENT+2) + dragSeqImage.width
             self.argList = None
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
@@ -3519,7 +3560,7 @@ class DefOrClassIcon(Icon):
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3530,14 +3571,15 @@ class DefOrClassIcon(Icon):
         if self.drawList is None:
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = dragSeqImage.width - 1
-            img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
-             color=(0, 0, 0, 0))
-            txtImg = iconBoxedText(self.text, bodyHeight)
+            img = Image.new('RGBA', (max(bodyWidth, BLOCK_INDENT+3) + bodyOffset,
+             bodyHeight), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText(self.text, boldFont, KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = self.sites.nameIcon.yOffset
             inImageY = cntrSiteY - inSiteImage.height // 2
             img.paste(inSiteImage, (self.sites.nameIcon.xOffset, inImageY))
-            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right")
+            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right",
+             extendWidth=txtImg.width)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
@@ -3552,7 +3594,7 @@ class DefOrClassIcon(Icon):
                 # End Paren
                 rParenOffset = argsOffset - 1 + self.argList.width() - 1
                 self.drawList.append(((rParenOffset, 0), defRParenImage))
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3667,7 +3709,7 @@ class NoArgStmtIcon(Icon):
     def __init__(self, stmt, window, location):
         Icon.__init__(self, window)
         self.stmt = stmt
-        bodyWidth = globalFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = boldFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3679,7 +3721,7 @@ class NoArgStmtIcon(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3692,13 +3734,13 @@ class NoArgStmtIcon(Icon):
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = dragSeqImage.width - 1
-            txtImg = iconBoxedText(self.stmt, bodyHeight)
+            txtImg = iconBoxedText(self.stmt, boldFont, KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             drawSeqSites(img, bodyOffset, 0, txtImg.height)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, bodyHeight//2 - dragSeqImage.height//2))
             self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3737,7 +3779,7 @@ class SeriesStmtIcon(Icon):
         Icon.__init__(self, window)
         self.stmt = stmt
         self.drawIndent = seqIndent
-        bodyWidth = globalFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = boldFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3751,8 +3793,7 @@ class SeriesStmtIcon(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -3761,18 +3802,21 @@ class SeriesStmtIcon(Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (rectWidth(self.rect),
-             rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = dragSeqImage.width - 1
-            txtImg = iconBoxedText(self.stmt, bodyHeight)
+            img = Image.new('RGBA', (bodyOffset + max(bodyWidth, BLOCK_INDENT+2),
+             bodyHeight), color=(0, 0, 0, 0))
+            txtImg = iconBoxedText(self.stmt, boldFont, KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = bodyHeight // 2
             inImgX = bodyOffset + bodyWidth - inSiteImage.width
             inImageY = cntrSiteY - inSiteImage.height // 2
             img.paste(inSiteImage, (inImgX, inImageY))
-            indentType = "right" if self.drawIndent else None
-            drawSeqSites(img, bodyOffset, 0, txtImg.height, indent=indentType)
+            if self.drawIndent:
+                drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right",
+                 extendWidth=txtImg.width)
+            else:
+                drawSeqSites(img, bodyOffset, 0, txtImg.height)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
@@ -3780,7 +3824,7 @@ class SeriesStmtIcon(Icon):
             argsOffset = bodyOffset + bodyWidth - 1
             self.drawList += self.valueList.drawListCommas(argsOffset - OUTPUT_SITE_DEPTH,
              cntrSiteY)
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
@@ -3851,7 +3895,7 @@ class NonlocalIcon(SeriesStmtIcon):
 class YieldIcon(Icon):
     def __init__(self, window, location):
         Icon.__init__(self, window)
-        bodyWidth = globalFont.getsize("yield")[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = boldFont.getsize("yield")[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3865,7 +3909,7 @@ class YieldIcon(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -3874,7 +3918,7 @@ class YieldIcon(Icon):
              rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = outSiteImage.width - 1
-            txtImg = iconBoxedText("yield", bodyHeight)
+            txtImg = iconBoxedText("yield", boldFont, KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = bodyHeight // 2
             inImgX = bodyOffset + bodyWidth - inSiteImage.width
@@ -3890,7 +3934,7 @@ class YieldIcon(Icon):
             argsOffset = bodyOffset + bodyWidth - 1
             self.drawList += self.valueList.drawListCommas(argsOffset - OUTPUT_SITE_DEPTH,
              cntrSiteY)
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -3934,10 +3978,10 @@ class ImageIcon(Icon):
             x, y = location
         self.rect = (x, y, x + image.width, y + image.height)
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             self.drawList = [((0, 0), self.image)]
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def snapLists(self, forCursor=False):
         return {}
@@ -4027,15 +4071,20 @@ def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
     # Paste the cropped image in the drawn area
     dstImage.paste(croppedImage, box=(dl, dt), mask=croppedImage)
 
-def tintSelectedImage(image, selected, colorErr):
-    if not selected and not colorErr:
-        return image
-    # ... This is wasteful and should be an image filter if I can figure out how to
-    # make one properly
-    if colorErr:
+def tintSelectedImage(image, selected, style):
+    if style == "outline":
+        alphaImg = image.getchannel('A')
+        outlineMask = ImageMath.eval("convert(a*255, 'L')", a=alphaImg)
+        outlineImg = Image.new('RGBA', (image.width, image.height), color=SHOW_OUTLINE_TINT)
+        outlineImg.putalpha(outlineMask)
+        outlineImg.paste(image, mask=image)
+        return outlineImg
+    elif style == "error":
         color = ERR_TINT
-    else:
+    elif selected:
         color = SELECT_TINT
+    else:  # No outline and no additional coloring
+        return image
     alphaImg = image.getchannel('A')
     colorImg = Image.new('RGBA', (image.width, image.height), color=color)
     colorImg.putalpha(alphaImg)
@@ -4136,24 +4185,35 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
                 return result
     return None
 
-def drawSeqSites(img, boxLeft, boxTop, boxHeight, indent=None):
-    """Draw sequence (in and out) sites on a rectangular boxed icon"""
+def drawSeqSites(img, boxLeft, boxTop, boxHeight, indent=None, extendWidth=None):
+    """Draw sequence (in and out) sites on a rectangular boxed icon.  If extendWidth
+    is specified and the icon specifies an indent, build up the icon outline to include
+    the indented sequence site.  The value for extendWidth should be the width of the
+    icon box (how far in x beyond boxLeft to start the extension."""
     topIndent = 0
     bottomIndent = 0
     if indent == "right":
         bottomIndent = BLOCK_INDENT
     elif indent == "left":
         topIndent = BLOCK_INDENT
-    img.putpixel((topIndent + boxLeft + 1, boxTop+1), BLACK)
+    img.putpixel((topIndent + boxLeft + 1, boxTop+1),  OUTLINE_COLOR)
     img.putpixel((topIndent + boxLeft + 2, boxTop+1), OUTLINE_COLOR)
     img.putpixel((topIndent + boxLeft + 2, boxTop+2), OUTLINE_COLOR)
     img.putpixel((topIndent + boxLeft + 1, boxTop+2), OUTLINE_COLOR)
     bottomSiteY = boxTop + boxHeight - 2
-    img.putpixel((bottomIndent + boxLeft + 1, bottomSiteY), BLACK)
+    img.putpixel((bottomIndent + boxLeft + 1, bottomSiteY), OUTLINE_COLOR)
     img.putpixel((bottomIndent + boxLeft + 2, bottomSiteY), OUTLINE_COLOR)
     img.putpixel((bottomIndent + boxLeft + 2, bottomSiteY-1), OUTLINE_COLOR)
     img.putpixel((bottomIndent + boxLeft + 1, bottomSiteY-1), OUTLINE_COLOR)
     if indent == "right":
+        extendRight = bottomIndent + boxLeft + 2
+        if extendWidth is not None and extendWidth < extendRight:
+            boxRight = boxLeft + extendWidth - 1
+            boxBottom = boxTop + boxHeight
+            draw = ImageDraw.Draw(img)
+            draw.rectangle((boxRight, boxBottom-3, extendRight-2, boxBottom-1),
+             fill=ICON_BG_COLOR,  outline=OUTLINE_COLOR)
+            img.putpixel((boxRight, boxBottom-2), ICON_BG_COLOR)
         img.putpixel((bottomIndent + boxLeft, bottomSiteY), OUTLINE_COLOR)
         img.putpixel((bottomIndent + boxLeft, bottomSiteY - 1), OUTLINE_COLOR)
 
@@ -4534,6 +4594,9 @@ class HorizListMgr:
 
 def drawSeqSiteConnection(toIcon, image=None, clip=None):
     """Draw connection line between ic's seqIn site and whatever it connects."""
+    # Note that this is not currently used.  Since sequenced icons are usually close
+    # together, it seems to be enough that they share the same indent.  However there
+    # may be reasons to bring this code back, so for now it remains.
     fromIcon = toIcon.prevInSeq()
     if fromIcon is None:
         return
@@ -4592,7 +4655,7 @@ def seqRuleTouches(ic, rect):
         return False
     return True
 
-def drawSeqRule(ic, clip=None):
+def drawSeqRule(ic, clip=None, image=None):
     """Draw connection line between ic's seqIn site and whatever it connects."""
     if not hasattr(ic, 'blockEnd'):
         return
@@ -4612,7 +4675,11 @@ def drawSeqRule(ic, clip=None):
             if fromY > b:
                 return
             toY = b
-    ic.window.draw.line((x, fromY, x, toY), SEQ_RULE_COLOR)
+    if image is None:
+        draw = ic.window.draw
+    else:
+        draw = ImageDraw.Draw(image)
+    draw.line((x, fromY, x, toY), SEQ_RULE_COLOR)
 
 def findSeqStart(ic, toStartOfBlock=False):
     if toStartOfBlock:

@@ -11,7 +11,9 @@ import tkinter.messagebox
 
 windowBgColor = (128, 128, 128)
 windowBgColor = (160, 160, 160)
-#windowBgColor = (255, 255, 255)
+windowBgColor = (200, 200, 200)
+windowBgColor = (255, 255, 255)
+
 defaultWindowSize = (800, 800)
 dragThreshold = 2
 
@@ -1258,7 +1260,9 @@ class Window:
         # re-layouts, and redrawing.
         sequences = findSeries(icons)
         if needRemove:
-            self.removeIcons(self.dragging)
+            self.removeIcons(self.dragging, refresh=False)
+        # Refresh the whole display with icon outlines turned on
+        self.refresh(redraw=True, showOutlines=True)
         # Dragging parent icons away from their children may require re-layout of the
         # (moving) parent icons, and in some cases adding icons to keep lists intact
         self.dragging += restoreSeries(sequences)
@@ -1278,8 +1282,11 @@ class Window:
         self.lastDragImageRegion = None
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, -el, -et)
-            ic.draw(self.dragImage)
-            icon.drawSeqSiteConnection(ic, image=self.dragImage)
+            ic.draw(self.dragImage, style="outline")
+            # Looks better without connectors, but not willing to remove permanently, yet
+            # icon.drawSeqSiteConnection(ic, image=self.dragImage)
+        for ic in topDraggingIcons:
+            icon.drawSeqRule(ic, image=self.dragImage)
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons
         draggingOutputs = []
@@ -1449,7 +1456,6 @@ class Window:
             # Redraw the areas affected by the updated layouts
             self.clearBgRect(redrawRegion.get())
         self.addTop(topDraggedIcons)
-        self.redraw(redrawRegion.get())
         self.dragging = None
         self.snapped = None
         self.snapList = None
@@ -1457,7 +1463,7 @@ class Window:
         # Refresh the entire display.  While refreshing a smaller area is technically
         # possible, after all the dragging and drawing, it's prudent to ensure that the
         # display remains in sync with the image pixmap
-        self.refresh(redraw=False)
+        self.refresh(redraw=True)
         self.undo.addBoundary()
 
     def _cancelDrag(self):
@@ -1652,11 +1658,12 @@ class Window:
     def _handleExecErr(self, excep):
         iconRect = excep.icon.hierRect()
         for ic in excep.icon.traverse():
-            ic.draw(clip=iconRect, colorErr=ic==excep.icon)
+            style = "error" if ic==excep.icon else None
+            ic.draw(clip=iconRect, style=style)
         self.refresh(iconRect, redraw=False)
         tkinter.messagebox.showerror("Error Executing", message=excep.message)
         for ic in excep.icon.traverse():
-            ic.draw(clip=iconRect, colorErr=False)
+            ic.draw(clip=iconRect)
         self.refresh(iconRect, redraw=False)
 
     def _select(self, ic, op='select'):
@@ -1707,7 +1714,7 @@ class Window:
             ic.select(False)
         self.refresh(refreshRegion.get(), clear=False)
 
-    def redraw(self, region=None, clear=True):
+    def redraw(self, region=None, clear=True, showOutlines=False):
         """Cause all icons to redraw to the pseudo-framebuffer (call refresh to transfer
         from there to the display).  Setting clear to False suppresses clearing the
         region to the background color before redrawing."""
@@ -1717,23 +1724,25 @@ class Window:
         # drawing depends on everything being ordered so overlaps happen properly.
         # Sequence lines must be drawn on top of the icons they connect but below any
         # icons that might be placed on top of them.
+        drawStyle = "outline" if showOutlines else None
         for topIcon in self.topIcons:
             for ic in topIcon.traverse():
                 if region is None or rectsTouch(region, ic.rect):
-                    ic.draw()
-            if region is None or icon.seqConnectorTouches(topIcon, region):
-                icon.drawSeqSiteConnection(topIcon, clip=region)
+                    ic.draw(style=drawStyle)
+            # Looks better without connectors, but not willing to remove permanently, yet:
+            # if region is None or icon.seqConnectorTouches(topIcon, region):
+            #     icon.drawSeqSiteConnection(topIcon, clip=region)
             if region is None or icon.seqRuleTouches(topIcon, region):
                 icon.drawSeqRule(topIcon, clip=region)
 
-    def refresh(self, region=None, redraw=True, clear=True):
+    def refresh(self, region=None, redraw=True, clear=True, showOutlines=False):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
          window will be refreshed from the pseudo-framebuffer (self.image).  If redraw
          is True, the framebuffer is first refreshed from the underlying icon structures.
          If no region is specified (region==None), redraw the whole window.  Setting
          clear to False will not clear the background area before redrawing."""
         if redraw:
-            self.redraw(region, clear)
+            self.redraw(region, clear, showOutlines)
         if region is None:
             self.drawImage(self.image, (0, 0))
         else:
@@ -1799,7 +1808,7 @@ class Window:
                 return leftIcon
         return None
 
-    def removeIcons(self, icons):
+    def removeIcons(self, icons, refresh=True):
         """Remove icons from window icon list redraw affected areas of the display"""
         if len(icons) == 0:
             return
@@ -1876,7 +1885,9 @@ class Window:
         # Redo layouts of icons affected by detachment of children
         redrawRegion.add(self.layoutDirtyIcons())
         # Redraw the area affected by the deletion
-        self.refresh(redrawRegion.get())
+        if refresh:
+            self.refresh(redrawRegion.get())
+        return redrawRegion.get()
 
     def clearBgRect(self, rect=None):
         """Clear but don't refresh a rectangle of the window"""
@@ -2092,7 +2103,7 @@ class Window:
                     ic.rect = offsetRect(ic.rect, xOffset, yOffset)
                 seqIcNewRect = seqIc.hierRect()
                 redrawRegion.add(seqIcNewRect)
-            y = seqIcNewRect[3] + 1
+            y = seqIcNewRect[3] - 1  # Minimal line spacing (overlap icon borders)
             x = seqIc.posOfSite('seqOut')[0]
         return redrawRegion.get()
 
@@ -2204,6 +2215,7 @@ class App:
         self.root.withdraw()
         self.newWindow()
         self.frameCount = 0
+        #self.animate()
 
     def mainLoop(self):
         # self.root.after(2000, self.animate)

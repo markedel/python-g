@@ -217,7 +217,7 @@ class EntryIcon(icon.Icon):
             pixel = penImage.getpixel((x - rectLeft, y-rectTop - penImgYOff))
         return pixel[3] > 128
 
-    def draw(self, image=None, location=None, clip=None, colorErr=False):
+    def draw(self, image=None, location=None, clip=None, style=None):
         if image is None:
             image = self.window.image
             draw = self.window.draw
@@ -228,7 +228,7 @@ class EntryIcon(icon.Icon):
         else:
             x, y = location
         boxWidth = self._width(boxOnly=True) - 1
-        bgColor = PEN_OUTLINE_COLOR if colorErr else PEN_BG_COLOR
+        bgColor = PEN_OUTLINE_COLOR if style else PEN_BG_COLOR
         draw.rectangle((x + self.penOffset(), y, x + self.penOffset() + boxWidth,
          y + self.height-1), fill=bgColor, outline=PEN_OUTLINE_COLOR)
         textLeft = x + self.textOffset
@@ -972,7 +972,7 @@ class CursorParenIcon(icon.Icon):
         if closed:
             self.close()
 
-    def draw(self, toDragImage=None, location=None, clip=None, colorErr=False):
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -1016,7 +1016,7 @@ class CursorParenIcon(icon.Icon):
             else:
                 draw.line((bodyLeft, outSiteY, inSiteX, outSiteY),
                  fill=icon.ICON_BG_COLOR, width=3)
-        self._drawFromDrawList(toDragImage, location, clip, colorErr)
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         layout.updateSiteOffsets(self.sites.output)
