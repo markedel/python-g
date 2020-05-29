@@ -37,16 +37,25 @@ HORIZ_ARROW_MAX_DIST = 600
 # Weight of x distance in y cursor movement
 VERT_ARROW_X_WEIGHT = 2
 
-binaryOperators = ['+', '-', '*', '**', '/', '//', '%', '@<<', '>>', '&', '|', '^', '<',
- '>', '<=', '>=', '==', '!=']
-unaryOperators = ['+', '-', '~']
-emptyDelimiters = [' ', '\t', '\n', '\r', '\f', '\v']
-delimitChars = emptyDelimiters + ['(', ')', '[', ']', '}', ':', '.', ';', '@', '=', ',',
- '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!']
-keywords = ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
+compareOperators = {'<', '>', '<=', '>=', '==', '!='}
+binaryOperators = {'+', '-', '*', '**', '/', '//', '%', '@<<', '<<', '>>', '&', '|', '^'}
+unaryOperators = {'+', '-', '~', 'not'}
+emptyDelimiters = {' ', '\t', '\n', '\r', '\f', '\v'}
+delimitChars = {*emptyDelimiters, '(', ')', '[', ']', '}', ':', '.', ';', '@', '=', ',',
+ '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!'}
+keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
- 'return', 'try', 'while', 'with', 'yield']
+ 'return', 'try', 'while', 'with', 'yield', 'await'}
+
+topLevelStmts = {'async def':icon.DefIcon, 'def':icon.DefIcon, 'class':icon.ClassDefIcon,
+ 'break':icon.BreakIcon, 'return':icon.ReturnIcon, 'continue':icon.ContinueIcon,
+ 'yield':icon.YieldIcon, 'del':icon.DelIcon, 'elif':icon.ElifIcon, 'else':icon.ElseIcon,
+ 'except':icon.ExceptIcon, 'finally':icon.FinallyIcon, 'async for':icon.ForIcon,
+ 'for':icon.ForIcon, 'from':icon.FromIcon, 'global':icon.GlobalIcon, 'if':icon.IfIcon,
+ 'import':icon.ImportIcon, 'nonlocal':icon.NonlocalIcon, 'pass':icon.PassIcon,
+ 'raise':icon.RaiseIcon, 'try':icon.TryIcon, 'async while':icon.WhileIcon,
+ 'while':icon.WhileIcon, 'async with':icon.WithIcon, 'with':icon.WithIcon}
 
 identPattern = re.compile('^[a-zA-z_][a-zA-Z_\\d]*$')
 numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
@@ -203,20 +212,6 @@ class EntryIcon(icon.Icon):
             return boxWidth
         return boxWidth + self.penOffset()
 
-    def touchesPosition(self, x, y):
-        if not icon.pointInRect((x, y), self.rect):
-            return False
-        rectLeft, rectTop = self.rect[:2]
-        if x > rectLeft + self.penOffset():
-            return True
-        if self.attachedToAttribute():
-            penImgYOff = self.sites.attrOut.yOffset - attrPenImage.height
-            pixel = attrPenImage.getpixel((x - rectLeft, y - rectTop - penImgYOff))
-        else:
-            penImgYOff = self.sites.output.yOffset - penImage.height // 2
-            pixel = penImage.getpixel((x - rectLeft, y-rectTop - penImgYOff))
-        return pixel[3] > 128
-
     def draw(self, image=None, location=None, clip=None, style=None):
         if image is None:
             image = self.window.image
@@ -240,6 +235,9 @@ class EntryIcon(icon.Icon):
         else:
             nibTop = y + self.sites.output.yOffset - penImage.height // 2
             image.paste(penImage, box=(x, nibTop), mask=penImage)
+        # While we are setting image directly and not using self.drawList for drawing, it
+        # is still needed by the parent class for mouse picking selection sensing
+        self.drawList = [((0, 0), image)]
 
     def setPendingArg(self, newArg):
         if self.hasSite('pendingAttr'):
@@ -323,7 +321,12 @@ class EntryIcon(icon.Icon):
 
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
-        parseResult = parseEntryText(newText, self.attachedToAttribute(), self.window)
+        if self.attachedToAttribute():
+            parseResult = parseAttrText(newText, self.window)
+        elif self.attachedIcon is None or self.attachedSite in ('seqIn', 'seqOut'):
+            parseResult = parseTopLevelText(newText, self.window)
+        else: # Currently no other cursor places, must be expr
+            parseResult = parseExprText(newText, self.window)
         # print('parse result', parseResult)
         if parseResult == "reject":
             beep()
@@ -435,13 +438,16 @@ class EntryIcon(icon.Icon):
             remainingText = ""
         snapLists = ic.snapLists(forCursor=True)
         if self.attachedIcon is None:
+            # Note that this clause includes sequence-site attachment
             self.window.replaceTop(self, ic)
             ic.layoutDirty = True
             if "input" in snapLists:
                 cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
-            else:
+            elif "attrIn" in snapLists:
                 cursor.setToIconSite(ic, "attrIcon")
-        elif ic.__class__ is icon.AssignIcon:
+            elif "seqOut" in snapLists:
+                cursor.setToIconSite(ic, "seqOut")
+        elif ic.__class__ in (icon.AssignIcon, icon.AugmentedAssignIcon):
             if not self.insertAssign(ic):
                 beep()
                 return
@@ -542,9 +548,7 @@ class EntryIcon(icon.Icon):
             self.window.replaceTop(self, tupleIcon)
             return True
         siteType = onIcon.typeOf(site)
-        if onIcon.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
-         icon.AssignIcon, icon.DefIcon, icon.ReturnIcon, icon.YieldIcon) and \
-         siteType == "input":
+        if icon.isSeriesSiteId(site) and siteType == "input":
             # This is essentially ",,", which means leave a new space for an arg
             # Entry icon holds pending arguments
             seriesName, seriesIndex = icon.splitSeriesSiteId(site)
@@ -605,10 +609,9 @@ class EntryIcon(icon.Icon):
             rightArg = None
         child = onIcon
         for parent in onIcon.parentage():
-            if parent.__class__ in (icon.CallIcon, icon.ListIcon, icon.TupleIcon,
-             icon.AssignIcon, icon.DefIcon, icon.ReturnIcon, icon.YieldIcon):
+            childSite = parent.siteOf(child)
+            if icon.isSeriesSiteId(childSite):
                 onIcon.layoutDirty = True
-                childSite = parent.siteOf(child)
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
                 seriesName, seriesIndex = icon.splitSeriesSiteId(childSite)
                 parent.insertChild(rightArg, seriesName, seriesIndex + 1)
@@ -768,6 +771,7 @@ class EntryIcon(icon.Icon):
     def insertAssign(self, assignIcon):
         attIcon = icon.findAttrOutputSite(self.attachedIcon)
         attIconClass = attIcon.__class__
+        isAugmentedAssign = assignIcon.__class__ is icon.AugmentedAssignIcon
         if not (attIconClass is icon.AssignIcon or attIconClass is icon.TupleIcon and
          attIcon.noParens or self.attachedToAttribute() and attIconClass in
          (icon.IdentifierIcon, icon.TupleIcon, icon.ListIcon, icon.AttrIcon)):
@@ -787,27 +791,38 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToIconSite(parent, parentSite)
                 else:
                     self.window.cursor.setToIconSite(assignIcon, "values_0")
-                assignIcon.replaceChild(attIcon, "targets0_0")
+                if isAugmentedAssign:
+                    assignIcon.replaceChild(attIcon, 'targetIcon')
+                else:
+                    assignIcon.replaceChild(attIcon, "targets0_0")
                 return True
         topParent = attIcon.topLevelParent()
         if topParent.__class__ is icon.TupleIcon and topParent.noParens:
             # There is a no-paren tuple at the top level waiting to be converted in to an
             # assignment statement.  Do the conversion.
-            self.attachedIcon.replaceChild(None, self.attachedSite)
-            insertSiteId = topParent.siteOf(attIcon, recursive=True)
             targetIcons = topParent.argIcons()
-            for tgtIcon in targetIcons:
-                topParent.replaceChild(None, topParent.siteOf(tgtIcon))
-            seriesName, seriesIdx = icon.splitSeriesSiteId(insertSiteId)
-            splitIdx = seriesIdx + (0 if topParent is self.attachedIcon else 1)
-            assignIcon.insertChildren(targetIcons[:splitIdx], 'targets0', 0)
-            assignIcon.insertChildren(targetIcons[splitIdx:], 'values', 0)
-            if splitIdx < len(targetIcons):
-                assignIcon.insertChild(None, 'values_0')
+            if isAugmentedAssign:
+                # Augmented (i.e. +=) assigns have just one target, but it is possible
+                # to delete out a comma and be left with a single value in the tuple
+                if len(targetIcons) != 1:
+                    return False
+                self.attachedIcon.replaceChild(None, self.attachedSite)
+                assignIcon.replaceChild(targetIcons[0], 'targetIcon')
+            else:
+                self.attachedIcon.replaceChild(None, self.attachedSite)
+                insertSiteId = topParent.siteOf(attIcon, recursive=True)
+                for tgtIcon in targetIcons:
+                    topParent.replaceChild(None, topParent.siteOf(tgtIcon))
+                seriesName, seriesIdx = icon.splitSeriesSiteId(insertSiteId)
+                splitIdx = seriesIdx + (0 if topParent is self.attachedIcon else 1)
+                assignIcon.insertChildren(targetIcons[:splitIdx], 'targets0', 0)
+                assignIcon.insertChildren(targetIcons[splitIdx:], 'values', 0)
+                if splitIdx < len(targetIcons):
+                    assignIcon.insertChild(None, 'values_0')
             self.window.replaceTop(topParent, assignIcon)
             self.window.cursor.setToIconSite(assignIcon, "values_0")
             return True
-        if topParent.__class__ is icon.AssignIcon:
+        if topParent.__class__ is icon.AssignIcon and not isAugmentedAssign:
             # There is already an assignment icon.  Add a new clause, splitting the
             # target list at the entry location.  (assignIcon is thrown away)
             self.attachedIcon.replaceChild(None, self.attachedSite)
@@ -1507,95 +1522,121 @@ class Cursor:
         """Returns True if the cursor is already at a given icon site"""
         return self.type == "icon" and self.icon == ic and self.site == site
 
-def parseEntryText(text, forAttrSite, window):
+def parseAttrText(text, window):
     if len(text) == 0:
         return "accept"
-    if forAttrSite:
-        if text == '.' or attrPattern.fullmatch(text):
-            return "accept"  # Legal attribute pattern
-        if text in ("i", "a", "o", "an"):
-            return "accept"  # Legal precursor characters to binary keyword operation
-        if text in ("and", "is", "in", "or"):
-            return icon.BinOpIcon(text, window), None # Binary keyword operation
-        if text in ("*", "/", "@", "<", ">", "=", "!"):
-            return "accept"  # Legal precursor characters to binary operation
-        if text in binaryOperators:
-            if text == '//':
-                return icon.DivideIcon(True, window), None
-            return icon.BinOpIcon(text, window), None
-        if text == '(':
-            return "makeFunction"  # Make a function from the attached icon
-        if text == ')':
-            return "endParen"
-        if text == '[':
-            return icon.SubscriptIcon(1, window), None
-        if text == ']':
-            return "endBracket"
-        if text == ',':
-            return "comma"
-        if text == ':':
-            return "colon"
-        op = text[:-1]
-        delim = text[-1]
-        if attrPattern.fullmatch(op):
-            return icon.AttrIcon(op[1:], window), delim
-        if op in binaryOperators and opDelimPattern.match(delim):
+    if text == '.' or attrPattern.fullmatch(text):
+        return "accept"  # Legal attribute pattern
+    if text in ("i", "a", "o", "an"):
+        return "accept"  # Legal precursor characters to binary keyword operation
+    if text in ("and", "is", "in", "or"):
+        return icon.BinOpIcon(text, window), None # Binary keyword operation
+    if text in ("*", "/", "@", "<", ">", "=", "!"):
+        return "accept"  # Legal precursor characters to binary operation
+    if text in compareOperators:
+        return icon.BinOpIcon(text, window), None
+    if text in binaryOperators:
+        return "accept"  # Binary ops can be part of augmented assign (i.e. +=)
+    if text[:-1] in binaryOperators and text[-1] == '=':
+        return icon.AugmentedAssignIcon(text[:-1], window), None
+    if text == '(':
+        return "makeFunction"  # Make a function from the attached icon
+    if text == ')':
+        return "endParen"
+    if text == '[':
+        return icon.SubscriptIcon(1, window), None
+    if text == ']':
+        return "endBracket"
+    if text == ',':
+        return "comma"
+    if text == ':':
+        return "colon"
+    op = text[:-1]
+    delim = text[-1]
+    if attrPattern.fullmatch(op):
+        return icon.AttrIcon(op[1:], window), delim
+    if opDelimPattern.match(delim):
+        if op in compareOperators:
+            return icon.BinOpIcon(op, window), delim
+        if op in binaryOperators:
             # Valid binary operator followed by allowable operand character
             if op == '/':
                 return icon.DivideIcon(False, window), delim
             elif op == '//':
                 return icon.DivideIcon(True, window), delim
             return icon.BinOpIcon(op, window), delim
-        if op == '=':
-            return icon.AssignIcon(1, window), delim
-        return "reject"
-    else:
-        # input site
-        if text in ('+', '-', '~', "not"):
-            # Unary operator
-            return icon.UnaryOpIcon(text, window), None
+        if op[:-1] in binaryOperators and op[-1] == '=':
+            return icon.AugmentedAssignIcon(op[:-1], window), delim
+    if op == '=':
+        return icon.AssignIcon(1, window), delim
+    return "reject"
+
+def parseExprText(text, window):
+    if len(text) == 0:
+        return "accept"
+    if text in unaryOperators:
+        # Unary operator
+        return icon.UnaryOpIcon(text, window), None
+    if text == 'yield':
+        return icon.YieldIcon(window), None
+    if text == 'await':
+        return icon.AwaitIcon(window), None
+    if text == '(':
+        return CursorParenIcon(False, window), None
+    if text == ')':
+        return "endParen"
+    if text == '[':
+        return icon.ListIcon(window), None
+    if text == ']':
+        return "endBracket"
+    if text == ',':
+        return "comma"
+    if text == ':':
+        return "colon"
+    if text == '=':
+        return icon.AssignIcon(1, window), None
+    if identPattern.fullmatch(text) or numPattern.fullmatch(text):
+        return "accept"  # Nothing but legal identifier and numeric
+    delim = text[-1]
+    text = text[:-1]
+    if opDelimPattern.match(delim):
+        if text in unaryOperators:
+            return icon.UnaryOpIcon(text, window), delim
         if text == '(':
-            return CursorParenIcon(False, window), None
-        if text == ')':
-            return "endParen"
+            return CursorParenIcon(False, window), delim
         if text == '[':
-            return icon.ListIcon(window), None
-        if text == ']':
-            return "endBracket"
-        if text == ',':
-            return "comma"
-        if text == ':':
-            return "colon"
-        if text == '=':
-            return icon.AssignIcon(1, window), None
-        if identPattern.fullmatch(text) or numPattern.fullmatch(text):
-            return "accept"  # Nothing but legal identifier and numeric
-        delim = text[-1]
-        text = text[:-1]
-        if opDelimPattern.match(delim):
-            if text in ('+', '-', '~', "not"):
-                return icon.UnaryOpIcon(text, window), delim
-            if text == '(':
-                return CursorParenIcon(False, window), delim
-            if text == '[':
-                return icon.ListIcon(window), delim
-        if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
-            return "reject"  # Precursor characters do not form valid identifier or number
-        if len(text) == 0 or delim not in delimitChars:
-            return "reject"  # No legal text or not followed by a legal delimiter
-        # All but the last character is ok and the last character is a valid delimiter
-        if text in ('False', 'None', 'True'):
-            return icon.IdentifierIcon(text, window), delim
-        if text in keywords:
-            return "reject"
-        exprAst = compile_eval.parseExprToAst(text)
-        if exprAst is None:
-            return "reject"
-        if exprAst.__class__ == ast.Name:
-            return icon.IdentifierIcon(exprAst.id, window), delim
-        if exprAst.__class__ == ast.Num:
-            return icon.NumericIcon(exprAst.n, window), delim
+            return icon.ListIcon(window), delim
+    if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
+        return "reject"  # Precursor characters do not form valid identifier or number
+    if len(text) == 0 or delim not in delimitChars:
+        return "reject"  # No legal text or not followed by a legal delimiter
+    # All but the last character is ok and the last character is a valid delimiter
+    if text in ('False', 'None', 'True'):
+        return icon.IdentifierIcon(text, window), delim
+    if text in keywords:
         return "reject"
+    exprAst = compile_eval.parseExprToAst(text)
+    if exprAst is None:
+        return "reject"
+    if exprAst.__class__ == ast.Name:
+        return icon.IdentifierIcon(exprAst.id, window), delim
+    if exprAst.__class__ == ast.Num:
+        return icon.NumericIcon(exprAst.n, window), delim
+    return "reject"
+
+def parseTopLevelText(text, window):
+    if len(text) == 0:
+        return "accept"
+    for stmt, icClass in topLevelStmts.items():
+        if len(text) <= len(stmt) and text == stmt[:len(text)]:
+            return "accept"
+        delim = text[-1]
+        if text[:-1] == stmt and delim in delimitChars:
+            kwds = {}
+            if stmt[:5] == "async":
+                kwds['isAsync'] = True
+            return icClass(window=window, **kwds), delim
+    return parseExprText(text, window)
 
 def tkCharFromEvt(evt):
     if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 192 or 219 <= evt.keycode <= 222:

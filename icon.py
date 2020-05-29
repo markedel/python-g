@@ -472,7 +472,7 @@ defRParenPixmap = (
 
 binInSeqPixmap = (
  "ooo",
- "o%o",
+ "ooo",
  "ooo",
  "o o",
  "o o",
@@ -485,7 +485,7 @@ binInSeqPixmap = (
  "o o",
  "o o",
  "ooo",
- "o%o",
+ "ooo",
  "ooo",
 )
 
@@ -840,6 +840,8 @@ class Icon:
         draws something."""
         if not python_g.rectsTouch(self.rect, rect):
             return False
+        if self.drawList is None:
+            print('Missing drawlist?')
         for imgOffset, img in self.drawList:
             if img is commaImage:
                 continue
@@ -1972,7 +1974,7 @@ class CprhIfIcon(Icon):
         return "if " + _singleArgTextRepr(self.sites.testIcon)
 
 class CprhForIcon(Icon):
-    def __init__(self, isAsync, window=None, location=None):
+    def __init__(self, isAsync=False, window=None, location=None):
         Icon.__init__(self, window)
         self.isAsync = isAsync
         text = " async for" if isAsync else " for"
@@ -2778,7 +2780,7 @@ class AssignIcon(Icon):
         return text +  _seriesTextRepr(self.sites.values)
 
 class AugmentedAssignIcon(Icon):
-    def __init__(self, op, window, location):
+    def __init__(self, op, window, location=None):
         Icon.__init__(self, window)
         self.op = op
         bodyWidth = globalFont.getsize(self.op + '=')[0] + 2 * TEXT_MARGIN + 1
@@ -2793,7 +2795,7 @@ class AugmentedAssignIcon(Icon):
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         self.targetWidth = EMPTY_ARG_WIDTH
         argX = dragSeqImage.width + self.targetWidth + bodyWidth
-        self.valuesList = HorizListMgr(self, 'valueIcons', argX, siteYOffset)
+        self.valuesList = HorizListMgr(self, 'values', argX, siteYOffset)
         totalWidth = argX + self.valuesList.width() - 2
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
@@ -2878,7 +2880,7 @@ class AugmentedAssignIcon(Icon):
             target = " "
         else:
             target = self.sites.targetIcon.att.textRepr()
-        argText = _seriesTextRepr(self.sites.valueIcons)
+        argText = _seriesTextRepr(self.sites.values)
         return target + ' ' + self.op + '=' + ' ' + argText
 
     def clipboardRepr(self, offset, iconsToCopy):
@@ -3101,6 +3103,7 @@ class WhileIcon(Icon):
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
+            self.sites.seqOut.attach(self, self.blockEnd)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
@@ -3111,15 +3114,17 @@ class WhileIcon(Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (rectWidth(self.rect),
-             rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = iconBoxedText("while", boldFont, KEYWORD_COLOR)
+            bodyOffset = dragSeqImage.width - 1
+            bodyWidth, bodyHeight = txtImg.size
+            img = Image.new('RGBA', (bodyOffset + max(BLOCK_INDENT + 3, bodyWidth),
+             bodyHeight), color=(0, 0, 0, 0))
             img.paste(txtImg, (dragSeqImage.width - 1, 0))
             cntrSiteY = self.sites.condIcon.yOffset
             inImageY = cntrSiteY - inSiteImage.height // 2
             img.paste(inSiteImage, (self.sites.condIcon.xOffset, inImageY))
-            drawSeqSites(img, dragSeqImage.width-1, 0, txtImg.height, indent="right",
-             extendWidth=txtImg.width)
+            drawSeqSites(img, bodyOffset, 0, bodyHeight, indent="right",
+             extendWidth=bodyWidth)
             if temporaryDragSite:
                 img.paste(dragSeqImage, (0, cntrSiteY - dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
@@ -3161,7 +3166,7 @@ class WhileIcon(Icon):
         return None  #... no idea what to do here, yet.
 
 class ForIcon(Icon):
-    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
+    def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
         self.isAsync = isAsync
         text = "async for" if isAsync else "for"
@@ -3185,6 +3190,7 @@ class ForIcon(Icon):
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
+            self.sites.seqOut.attach(self, self.blockEnd)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
@@ -3319,6 +3325,7 @@ class IfIcon(Icon):
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
+            self.sites.seqOut.attach(self, self.blockEnd)
         self.elifIcons = []
         self.elseIcon = None
 
@@ -3399,7 +3406,7 @@ class IfIcon(Icon):
         return None  #... no idea what to do here, yet.
 
 class ElifIcon(Icon):
-    def __init__(self, window, location):
+    def __init__(self, window, location=None):
         Icon.__init__(self, window)
         bodyWidth, bodyHeight = boldFont.getsize("elif ")
         bodyHeight = max(minTxtHgt, bodyHeight)
@@ -3471,7 +3478,7 @@ class ElifIcon(Icon):
         return None  # ... no idea what to do here, yet.
 
 class ElseIcon(Icon):
-    def __init__(self, window, location):
+    def __init__(self, window, location=None):
         Icon.__init__(self, window)
         bodyWidth, bodyHeight = boldFont.getsize("else")
         bodyHeight = max(minTxtHgt, bodyHeight)
@@ -3559,6 +3566,7 @@ class DefOrClassIcon(Icon):
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window, (x, y + bodyHeight + 2))
+            self.sites.seqOut.attach(self, self.blockEnd)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
@@ -3688,7 +3696,7 @@ class DefOrClassIcon(Icon):
         self.window.undo.registerCallback(self.addArgs)
 
 class ClassDefIcon(DefOrClassIcon):
-    def __init__(self, hasArgs, createBlockEnd=True, window=None, location=None):
+    def __init__(self, hasArgs=False, createBlockEnd=True, window=None, location=None):
         DefOrClassIcon.__init__(self, "class", hasArgs, createBlockEnd, window, location)
 
     def clipboardRepr(self, offset, iconsToCopy):
@@ -3696,7 +3704,7 @@ class ClassDefIcon(DefOrClassIcon):
          createBlockEnd=False)
 
 class DefIcon(DefOrClassIcon):
-    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
+    def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
         self.isAsync = isAsync
         text = "async def" if isAsync else "def"
         DefOrClassIcon.__init__(self, text, True, createBlockEnd, window, location)
@@ -3763,15 +3771,15 @@ class NoArgStmtIcon(Icon):
         return None  #... no idea what to do here, yet.
 
 class PassIcon(NoArgStmtIcon):
-    def __init__(self, window, location):
+    def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "pass", window, location)
 
 class ContinueIcon(NoArgStmtIcon):
-    def __init__(self, window, location):
+    def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "continue", window, location)
 
 class BreakIcon(NoArgStmtIcon):
-    def __init__(self, window, location):
+    def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "break", window, location)
 
 class SeriesStmtIcon(Icon):
@@ -3862,20 +3870,21 @@ class SeriesStmtIcon(Icon):
         return None  #... no idea what to do here, yet.
 
 class ReturnIcon(SeriesStmtIcon):
-    def __init__(self, window, location):
+    def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "return", window, location=location)
 
 class DelIcon(SeriesStmtIcon):
-    def __init__(self, window, location):
+    def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "del", window, location=location)
 
 class WithIcon(SeriesStmtIcon):
-    def __init__(self, isAsync, createBlockEnd=True, window=None, location=None):
+    def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
         stmt = "async with" if isAsync else "with"
         SeriesStmtIcon.__init__(self, stmt, window, seqIndent=True, location=location)
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = BlockEnd(self, window)
+            self.sites.seqOut.attach(self, self.blockEnd)
 
     def select(self, select=True):
         self.selected = select
@@ -3885,15 +3894,15 @@ class WithIcon(SeriesStmtIcon):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
 class GlobalIcon(SeriesStmtIcon):
-    def __init__(self, window, location):
+    def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "global", window, location=location)
 
 class NonlocalIcon(SeriesStmtIcon):
-    def __init__(self, window, location):
+    def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "nonlocal", window, location=location)
 
 class YieldIcon(Icon):
-    def __init__(self, window, location):
+    def __init__(self, window=None, location=None):
         Icon.__init__(self, window)
         bodyWidth = boldFont.getsize("yield")[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
@@ -4000,6 +4009,30 @@ class ImageIcon(Icon):
 
     def execute(self):
         return None
+
+# Unfinished
+class ToDoIcon(TextIcon):
+    def __init__(self, window=None, location=None):
+        name = self.__class__.__name__
+        TextIcon.__init__(self, 'ToDo: ' + name + 'Not implemented', window, location)
+
+class ExceptIcon(ToDoIcon):
+    pass
+
+class FinallyIcon(ToDoIcon):
+    pass
+
+class FromIcon(ToDoIcon):
+    pass
+
+class ImportIcon(ToDoIcon):
+    pass
+
+class RaiseIcon(ToDoIcon):
+    pass
+
+class TryIcon(ToDoIcon):
+    pass
 
 class Layout:
     """Structure to store the information that the icon has calculated about how it
@@ -4746,6 +4779,18 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False):
                 yield from ic.traverse()
             else:
                 yield ic
+
+def elseElifBlockIcons(ic):
+    """Returns a list of all icons (hierarchy) in an else or elif clause, including
+    the else or elif icon itself."""
+    seqIcons = list(ic.traverse())
+    for seqIcon in traverseSeq(ic, includeStartingIcon=False):
+        if isinstance(seqIcon, BlockEnd):
+            break
+        if seqIcon.__class__ in (ElifIcon, ElseIcon):
+            break
+        seqIcons += list(seqIcon.traverse())
+    return seqIcons
 
 def insertSeq(seqStartIc, atIc, before=False):
     seqEndIc = findSeqEnd(seqStartIc)

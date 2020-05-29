@@ -318,9 +318,9 @@ def makeIcons(parsedExpr, window, x, y):
         assignIcon.replaceChild(targetIcon, "targetIcon")
         if parsedExpr[3][0] is icon.TupleIcon:
             valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[3][1:]]
-            assignIcon.insertChildren(valueIcons, "valueIcons", 0)
+            assignIcon.insertChildren(valueIcons, "values", 0)
         else:
-            assignIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "valueIcons_0")
+            assignIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "values_0")
         return assignIcon
     if iconClass in (icon.ReturnIcon, icon.YieldIcon):
         topIcon = iconClass(window, (x, y))

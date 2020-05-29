@@ -9,13 +9,11 @@ import time
 import compile_eval
 import tkinter.messagebox
 
-windowBgColor = (128, 128, 128)
-windowBgColor = (160, 160, 160)
-windowBgColor = (200, 200, 200)
-windowBgColor = (255, 255, 255)
+WINDOW_BG_COLOR = (255, 255, 255)
+RECT_SELECT_COLOR = (128, 128, 255, 255)
 
-defaultWindowSize = (800, 800)
-dragThreshold = 2
+DEFAULT_WINDOW_SIZE = (800, 800)
+DRAG_THRESHOLD = 2
 
 # Tkinter event modifiers
 SHIFT_MASK = 0x001
@@ -121,7 +119,7 @@ class Window:
         menu.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
         self.top.config(menu=self.menubar)
         if size is None:
-            size = defaultWindowSize
+            size = DEFAULT_WINDOW_SIZE
         width, height = size
         self.imgFrame = tk.Frame(self.frame, bg="", width=width, height=height)
         self.imgFrame.bind("<Expose>", self._exposeCb)
@@ -190,7 +188,7 @@ class Window:
         self.rectSelectInitialStates = {}
 
         self.topIcons = []
-        self.image = Image.new('RGB', (width, height), color=windowBgColor)
+        self.image = Image.new('RGB', (width, height), color=WINDOW_BG_COLOR)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
         self.entryIcon = None
@@ -238,7 +236,7 @@ class Window:
     def _configureCb(self, evt):
         """Called when window is initially displayed or resized"""
         if evt.width != self.image.width or evt.height != self.image.height:
-            self.image = Image.new('RGB', (evt.width, evt.height), color=windowBgColor)
+            self.image = Image.new('RGB', (evt.width, evt.height), color=WINDOW_BG_COLOR)
             self.draw = ImageDraw.Draw(self.image)
         self.redraw()
 
@@ -356,7 +354,7 @@ class Window:
             return
         # Not currently dragging, but button is down
         btnX, btnY = self.buttonDownLoc
-        if abs(evt.x - btnX) + abs(evt.y - btnY) <= dragThreshold:
+        if abs(evt.x - btnX) + abs(evt.y - btnY) <= DRAG_THRESHOLD:
             return  # Mouse has not moved sufficiently to start a drag
         # Start a drag
         ic = self.findIconAt(btnX, btnY)
@@ -396,6 +394,8 @@ class Window:
                 self._startDrag(evt, list(ic.traverseBlock(hier=True)))
             elif isinstance(ic, icon.BlockEnd):
                 self._startDrag(evt, list(ic.primary.traverseBlock(hier=True)))
+            elif ic.__class__ in (icon.ElseIcon, icon.ElifIcon):
+                self._startDrag(evt, icon.elseElifBlockIcons(ic))
             else:
                 self._startDrag(evt, list(self.findLeftOuterIcon(
                  self.assocGrouping(ic)).traverse()))
@@ -985,10 +985,10 @@ class Window:
 
         elif isinstance(ic, icon.AugmentedAssignIcon):
             siteName, index = icon.splitSeriesSiteId(self.cursor.site)
-            if siteName == "valueIcons" and index is 0:
+            if siteName == "values" and index is 0:
                 # Cursor is on first input site.  Remove icon and replace with cursor
                 text = ic.op + '='
-                valueIcons = [s.att for s in ic.sites.valueIcons if s.att is not None]
+                valueIcons = [s.att for s in ic.sites.values if s.att is not None]
                 targetIcon = ic.childAt("targetIcon")
                 if len(valueIcons) in (0, 1):
                     # Zero or one argument, convert to entry icon (with pending arg if
@@ -1012,7 +1012,7 @@ class Window:
                     # Multiple remaining arguments: convert to tuple with entry icon as
                     # first element
                     redrawRegion = AccumRects(ic.topLevelParent().hierRect())
-                    valueIcons = [s.att for s in ic.sites.valueIcons if s.att is not None]
+                    valueIcons = [s.att for s in ic.sites.values if s.att is not None]
                     newTuple = icon.TupleIcon(window=self, noParens=True)
                     if targetIcon is None:
                         self.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
@@ -1032,7 +1032,7 @@ class Window:
                     self.replaceTop(ic, newTuple)
                 self.cursor.setToEntryIcon()
                 self._redisplayChangedEntryIcon(evt, redrawRegion.get())
-            elif siteName == "valueIcons":
+            elif siteName == "values":
                 # Cursor is on comma input.  Delete if empty or previous site is empty
                 prevSite = icon.makeSeriesSiteId(siteName, index-1)
                 childAtCursor = ic.childAt(self.cursor.site)
@@ -1211,6 +1211,12 @@ class Window:
         topIcon = self.cursor.icon.topLevelParent()
         if topIcon is None or not topIcon.hasSite('seqOut'):
             return
+        if evt.state & SHIFT_MASK:
+            #... not correct/complete.  Need to create entry icon with pending block
+            blockStartIcon = icon.findSeqStart(topIcon, toStartOfBlock=True)
+            blockOwnerIcon = blockStartIcon.childAt('seqIn')
+            if blockOwnerIcon is not None:
+                topIcon = blockOwnerIcon.blockEnd
         self.cursor.setToIconSite(topIcon, 'seqOut')
         self._insertEntryIconAtCursor("")
 
@@ -1502,8 +1508,8 @@ class Window:
                 redrawRegion.add(ic.rect)
         self.refresh(redrawRegion.get(), clear=False)
         l, t, r, b = newRect
-        hLineImg = Image.new('RGB', (r - l, 1), color=(255, 255, 255, 255))
-        vLineImg = Image.new('RGB', (1, b - t), color=(255, 255, 255, 255))
+        hLineImg = Image.new('RGB', (r - l, 1), color=RECT_SELECT_COLOR)
+        vLineImg = Image.new('RGB', (1, b - t), color=RECT_SELECT_COLOR)
         self.drawImage(hLineImg, (l, t))
         self.drawImage(hLineImg, (l, b))
         self.drawImage(vLineImg, (l, t))
@@ -1896,7 +1902,7 @@ class Window:
             l, t, r, b = 0, 0, self.image.width, self.image.height
         else:
             l, t, r, b = rect
-        self.draw.rectangle((l, t, r-1, b-1), fill=windowBgColor)
+        self.draw.rectangle((l, t, r-1, b-1), fill=WINDOW_BG_COLOR)
 
     def assocGrouping(self, ic):
         """Find the root binary operation associated with a group of equal precedence
@@ -1925,12 +1931,16 @@ class Window:
     def replaceTop(self, old, new):
         """Replace an existing top-level icon with a new icon.  If the existing icon was
          part of a sequence, replace it in the sequence.  If the icon was not part of a
-         sequence place it in the same location.  Does not re-layout or re-draw."""
+         sequence place it in the same location.  If "new" will own a code block, also
+         integrate its corresponding block-end icon.  Does not re-layout or re-draw."""
         self.removeTop(old)
         nextInSeq = old.nextInSeq()
         if nextInSeq:
             old.replaceChild(None, 'seqOut')
-            new.replaceChild(nextInSeq, 'seqOut')
+            if hasattr(new, 'blockEnd'):
+                new.blockEnd.replaceChild(nextInSeq, 'seqOut')
+            else:
+                new.replaceChild(nextInSeq, 'seqOut')
         prevInSeq = old.prevInSeq()
         if prevInSeq:
             old.replaceChild(None, 'seqIn')
@@ -1944,7 +1954,10 @@ class Window:
             newX = oldX + oldSite.xOffset - newSite.xOffset
             newY = oldY + oldSite.yOffset - newSite.yOffset
         new.rect = icon.moveRect(new.rect, (newX, newY))
-        self.addTop(new)
+        if hasattr(new, 'blockEnd'):
+            self.addTop((new, new.blockEnd))
+        else:
+            self.addTop(new)
 
     def addTop(self, ic):
         """Place an icon or icons on the window at the top level.  If the icon(s) are
