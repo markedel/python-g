@@ -212,32 +212,24 @@ class EntryIcon(icon.Icon):
             return boxWidth
         return boxWidth + self.penOffset()
 
-    def draw(self, image=None, location=None, clip=None, style=None):
-        if image is None:
-            image = self.window.image
-            draw = self.window.draw
-        else:
-            draw = ImageDraw.Draw(image)
-        if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        boxWidth = self._width(boxOnly=True) - 1
-        bgColor = PEN_OUTLINE_COLOR if style else PEN_BG_COLOR
-        draw.rectangle((x + self.penOffset(), y, x + self.penOffset() + boxWidth,
-         y + self.height-1), fill=bgColor, outline=PEN_OUTLINE_COLOR)
-        textLeft = x + self.textOffset
-        draw.text((textLeft, y + icon.TEXT_MARGIN), self.text, font=icon.globalFont,
-         fill=(0, 0, 0, 255))
-        if self.attachedToAttribute():
-            nibTop = y + self.sites.attrOut.yOffset - attrPenImage.height + 2
-            image.paste(attrPenImage, box=(x, nibTop), mask=attrPenImage)
-        else:
-            nibTop = y + self.sites.output.yOffset - penImage.height // 2
-            image.paste(penImage, box=(x, nibTop), mask=penImage)
-        # While we are setting image directly and not using self.drawList for drawing, it
-        # is still needed by the parent class for mouse picking selection sensing
-        self.drawList = [((0, 0), image)]
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if self.drawList is None:
+            boxWidth = self._width(boxOnly=True) - 1
+            img = Image.new('RGBA', (icon.rectWidth(self.rect), self.height))
+            bgColor = PEN_OUTLINE_COLOR if style else PEN_BG_COLOR
+            draw = ImageDraw.Draw(img)
+            draw.rectangle((self.penOffset(), 0, self.penOffset() + boxWidth,
+             self.height-1), fill=bgColor, outline=PEN_OUTLINE_COLOR)
+            draw.text((self.textOffset, icon.TEXT_MARGIN), self.text,
+             font=icon.globalFont, fill=(0, 0, 0, 255))
+            if self.attachedToAttribute():
+                nibTop = self.sites.attrOut.yOffset - attrPenImage.height + 2
+                img.paste(attrPenImage, box=(0, nibTop), mask=attrPenImage)
+            else:
+                nibTop = self.sites.output.yOffset - penImage.height // 2
+                img.paste(penImage, box=(0, nibTop), mask=penImage)
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, style)
 
     def setPendingArg(self, newArg):
         if self.hasSite('pendingAttr'):
@@ -933,6 +925,8 @@ class EntryIcon(icon.Icon):
         self.rect = (outSiteX, top, outSiteX + width, top + self.height)
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        self.layoutDirty = False
+        self.drawList = None
 
     def calcLayout(self):
         width = self._width() - (1 if self.attachedToAttribute() else 2)

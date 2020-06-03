@@ -37,6 +37,22 @@ SEQ_SELECT_WIDTH = 15
 # How far to the right of icons to deposit the result of executing them
 RESULT_X_OFFSET = 5
 
+# How wide (pixels) are the window scroll bars
+SCROLL_BAR_WIDTH = 15
+
+# How much to scroll per push of scroll bar arrow buttons.  In a normal text editor, this
+# is 1 line.  The equivalent for this font is 17 pixels
+SCROLL_INCR = 17
+
+# Scrolling a little bit beyond bottom and right of content is allowed to give room for
+# cursors and seeing were we're snapping.
+SCROLL_RIGHT_PAD = SCROLL_BOTTOM_PAD = 9
+
+# Mouse wheel delta is a quantity which the industry has decided is 120 per "step" (some
+# mouse wheels allow finer control than one step).  A typical text editor scrolls 3 lines
+# per step.  A scale factor of .42 yields 50 pixels per step, which is a similar distance.
+MOUSE_WHEEL_SCALE = 0.42
+
 startUpTime = time.monotonic()
 
 # Notes on window drawing:
@@ -129,6 +145,7 @@ class Window:
         self.imgFrame.bind('<Button-3>', self._btn3Cb)
         self.imgFrame.bind('<ButtonRelease-3>', self._btn3ReleaseCb)
         self.imgFrame.bind("<Motion>", self._motionCb)
+        self.imgFrame.bind("<MouseWheel>", self._mouseWheelCb)
         self.top.bind("<FocusIn>", self._focusInCb)
         self.top.bind("<FocusOut>", self._focusOutCb)
         self.top.bind("<Control-z>", self._undoCb)
@@ -146,7 +163,17 @@ class Window:
         self.top.bind("<Left>", self._arrowCb)
         self.top.bind("<Right>", self._arrowCb)
         self.top.bind("<Key>", self._keyCb)
-        self.imgFrame.pack(fill=tk.BOTH, expand=True)
+        self.imgFrame.grid(row=0, column=0, sticky=tk.NSEW)
+        self.xScrollbar = tk.Scrollbar(self.frame, orient=tk.HORIZONTAL,
+         width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
+        self.xScrollbar.grid(row=1, column=0, sticky=tk.EW)
+        self.yScrollbar = tk.Scrollbar(self.frame,
+         width=SCROLL_BAR_WIDTH, command=self._yScrollCb)
+        self.yScrollbar.grid(row=0, column=2, sticky=tk.NS)
+        self.scrollOrigin = 0, 0
+        self.scrollExtent = 0, 0, width, height
+        self.frame.grid_rowconfigure(0, weight=1)
+        self.frame.grid_columnconfigure(0, weight=1)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
         self.popup = tk.Menu(self.imgFrame, tearoff=0)
@@ -182,7 +209,7 @@ class Window:
         self.dragImage = None
         self.lastDragImageRegion = None
         self.inRectSelect = False
-        self.lastRectSelect = None
+        self.lastRectSelect = None  # Note, in image coords (not content)
         self.inStmtSelect = False
         self.lastStmtHighlightRects = None
         self.rectSelectInitialStates = {}
@@ -208,9 +235,10 @@ class Window:
         return [ic for ic in self.allIcons(order) if ic.selected]
 
     def _btn3Cb(self, evt):
-        ic = self.findIconAt(evt.x, evt.y)
+        x, y = self.imageToContentCoord(evt.x, evt.y)
+        ic = self.findIconAt(x, y)
         if ic is not None and ic.selected is False:
-            self._select(self.findIconAt(evt.x, evt.y))
+            self._select(self.findIconAt(x, y))
 
     def _btn3ReleaseCb(self, evt):
         selectedIcons = self.selectedIcons()
@@ -238,7 +266,99 @@ class Window:
         if evt.width != self.image.width or evt.height != self.image.height:
             self.image = Image.new('RGB', (evt.width, evt.height), color=WINDOW_BG_COLOR)
             self.draw = ImageDraw.Draw(self.image)
+        self._updateScrollRanges()
         self.redraw()
+
+    def _updateScrollRanges(self):
+        """Update scroll bar widgets to reflect changes in window content or scrolling."""
+        # Note that because dragging the scroll bars calls this function, if both don't
+        # agree, a loop can occur that will iterate until they do agree.  I did not try
+        # to break this loop, since it seems to both mitigate and flag inconsistencies
+        # in scroll bar positioning that do occur, just be aware that it can happen.
+        scrollOriginX, scrollOriginY = self.scrollOrigin
+        xMin, yMin, xMax, yMax = self.scrollExtent
+        contentWidth = max(1, xMax - xMin)  # Avoid division by 0 if window is empty
+        contentHeight = max(1, yMax - yMin)
+        barLeft = (scrollOriginX - xMin)
+        barRight = (scrollOriginX + self.image.width - xMin)
+        barTop = (scrollOriginY - yMin)
+        barBottom = (scrollOriginY + self.image.height - yMin)
+        self.xScrollbar.set(barLeft / contentWidth, barRight / contentWidth)
+        self.yScrollbar.set(barTop / contentHeight, barBottom / contentHeight)
+        # Remove scroll bars if no scrolling is possible
+        if barLeft <= 0 and barRight >= contentWidth:
+            self.xScrollbar.config(width=0)
+        else:
+            self.xScrollbar.config(width=SCROLL_BAR_WIDTH)
+        if barTop <= 0 and barBottom >= contentHeight:
+            self.yScrollbar.config(width=0)
+        else:
+            self.yScrollbar.config(width=SCROLL_BAR_WIDTH)
+
+    def _calcScrollExtent(self, xMin, yMin, xMax, yMax):
+        """Calculate scrolling range (minimum and maximum coordinates in the content
+        coordinate system that scrolling can reach) from window content extent."""
+        scrollOriginX, scrollOriginY = self.scrollOrigin
+        xMax += SCROLL_RIGHT_PAD
+        yMax += SCROLL_BOTTOM_PAD
+        windowWidth, windowHeight = self.image.size
+        if scrollOriginX < xMin:
+            xMin = scrollOriginX
+        if scrollOriginY < yMin:
+            yMin = scrollOriginY
+        if scrollOriginX + windowWidth > xMax:
+            xMax = scrollOriginX + windowWidth
+        if scrollOriginY + windowHeight > yMax:
+            yMax = scrollOriginY + windowHeight
+        # Always allow scrolling to the original 0, 0 (xMin and yMin can extend above
+        # and to the left of zero so allow scrolling to see that content, but don't allow
+        # scrolling beyond it).
+        xMin = min(0, xMin)
+        yMin = min(0, yMin)
+        return xMin, yMin, xMax, yMax
+
+    def _xScrollCb(self, scrollOp, fract, unit=None):
+        scrollOriginX, scrollOriginY = self.scrollOrigin
+        if scrollOp == tk.SCROLL:
+            if unit == tk.UNITS:
+                delta = SCROLL_INCR * int(fract)
+            elif unit == tk.PAGES:
+                delta = (self.image.width - SCROLL_INCR) * int(fract)
+            left, top, right, bottom = self.scrollExtent
+            newXOrigin = scrollOriginX + delta
+            if delta < 0 and newXOrigin < min(left, 0):
+                newXOrigin = min(left, 0)
+            elif delta > 0 and newXOrigin + self.image.width > right:
+                newXOrigin = (right - self.image.width)
+            if newXOrigin != scrollOriginX:
+                self.scrollOrigin = newXOrigin, scrollOriginY
+        elif scrollOp == tk.MOVETO:
+            xMin, yMin, xMax, yMax = self.scrollExtent
+            self.scrollOrigin = xMin + int((xMax - xMin) * float(fract)), scrollOriginY
+        self._updateScrollRanges()
+        self.refresh(redraw=True)
+
+    def _yScrollCb(self, scrollOp, fract, unit=None):
+        scrollOriginX, scrollOriginY = self.scrollOrigin
+        if scrollOp == tk.SCROLL:
+            if unit == tk.UNITS:
+                delta = SCROLL_INCR * int(fract)
+            elif unit == tk.PAGES:
+                delta = (self.image.height - SCROLL_INCR) * int(fract)
+            left, top, right, bottom = self.scrollExtent
+            newYOrigin = scrollOriginY + delta
+            if delta < 0 and newYOrigin < top:
+                newYOrigin = top
+            elif delta > 0 and newYOrigin + self.image.height > bottom:
+                newYOrigin = (bottom - self.image.height)
+            if newYOrigin == scrollOriginY:
+                return
+            self.scrollOrigin = scrollOriginX, newYOrigin
+        elif scrollOp == tk.MOVETO:
+            xMin, yMin, xMax, yMax = self.scrollExtent
+            self.scrollOrigin = scrollOriginX, yMin + int((yMax - yMin) * float(fract))
+        self._updateScrollRanges()
+        self.refresh(redraw=True)
 
     def _exposeCb(self, _evt):
         """Called when a new part of the window is exposed and needs to be redrawn"""
@@ -360,7 +480,7 @@ class Window:
         ic = self.findIconAt(btnX, btnY)
         if ic is None:
             # If nothing was clicked, start a rectangular selection
-            seqSiteIc = self._leftOfSeq(evt.x, evt.y)
+            seqSiteIc = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
             if seqSiteIc is not None:
                 self._startStmtSelect(seqSiteIc, evt)
             else:
@@ -400,6 +520,21 @@ class Window:
                 self._startDrag(evt, list(self.findLeftOuterIcon(
                  self.assocGrouping(ic)).traverse()))
 
+    def _mouseWheelCb(self, evt):
+        delta = -int(evt.delta * MOUSE_WHEEL_SCALE)
+        scrollOriginX, scrollOriginY = self.scrollOrigin
+        left, top, right, bottom = self.scrollExtent
+        newYOrigin = scrollOriginY + delta
+        if delta < 0 and newYOrigin < top:
+            newYOrigin = top
+        elif delta > 0 and newYOrigin + self.image.height > bottom:
+            newYOrigin = (bottom - self.image.height)
+        if newYOrigin == scrollOriginY:
+            return
+        self.scrollOrigin = scrollOriginX,  newYOrigin
+        self._updateScrollRanges()
+        self.refresh(redraw=True)
+
     def _focusInCb(self, evt):
         pass
 
@@ -414,14 +549,15 @@ class Window:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
                 self.doubleClickFlag = True
                 return
-        if self.entryIcon and self.entryIcon.pointInTextArea(evt.x, evt.y):
+        x, y = self.imageToContentCoord(evt.x, evt.y)
+        if self.entryIcon and self.entryIcon.pointInTextArea(x, y):
             self.entryIcon.click(evt)
             return
         self.buttonDownTime = msTime()
-        self.buttonDownLoc = evt.x, evt.y
+        self.buttonDownLoc = x, y
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
-        ic = self.findIconAt(evt.x, evt.y)
+        ic = self.findIconAt(x, y)
         if (ic is None or not ic.selected) and not (evt.state & SHIFT_MASK or \
          evt.state & CTRL_MASK):
             self.unselectAll()
@@ -442,7 +578,7 @@ class Window:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
                 iconToExecute = self.findIconAt(*self.buttonDownLoc)
                 if iconToExecute is None:
-                    ic = self._leftOfSeq(evt.x, evt.y)
+                    ic = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
                     if ic is None:
                         self.doubleClickFlag = False
                         self._delayedBtnUpActions(evt)
@@ -470,11 +606,12 @@ class Window:
         if self.doubleClickFlag:
             return  # Second click occurred, don't do the delayed action
         self.buttonDownTime = None
-        clickedIcon = self.findIconAt(evt.x, evt.y)
+        x, y = self.imageToContentCoord(evt.x, evt.y)
+        clickedIcon = self.findIconAt(x, y)
         if clickedIcon is None:
             # Clicked on window background, move cursor
-            ic = self._leftOfSeq(evt.x, evt.y)
-            if ic is not None and ic.posOfSite('seqOut')[1] >= evt.y:
+            ic = self._leftOfSeq(x, y)
+            if ic is not None and ic.posOfSite('seqOut')[1] >= y:
                 self._select(ic, op="hier")
                 return
             if self.entryIcon is not None:  # Might want to flash entry icon, here
@@ -484,7 +621,7 @@ class Window:
                 self.cursor.setToIconSite(siteIcon, site)
             else:
                 self.unselectAll()
-                self.cursor.setToWindowPos((evt.x, evt.y))
+                self.cursor.setToWindowPos((x, y))
             return
         if self.buttonDownState & SHIFT_MASK:
             self._select(clickedIcon, 'add')
@@ -1373,8 +1510,9 @@ class Window:
     def _updateDrag(self, evt):
         if not self.dragging:
             return
-        x = snappedX = self.dragImageOffset[0] + evt.x
-        y = snappedY = self.dragImageOffset[1] + evt.y
+        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+        x = snappedX = self.dragImageOffset[0] + btnX
+        y = snappedY = self.dragImageOffset[1] + btnY
         # If the drag results in mating sites being within snapping distance, change the
         # drag position to mate them exactly (snap them together)
         self.snapped = None
@@ -1403,9 +1541,10 @@ class Window:
         # Draw the image of the moving icons in their new locations directly to the
         # display (leaving self.image clean).  This makes dragging fast by eliminating
         # individual icon drawing of while the user is dragging.
-        dragImage = self.image.crop(dragImageRegion)
+        crop = offsetRect(dragImageRegion, -self.scrollOrigin[0], -self.scrollOrigin[1])
+        dragImage = self.image.crop(crop)
         dragImage.paste(self.dragImage, mask=self.dragImage)
-        self.drawImage(dragImage, (snappedX, snappedY))
+        self.drawImage(dragImage, self.contentToImageCoord(snappedX, snappedY))
         self.lastDragImageRegion = dragImageRegion
 
     def _endDrag(self):
@@ -1491,7 +1630,7 @@ class Window:
 
     def _updateRectSelect(self, evt):
         toggle = evt.state & CTRL_MASK
-        newRect = makeRect(self.buttonDownLoc, (evt.x, evt.y))
+        newRect = makeRect(self.contentToImageCoord(*self.buttonDownLoc), (evt.x, evt.y))
         if self.lastRectSelect is None:
             combinedRegion = newRect
         else:
@@ -1536,8 +1675,9 @@ class Window:
 
     def _updateStmtSelect(self, evt):
         anchorY = self.buttonDownLoc[1]
-        drawTop = min(anchorY, evt.y)
-        drawBottom = max(anchorY, evt.y)
+        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+        drawTop = min(anchorY, btnY)
+        drawBottom = max(anchorY, btnY)
         # Trim selection top to start of sequence
         seqTopY = self.stmtSelectSeqStart.posOfSite('seqIn')[1]
         if drawTop < seqTopY:
@@ -1592,7 +1732,7 @@ class Window:
             image = self.image.crop(drawRect)
             colorImg = Image.new('RGB', (image.width, image.height), color=(0, 0, 255)) # color=icon.SELECT_TINT)
             selImg = Image.blend(image, colorImg, .15)
-            self.drawImage(selImg, drawRect[:2])
+            self.drawImage(selImg, self.contentToImageCoord(*drawRect[:2]))
         self.lastStmtHighlightRects = drawRects
 
     def _endStmtSelect(self):
@@ -1723,16 +1863,25 @@ class Window:
     def redraw(self, region=None, clear=True, showOutlines=False):
         """Cause all icons to redraw to the pseudo-framebuffer (call refresh to transfer
         from there to the display).  Setting clear to False suppresses clearing the
-        region to the background color before redrawing."""
+        region to the background color before redrawing.  As a side effect, recalculates
+        content extent of the window and (if necessary) redraws scroll bars."""
         if clear:
             self.clearBgRect(region)
         # Traverse all top icons (only way to find out what's in the region).  Correct
         # drawing depends on everything being ordered so overlaps happen properly.
         # Sequence lines must be drawn on top of the icons they connect but below any
-        # icons that might be placed on top of them.
+        # icons that might be placed on top of them.  For efficiency (because we're
+        # traversing the entire icon tree), also set the window extents used to maintain
+        # scroll bar ranges
+        minX = minY = maxX = maxY = 0
         drawStyle = "outline" if showOutlines else None
         for topIcon in self.topIcons:
             for ic in topIcon.traverse():
+                left, top, right, bottom = ic.rect
+                minX = min(left, minX)
+                minY = min(top, minY)
+                maxX = max(right, maxX)
+                maxY = max(bottom, maxY)
                 if region is None or rectsTouch(region, ic.rect):
                     ic.draw(style=drawStyle)
             # Looks better without connectors, but not willing to remove permanently, yet:
@@ -1740,6 +1889,10 @@ class Window:
             #     icon.drawSeqSiteConnection(topIcon, clip=region)
             if region is None or icon.seqRuleTouches(topIcon, region):
                 icon.drawSeqRule(topIcon, clip=region)
+        newExtent = self._calcScrollExtent(minX, minY, maxX, maxY)
+        if newExtent != self.scrollExtent:
+            self.scrollExtent = newExtent
+            self._updateScrollRanges()
 
     def refresh(self, region=None, redraw=True, clear=True, showOutlines=False):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
@@ -1752,10 +1905,12 @@ class Window:
         if region is None:
             self.drawImage(self.image, (0, 0))
         else:
+            region = offsetRect(region, -self.scrollOrigin[0], -self.scrollOrigin[1])
             self.drawImage(self.image, (region[0], region[1]), region)
 
     def drawImage(self, image, location, subImage=None):
-        """Draw an arbitrary image anywhere in the window, ignoring the window image"""
+        """Draw an arbitrary image anywhere in the window, ignoring the window image.
+        Note that location and subImage are in image (not window content) coordinates."""
         if subImage:
             x1, y1, x2, y2 = subImage
             width = x2 - x1
@@ -1896,12 +2051,13 @@ class Window:
         return redrawRegion.get()
 
     def clearBgRect(self, rect=None):
-        """Clear but don't refresh a rectangle of the window"""
+        """Clear but don't refresh a rectangle of the window.  rect is in content
+        coordinates (not the coordinates of the window image)"""
         # Fill rectangle seems to go one beyond
         if rect is None:
             l, t, r, b = 0, 0, self.image.width, self.image.height
         else:
-            l, t, r, b = rect
+            l, t, r, b = offsetRect(rect, -self.scrollOrigin[0], -self.scrollOrigin[1])
         self.draw.rectangle((l, t, r-1, b-1), fill=WINDOW_BG_COLOR)
 
     def assocGrouping(self, ic):
@@ -2122,10 +2278,11 @@ class Window:
 
     def siteSelected(self, evt):
         """Look for icon sites near button press, if found return icon and site"""
-        left = evt.x - SITE_SELECT_DIST
-        right = evt.x + SITE_SELECT_DIST
-        top = evt.y - SITE_SELECT_DIST
-        bottom = evt.y + SITE_SELECT_DIST
+        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+        left = btnX - SITE_SELECT_DIST
+        right = btnX + SITE_SELECT_DIST
+        top = btnY - SITE_SELECT_DIST
+        bottom = btnY + SITE_SELECT_DIST
         minDist = SITE_SELECT_DIST + 1
         minSite = (None, None, None)
         for ic in self.findIconsInRegion((left, top, right, bottom)):
@@ -2144,7 +2301,7 @@ class Window:
                         y += 1
                     else:
                         continue  # not a visible site type
-                    dist = (abs(evt.x - x) + abs(evt.y - y))
+                    dist = (abs(btnX - x) + abs(btnY - y))
                     if dist < minDist or (dist == minDist and
                      minSite[2] in ("attrOut", "output")):  # Prefer inputs, for now
                         minDist = dist
@@ -2189,6 +2346,16 @@ class Window:
         """Recompute layout for a top-level icon and redraw all affected icons"""
         redrawRect = self.layoutIconsInSeq(topIcon, checkAllForDirty=True)
         self.refresh(redrawRect)
+
+    def imageToContentCoord(self, imageX, imageY):
+        """Convert a coordinate from the screen image of the window to the underlying
+        content of the window (convert scrolled to unscrolled coordinates)"""
+        return imageX + self.scrollOrigin[0], imageY + self.scrollOrigin[1]
+
+    def contentToImageCoord(self, contentX, contentY):
+        """Convert a coordinate from icon content of the window to the screen image
+        content of the window (convert scrolled to unscrolled coordinates)"""
+        return contentX - self.scrollOrigin[0], contentY - self.scrollOrigin[1]
 
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""

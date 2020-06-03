@@ -1058,10 +1058,15 @@ class Icon:
     def _drawFromDrawList(self, toDragImage, location, clip, style):
         if location is None:
             location = self.rect[:2]
-        for imgOffset, img in self.drawList:
-            imgLoc = addPoints(location, imgOffset)
-            pasteImageWithClip(self.window.image if toDragImage is None else toDragImage,
-             tintSelectedImage(img, self.selected, style), imgLoc, clip)
+        if toDragImage is None:
+            outImg = self.window.image
+            x, y = self.window.contentToImageCoord(*location)
+        else:
+            outImg = toDragImage
+            x, y = location
+        for (imgOffsetX, imgOffsetY), img in self.drawList:
+            pasteImageWithClip(outImg, tintSelectedImage(img, self.selected, style),
+             (x + imgOffsetX, y + imgOffsetY), clip)
 
     def _serialize(self, offset, iconsToCopy, **args):
         currentSeries = None
@@ -4710,6 +4715,8 @@ def drawSeqRule(ic, clip=None, image=None):
             toY = b
     if image is None:
         draw = ic.window.draw
+        _x, fromY = ic.window.contentToImageCoord(x, fromY)
+        x, toY = ic.window.contentToImageCoord(x, toY)
     else:
         draw = ImageDraw.Draw(image)
     draw.line((x, fromY, x, toY), SEQ_RULE_COLOR)
