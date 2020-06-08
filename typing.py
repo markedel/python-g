@@ -1315,10 +1315,11 @@ class Cursor:
             x += eIcon.textOffset + icon.globalFont.getsize(eIcon.text[:cursorPos])[0]
             y += eIcon.sites.output.yOffset - cursorImg.height // 2
         cursorRegion = (x, y, x + cursorImg.width, y + cursorImg.height)
+        self.lastDrawRect = cursorRegion
+        cursorRegion = self.window.contentToImageRect(cursorRegion)
         cursorDrawImg = self.window.image.crop(cursorRegion)
         cursorDrawImg.paste(cursorImg, mask=cursorImg)
-        self.window.drawImage(cursorDrawImg, (x, y))
-        self.lastDrawRect = cursorRegion
+        self.window.drawImage(cursorDrawImg, cursorRegion[:2])
 
     def processArrowKey(self, evt):
         direction = evt.keysym

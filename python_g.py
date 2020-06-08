@@ -1541,7 +1541,7 @@ class Window:
         # Draw the image of the moving icons in their new locations directly to the
         # display (leaving self.image clean).  This makes dragging fast by eliminating
         # individual icon drawing of while the user is dragging.
-        crop = offsetRect(dragImageRegion, -self.scrollOrigin[0], -self.scrollOrigin[1])
+        crop = self.contentToImageRect(dragImageRegion)
         dragImage = self.image.crop(crop)
         dragImage.paste(self.dragImage, mask=self.dragImage)
         self.drawImage(dragImage, self.contentToImageCoord(snappedX, snappedY))
@@ -1630,7 +1630,7 @@ class Window:
 
     def _updateRectSelect(self, evt):
         toggle = evt.state & CTRL_MASK
-        newRect = makeRect(self.contentToImageCoord(*self.buttonDownLoc), (evt.x, evt.y))
+        newRect = makeRect(self.buttonDownLoc, self.imageToContentCoord(evt.x, evt.y))
         if self.lastRectSelect is None:
             combinedRegion = newRect
         else:
@@ -1646,7 +1646,7 @@ class Window:
                 ic.select(newSelect)
                 redrawRegion.add(ic.rect)
         self.refresh(redrawRegion.get(), clear=False)
-        l, t, r, b = newRect
+        l, t, r, b = self.contentToImageRect(newRect)
         hLineImg = Image.new('RGB', (r - l, 1), color=RECT_SELECT_COLOR)
         vLineImg = Image.new('RGB', (1, b - t), color=RECT_SELECT_COLOR)
         self.drawImage(hLineImg, (l, t))
@@ -1865,6 +1865,9 @@ class Window:
         from there to the display).  Setting clear to False suppresses clearing the
         region to the background color before redrawing.  As a side effect, recalculates
         content extent of the window and (if necessary) redraws scroll bars."""
+        if region is None:
+            left, top = self.scrollOrigin
+            region = left, top, left + self.image.width, top + self.image.height
         if clear:
             self.clearBgRect(region)
         # Traverse all top icons (only way to find out what's in the region).  Correct
@@ -1882,8 +1885,8 @@ class Window:
                 minY = min(top, minY)
                 maxX = max(right, maxX)
                 maxY = max(bottom, maxY)
-                if region is None or rectsTouch(region, ic.rect):
-                    ic.draw(style=drawStyle)
+                if rectsTouch(region, ic.rect):
+                    ic.draw(clip=region, style=drawStyle)
             # Looks better without connectors, but not willing to remove permanently, yet:
             # if region is None or icon.seqConnectorTouches(topIcon, region):
             #     icon.drawSeqSiteConnection(topIcon, clip=region)
@@ -1905,7 +1908,7 @@ class Window:
         if region is None:
             self.drawImage(self.image, (0, 0))
         else:
-            region = offsetRect(region, -self.scrollOrigin[0], -self.scrollOrigin[1])
+            region = self.contentToImageRect(region)
             self.drawImage(self.image, (region[0], region[1]), region)
 
     def drawImage(self, image, location, subImage=None):
@@ -2057,7 +2060,7 @@ class Window:
         if rect is None:
             l, t, r, b = 0, 0, self.image.width, self.image.height
         else:
-            l, t, r, b = offsetRect(rect, -self.scrollOrigin[0], -self.scrollOrigin[1])
+            l, t, r, b = self.contentToImageRect(rect)
         self.draw.rectangle((l, t, r-1, b-1), fill=WINDOW_BG_COLOR)
 
     def assocGrouping(self, ic):
@@ -2356,6 +2359,9 @@ class Window:
         """Convert a coordinate from icon content of the window to the screen image
         content of the window (convert scrolled to unscrolled coordinates)"""
         return contentX - self.scrollOrigin[0], contentY - self.scrollOrigin[1]
+
+    def contentToImageRect(self, contentRect):
+        return offsetRect(contentRect, -self.scrollOrigin[0], -self.scrollOrigin[1])
 
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""

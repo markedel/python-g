@@ -1061,6 +1061,9 @@ class Icon:
         if toDragImage is None:
             outImg = self.window.image
             x, y = self.window.contentToImageCoord(*location)
+            if clip is not None:
+                clip = python_g.offsetRect(clip, -self.window.scrollOrigin[0],
+                 -self.window.scrollOrigin[1])
         else:
             outImg = toDragImage
             x, y = location
