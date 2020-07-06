@@ -1,4 +1,4 @@
-import ast, astpretty
+import ast, time
 import icon
 
 binOps = {ast.Add:'+', ast.Sub:'-', ast.Mult:'*', ast.Div:'/', ast.FloorDiv:'//',
@@ -27,7 +27,6 @@ def parsePasted(text, window, location):
     icons = parseCodeBlock(modAst.body, window, location)
     if len(icons) == 0:
         return None
-    window.layoutIconsInSeq(icons[0])
     return icons
 
 def parseCodeBlock(bodyAst, window, location):

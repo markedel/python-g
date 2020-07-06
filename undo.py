@@ -23,11 +23,11 @@ class UndoRedoList:
     def registerIconDelete(self, ic):
         self._addUndoRedoEntry(IconDeleted(ic))
 
-    def registerRemoveFromTopLevel(self, ic, fromPos, index):
-        self._addUndoRedoEntry(RemoveFromTopLevel(ic, fromPos, index))
+    def registerRemoveFromTopLevel(self, ic, topOfSeq):
+        self._addUndoRedoEntry(RemoveFromTopLevel(ic, topOfSeq))
 
-    def registerAddToTopLevel(self, ic):
-        self._addUndoRedoEntry(AddToTopLevel(ic))
+    def registerAddToTopLevel(self, ic, newSeq):
+        self._addUndoRedoEntry(AddToTopLevel(ic, newSeq))
 
     def registerAttach(self, parentIcon, siteId, origChild, childSite):
         self._addUndoRedoEntry(Attach(parentIcon, siteId, origChild, childSite))
@@ -55,22 +55,28 @@ class UndoRedoList:
 
     def undo(self):
         """Perform operations on the undo list until the next undo boundary"""
-        self.redoList.append(Boundary(self.window))
         self._inUndo = True
-        self._undoOrRedoToBoundary(self.undoList)
+        self._undoOrRedoToBoundary(False)
         self._inUndo = False
 
     def redo(self):
         """Perform operations on the redo list until the next undo boundary"""
-        self.undoList.append(Boundary(self.window))
         self._inRedo = True
-        self._undoOrRedoToBoundary(self.redoList)
+        self._undoOrRedoToBoundary(True)
         self._inRedo = False
 
-    def _undoOrRedoToBoundary(self, undoList):
+    def _undoOrRedoToBoundary(self, isRedo):
+        undoList = self.redoList if isRedo else self.undoList
         if len(undoList) == 0:
             typing.beep()
             return
+        #... I don't understand why I put the boundary before the operation, here.
+        #    Normally, the convention is to put it at the end of an operation,
+        #    particularly since the boundary caries cursor positioning information.
+        if isRedo:
+            self.undoList.append(Boundary(self.window))
+        else:
+            self.redoList.append(Boundary(self.window))
         if undoList[-1].__class__ is Boundary:
             undoList.pop(-1)
         redrawRegion = AccumRect()
@@ -82,6 +88,7 @@ class UndoRedoList:
             redrawRegion.add(u.undo(self))
         else:
             listType = "Undo" if undoList is self.undoList else "Redo"
+            #... I don't think the redo list is supposed to end in a boundary
             print("Warning:", listType, "list does not end in boundary")
             self.window.cursor.removeCursor()
         # Layouts may now be dirty
@@ -102,7 +109,6 @@ class UndoRedoList:
         undoList.append(undoEntry)
         if not self._inRedo and not self._inUndo:
             self.redoList = []
-            
 
 class UndoListEntry:
     pass
@@ -157,7 +163,7 @@ class Attach(UndoListEntry):
         redrawRect = self.parentIcon.hierRect()
         self.parentIcon.sites.lookup(self.siteId).attach(self.parentIcon, self.origChild,
          self.childSite)
-        self.parentIcon.layoutDirty = True
+        self.parentIcon.markLayoutDirty()
         return redrawRect
 
 class InsertSeriesSite(UndoListEntry):
@@ -169,7 +175,7 @@ class InsertSeriesSite(UndoListEntry):
     def undo(self, undoData):
         self.icon.sites.removeSeriesSiteByNameAndIndex(self.icon, self.seriesName,
          self.idx)
-        self.icon.layoutDirty = True
+        self.icon.markLayoutDirty()
         return None
 
 class RemoveSeriesSite(UndoListEntry):
@@ -181,7 +187,7 @@ class RemoveSeriesSite(UndoListEntry):
     def undo(self, undoData):
         self.icon.sites.insertSeriesSiteByNameAndIndex(self.icon, self.seriesName,
          self.idx)
-        self.icon.layoutDirty = True
+        self.icon.markLayoutDirty()
         return None
 
 class IconCreated(UndoListEntry):
@@ -201,23 +207,23 @@ class IconDeleted(UndoListEntry):
         return None
 
 class RemoveFromTopLevel(UndoListEntry):
-    def __init__(self, ic, fromPos, idx):
+    def __init__(self, ic, topOfSeq):
         self.icon = ic
-        self.fromPos = fromPos
-        self.index = idx
+        self.topOfSeq = topOfSeq
 
     def undo(self, undoData):
-        undoData.window.insertTopLevel(self.icon, self.index, self.fromPos)
-        self.icon.layoutDirty = True
+        undoData.window.addTopSingle(self.icon, pos=self.topOfSeq, newSeq=self.topOfSeq)
+        self.icon.markLayoutDirty()
         return None
 
 class AddToTopLevel(UndoListEntry):
-    def __init__(self, ic):
+    def __init__(self, ic, newSeq):
         self.icon = ic
+        self.newSeq = newSeq
 
     def undo(self, undoData):
         redrawRect = self.icon.rect
-        undoData.window.removeTop(self.icon)
+        undoData.window.removeTopSingle(self.icon, self.newSeq)
         return redrawRect
 
 class Callback(UndoListEntry):

@@ -53,6 +53,16 @@ SCROLL_RIGHT_PAD = SCROLL_BOTTOM_PAD = 9
 # per step.  A scale factor of .42 yields 50 pixels per step, which is a similar distance.
 MOUSE_WHEEL_SCALE = 0.42
 
+# Max. number of statements allowed in a single page.  Splitting sequences in to pages
+# makes edits, scrolling, and finding icons within a region, more efficient.  It does
+# so by segmenting the list of top-level icons that when a long file is edited,
+# operations can be done just on the area of interest, without scanning the whole icon
+# tree.  A larger value will raise the maximum file size that the program can handle
+# without performance degrading.  A smaller value (up to a point) will improve
+# performance for everything else.  At around 70 there a minor delay can be detected,
+# but not objectionable.
+PAGE_SPLIT_THRESHOLD = 100
+
 startUpTime = time.monotonic()
 
 # Notes on window drawing:
@@ -214,7 +224,15 @@ class Window:
         self.lastStmtHighlightRects = None
         self.rectSelectInitialStates = {}
 
-        self.topIcons = []
+        # .sequences holds the first Page structure for each sequence in the window.  The
+        # ordering the list controls which icons are drawn on top when sequences overlap.
+        self.sequences = []
+        # .topIcons maps icons at the top of the parent hierarchy to the page structures
+        # (see above) that index those sequences.  When edits are made and layouts need
+        # to be updated, they are batched and done per-page.
+        self.topIcons = {}
+        # List (set) of all icons that are currently selected in the window
+        self.selectedSet = set()
         self.image = Image.new('RGB', (width, height), color=WINDOW_BG_COLOR)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
@@ -223,21 +241,44 @@ class Window:
         self.execResultPositions = {}
         self.undo = undo.UndoRedoList(self)
 
-    def allIcons(self, order="draw"):
-        """Iterate over of all icons in the window, in drawing order, "draw", by default,
-         but optionally in opposite, "pick", order.  (warning: generator)"""
-        for ic in reversed(self.topIcons) if order is "pick" else self.topIcons:
-            yield from ic.traverse(order)
+    def selectedIcons(self):
+        """Return a list of the icons in the window that are currently selected."""
+        # Selection was initially a property of icons, but that caused performance issues
+        # because finding the current selection required traversing all icons.  Now the
+        # selection is held in a set, but to support existing code which does not expect
+        # to see deleted icons in the selection, it must be cleaned per-use (which will
+        # make performance significantly WORSE when more than half of the icons in the
+        # window are selected).  It is intended that there will be a formal mechanism for
+        # removing icons, after which this code can be removed.
+        removeSet = set()
+        for ic in self.selectedSet:
+            topParent = ic.topLevelParent()
+            if topParent is None or topParent not in self.topIcons:
+                print("Removing deleted icon from selection")
+                removeSet.add(ic)
+        self.selectedSet -= removeSet
+        return list(self.selectedSet)
 
-    def selectedIcons(self, order="draw"):
-        """Return a list of the icons in the window that are currently selected.  Result
-        can be returned in "draw" or "pick" order"""
-        return [ic for ic in self.allIcons(order) if ic.selected]
+    def isSelected(self, ic):
+        """Return True if an icon is in the current selection, False if not."""
+        return ic in self.selectedSet
+
+    def select(self, ic, select=True):
+        """Add (select=True) or remove (select=False) an icon from the current selection.
+        Does not redraw or mark the icon as dirty.  Use .isSelected() to read the
+        selection state of an icon."""
+        if select:
+            self.selectedSet.add(ic)
+        else:
+            self.selectedSet.remove(ic)
+
+    def clearSelection(self):
+        self.selectedSet = set()
 
     def _btn3Cb(self, evt):
         x, y = self.imageToContentCoord(evt.x, evt.y)
         ic = self.findIconAt(x, y)
-        if ic is not None and ic.selected is False:
+        if ic is not None and not self.isSelected(ic):
             self._select(self.findIconAt(x, y))
 
     def _btn3ReleaseCb(self, evt):
@@ -276,7 +317,7 @@ class Window:
         # to break this loop, since it seems to both mitigate and flag inconsistencies
         # in scroll bar positioning that do occur, just be aware that it can happen.
         scrollOriginX, scrollOriginY = self.scrollOrigin
-        xMin, yMin, xMax, yMax = self.scrollExtent
+        xMin, yMin, xMax, yMax = self.scrollExtent = self._calcScrollExtent()
         contentWidth = max(1, xMax - xMin)  # Avoid division by 0 if window is empty
         contentHeight = max(1, yMax - yMin)
         barLeft = (scrollOriginX - xMin)
@@ -295,13 +336,29 @@ class Window:
         else:
             self.yScrollbar.config(width=SCROLL_BAR_WIDTH)
 
-    def _calcScrollExtent(self, xMin, yMin, xMax, yMax):
+    def _calcScrollExtent(self):
         """Calculate scrolling range (minimum and maximum coordinates in the content
-        coordinate system that scrolling can reach) from window content extent."""
+        coordinate system that scrolling can reach) from page lists in self.sequences."""
+        xMin = yMin = xMax = yMax = 0
         scrollOriginX, scrollOriginY = self.scrollOrigin
+        windowWidth, windowHeight = self.image.size
+        # Page structures contain y range of page, so y extent can be based entirely on
+        # them, but x extent should vary based on content within the displayed y range
+        # (must include area under x scroll bar, since automatic removal will expose).
+        windowBottom = scrollOriginY + windowHeight + int(self.xScrollbar.cget('width'))
+        for seqStartPage in self.sequences:
+            for page in seqStartPage.traversePages():
+                yMin = min(page.topY, yMin)
+                yMax = max(page.bottomY, yMax)
+                if page.bottomY >= scrollOriginY and page.topY <= windowBottom:
+                    page.applyOffset()
+                    for ic in page.traverseSeq(hier=True):
+                        l, t, r, b = ic.rect
+                        if b >= scrollOriginY and t <= windowBottom:
+                            xMin = min(ic.rect[0], xMin)
+                            xMax = max(ic.rect[2], xMax)
         xMax += SCROLL_RIGHT_PAD
         yMax += SCROLL_BOTTOM_PAD
-        windowWidth, windowHeight = self.image.size
         if scrollOriginX < xMin:
             xMin = scrollOriginX
         if scrollOriginY < yMin:
@@ -385,7 +442,7 @@ class Window:
             self.entryIcon = typing.EntryIcon(None, None, window=self)
             y -= self.entryIcon.sites.output.yOffset
             self.entryIcon.rect = offsetRect(self.entryIcon.rect, x, y)
-            self.insertTopLevel(self.entryIcon)
+            self.addTopSingle(self.entryIcon, newSeq=True)
             self.cursor.setToEntryIcon()
             self.entryIcon.addText(char)
             self._redisplayChangedEntryIcon()
@@ -426,7 +483,7 @@ class Window:
             before = self.cursor.siteType == "seqIn"
             icon.insertSeq(self.entryIcon, self.cursor.icon, before=before)
             self.cursor.setToEntryIcon()
-            self.insertTopLevel(self.entryIcon)
+            self.addTopSingle(self.entryIcon)
         else:  # Cursor site type is input or attrIn
             self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
              window=self)
@@ -441,15 +498,11 @@ class Window:
         self._redisplayChangedEntryIcon()
 
     def _redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
-        # ... This currently operates on all of the icons in the window, and needs to be
-        #      narrowed to just the top icon that held the cursor
         redrawRegion = AccumRects(oldLoc)
         if self.entryIcon is not None:
             redrawRegion.add(self.entryIcon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
-        for ic in self.topIcons.copy():  # Copy because function can change list
-            self.filterRedundantParens(ic)
         layoutNeeded = self.layoutDirtyIcons()
         # Redraw the areas affected by the updated layouts
         if layoutNeeded:
@@ -487,7 +540,7 @@ class Window:
                 self._startRectSelect(evt)
         elif evt.state & SHIFT_MASK:
             self._startRectSelect(evt)
-        elif ic.selected:
+        elif ic.isSelected():
             # If a selected icon was clicked, drag all of the selected icons
             self._startDrag(evt, self.selectedIcons())
         else:
@@ -517,8 +570,8 @@ class Window:
             elif ic.__class__ in (icon.ElseIcon, icon.ElifIcon):
                 self._startDrag(evt, icon.elseElifBlockIcons(ic))
             else:
-                self._startDrag(evt, list(self.findLeftOuterIcon(
-                 self.assocGrouping(ic)).traverse()))
+                self._startDrag(evt, list(icon.findLeftOuterIcon(
+                 self.assocGrouping(ic), self.buttonDownLoc).traverse()))
 
     def _mouseWheelCb(self, evt):
         delta = -int(evt.delta * MOUSE_WHEEL_SCALE)
@@ -558,7 +611,7 @@ class Window:
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
         ic = self.findIconAt(x, y)
-        if (ic is None or not ic.selected) and not (evt.state & SHIFT_MASK or \
+        if (ic is None or not ic.isSelected()) and not (evt.state & SHIFT_MASK or \
          evt.state & CTRL_MASK):
             self.unselectAll()
 
@@ -585,7 +638,8 @@ class Window:
                         return
                     self._select(ic, op="block")
                 else:
-                    iconToExecute = self.findLeftOuterIcon(self.assocGrouping(iconToExecute))
+                    iconToExecute = icon.findLeftOuterIcon(
+                     self.assocGrouping(iconToExecute), self.buttonDownLoc)
                     if iconToExecute not in self.topIcons:
                         self.doubleClickFlag = False
                         self._delayedBtnUpActions(evt)
@@ -651,7 +705,8 @@ class Window:
         currentSel = self.selectedIcons()
         singleSel = [clickedIcon]
         hierSel = list(clickedIcon.traverse())
-        leftSel = list(self.findLeftOuterIcon(self.assocGrouping(clickedIcon)).traverse())
+        leftSel = list(icon.findLeftOuterIcon(self.assocGrouping(clickedIcon),
+         self.buttonDownLoc).traverse())
         if hasattr(clickedIcon, 'blockEnd'):
             singleSel.append(clickedIcon.blockEnd)
             hierSel.append(clickedIcon.blockEnd)
@@ -701,6 +756,7 @@ class Window:
         self.top.clipboard_append(clipTxt, type='STRING')
 
     def _pasteCb(self, evt=None):
+        print('start icon creation', time.monotonic())
         if self.cursor.type == "text":
             # If the user is pasting in to the entry icon use clipboard text, only
             try:
@@ -778,22 +834,21 @@ class Window:
             topIcon = replaceParent.topLevelParent()
             redrawRegion = AccumRects(topIcon.hierRect())
             replaceParent.replaceChild(pastedIcons[0], replaceSite)
-            topIcon = self.filterRedundantParens(topIcon)
-            topIcon.layout()
-            redrawRegion.add(topIcon.hierRect())
+            print('start layout', time.monotonic())
+            redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
+            print('finish layout', time.monotonic())
             self.refresh(redrawRegion.get())
             self.cursor.setToIconSite(replaceParent, replaceSite)
-        else:  # Put
+        else:  # Place at top level
             x, y = pastePos
             for topIcon in pastedIcons:
                 for ic in topIcon.traverse():
                     ic.rect = offsetRect(ic.rect, x, y)
-            redrawRect = AccumRects()
-            for pastedTopIcon in pastedIcons:
-                self.addTop(pastedTopIcon)
-                for ic in pastedTopIcon.traverse():
-                    redrawRect.add(ic.rect)
-            self.refresh(redrawRect.get(), clear=False)
+            self.addTop(pastedIcons)
+            print('start layout', time.monotonic())
+            redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
+            print('finish layout', time.monotonic())
+            self.refresh(redrawRect, clear=False)
             if iconOutputSite is None:
                 self.cursor.removeCursor()
             else:
@@ -896,7 +951,7 @@ class Window:
                     rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
                     ic.removeEmptySeriesSite(self.cursor.site)
                     self.cursor.setToIconSite(rightmostIcon, rightmostSite)
-                redrawRegion.add(self.layoutDirtyIcons())
+                redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
                 self.refresh(redrawRegion.get())
 
         elif isinstance(ic, icon.SubscriptIcon):
@@ -1116,7 +1171,7 @@ class Window:
                     rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
                     ic.removeEmptySeriesSite(self.cursor.site)
                     self.cursor.setToIconSite(rightmostIcon, rightmostSite)
-                redrawRegion.add(self.layoutDirtyIcons())
+                redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
                 self.refresh(redrawRegion.get())
                 self.undo.addBoundary()
 
@@ -1186,7 +1241,7 @@ class Window:
                     rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
                     ic.removeEmptySeriesSite(self.cursor.site)
                     self.cursor.setToIconSite(rightmostIcon, rightmostSite)
-                redrawRegion.add(self.layoutDirtyIcons())
+                redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
                 self.refresh(redrawRegion.get())
                 self.undo.addBoundary()
 
@@ -1262,7 +1317,7 @@ class Window:
                     rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
                     ic.removeEmptySeriesSite(self.cursor.site)
                     self.cursor.setToIconSite(rightmostIcon, rightmostSite)
-            redrawRegion.add(self.layoutDirtyIcons())
+            redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
             self.refresh(redrawRegion.get())
             self.undo.addBoundary()
 
@@ -1412,8 +1467,8 @@ class Window:
         topDraggingIcons = findTopIcons(self.dragging)
         for ic in topDraggingIcons:
             if isinstance(ic, icon.BinOpIcon) and ic.hasParens:
-                ic.layoutDirty = True  # BinOp icons need to check check auto-parens
-        self.layoutDirtyIcons(topDraggingIcons)
+                ic.markLayoutDirty()  # BinOp icons need to check check auto-parens
+        self.layoutDirtyIcons(topDraggingIcons, filterRedundantParens=False)
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
         moveRegion = AccumRects()
@@ -1450,34 +1505,33 @@ class Window:
             for ic, (x, y), name, siteType, test in dragSnapList.get("conditional", []):
                 draggingConditionals.append(((x, y), ic, name, test))
         stationaryInputs = []
-        for topIcon in self.topIcons:
-            for winIcon in topIcon.traverse():
-                snapLists = winIcon.snapLists()
-                for ic, pos, name in snapLists.get("input", []):
-                    stationaryInputs.append((pos, 0, ic, "input", name, None))
-                for ic, pos, name in snapLists.get("insertInput", []):
-                    stationaryInputs.append((pos, 0, ic, "insertInput", name, None))
-                for ic, pos, name in snapLists.get("attrIn", []):
-                    stationaryInputs.append((pos, 0, ic, "attrIn", name, None))
-                for ic, pos, name in snapLists.get("insertAttr", []):
-                    stationaryInputs.append((pos, 0, ic, "insertAttr", name, None))
-                for ic, pos, name in snapLists.get("cprhIn", []):
-                    stationaryInputs.append((pos, 0, ic, "cprhIn", name, None))
-                for ic, pos, name in snapLists.get("insertCprh", []):
-                    stationaryInputs.append((pos, 0, ic, "insertCprh", name, None))
-                for ic, pos, name, siteType, test in snapLists.get("conditional", []):
-                    stationaryInputs.append((pos, 0, ic, siteType, name, test))
-                for ic, pos, name in snapLists.get("seqIn", []):
-                    if ic.sites.seqIn.att is None:
-                        stationaryInputs.append((pos, 0, ic, "seqIn", name, None))
-                for ic, pos, name in snapLists.get("seqOut", []):
-                    nextIc = ic.sites.seqOut.att
-                    if nextIc is None:
-                        sHgt = 0
-                    else:
-                        nextInX, nextInY = nextIc.posOfSite('seqIn')
-                        sHgt = nextInY - pos[1]
-                    stationaryInputs.append((pos, sHgt, ic, "seqOut", name, None))
+        for winIcon in self.findIconsInRegion(order='pick'):
+            snapLists = winIcon.snapLists()
+            for ic, pos, name in snapLists.get("input", []):
+                stationaryInputs.append((pos, 0, ic, "input", name, None))
+            for ic, pos, name in snapLists.get("insertInput", []):
+                stationaryInputs.append((pos, 0, ic, "insertInput", name, None))
+            for ic, pos, name in snapLists.get("attrIn", []):
+                stationaryInputs.append((pos, 0, ic, "attrIn", name, None))
+            for ic, pos, name in snapLists.get("insertAttr", []):
+                stationaryInputs.append((pos, 0, ic, "insertAttr", name, None))
+            for ic, pos, name in snapLists.get("cprhIn", []):
+                stationaryInputs.append((pos, 0, ic, "cprhIn", name, None))
+            for ic, pos, name in snapLists.get("insertCprh", []):
+                stationaryInputs.append((pos, 0, ic, "insertCprh", name, None))
+            for ic, pos, name, siteType, test in snapLists.get("conditional", []):
+                stationaryInputs.append((pos, 0, ic, siteType, name, test))
+            for ic, pos, name in snapLists.get("seqIn", []):
+                if ic.sites.seqIn.att is None:
+                    stationaryInputs.append((pos, 0, ic, "seqIn", name, None))
+            for ic, pos, name in snapLists.get("seqOut", []):
+                nextIc = ic.sites.seqOut.att
+                if nextIc is None:
+                    sHgt = 0
+                else:
+                    nextInX, nextInY = nextIc.posOfSite('seqIn')
+                    sHgt = nextInY - pos[1]
+                stationaryInputs.append((pos, sHgt, ic, "seqOut", name, None))
         self.snapList = []
         for si in stationaryInputs:
             (sx, sy), sh, sIcon, sSiteType, sName, sTest = si
@@ -1550,17 +1604,12 @@ class Window:
     def _endDrag(self):
         # self.dragging icons are not stored hierarchically, but are in draw order
         topDraggedIcons = findTopIcons(self.dragging)
-        redrawRegion = AccumRects()
         l, t, r, b = self.lastDragImageRegion
         for ic in self.dragging:
             ic.rect = offsetRect(ic.rect, l, t)
-            redrawRegion.add(ic.rect)
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             statIcon, movIcon, siteType, siteName = self.snapped
-            redrawRegion.add(statIcon.hierRect())
-            if siteType != "insertInput" and statIcon.childAt(siteName):
-                redrawRegion.add(movIcon.hierRect())
             if siteType == "input":
                 topDraggedIcons.remove(movIcon)
                 if icon.isSeriesSiteId(siteName) and isinstance(movIcon, icon.TupleIcon) \
@@ -1594,13 +1643,9 @@ class Window:
                 icon.insertSeq(movIcon, statIcon)
             elif siteType == 'seqIn':
                 icon.insertSeq(movIcon, statIcon, before=True)
-            for ic in self.topIcons:
-                self.filterRedundantParens(ic)
-            # Redo layouts for all affected (all the way to the top)
-            redrawRegion.add(self.layoutDirtyIcons())
-            # Redraw the areas affected by the updated layouts
-            self.clearBgRect(redrawRegion.get())
         self.addTop(topDraggedIcons)
+        # Redo layouts for all affected icons
+        self.layoutDirtyIcons()
         self.dragging = None
         self.snapped = None
         self.snapList = None
@@ -1625,7 +1670,7 @@ class Window:
         self.cursor.removeCursor()
         self.inRectSelect = True
         self.lastRectSelect = None
-        self.rectSelectInitialStates = {ic:ic.selected for ic in self.allIcons()}
+        self.rectSelectInitialState = self.selectedSet.copy()
         self._updateRectSelect(evt)
 
     def _updateRectSelect(self, evt):
@@ -1639,10 +1684,10 @@ class Window:
         redrawRegion = AccumRects()
         for ic in self.findIconsInRegion(combinedRegion):
             if ic.inRectSelect(newRect):
-                newSelect = (not self.rectSelectInitialStates[ic]) if toggle else True
+                newSelect = (ic not in self.rectSelectInitialState) if toggle else True
             else:
-                newSelect = self.rectSelectInitialStates[ic]
-            if ic.selected != newSelect:
+                newSelect = ic in self.rectSelectInitialState
+            if ic.isSelected() != newSelect:
                 ic.select(newSelect)
                 redrawRegion.add(ic.rect)
         self.refresh(redrawRegion.get(), clear=False)
@@ -1669,6 +1714,7 @@ class Window:
     def _startStmtSelect(self, seqSiteIc, evt):
         self.unselectAll()
         self.stmtSelectSeqStart = icon.findSeqStart(seqSiteIc)
+        self.topIcons[self.stmtSelectSeqStart].applyOffset()
         self.inStmtSelect = True
         self.lastStmtHighlightRects = None
         self._updateStmtSelect(evt)
@@ -1698,7 +1744,8 @@ class Window:
             if xChangePoints is not None and seqInX != seqOutX and seqOutY <= drawBottom:
                 xChangePoints.append((seqOutX, seqOutY + 2))
             needsSelect = drawBottom > seqInY and drawTop < seqOutY
-            if not ic.selected and needsSelect or ic.selected and not needsSelect:
+            selected = ic.isSelected()
+            if not selected and needsSelect or selected and not needsSelect:
                 for selIc in ic.traverse():
                     selIc.select(needsSelect)
                     redrawRegion.add(selIc.rect)
@@ -1716,12 +1763,14 @@ class Window:
             if y > drawTop:
                 break
             prevX = x
-        drawRects = [(prevX - SEQ_SELECT_WIDTH, drawTop, prevX, drawBottom)]
+        selectLeft = self.stmtSelectSeqStart.posOfSite('seqIn')[0] - 1
+        selectRight = selectLeft + 3
+        drawRects = [(selectLeft, drawTop, selectRight, drawBottom)]
         for x, y in xChangePoints:
             if drawBottom > y > drawTop and drawRects is not None:
                 splitL, splitT, splitR, splitB = drawRects[-1]
                 drawRects[-1] = (splitL, splitT, splitR, y)
-                drawRects.append((x - SEQ_SELECT_WIDTH, y, x, drawBottom))
+                drawRects.append((selectLeft, y, selectRight, drawBottom))
         # Refresh selection changes and clear erase areas
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
@@ -1729,10 +1778,11 @@ class Window:
         self.refresh(redrawRegion.get(), clear=False)
         # Draw the selection shading
         for drawRect in drawRects:
-            image = self.image.crop(drawRect)
+            drawImgRect = self.contentToImageRect(drawRect)
+            image = self.image.crop(drawImgRect)
             colorImg = Image.new('RGB', (image.width, image.height), color=(0, 0, 255)) # color=icon.SELECT_TINT)
             selImg = Image.blend(image, colorImg, .15)
-            self.drawImage(selImg, self.contentToImageCoord(*drawRect[:2]))
+            self.drawImage(selImg, drawImgRect[:2])
         self.lastStmtHighlightRects = drawRects
 
     def _endStmtSelect(self):
@@ -1784,8 +1834,8 @@ class Window:
         resultX = outSiteX - RESULT_X_OFFSET - icon.rectWidth(resultRect)
         resultY = outSiteY - resultOutSiteY - resultIcon.rect[1]
         resultIcon.rect = offsetRect(resultIcon.rect, resultX, resultY)
-        self.insertTopLevel(resultIcon)
-        resultIcon.layout()
+        self.addTopSingle(resultIcon, newSeq=True)
+        self.layoutDirtyIcons()
         resultRect = resultIcon.hierRect()
         for ic in resultIcon.traverse():
             ic.select()
@@ -1838,13 +1888,14 @@ class Window:
         elif op == 'icAndblock':
             changedIcons = list(ic.traverseBlock(hier=True))
         elif op == 'left':
-            changedIcons = list(self.findLeftOuterIcon(self.assocGrouping(ic)).traverse())
+            ic = icon.findLeftOuterIcon(self.assocGrouping(ic), self.buttonDownLoc)
+            changedIcons = list(ic.traverse())
         else:
             changedIcons = [ic]
         for ic in changedIcons:
             refreshRegion.add(ic.rect)
             if op is 'toggle':
-                ic.select(not ic.selected)
+                ic.select(not ic.isSelected())
             else:
                 ic.select()
         self.refresh(refreshRegion.get(), clear=False)
@@ -1857,45 +1908,36 @@ class Window:
             return
         for ic in selectedIcons:
             refreshRegion.add(ic.rect)
-            ic.select(False)
+        self.clearSelection()
         self.refresh(refreshRegion.get(), clear=False)
 
     def redraw(self, region=None, clear=True, showOutlines=False):
         """Cause all icons to redraw to the pseudo-framebuffer (call refresh to transfer
         from there to the display).  Setting clear to False suppresses clearing the
-        region to the background color before redrawing.  As a side effect, recalculates
-        content extent of the window and (if necessary) redraws scroll bars."""
+        region to the background color before redrawing."""
+        left, top = self.scrollOrigin
+        width, height = self.image.size
+        right, bottom = left + width, top + height
         if region is None:
-            left, top = self.scrollOrigin
-            region = left, top, left + self.image.width, top + self.image.height
+            region = left, top, right, bottom
+        else:
+            # Clip the region to the visible area of the window
+            l, t, r, b = region
+            region = max(left, l), max(top, t), min(right, r), min(bottom, b)
         if clear:
             self.clearBgRect(region)
-        # Traverse all top icons (only way to find out what's in the region).  Correct
-        # drawing depends on everything being ordered so overlaps happen properly.
-        # Sequence lines must be drawn on top of the icons they connect but below any
-        # icons that might be placed on top of them.  For efficiency (because we're
-        # traversing the entire icon tree), also set the window extents used to maintain
-        # scroll bar ranges
-        minX = minY = maxX = maxY = 0
+        # Traverse all the visible icons in the window.  Note that correct drawing depends
+        # on ordering so overlaps happen properly, so this is subtly dependent on the
+        # order returned from findIconsInRegion.  Sequence lines must be drawn on top of
+        # the icons they connect but below any icons that might be placed on top of them.
         drawStyle = "outline" if showOutlines else None
-        for topIcon in self.topIcons:
-            for ic in topIcon.traverse():
-                left, top, right, bottom = ic.rect
-                minX = min(left, minX)
-                minY = min(top, minY)
-                maxX = max(right, maxX)
-                maxY = max(bottom, maxY)
-                if rectsTouch(region, ic.rect):
-                    ic.draw(clip=region, style=drawStyle)
+        for ic in self.findIconsInRegion(region, inclSeqRules=True):
+            ic.draw(clip=region, style=drawStyle)
             # Looks better without connectors, but not willing to remove permanently, yet:
             # if region is None or icon.seqConnectorTouches(topIcon, region):
             #     icon.drawSeqSiteConnection(topIcon, clip=region)
-            if region is None or icon.seqRuleTouches(topIcon, region):
-                icon.drawSeqRule(topIcon, clip=region)
-        newExtent = self._calcScrollExtent(minX, minY, maxX, maxY)
-        if newExtent != self.scrollExtent:
-            self.scrollExtent = newExtent
-            self._updateScrollRanges()
+            if icon.seqRuleTouches(ic, region):
+                icon.drawSeqRule(ic, clip=region)
 
     def refresh(self, region=None, redraw=True, clear=True, showOutlines=False):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
@@ -1937,45 +1979,100 @@ class Window:
             self.dc = dib.image.getdc(self.imgFrame.winfo_id())
         dib.draw(self.dc, (x, y, x + width, y + height))
 
-    def findIconsInRegion(self, rect):
-        return [ic for ic in self.allIcons() if rectsTouch(rect, ic.rect)]
+    def findIconsInRegion(self, rect=None, inclSeqRules=False, order='draw'):
+        """Find the icons that touch a (content coordinate) rectangle of the window.  If
+        rect is not specified, assume the visible region of the window.  This function
+        uses an efficient searching technique, so it is also used to cull candidate icons
+        by location, to avoid scanning all icons in the window when location is known. If
+        inclSeqRule is True, includes icons at the start of sequence rules in rect."""
+        if rect is None:
+            left, top = self.scrollOrigin
+            width, height = self.image.size
+            right = left + width
+            bottom = top + height
+            rect = left, top, right, bottom
+        else:
+            left, top, right, bottom = rect
+        iconsInRegion = []
+        seqRuleSeed = None
+        sequences = reversed(self.sequences) if order == "pick" else self.sequences
+        for seqStartPage in sequences:
+            for page in seqStartPage.traversePages():
+                if page.bottomY >= rect[1] and page.topY <= bottom:
+                    page.applyOffset()
+                    for topIc in page.traverseSeq():
+                        for ic in topIc.traverse(order=order):
+                            if rectsTouch(rect, ic.rect):
+                                iconsInRegion.append(ic)
+                        if inclSeqRules and seqRuleSeed is None and topIc.rect[1] >= top:
+                            seqRuleSeed = topIc
+        if inclSeqRules and seqRuleSeed is not None:
+            # Follow code blocks up to the top of the sequence to find the start for each
+            # sequence rule left of seqRuleSeed
+            blockStart = seqRuleSeed
+            while True:
+                blockStart = icon.findSeqStart(blockStart, toStartOfBlock=True).prevInSeq()
+                if blockStart is None:
+                    break
+                if icon.seqRuleTouches(blockStart, rect):
+                    iconsInRegion.append(blockStart)
+                    page = self.topIcons[blockStart]
+                    page.applyOffset()
+            # Follow code within the y range down from seqRule seed to the bottom of rect
+            # to find any icons whose sequence rules need to be drawn
+            for ic in icon.traverseSeq(seqRuleSeed):
+                if icon.seqRuleTouches(ic, rect):
+                    iconsInRegion.append(ic)
+                    page = self.topIcons[ic]
+                    page.applyOffset()
+                if ic.rect[1] > bottom:
+                    break
+        return iconsInRegion
 
     def findIconAt(self, x, y):
-        for ic in self.allIcons(order="pick"):
-            if ic.touchesPosition(x, y):
-                return ic
+        for seqStartPage in reversed(self.sequences):
+            for page in seqStartPage.traversePages():
+                if page.bottomY >= y >= page.topY:
+                    page.applyOffset()
+                    for ic in page.traverseSeq(order="pick", hier=True):
+                        if ic.touchesPosition(x, y):
+                            return ic
         return None
 
     def _leftOfSeq(self, x, y):
-        """Return True if x,y is in the appropriate zone to start a statement-selection"""
-        for ic in self.topIcons:
-            if ic.hasSite('seqIn'):
-                seqInX, seqInY = ic.posOfSite('seqIn')
-                seqOutX, seqOutY = ic.posOfSite('seqOut')
-                if y < seqInY:
-                    continue
-                if seqInY <= y <= seqOutY and seqInX - SEQ_SELECT_WIDTH <= x <= seqInX:
-                    return ic  # Point is adjacent to icon body
-                nextIc = ic.nextInSeq()
-                if nextIc is None:
-                    continue
-                nextSeqInX, nextSeqInY = nextIc.posOfSite('seqIn')
-                if seqOutY <= y < nextSeqInY and seqOutX-SEQ_SELECT_WIDTH <= x <= seqOutX:
-                    return ic  # Point is adjacent to connector to next icon
-        return None
-
-    def findLeftOuterIcon(self, ic):
-        """Selection method for execution and dragging:  See description in icon.py"""
-        for topIcon in self.topIcons:
-            leftIcon = icon.findLeftOuterIcon(ic, topIcon, btnPressLoc=self.buttonDownLoc)
-            if leftIcon is not None:
-                return leftIcon
+        """Return top level icon near x,y if x,y is in the appropriate zone to start a
+        statement-selection"""
+        for seqStartPage in self.sequences:
+            for page in seqStartPage.traversePages():
+                if page.bottomY >= y >= page.topY:
+                    page.applyOffset()
+                    for ic in page.traverseSeq():
+                        if ic.hasSite('seqIn'):
+                            seqInX, seqInY = ic.posOfSite('seqIn')
+                            seqOutX, seqOutY = ic.posOfSite('seqOut')
+                            if y < seqInY:
+                                continue
+                            if seqInY <= y <= seqOutY and \
+                             seqInX - SEQ_SELECT_WIDTH <= x <= seqInX:
+                                return ic  # Point is adjacent to icon body
+                            nextIc = ic.nextInSeq()
+                            if nextIc is None:
+                                continue
+                            nextSeqInX, nextSeqInY = nextIc.posOfSite('seqIn')
+                            if seqOutY <= y < nextSeqInY and \
+                             seqOutX-SEQ_SELECT_WIDTH <= x <= seqOutX:
+                                return ic  # Point is adjacent to connector to next icon
         return None
 
     def removeIcons(self, icons, refresh=True):
         """Remove icons from window icon list redraw affected areas of the display"""
         if len(icons) == 0:
             return
+        # Note that order is important, here. .removeTop() must be called before
+        # disconnecting the icon sequences, and .addTop() must be called after connecting
+        # them.  Therefore, the first step is to remove deleted top-level icons from
+        # the window's .topIcon and .sequences lists.
+        self.removeTop([ic for ic in icons if ic.parent() is None])
         # deletedSet more efficiently determines if an icon is on the deleted list
         deletedSet = set(icons)
         detachList = []
@@ -1999,15 +2096,26 @@ class Window:
         # child icon rather than siteId in detachList because site names change as icons
         # are removed from variable-length sequences.
         addTopIcons = []
-        for topIcon in self.topIcons:
+        affectedTopIcons = set()
+        for topIcon in findTopIcons(icons):
+            affectedTopIcons.add(topIcon)
+            prevIcon = topIcon.prevInSeq()
+            if prevIcon is not None:
+                affectedTopIcons.add(prevIcon)
+            nextIcon = topIcon.nextInSeq()
+            if nextIcon is not None:
+                affectedTopIcons.add(nextIcon)
+        for ic in icons:
+            affectedTopIcons.add(ic.topLevelParent())
+        for topIcon in affectedTopIcons:
             nextIcon = topIcon.nextInSeq()
             if nextIcon is not None:
                 if topIcon in deletedSet and nextIcon not in deletedSet:
                     detachList.append((topIcon, nextIcon))
-                    topIcon.layoutDirty = True
+                    topIcon.markLayoutDirty()
                 if topIcon not in deletedSet and nextIcon in deletedSet:
                     detachList.append((topIcon, nextIcon))
-                    topIcon.layoutDirty = True
+                    topIcon.markLayoutDirty()
                     while True:
                         nextIcon = nextIcon.nextInSeq()
                         if nextIcon is None:
@@ -2035,6 +2143,9 @@ class Window:
             outIcon.replaceChild(inIcon, 'seqOut')
         for outIcon, (inIcon, site) in reconnectList.items():
             inIcon.replaceChild(outIcon, site)
+        # Add those icons that are now on the top level as a result of deletion of their
+        # parents (and bring those to front via ordering of .sequences page list)
+        self.addTop(addTopIcons)
         # Remove unsightly "naked tuples" left behind empty by deletion of their children
         for ic, child in detachList:
             if child in deletedSet and isinstance(ic, icon.TupleIcon) and \
@@ -2042,10 +2153,6 @@ class Window:
              ic.nextInSeq() is None and ic.prevInSeq() is None and ic in self.topIcons:
                 redrawRegion.add(ic.rect)
                 self.removeTop(ic)
-        # Update the window's top-icon list to remove deleted icons and add those that
-        # have become top icons via deletion of their parents (bring those to the front)
-        self.removeTop([ic for ic in self.topIcons if ic in deletedSet])
-        self.addTop(addTopIcons)
         # Redo layouts of icons affected by detachment of children
         redrawRegion.add(self.layoutDirtyIcons())
         # Redraw the area affected by the deletion
@@ -2076,22 +2183,80 @@ class Window:
             child = parent
         return child
 
-    def removeTop(self, ic):
-        """Remove top-level icon or icons from the top level.  Does NOT remove from
-        sequence (use removeIcons for that).  Also, does not re-layout or re-draw."""
-        if hasattr(ic, '__iter__'):
-            for i in ic:
-                self.removeTop(i)
+    def removeTop(self, icons):
+        """Remove top-level icon or icons from the .topIcons and page list.  Does NOT
+        remove from sequence (use removeIcons for that).  Also, does not re-layout or
+        re-draw.  Note that if removing a sequence, this should be 1) called with all of
+        the icons being removed (as opposed to individual icons), and 2) called before
+        the sequence links are reordered.  These are required so that the inverse of
+        the operation (undo) can assign pages consistent with the sequence."""
+        if hasattr(icons, '__iter__'):
+            # Control the order in which icons are removed, so that when undone, they
+            # will go back in an order that page membership can be reestablished
+            # reverse of the order used in addTop
+            for seqIc, newSeq in reversed(self._orderIconsForAdd(icons)):
+                self.removeTopSingle(seqIc, newSeq)
         else:
-            self.undo.registerRemoveFromTopLevel(ic, ic.rect[:2], self.topIcons.index(ic))
-            self.topIcons.remove(ic)
-            ic.becomeTopLevel(True)  #... ??? This does not seem right
+            lastOfSeq = icons.nextInSeq() is None and icons.prevInSeq() is None
+            self.removeTopSingle(icons, lastOfSeq)
+
+    def removeTopSingle(self, ic, lastOfSeq):
+        """Remove a single top-level icon from the window .topIcon and .sequences
+        structures.  If this icon is part of a sequence, use removeTop, instead, because
+        ordering of removal is necessary to rebuild page structures when the operation
+        is undone."""
+        self.undo.registerRemoveFromTopLevel(ic, ic.rect[:2] if lastOfSeq else None)
+        page = self.topIcons.get(ic)
+        page.layoutDirty = True
+        page.iconCount -= 1
+        if page.iconCount == 0:
+            self.removePage(page)
+        else:
+            if page.startIcon is ic:
+                # The removed icon was the reference icon for the page.  Because we
+                # require the sequence to be in pre-removal state, we can find a
+                # replacement, but it may require iteration as we don't require icons
+                # to be removed top-to-bottom, so some candidates may already be gone.
+                while True:
+                    page.startIcon = page.startIcon.nextInSeq()
+                    pageOfStartIcon = self.topIcons.get(page.startIcon)
+                    if pageOfStartIcon is page:
+                        break
+                    if pageOfStartIcon is None:
+                        continue
+                    print('Page list out of sync with icon sequence')
+        del self.topIcons[ic]
+        ic.becomeTopLevel(True)  #... ??? This does not seem right
+
+    def removePage(self, pageToRemove):
+        """Remove a (presumably empty) page.  Because pages are single-direction linked
+         list, this can only be done by exhaustively searching for the page, starting
+        from self.sequences."""
+        for seqStartPage in self.sequences:
+            if seqStartPage is pageToRemove:
+                idx = self.sequences.index(pageToRemove)
+                nextPage = pageToRemove.nextPage
+                if nextPage is None:
+                    del self.sequences[idx]
+                else:
+                    self.sequences[idx] = nextPage
+                return
+            for page in seqStartPage.traversePages():
+                if page.nextPage is pageToRemove:
+                    page.nextPage = pageToRemove.nextPage
+                    return
+        print("removePage could not find page to remove")
 
     def replaceTop(self, old, new):
         """Replace an existing top-level icon with a new icon.  If the existing icon was
-         part of a sequence, replace it in the sequence.  If the icon was not part of a
-         sequence place it in the same location.  If "new" will own a code block, also
-         integrate its corresponding block-end icon.  Does not re-layout or re-draw."""
+        part of a sequence, replace it in the sequence.  If the icon was not part of a
+        sequence place it in the same location.  If "new" will own a code block, also
+        integrate its corresponding block-end icon.  Does not re-layout or re-draw."""
+        # Note that order is important here, because the page infrastructure duplicates
+        # some of the information in the icon sequences.  .removeTop should always be
+        # called before tearing down the sequence connections, and .addTop should always
+        # be called after building them up.  This is important for undo, as well which
+        # separately tracks icon attachments and add/remove from the window structures.
         self.removeTop(old)
         nextInSeq = old.nextInSeq()
         if nextInSeq:
@@ -2118,101 +2283,141 @@ class Window:
         else:
             self.addTop(new)
 
-    def addTop(self, ic):
-        """Place an icon or icons on the window at the top level.  If the icon(s) are
-         part of a sequence, maintain sequence order in the list, otherwise place them
-         at the end of the list (last-drawn, on-top).  Does not re-layout or re-draw."""
-        # Find the appropriate index at which to place each icon.  The fact that python 3
-        # dictionaries are ordered preserves the order of the added icons, except where
-        # we reorder to join sequences with existing sequences.
-        addedIcons = {i:True for i in (ic if hasattr(ic, '__iter__') else [ic])}
+    def addTop(self, icons):
+        """Place an icon or icons on the window at the top level.  If the icons are
+        part of a sequence, they must be linked in to the sequence before calling this
+        function. This call adds them to the window topIcons dictionary and assigns them
+        to a (new or existing) page.  Does not re-layout or re-draw. """
+        # Convert the added icon list to a set so it can be quickly tested against
+        for ic, newSeq in self._orderIconsForAdd(icons):
+            self.addTopSingle(ic, newSeq=newSeq)
+
+    def _orderIconsForAdd(self, icons):
+        """Takes a list of top-level icons to be added to or removed from the window,
+        and returns them in an order in which they will can be added such that pages
+        can be inferred from adjacent icons as they are added (or for removal, that
+        when removal is undone, they will be added in the appropriate order).  The fact
+        that this ordering is necessary is unfortunate"""
+        addedIcons = {i for i in (icons if hasattr(icons, '__iter__') else [icons])}
         # Find any icons in list that are connected to icons outside of the list.  If
-        # found look for the attached icon in the topIcons list and insert them in the
-        # appropriate place in the list.  This is done first for sequences attached at
-        # the top, then for sequences attached at the bottom.  As these sequences are
-        # spliced in to the topIcons list, they are removed from addedIcons, so sequences
-        # attached at both the top and bottom will not be done twice, and the the
-        # remaining (unattached) icons will be left at the end in addedIcons
+        # found look for the attached icon in the topIcons list.  This is done first for
+        # sequences attached at the top, then for sequences attached at the bottom.  As
+        # these sequences are added to the sequencedIcons list, they are removed from
+        # addedIcons, so sequences attached at both the top and bottom will not be listed
+        # twice, and the the  remaining (unattached) icons will be left at the end.
         attachedSeqs = []
+        sequencedIcons = []
         for ic in addedIcons:
             if ic.hasSite('seqIn'):
                 prevIcon = ic.sites.seqIn.att
                 if prevIcon is not None and prevIcon not in addedIcons:
                     attachedSeqs.append((ic, prevIcon))
         for ic, attachedTo in attachedSeqs:
-            try:
-                idx = self.topIcons.index(attachedTo) + 1
-            except ValueError:
+            if self.topIcons.get(attachedTo) is None:
+                print('Removed top icon with seqIn site pointed to unknown icon')
                 continue
-            iconsInSeq = []
             seqIc = ic
             while True:
-                del addedIcons[seqIc]
-                iconsInSeq.append(seqIc)
+                addedIcons.remove(seqIc)
+                sequencedIcons.append((seqIc, False))
                 seqIc = seqIc.nextInSeq()
                 if seqIc is None or seqIc not in addedIcons:
                     break
-            self.insertTopLevel(iconsInSeq, idx)
         attachedSeqs = []
         for ic in addedIcons:
             nextIcon = ic.nextInSeq()
             if nextIcon is not None and nextIcon not in addedIcons:
                 attachedSeqs.append((ic, nextIcon))
         for ic, attachedTo in attachedSeqs:
-            try:
-                idx = self.topIcons.index(attachedTo)
-            except ValueError:
+            if self.topIcons.get(attachedTo) is None:
+                print('Removed top icon with seqOut site pointed to unknown icon')
                 continue
-            iconsInSeq = []
             seqIc = ic
             while True:
-                del addedIcons[seqIc]
-                iconsInSeq.append(seqIc)
+                addedIcons.remove(seqIc)
+                sequencedIcons.append((seqIc, False))
                 seqIc = seqIc.prevInSeq()
                 if seqIc is None or seqIc not in addedIcons:
                     break
-            iconsInSeq.reverse()
-            self.insertTopLevel(iconsInSeq, idx)
-        # Insert the remaining icons (not needing to be placed in sequence), at the end
-        # of the list.
-        self.insertTopLevel(list(addedIcons))
+        # Any remaining icons are not part of an existing sequence.  Organize them in to
+        # (new) sequences and add them top-down to sequencedIcons.  Adding them top-down
+        # allows addTopSingle to create a new page and add it to the sequence list, and
+        # put the remaining icons in the sequence in the same page.
+        remainingSeqs = []
+        for ic in addedIcons:
+            if ic.prevInSeq() is None:
+                remainingSeqs.append(ic)
+        for ic in remainingSeqs:
+            seqIc = ic
+            while True:
+                addedIcons.remove(seqIc)
+                sequencedIcons.append((seqIc, seqIc==ic))
+                seqIc = seqIc.nextInSeq()
+                if seqIc is None or seqIc not in addedIcons:
+                    break
+        # As a check on the whole process, addedIcons should now have all been sorted in
+        # sequencedIcons, so addedIcons should be empty.
+        if len(addedIcons) is not 0:
+            print('addTop left icons unaccounted')
+        return sequencedIcons
 
-    def insertTopLevel(self, icons, index=None, pos=None):
-        """Add icon or icons to the window's top-level icon list at a specific position
-        in the list.  If index is None, append to the end.  Note that this is not
-        appropriate for adding icons that are attached to sequences that have icons
-        already in the window. If pos is specified, attempt to place the (single) ic at
-        that position in the window."""
-        if not hasattr(icons, '__iter__'):
-            icons = [icons]
-        for ic in icons:
-            self.undo.registerAddToTopLevel(ic)
-        if index is None:
-            self.topIcons += icons
+    def addTopSingle(self, ic, newSeq=False, pos=None):
+        """Add a single icon to the window's top-level icon lists (.topIcons and
+        .sequences).  If ic is part of a sequence, this is probably not the appropriate
+        call (use .addTop(), instead), as each icon of a sequence must be added in an
+        order that allows the page to be determined.  If newSeq is True, will force
+        creation of a new .sequences entry and a new page rather than looking at sequence
+        attachments.  If ic is part of a sequence, this call must be made AFTER ic has
+        been linked in to the sequence."""
+        # Page is determined by the icon's seqIn/seqOut attachments as follows: if the
+        # icon is attached with its seqIn site, it is added to the page of the previous
+        # icon.  If it is attached only via seqOut, it is added to the page of the next
+        # icon in the sequence.  If it is attached to neither, a new page is created.
+        self.undo.registerAddToTopLevel(ic, newSeq)
+        if pos is not None:
+            ic.rect = icon.moveRect(ic.rect, pos)
+        prevIcon = ic.prevInSeq()
+        if prevIcon is None:
+            nextIcon = ic.nextInSeq()
+            if nextIcon is None or newSeq:
+                page = Page()
+                page.startIcon = ic
+                page.topY = ic.rect[1]
+                page.bottomY = ic.rect[3]
+                page.iconCount = 0
+                self.sequences.append(page)
+            else:
+                page = self.topIcons.get(nextIcon)
+                if page is None:
+                    print("addTopSingle couldn't infer page for attached icon")
+                if page.startIcon is nextIcon:
+                    page.startIcon = ic
         else:
-            self.topIcons[index:index] = icons
-        for ic in icons:
-            # Detaching icons should remove all connections, but the consequence to
-            # leaving a parent link at the top level is dire, so make sure all parent
-            # links are removed.
-            for parentSite in ic.parentSites():
-                lingeringParent = ic.childAt(parentSite)
-                if lingeringParent:
-                    print("Removing lingering parent link to icon added to top")
-                    lingeringParent.replaceChild(None, lingeringParent.siteOf(ic))
-            # If position was specified, relocate the icon
-            if pos is not None:
-                ic.rect = icon.moveRect(ic.rect, pos)
-            ic.becomeTopLevel(True)
+            page = self.topIcons.get(prevIcon)
+            if page is None:
+                nextIcon = ic.nextInSeq()
+                if nextIcon is None or nextIcon not in self.topIcons:
+                    print("addTopSingle couldn't infer page for added icon")
+                page = self.topIcons[nextIcon]
+                if page.startIcon is nextIcon:
+                    page.startIcon = ic
+        self.topIcons[ic] = page
+        page.layoutDirty = True
+        page.iconCount += 1  # Splitting too-large pages is deferred to layout time
+        # Detaching icons should remove all connections, but the consequence to
+        # leaving a parent link at the top level is dire, so make sure all parent
+        # links are removed.
+        for parentSite in ic.parentSites():
+            lingeringParent = ic.childAt(parentSite)
+            if lingeringParent:
+                print("Removing lingering parent link to icon added to top")
+                lingeringParent.replaceChild(None, lingeringParent.siteOf(ic))
+        ic.becomeTopLevel(True)
 
-    def findSequences(self, topIcons=None):
-        """Find the starting icons for all sequences in the window.  If topIcons is
-        None, look at all of the icons in the window.  Otherwise look for just those
-        in topIcons (which do not have to be in self.topIcons)"""
+    def findSequences(self, topIcons):
+        """Find the starting icons for all sequences in a list of top (stmt) icons."""
         sequenceTops = {}
         topIconSeqs = {}
-        if topIcons is None:
-            topIcons = self.topIcons
         for topIcon in topIcons:
             if topIcon not in topIconSeqs:
                 topOfSeq = icon.findSeqStart(topIcon)
@@ -2221,35 +2426,114 @@ class Window:
                     topIconSeqs[seqIcon] = topOfSeq
         return sequenceTops.keys()
 
-    def layoutDirtyIcons(self, topIcons=None):
-        """Look for icons marked as needing layout and lay them out.  If topIcons is
-        None, look at all of the icons in the window.  Otherwise look for just those
-        in topIcons (which do not have to be in self.topIcons).  Returns a rectangle
-        representing the changed areas that need to be redrawn, or None if nothing
-        changed."""
+    def layoutDirtyIcons(self, draggingIcons=None, filterRedundantParens=True):
+        """Look for icons marked as needing layout and lay them out.  If draggingIcons is
+        specified, assume a stand-alone list of top icons not of the window.  Otherwise
+        look at all of the icons in the window.  Returns a rectangle representing the
+        changed areas that need to be redrawn, or None if nothing changed."""
         redrawRegion = AccumRects()
-        for seqTopIcon in self.findSequences(topIcons):
-            redrawRegion.add(self.layoutIconsInSeq(seqTopIcon))
+        if draggingIcons is not None:
+            for seq in self.findSequences(draggingIcons):
+                redraw = self.layoutIconsInSeq(seq, filterRedundantParens)[0]
+                redrawRegion.add(redraw)
+        else:
+            for seqStartPage in self.sequences:
+                redrawRegion.add(self.layoutIconsInPage(seqStartPage, filterRedundantParens))
         return redrawRegion.get()
 
-    def layoutIconsInSeq(self, seqStartIcon, checkAllForDirty=True):
-        """Lay out all icons in a sequence starting from seqStartIcon. if checkAllForDirty
-        is True, will traverse all trees looking for dirty icons and redo those layouts
-        as well.  If False, only the top icon is assumed to require layout, and the
-        rest in the sequence will be moved up or down without additional checking."""
+    def layoutIconsInPage(self, startPage, filterRedundantParens, checkAllForDirty=True):
+        """Lay out all icons on a given page. if checkAllForDirty is True, will check the
+        entire sequence following page for dirty icons and redo those layouts as well.
+        If False, only startPage is assumed to require layout, and the remaining pages
+        will only be traversed if an offset needs to be propagated to them.  Side effects
+        are: splitting large pages and updating the window's scroll bars if the content
+        extent has changed."""
+        # Traverse the pages in the sequence: 1) looking for pages that need to be laid
+        # out, and 2) applying accumulated changes to y position from earlier changes.
+        redrawRegion = AccumRects()
+        offsetDelta = 0
+        pagesNeedingSplit = []
+        for page in startPage.traversePages():
+            if page.iconCount > PAGE_SPLIT_THRESHOLD:
+                pagesNeedingSplit.append(page)
+            if not page.layoutDirty:
+                # The page does not need layout
+                if offsetDelta == 0:
+                    if not checkAllForDirty:
+                        break
+                else:
+                    # The page needs offset but not layout, so just update the unapplied
+                    # offset and y range, which will be applied to icons when needed.
+                    page.unappliedOffset += offsetDelta
+                    page.topY += offsetDelta
+                    page.bottomY += offsetDelta
+                    windowLeft = self.scrollOrigin[0]
+                    windowRight = windowLeft + self.image.width
+                    redrawRegion.add((windowLeft, page.topY, windowRight, page.bottomY))
+                continue
+            # The page is marked as needing layout.
+            # Traverse the sequence of icons in the page looking for icons that need to
+            # be laid out.  The page may have unapplied offset, but that will be remedied
+            # by layoutIconsInSeq (unapplied offset will mess up the call's redraw rect
+            # for the original location, but presumably, displayed areas will not have
+            # unapplied offset, and redraw regions outside the window are clipped off).
+            page.topY += offsetDelta
+            redrawRect, bottomY, seqOutX = self.layoutIconsInSeq(page.startIcon,
+             filterRedundantParens, fromTopY=page.topY, restrictToPage=page)
+            redrawRegion.add(redrawRect)
+            page.unappliedOffset = 0
+            page.layoutDirty = False
+            page.bottomY = bottomY
+            if page.nextPage is not None:
+                offsetDelta = bottomY - page.nextPage.topY
+                nextIcon = page.nextPage.startIcon
+                if nextIcon is not None:
+                    x, y = nextIcon.pos()
+                    if x != seqOutX:
+                        # X shifts are rare as edits are usually balanced, but can
+                        # happen: propagate to next page and force layout.
+                        nextIcon.rect = offsetRect(nextIcon.rect, seqOutX - x, 0)
+                        page.nextPage.layoutDirty = True
+                        nextIcon.markLayoutDirty()
+        # If a page was found with more than PAGE_SPLIT_THRESHOLD icons, split it up
+        for page in pagesNeedingSplit:
+            page.split()
+        # Window content likely changed, update the scroll bars
+        self._updateScrollRanges()
+        return redrawRegion.get()
+
+    def layoutIconsInSeq(self, seqStartIcon, filterRedundantParens, fromTopY=None,
+     restrictToPage=None):
+        """Lay out all icons in a sequence starting from seqStartIcon. if
+        filterRedundantParens is True, apply redundant paren filter before laying out.
+        If fromTop specifies a value, line up the layout below that y value.  If fromTop
+        is None, position the sequence or output site of seqStartIcon identically.  If
+        restrictToPage is True, stop at the end of the page rather than processing the
+        entire sequence.  Returns three values: the modified region (rectangle) of the
+        window, the new bottomY of the sequence/page, and the seqOut site offset of the
+        last icon on the page."""
         redrawRegion = AccumRects()
         x, y = seqStartIcon.pos()
+        if fromTopY is not None:
+            y = fromTopY
         if not seqStartIcon.hasSite('seqIn'):
             # Icon can not be laid out by sequence site.  Just lay it out by itself
             redrawRegion.add(seqStartIcon.hierRect())
             seqStartIcon.layout((x, y))
-            redrawRegion.add(seqStartIcon.hierRect())
-            return redrawRegion.get()
-        for seqIc in icon.traverseSeq(seqStartIcon):
+            hierRect = seqStartIcon.hierRect()
+            redrawRegion.add(hierRect)
+            return redrawRegion.get(), hierRect[3], x
+        if filterRedundantParens:
+            # filterRedundantParens can modify sequence, so must operate on a copy
+            for ic in list(icon.traverseSeq(seqStartIcon, restrictToPage=restrictToPage)):
+                if ic.layoutDirty:
+                    self.filterRedundantParens(ic)
+        for seqIc in icon.traverseSeq(seqStartIcon, restrictToPage=restrictToPage):
             seqIcOrigRect = seqIc.hierRect()
             xOffsetToSeqIn, yOffsetToSeqIn = seqIc.posOfSite('seqIn')
             yOffsetToSeqIn -= seqIcOrigRect[1]
-            if (seqIc is seqStartIcon or checkAllForDirty) and seqIc.needsLayout():
+            if seqIc.layoutDirty:
+                redrawRegion.add(seqIcOrigRect)
                 layout = seqIc.layout((0, 0))
                 # Find y offset from top of layout to the seqIn site by which the icon
                 # needs to be positioned.  If seqIc has an output site, parentSiteOffset
@@ -2258,9 +2542,9 @@ class Window:
                 if seqIc.hasSite('output'):
                     yOffsetToSeqIn += seqIc.sites.seqIn.yOffset-seqIc.sites.output.yOffset
             # At this point, y is the seqIn site position if it is the first icon in the
-            # sequence.  Otherwise y is the bottom of the layout of the statement above.
-            # Adjust it to be the desired y of the seqIn site.
-            if seqIc is not seqStartIcon:
+            # sequence and fromTopY is False.  Otherwise y is the bottom of the layout of
+            # the statement above.  Adjust it to be the desired y of the seqIn site.
+            if fromTopY is not None or seqIc is not seqStartIcon:
                 y += yOffsetToSeqIn
             # Figure out how much to move the icons of the statement
             seqIcX, seqIcY = seqIc.posOfSite('seqIn')
@@ -2277,7 +2561,7 @@ class Window:
                 redrawRegion.add(seqIcNewRect)
             y = seqIcNewRect[3] - 1  # Minimal line spacing (overlap icon borders)
             x = seqIc.posOfSite('seqOut')[0]
-        return redrawRegion.get()
+        return redrawRegion.get(), y, x
 
     def siteSelected(self, evt):
         """Look for icon sites near button press, if found return icon and site"""
@@ -2288,7 +2572,7 @@ class Window:
         bottom = btnY + SITE_SELECT_DIST
         minDist = SITE_SELECT_DIST + 1
         minSite = (None, None, None)
-        for ic in self.findIconsInRegion((left, top, right, bottom)):
+        for ic in self.findIconsInRegion((left, top, right, bottom), order='pick'):
             iconSites = ic.snapLists(forCursor=True)
             for siteType, siteList in iconSites.items():
                 for siteIcon, (x, y), siteName in siteList:
@@ -2333,7 +2617,7 @@ class Window:
             self.replaceTop(ic, argIcon)
         else:
             parentIcon.replaceChild(argIcon, parentSite)
-            argIcon.layoutDirty = True
+            argIcon.markLayoutDirty()
         attrIcon = ic.sites.attrIcon.att
         ic.replaceChild(None, 'attrIcon')
         if attrIcon is not None and argIcon.hasSite('attrIcon'):
@@ -2345,9 +2629,10 @@ class Window:
             self.cursor.setToIconSite(argIcon, "attrIcon")
         return argIcon
 
-    def redoLayout(self, topIcon):
+    def redoLayout(self, topIcon, filterRedundantParens=True):
         """Recompute layout for a top-level icon and redraw all affected icons"""
-        redrawRect = self.layoutIconsInSeq(topIcon, checkAllForDirty=True)
+        redrawRect = self.layoutIconsInPage(self.topIcons[topIcon], filterRedundantParens,
+         checkAllForDirty=False)
         self.refresh(redrawRect)
 
     def imageToContentCoord(self, imageX, imageY):
@@ -2362,6 +2647,98 @@ class Window:
 
     def contentToImageRect(self, contentRect):
         return offsetRect(contentRect, -self.scrollOrigin[0], -self.scrollOrigin[1])
+
+class Page:
+    """The fact that icons know their own window positions becomes problematic for very
+    large files, because tiny edits can relocate every single icon below them in the
+    sequence.  To make this work, the Page structure was added to maintain an "unapplied
+    offset" to a range of icons in a sequence.  When icons become visible and need to
+    know their absolute positions, applyOffset can be called to update them.  The other
+    issue that pages address is the need to quickly find icons by position, without
+    traversing the entire tree."""
+    def __init__(self):
+        self.unappliedOffset = 0
+        self.layoutDirty = False
+        self.topY = 0
+        self.bottomY = 0
+        self.iconCount = 0
+        self.startIcon = None
+        self.nextPage = None
+
+    def split(self):
+        """Split this page, if it is too long, in to as many pages as necessary to bring
+        the size of each below PAGE_SPLIT_THRESHOLD."""
+        origStmtCnt = self.iconCount
+        if origStmtCnt <= PAGE_SPLIT_THRESHOLD:
+            return
+        numNewPages = 1 + (origStmtCnt - 1) // PAGE_SPLIT_THRESHOLD
+        newPageMax = 1 + (origStmtCnt - 1) // numNewPages
+        pageStmtCnt = 0
+        totalStmtCnt = 0
+        page = self
+        for ic in icon.traverseSeq(self.startIcon):
+            pageStmtCnt += 1
+            totalStmtCnt += 1
+            if pageStmtCnt > newPageMax:
+                # number of stmts on page exceeds max.  ic should start a new page
+                page.bottomY = ic.hierRect()[1] + page.unappliedOffset
+                page.iconCount = pageStmtCnt - 1
+                newPage = Page()
+                newPage.nextPage = page.nextPage
+                page.nextPage = newPage
+                newPage.unappliedOffset = page.unappliedOffset
+                newPage.layoutDirty = page.layoutDirty
+                newPage.topY = page.bottomY
+                newPage.startIcon = ic
+                page = newPage
+                pageStmtCnt = 1
+            if page is not self:
+                # Update entries in .topIcons list to point to new owning page
+                ic.window.topIcons[ic] = page
+            if totalStmtCnt >= origStmtCnt:
+                # ic is the last icon in the original page
+                break
+        page.bottomY = ic.hierRect()[3] + page.unappliedOffset
+        page.iconCount = pageStmtCnt
+
+    def traversePages(self):
+        """Return each of the pages following this page in the sequence"""
+        page = self
+        while page is not None:
+            yield page
+            page = page.nextPage
+
+    def traverseSeq(self, hier=False, order="draw"):
+        """Traverse the icons in the page (note, generator).  If hier is False, just
+        return the top icons in the sequence.  If hier is True, return all icons.  order
+        can be either "pick" or "draw", and controls hierarchical (hier=True) traversal.
+        Parent icons are allowed to hide structure under child icons, so picking must be
+        done child-first, and drawing must be done parent-first."""
+        count = 0
+        for ic in icon.traverseSeq(self.startIcon):
+            page = ic.window.topIcons[ic]
+            if page is not self:
+                break
+            count += 1
+            if hier:
+                yield from ic.traverse(order=order)
+            else:
+                yield ic
+        if count != self.iconCount:
+            # This shouldn't happen, but this is a cheap place to verify that iconCount
+            # matches the length of the sequence to which it is attached.
+            print('Page icon count does not agree with attached sequence, fixing')
+            self.iconCount = count
+
+    def applyOffset(self):
+        """If the page has an unapplied offset, apply it (move all of the icons on the
+        page vertically by unappliedOffset and set it to 0)."""
+        if self.unappliedOffset == 0:
+            return
+        for ic in self.traverseSeq(hier=True):
+            l, t, r, b = ic.rect
+            ic.rect = l, t + self.unappliedOffset, r, b + self.unappliedOffset
+        self.unappliedOffset = 0
 
 class AccumRects:
     """Make one big rectangle out of all rectangles added."""
@@ -2430,14 +2807,14 @@ class App:
                 break
         self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
 
-def findTopIcons(icons):
-    """ Find the top icon(s) within a list of icons (the returned icons do not have to be
-     at the top of the window icon hierarchy, just the highest within the given list)."""
-    iconDir = {ic:True for ic in icons}
-    for ic in icons:
-        for child in ic.children():
-            iconDir[child] = False
-    return [ic for ic, isTop in iconDir.items() if isTop]
+def findTopIcons(icons, stmtLvlOnly=False):
+    """ Find the top icon(s) within a list of icons.  If stmtLvlOnly is True, the only
+    criteria is that the icons have no parent.  If stmtLvlOnly is False, icons that have
+    a parent but that parent is not in the list, are also returned."""
+    if stmtLvlOnly:
+        return [ic for ic in icons if ic.parent() is None]
+    iconSet = set(icons)
+    return [ic for ic in icons if ic.parent() not in iconSet]
 
 def findSeries(icons):
     """Returns a list of groups of icons that appear on the same sequence, list, tuple,
@@ -2510,7 +2887,7 @@ def restoreSeries(series):
         newTuple = icon.TupleIcon(icons[0].window, noParens=True,
          location=icons[0].rect[:2])
         newTuple.insertChildren(icons, 'argIcons', 0)
-        newTuple.select(icons[0].selected)
+        newTuple.select(icons[0].isSelected())
         newIcons.append(newTuple)
     return newIcons
 

@@ -605,10 +605,9 @@ def iconsFromClipboardString(clipString, window, offset):
                     branchIc = branchStack.pop()
                     branchIc.blockEnd = ic
                     ic.primary = branchIc
-            ic.layoutDirty = True
+            ic.markLayoutDirty()
         if len(branchStack) != 0:
             print("Unbalanced branches in clipboard data")
-        window.layoutIconsInSeq(seqIcons[0], checkAllForDirty=True)
         allIcons += seqIcons
     return allIcons
 
@@ -690,6 +689,14 @@ def iconBoxedText(text, font=globalFont, color=BLACK):
     renderCache[(text, font, color)] = txtImg
     return txtImg
 
+textSizeCache = {}
+def getTextSize(text, font=globalFont):
+    key = text, font
+    size = textSizeCache.get(key)
+    if size is None:
+        size = textSizeCache[key] = font.getsize(text)
+    return size
+
 outSiteImage = asciiToImage(outSitePixmap)
 inSiteImage = asciiToImage(inSitePixmap)
 attrOutImage = asciiToImage(attrOutPixmap)
@@ -738,7 +745,6 @@ class Icon:
     def __init__(self, window=None):
         self.window = window
         self.rect = None
-        self.selected = False
         self.layoutDirty = False
         self.drawList = None
         self.sites = IconSiteList()
@@ -758,9 +764,16 @@ class Icon:
             return self.rect[:2]
 
     def select(self, select=True):
-        """Use this method to select or unselect an icon (state can be read from .selected
-        member variable, but some icons need to take action on change)."""
-        self.selected = select
+        """Use this method to select (select=True) or unselect (select=False) an icon.
+        Use .isSelected() to read the selection state of the icon."""
+        # Icon selection was initially a property of the icon itself, but many operations
+        # need to look up "which icons are currently selected" which is too expensive for
+        # windows with large numbers of icons, so it is now maintained as a set in the
+        # window structure rather than an icon property
+        self.window.select(self, select)
+
+    def isSelected(self):
+        return self.window.isSelected(self)
 
     def layout(self, location=None):
         """Compute layout and set locations for icon and its children (do not redraw).
@@ -872,6 +885,17 @@ class Icon:
                 return True
         return False
 
+    def markLayoutDirty(self):
+        self.layoutDirty = True
+        # Dirty layouts are found through the window Page structure, then iterating over
+        # just the top icons of the page sequence, so mark the page and the top icon.
+        if self.window is not None:
+            topParent = self.topLevelParent()
+            topParent.layoutDirty = True
+            page = self.window.topIcons.get(topParent)
+            if page is not None:
+                page.layoutDirty = True
+
     def children(self):
         return [c.att for c in self.sites.childSites() if c is not None and
          c.att is not None]
@@ -947,13 +971,13 @@ class Icon:
                 self.sites.lookup(siteId).attach(self, newChild, childSite)
         else:
             self.sites.lookup(siteId).attach(self, newChild, childSite)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def removeEmptySeriesSite(self, siteId):
         if self.childAt(siteId):
             return
         self.sites.removeSeriesSiteById(self, siteId)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
         """Insert a child icon or empty icon site (child=None) at the specified site.
@@ -976,7 +1000,7 @@ class Icon:
         else:
             self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, seriesIdx)
             self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def insertChildren(self, children, seriesName, seriesIdx, childSite=None):
         """Insert a group of child icons at the specified site"""
@@ -1068,7 +1092,7 @@ class Icon:
             outImg = toDragImage
             x, y = location
         for (imgOffsetX, imgOffsetY), img in self.drawList:
-            pasteImageWithClip(outImg, tintSelectedImage(img, self.selected, style),
+            pasteImageWithClip(outImg, tintSelectedImage(img, self.isSelected(), style),
              (x + imgOffsetX, y + imgOffsetY), clip)
 
     def _serialize(self, offset, iconsToCopy, **args):
@@ -1120,7 +1144,7 @@ class TextIcon(Icon):
         Icon.__init__(self, window)
         self.text = text
         self.hasAttrIn = hasAttrIn
-        bodyWidth, bodyHeight = globalFont.getsize(self.text)
+        bodyWidth, bodyHeight = getTextSize(self.text)
         bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
@@ -1194,7 +1218,7 @@ class TextIcon(Icon):
 
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
-        _w, minTxtHgt = globalFont.getsize("Mg_")
+        _w, minTxtHgt = getTextSize("Mg_")
         TextIcon.__init__(self, name, window, location)
         self.name = name
 
@@ -1245,8 +1269,8 @@ class AttrIcon(Icon):
     def __init__(self, name, window=None, location=None):
         Icon.__init__(self, window)
         self.name = name
-        bodyWidth, _h = globalFont.getsize(self.name)
-        _w, bodyHeight = globalFont.getsize("Mg_")
+        bodyWidth, _h = getTextSize(self.name)
+        _w, bodyHeight = getTextSize("Mg_")
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight = max(bodyHeight, minTxtHgt) + 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -1430,7 +1454,7 @@ class SubscriptIcon(Icon):
         if n == 3 and oldN < 3:
             self.sites.add('stepIcon', 'input')
         self.window.undo.registerCallback(self.changeNumSubscripts, oldN)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def textRepr(self):
         indexIcon = self.sites.indexIcon.att
@@ -1488,7 +1512,7 @@ class UnaryOpIcon(Icon):
         Icon.__init__(self, window)
         self.operator = op
         self.precedence = unaryOpPrecedence[op]
-        bodyWidth, bodyHeight = globalFont.getsize(self.operator)
+        bodyWidth, bodyHeight = getTextSize(self.operator)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -1511,7 +1535,7 @@ class UnaryOpIcon(Icon):
         if self.drawList is None:
             img = Image.new('RGBA', (rectWidth(self.rect),
              rectHeight(self.rect)), color=(0, 0, 0, 0))
-            width, height = globalFont.getsize(self.operator)
+            width, height = getTextSize(self.operator)
             bodyLeft = outSiteImage.width - 1
             bodyWidth = width + 2 * TEXT_MARGIN
             bodyHeight = height + 2 * TEXT_MARGIN
@@ -1729,7 +1753,7 @@ class ListTypeIcon(Icon):
             return
         self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, idx)
         self.sites.lookupSeries(seriesName)[idx].attach(self, child, childSite)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
         # Checks and special rules for comprehension series with no commas.
@@ -1865,7 +1889,7 @@ class TupleIcon(ListTypeIcon):
         self.leftImg = tupleLParenImage
         self.rightImg = tupleRParenImage
         self.drawList = None
-        self.layoutDirty = True
+        self.markLayoutDirty()
         self.window.undo.registerCallback(self.removeParens)
 
     def removeParens(self):
@@ -1875,7 +1899,7 @@ class TupleIcon(ListTypeIcon):
         self.leftImg = inpOptionalSeqImage
         self.rightImg = emptyImage
         self.drawList = None
-        self.layoutDirty = True
+        self.markLayoutDirty()
         self.window.undo.registerCallback(self.restoreParens)
 
     def acceptsComprehension(self):
@@ -1943,7 +1967,7 @@ class DictIcon(ListTypeIcon):
 class CprhIfIcon(Icon):
     def __init__(self, window, location=None):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = globalFont.getsize(" if")
+        bodyWidth, bodyHeight = getTextSize(" if")
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -1986,9 +2010,9 @@ class CprhForIcon(Icon):
         Icon.__init__(self, window)
         self.isAsync = isAsync
         text = " async for" if isAsync else " for"
-        bodyWidth = globalFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = getTextSize(text)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
-        inWidth = globalFont.getsize("in")[0] + 2 * TEXT_MARGIN + 1
+        inWidth = getTextSize("in")[0] + 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight, inWidth)
         siteYOffset = bodyHeight // 2
         targetXOffset = bodyWidth - OUTPUT_SITE_DEPTH
@@ -2088,7 +2112,7 @@ class BinOpIcon(Icon):
         self.hasParens = False  # Filled in by layout methods
         self.leftArgWidth = EMPTY_ARG_WIDTH
         self.rightArgWidth = EMPTY_ARG_WIDTH
-        opWidth, opHeight = globalFont.getsize(self.operator)
+        opWidth, opHeight = getTextSize(self.operator)
         opHeight = max(opHeight + 2*TEXT_MARGIN + 1, lParenImage.height)
         opWidth += 2*TEXT_MARGIN - 1
         self.opSize = (opWidth, opHeight)
@@ -2584,7 +2608,7 @@ class WithAsIcon(TwoArgIcon):
 class AssignIcon(Icon):
     def __init__(self, numTargets=1, window=None, location=None):
         Icon.__init__(self, window)
-        opWidth, opHeight = globalFont.getsize('=')
+        opWidth, opHeight = getTextSize('=')
         opWidth += 2*TEXT_MARGIN + 1
         opHeight += 2*TEXT_MARGIN + 1
         siteY = inpSeqImage.height // 2
@@ -2660,7 +2684,7 @@ class AssignIcon(Icon):
         self.tgtLists.insert(idx, HorizListMgr(self, 'targetsX', 0, 0))
         self.renumberTargetGroups(descending=True)
         self.window.undo.registerCallback(self.removeTargetGroup, idx)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def removeTargetGroup(self, idx):
         if idx <= 0 or idx >= len(self.tgtLists):
@@ -2673,7 +2697,7 @@ class AssignIcon(Icon):
         self.sites.removeSeries("targets%d" % idx)
         self.renumberTargetGroups()
         self.window.undo.registerCallback(self.addTargetGroup, idx)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def renumberTargetGroups(self, descending=False):
         tgtLists = list(enumerate(self.tgtLists))
@@ -2791,7 +2815,7 @@ class AugmentedAssignIcon(Icon):
     def __init__(self, op, window, location=None):
         Icon.__init__(self, window)
         self.op = op
-        bodyWidth = globalFont.getsize(self.op + '=')[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = getTextSize(self.op + '=')[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3064,7 +3088,7 @@ class BlockEnd(Icon):
 
     def select(self, select=True, selectPrimary=False):
         if selectPrimary:
-            self.primary.selected = select
+            self.primary.select(select)
 
     def primaryRect(self):
         return self.primary.rect
@@ -3095,7 +3119,7 @@ class BlockEnd(Icon):
 class WhileIcon(Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = boldFont.getsize("while")
+        bodyWidth, bodyHeight = getTextSize("while", boldFont)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -3141,8 +3165,8 @@ class WhileIcon(Icon):
             self.drawList = None
 
     def select(self, select=True):
-        self.selected = select
-        self.blockEnd.selected = select
+        Icon.select(self, select)
+        Icon.select(self.blockEnd, select)
 
     def doLayout(self, seqSiteX, seqSiteY, layout):
         width, height = self.bodySize
@@ -3178,9 +3202,9 @@ class ForIcon(Icon):
         Icon.__init__(self, window)
         self.isAsync = isAsync
         text = "async for" if isAsync else "for"
-        bodyWidth = boldFont.getsize(text)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = getTextSize(text, boldFont)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
-        inWidth = boldFont.getsize("in")[0] + 2 * TEXT_MARGIN + 1
+        inWidth = getTextSize("in", boldFont)[0] + 2 * TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight, inWidth)
         siteYOffset = bodyHeight // 2
         targetXOffset = bodyWidth + dragSeqImage.width-1 - OUTPUT_SITE_DEPTH
@@ -3260,8 +3284,8 @@ class ForIcon(Icon):
         return siteSnapLists
 
     def select(self, select=True):
-        self.selected = select
-        self.blockEnd.selected = select
+        Icon.select(self, select)
+        Icon.select(self.blockEnd, select)
 
     def doLayout(self, seqSiteX, seqSiteY, layout):
         self.tgtList.doLayout(layout)
@@ -3315,7 +3339,7 @@ class ForIcon(Icon):
 class IfIcon(Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = boldFont.getsize("if")
+        bodyWidth, bodyHeight = getTextSize("if", boldFont)
         bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
@@ -3364,13 +3388,13 @@ class IfIcon(Icon):
             self.drawList = None
 
     def select(self, select=True, includeElses=False):
-        self.selected = select
-        self.blockEnd.selected = select
+        Icon.select(self, select)
+        Icon.select(self.blockEnd, select)
         if includeElses:
             if self.elseIcon is not None:
-                self.elseIcon.selected = select
+                Icon.select(self.elseIcon, select)
             for elifIc in self.elifIcons:
-                elifIc.selected = select
+                Icon.select(elifIc, select)
 
     def addElse(self, ic):
         if isinstance(ic, ElifIcon):
@@ -3416,7 +3440,7 @@ class IfIcon(Icon):
 class ElifIcon(Icon):
     def __init__(self, window, location=None):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = boldFont.getsize("elif ")
+        bodyWidth, bodyHeight = getTextSize("elif ", boldFont)
         bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
@@ -3488,7 +3512,7 @@ class ElifIcon(Icon):
 class ElseIcon(Icon):
     def __init__(self, window, location=None):
         Icon.__init__(self, window)
-        bodyWidth, bodyHeight = boldFont.getsize("else")
+        bodyWidth, bodyHeight = getTextSize("else", boldFont)
         bodyHeight = max(minTxtHgt, bodyHeight)
         bodyWidth += 2 * TEXT_MARGIN + 1
         bodyHeight += 2 * TEXT_MARGIN + 1
@@ -3549,7 +3573,7 @@ class DefOrClassIcon(Icon):
     def __init__(self, text, hasArgs, createBlockEnd=True, window=None, location=None):
         Icon.__init__(self, window)
         self.text = text
-        bodyWidth = boldFont.getsize(self.text)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = getTextSize(self.text, boldFont)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3634,8 +3658,8 @@ class DefOrClassIcon(Icon):
         return siteSnapLists
 
     def select(self, select=True):
-        self.selected = select
-        self.blockEnd.selected = select
+        Icon.select(self, select)
+        Icon.select(self.blockEnd, select)
 
     def doLayout(self, seqSiteX, seqSiteY, layout):
         self.nameWidth = layout.nameWidth
@@ -3725,7 +3749,7 @@ class NoArgStmtIcon(Icon):
     def __init__(self, stmt, window, location):
         Icon.__init__(self, window)
         self.stmt = stmt
-        bodyWidth = boldFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = getTextSize(stmt, boldFont)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3795,7 +3819,7 @@ class SeriesStmtIcon(Icon):
         Icon.__init__(self, window)
         self.stmt = stmt
         self.drawIndent = seqIndent
-        bodyWidth = boldFont.getsize(stmt)[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = getTextSize(stmt, boldFont)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -3895,8 +3919,8 @@ class WithIcon(SeriesStmtIcon):
             self.sites.seqOut.attach(self, self.blockEnd)
 
     def select(self, select=True):
-        self.selected = select
-        self.blockEnd.selected = select
+        Icon.select(self, select)
+        Icon.select(self.blockEnd, select)
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
@@ -3912,7 +3936,7 @@ class NonlocalIcon(SeriesStmtIcon):
 class YieldIcon(Icon):
     def __init__(self, window=None, location=None):
         Icon.__init__(self, window)
-        bodyWidth = boldFont.getsize("yield")[0] + 2 * TEXT_MARGIN + 1
+        bodyWidth = getTextSize("yield", boldFont)[0] + 2 * TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -4165,7 +4189,7 @@ def needsParens(ic, parent=None, forText=False):
         return True
     return False
 
-def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
+def findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon=None):
     """Because we have icons with no pickable structure left of their arguments (binary
     operations), we have to make rules about what it means to click or drag the leftmost
     icon in an expression.  For the purpose of selection, that is simply the icon that was
@@ -4175,6 +4199,8 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
     # with automatic parens visible: only if the user clicked on the left paren can
     # the icon be the leftmost object in an expression.  Clicking on the body or the
     # right paren does not count.
+    if fromIcon is None:
+        fromIcon = clickedIcon.topLevelParent()
     if clickedIcon.__class__ is BinOpIcon and clickedIcon.hasParens:
         if not clickedIcon.locIsOnLeftParen(btnPressLoc):
             return clickedIcon
@@ -4185,23 +4211,23 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
     if fromIcon.__class__ is AssignIcon:
         leftSiteIcon = fromIcon.sites.targets0[0].att
         if leftSiteIcon is not None:
-            left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
+            left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
             if left is leftSiteIcon:
                 return fromIcon  # Claim outermost status for this icon
     if fromIcon.__class__ is AugmentedAssignIcon:
         leftSiteIcon = fromIcon.sites.targetIcon.att
         if leftSiteIcon is not None:
-            left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
+            left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
             if left is leftSiteIcon:
                 return fromIcon  # Claim outermost status for this icon
     if fromIcon.__class__ is TupleIcon and fromIcon.noParens:
         leftSiteIcon = fromIcon.childAt('argIcons_0')
         if leftSiteIcon is not None:
-            left = findLeftOuterIcon(clickedIcon, leftSiteIcon, btnPressLoc)
+            left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
             if left is leftSiteIcon:
                 return fromIcon  # Claim outermost status for this icon
     if fromIcon.__class__ is BinOpIcon and fromIcon.leftArg() is not None:
-        left = findLeftOuterIcon(clickedIcon, fromIcon.leftArg(), btnPressLoc)
+        left = findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon.leftArg())
         if left is fromIcon.leftArg():
             targetIsBinOpIcon = clickedIcon.__class__ is BinOpIcon
             if not targetIsBinOpIcon or targetIsBinOpIcon and clickedIcon.hasParens:
@@ -4216,12 +4242,12 @@ def findLeftOuterIcon(clickedIcon, fromIcon, btnPressLoc):
             return left
         if fromIcon.rightArg() is None:
             return None
-        return findLeftOuterIcon(clickedIcon, fromIcon.rightArg(), btnPressLoc)
+        return findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon.rightArg())
     # Pass on any results from below fromIcon in the hierarchy
     children = fromIcon.children()
     if children is not None:
         for child in fromIcon.children():
-            result = findLeftOuterIcon(clickedIcon, child, btnPressLoc)
+            result = findLeftOuterIcon(clickedIcon, btnPressLoc, child)
             if result is not None:
                 return result
     return None
@@ -4697,7 +4723,7 @@ def seqRuleTouches(ic, rect):
     return True
 
 def drawSeqRule(ic, clip=None, image=None):
-    """Draw connection line between ic's seqIn site and whatever it connects."""
+    """Draw connection line spanning indented code block below ic."""
     if not hasattr(ic, 'blockEnd'):
         return
     x, toY = ic.blockEnd.posOfSite('seqOut')
@@ -4725,43 +4751,34 @@ def drawSeqRule(ic, clip=None, image=None):
     draw.line((x, fromY, x, toY), SEQ_RULE_COLOR)
 
 def findSeqStart(ic, toStartOfBlock=False):
-    if toStartOfBlock:
-        while True:
-            if not hasattr(ic.sites, 'seqIn'):
-                return ic
-            prevIc = ic.sites.seqIn.att
-            if prevIc is None:
-                return ic
-            if hasattr(prevIc, 'blockEnd'):
-                return ic
-            ic = prevIc
-            if isinstance(ic, BlockEnd):
-                ic = ic.primary
-    else:
-        for seqStartIc in traverseSeq(ic, reverse=True):
-            pass
-        return seqStartIc
-
+    while True:
+        if not hasattr(ic.sites, 'seqIn'):
+            return ic
+        prevIc = ic.sites.seqIn.att
+        if prevIc is None:
+            return ic
+        if toStartOfBlock and hasattr(prevIc, 'blockEnd'):
+            return ic
+        ic = prevIc
+        if isinstance(ic, BlockEnd):
+            # Shortcut around blocks significantly improves performance
+            ic = ic.primary
 
 def findSeqEnd(ic, toEndOfBlock=False):
-    if toEndOfBlock:
-        while True:
-            if hasattr(ic, 'blockEnd'):
-                ic = ic.blockEnd
-            if not hasattr(ic.sites, 'seqOut'):
-                return ic
-            nextIc = ic.sites.seqOut.att
-            if nextIc is None:
-                return ic
-            if isinstance(nextIc, BlockEnd):
-                return ic
-            ic = nextIc
-    else:
-        for seqEndIc in traverseSeq(ic):
-            pass
-        return seqEndIc
+    while True:
+        if hasattr(ic, 'blockEnd'):
+            ic = ic.blockEnd
+        if not hasattr(ic.sites, 'seqOut'):
+            return ic
+        nextIc = ic.sites.seqOut.att
+        if nextIc is None:
+            return ic
+        if toEndOfBlock and isinstance(nextIc, BlockEnd):
+            return ic
+        ic = nextIc
 
-def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False):
+def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
+ restrictToPage=None):
     if includeStartingIcon:
         if hier:
             yield from ic.traverse()
@@ -4774,6 +4791,8 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False):
             if ic.sites.seqIn.att is None:
                 return
             ic = ic.sites.seqIn.att
+            if restrictToPage is not None and ic.window.topIcons[ic] != restrictToPage:
+                return
             if hier:
                 yield from ic.traverse()
             else:
@@ -4785,6 +4804,8 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False):
             if ic.sites.seqOut.att is None:
                 return
             ic = ic.sites.seqOut.att
+            if restrictToPage is not None and ic.window.topIcons[ic] != restrictToPage:
+                return
             if hier:
                 yield from ic.traverse()
             else:

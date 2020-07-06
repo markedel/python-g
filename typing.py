@@ -175,7 +175,7 @@ class EntryIcon(icon.Icon):
         self.sites.add('attrOut', 'attrOut', 0, outSiteY + icon.ATTR_SITE_OFFSET)
         self.sites.add('seqIn', 'seqIn', 0, outSiteY)
         self.sites.add('seqOut', 'seqOut', 0, outSiteY)
-        self.layoutDirty = True
+        self.markLayoutDirty()
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)
 
@@ -198,7 +198,7 @@ class EntryIcon(icon.Icon):
             self.attachedSiteType = None
         self.text = text
         self.cursorPos = len(text)
-        self.layoutDirty = True
+        self.markLayoutDirty()
 
     def _width(self, boxOnly=False):
         textWidth = icon.globalFont.getsize(self.text)[0]
@@ -298,13 +298,13 @@ class EntryIcon(icon.Icon):
             if pendingArg:
                 self.replaceChild(None, 'pendingArg', 'output')
                 self.window.replaceTop(self, pendingArg)
-                pendingArg.layoutDirty = True
+                pendingArg.markLayoutDirty()
                 self.window.cursor.setToIconSite(pendingArg, "output")
             elif self.pendingAttr():
                 pendingAttr = self.pendingAttr()
                 self.replaceChild(None, 'pendingAttr', 'attrOut')
                 self.window.replaceTop(self, pendingAttr)
-                pendingAttr.layoutDirty = True
+                pendingAttr.markLayoutDirty()
                 self.window.cursor.setToIconSite(pendingAttr, "attrOut")
             else:
                 self.window.removeIcons([self])
@@ -330,7 +330,7 @@ class EntryIcon(icon.Icon):
             self.cursorPos = newCursorPos
             cursor.draw()
             if self._width() != oldWidth:
-                self.layoutDirty = True
+                self.markLayoutDirty()
             return
         elif parseResult == "comma":
             if self.commaEntered(self.attachedIcon, self.attachedSite):
@@ -388,7 +388,7 @@ class EntryIcon(icon.Icon):
                 tupleIcon = icon.TupleIcon(window=self.window)
                 if parent is None:
                     self.window.replaceTop(matchingParen, tupleIcon)
-                    tupleIcon.layoutDirty = True
+                    tupleIcon.markLayoutDirty()
                 else:
                     parent.replaceChild(tupleIcon, parent.siteOf(matchingParen))
                 if self.pendingArg() or self.pendingAttr():
@@ -432,7 +432,7 @@ class EntryIcon(icon.Icon):
         if self.attachedIcon is None:
             # Note that this clause includes sequence-site attachment
             self.window.replaceTop(self, ic)
-            ic.layoutDirty = True
+            ic.markLayoutDirty()
             if "input" in snapLists:
                 cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
             elif "attrIn" in snapLists:
@@ -490,7 +490,7 @@ class EntryIcon(icon.Icon):
         self.attachedSiteType = cursor.icon.typeOf(cursor.site)
         self.attachedIcon.replaceChild(self, self.attachedSite)
         cursor.setToEntryIcon()
-        self.layoutDirty = True
+        self.markLayoutDirty()
         self.text = ""
         self.cursorPos = 0
         if remainingText == "":
@@ -603,7 +603,7 @@ class EntryIcon(icon.Icon):
         for parent in onIcon.parentage():
             childSite = parent.siteOf(child)
             if icon.isSeriesSiteId(childSite):
-                onIcon.layoutDirty = True
+                onIcon.markLayoutDirty()
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
                 seriesName, seriesIndex = icon.splitSeriesSiteId(childSite)
                 parent.insertChild(rightArg, seriesName, seriesIndex + 1)
@@ -755,7 +755,7 @@ class EntryIcon(icon.Icon):
         rightSite = "bottomArg" if newOpIcon.__class__ is icon.DivideIcon else "rightArg"
         if rightArg is None:
             self.window.cursor.setToIconSite(newOpIcon, rightSite)
-        newOpIcon.layoutDirty = True
+        newOpIcon.markLayoutDirty()
         newOpIcon.replaceChild(leftArg, leftSite)
         newOpIcon.replaceChild(rightArg, rightSite)
         return True
@@ -1038,6 +1038,7 @@ class CursorParenIcon(icon.Icon):
         top = outSiteY - self.sites.output.yOffset
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         self.drawList = None
+        self.layoutDirty = False
 
     def calcLayout(self):
         singleParenWidth, height = self.bodySize
@@ -1081,7 +1082,7 @@ class CursorParenIcon(icon.Icon):
 
     def close(self):
         self.closed = True
-        self.layoutDirty = True
+        self.markLayoutDirty()
         # Allow cursor to be set to the end paren before layout knows where it goes
         self.sites.add('attrIcon', 'attrIn', icon.rectWidth(self.rect) -
          icon.ATTR_SITE_DEPTH, icon.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
@@ -1089,7 +1090,7 @@ class CursorParenIcon(icon.Icon):
 
     def reopen(self):
         self.closed = False
-        self.layoutDirty = True
+        self.markLayoutDirty()
         self.sites.remove('attrIcon')
         self.window.undo.registerCallback(self.close)
 
