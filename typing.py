@@ -855,6 +855,16 @@ class EntryIcon(icon.Icon):
         newOpIcon.markLayoutDirty()
         newOpIcon.replaceChild(leftArg, leftSite)
         newOpIcon.replaceChild(rightArg, rightSite)
+        # The conventional method to type a division operation with lower precedent
+        # operator(s) in the numerator is to use parenthesis.  However because of our
+        # vertical arrangement, those parens are thereafter unnecessary and unaesthetic.
+        # Removing them here (when the divide icon is first inserted) rather than as a
+        # general rule in filterRedundantParens, allows the user to add them back later
+        # if needed for subsequent edits and not be unexpectedly removed.
+        if newOpIcon.__class__ is icon.DivideIcon:
+            topArgChild = newOpIcon.childAt('topArg')
+            if isinstance(topArgChild, CursorParenIcon) and topArgChild.closed:
+                newOpIcon.replaceChild(topArgChild.childAt('argIcon'), 'topArg')
         return True
 
     def insertAssign(self, assignIcon):
