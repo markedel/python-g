@@ -370,8 +370,11 @@ class EntryIcon(icon.Icon):
             if not cursor.movePastEndBracket():
                 beep()
             return
+        elif parseResult == "openParen":
+            self.insertCursorParen()
+            return
         elif parseResult == "endParen":
-            matchingParen = self.findOpenParen(self.attachedIcon, self.attachedSite)
+            matchingParen = self.getUnclosedParen(self.attachedIcon, self.attachedSite)
             if matchingParen is None:
                 # Maybe user was just trying to move past an existing paren by typing it
                 if not self._removeAndReplaceWithPending():
@@ -504,19 +507,31 @@ class EntryIcon(icon.Icon):
         """Removes the entry icon and replaces it with it's pending argument or attribute
         if that is possible.  If the pending item cannot be put in place of the entry
         icon, does nothing and returns False"""
-        if self.pendingArg() and self.attachedSiteType == "input":
-            self.attachedIcon.replaceChild(self.pendingArg(), self.attachedSite)
-            self.setPendingArg(None)
-        elif self.pendingAttr() and self.attachedSiteType == "attrIn":
-            self.attachedIcon.replaceChild(self.pendingAttr(), self.attachedSite)
-            self.setPendingAttr(None)
-        elif self.pendingArg() is None and self.pendingAttr() is None:
-            self.attachedIcon.replaceChild(None, self.attachedSite,
-                leavePlace=True)
-        else:
-            return False
+        if self.attachedIcon is not None:
+            if self.pendingArg() and self.attachedSiteType == "input":
+                self.attachedIcon.replaceChild(self.pendingArg(), self.attachedSite)
+                self.setPendingArg(None)
+            elif self.pendingAttr() and self.attachedSiteType == "attrIn":
+                self.attachedIcon.replaceChild(self.pendingAttr(), self.attachedSite)
+                self.setPendingAttr(None)
+            elif self.pendingArg() is None and self.pendingAttr() is None:
+                self.attachedIcon.replaceChild(None, self.attachedSite,
+                    leavePlace=True)
+            else:
+                return False
+            self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
+        else:  # Entry icon is at top level
+            if self.pendingArg():
+                self.window.replaceTop(self.pendingArg())
+                self.window.cursor.setToIconSite(self.pendingArg(), 'output')
+                self.setPendingArg(None)
+            elif self.pendingAttr():
+                self.window.replaceTop(self.pendingAttr())
+                self.window.cursor.setToIconSite(self.pendingArg(), 'attrOut')
+                self.setPendingAttr(None)
+            else:
+                return False
         self.window.entryIcon = None
-        self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
         return True
 
     def commaEntered(self, onIcon, site):
@@ -657,39 +672,121 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(tupleIcon, "argIcons", 1)
         return True
 
-    def findOpenParen(self, fromIcon, fromSite):
-        """Find a matching open paren, and if necessary, relocate it among coincident
-        sites to match a close paren at fromIcon, fromSite"""
-        matchingParen = searchForOpenCursorParen(fromIcon, fromSite)
+    def insertCursorParen(self):
+        """When the user types an open paren, we insert a CursorParen icon, which
+        represents an un-closed parenthesis.  Managing these is complicated because they
+        have the power to completely rearrange the icon hierarchy depending where the
+        user eventually places the matching end paren.  For a consistent user-interface,
+        we maintain un-closed parens at the highest level of the hierarchy that they can
+        influence (clicking and dragging behavior is dependent on the hierarchy, even if
+        code appearance is identical).  It is easier to maintain parens at the highest
+        level than the lowest, since the paren itself makes this happen automatically,
+        and they can be found by just looking up from a prospective end position."""
+        if self.attachedIcon is None:
+            # Entry icon is at the top level.  Process this simpler case separately
+            # and return (while this could be handled as part of the general code, its
+            # subtly different conditions would complicate an already hairy operation)
+            newParenIcon = CursorParenIcon(window=self.window)
+            newParenIcon.markLayoutDirty()
+            self.window.replaceTop(self, newParenIcon)
+            if self.pendingArg():
+                # If there was a pending argument, put it in the paren
+                newParenIcon.replaceChild(self.pendingArg(), 'argIcon')
+                self.window.cursor.setToIconSite(newParenIcon, "argIcon")
+                self.setPendingArg(None)
+                self.window.entryIcon = None
+            elif self.pendingAttr():
+                # If there was a pending attribute, keep the entry icon but put it
+                # inside the new paren
+                newParenIcon.replaceChild(self, 'argIcon')
+            else:
+                # There are no pending arguments or attributes.  Replace the entry
+                # icon with a cursor in the new paren
+                self.window.cursor.setToIconSite(newParenIcon, "argIcon")
+                self.window.entryIcon = None
+            return True
+        # (Entry icon is guaranteed to have a parent)
+        # Attempt to get rid of the entry icon
+        attachedIc = self.attachedIcon
+        attachedSite = self.attachedSite
+        entryIconRemoved = self._removeAndReplaceWithPending()
+        # Adjust attachedIc and attachedSite to ensure they point to the outermost
+        # coincident site, and set parenChild to the candidate icon to be placed within
+        # the new parentheses
+        parenChild = attachedIc.childAt(attachedSite)
+        if parenChild is not None:
+            parenChild = icon.highestCoincidentIcon(parenChild)
+            attachedIc = parenChild.parent()
+            attachedSite = None if attachedIc is None else attachedIc.siteOf(parenChild)
+        # Create the cursor paren icon
+        newParenIcon = CursorParenIcon(window=self.window)
+        if attachedIc is None:
+            # If the new cursor paren is trivially at the top level, avoid all the work of
+            # integrating it in to the hierarchy
+            self.window.replaceTop(parenChild, newParenIcon)
+        else:
+            #  Attach the new cursor paren icon at the requested site
+            attachedIc.replaceChild(newParenIcon, attachedSite)
+            # While the cursor paren icon is now attached to highest level coincident
+            # site, there may be binary operations above it in the hierarchy whose
+            # operators appear to the right of the parenthesis.  Walk up the hierarchy
+            # of binary operations, pulling any operations that appear to the right of
+            # the new open-paren into it.
+            treeToMove = attachedIc
+            op = attachedIc.parent()
+            site = None if op is None else op.siteOf(attachedIc)
+            if op is not None and op.typeOf(site) != "input" or attachedIc.__class__ in (
+             icon.BinOpIcon, icon.UnaryOpIcon, icon.YieldIcon, icon.YieldFromIcon):
+                while op is not None and isinstance(op, icon.BinOpIcon):
+                    # Parent of the paren-owning icon (op) is a binary operation
+                    if op.hasParens:
+                        break  # op has own parens which the cursor paren must stay within
+                    parent = op.parent()
+                    parentSite = None if parent is None else parent.siteOf(op)
+                    if site == 'rightArg':
+                        # Operator of op is left (outside) of paren
+                        treeToMove = op
+                    else:
+                        # op operator is right of paren: make it the parent of the
+                        # paren content and replace it in the hierarchy with treeToMove
+                        op.replaceChild(parenChild, "leftArg")
+                        parenChild = op
+                        if parent is None:
+                            # Tree containing the open paren becomes a top icon
+                            self.window.replaceTop(op, treeToMove)
+                            break
+                        else:
+                            # Move the tree containing the open paren up to op's parent
+                            parent.replaceChild(treeToMove, parent.siteOf(op))
+                    op = parent
+                    site = parentSite
+        # Populate the new paren icon with the accumulated child icons
+        newParenIcon.replaceChild(parenChild, "argIcon")
+        if entryIconRemoved:
+            # Move the cursor inside the new cursor paren
+            self.window.cursor.setToIconSite(newParenIcon, "argIcon")
+        else:
+            # The entry icon was moved inside the cursorParen
+            self.attachedIcon = self.sites.output.att
+            self.attachedSite = self.attachedIcon.siteOf(self)
+        return True
+
+    def getUnclosedParen(self, fromIcon, fromSite):
+        """Find a matching open paren or paren-less tuple that could be closed by an end
+        paren at fromIcon, fromSite.  If an unclosed cursor paren is found, relocate it
+        to the appropriate level and rearrange the icon hierarchy such that it can be
+        closed.  Rearrangement may be significant.  Unclosed cursor parens are inserted
+        and maintained at the highest level in the hierarchy that they can reach.  In
+        addition to changing the level of the cursor paren itself, closing can expose
+        lower-precedence operations that will end up above it in the hierarchy."""
+        matchingParen = searchForOpenParen(fromIcon, fromSite)
         if matchingParen is None:
             return None
-        if matchingParen is fromIcon or matchingParen.__class__ is icon.TupleIcon:
+        if matchingParen is fromIcon or isinstance(matchingParen, icon.TupleIcon):
             return matchingParen
-        # Find the lowest common ancestor of the start paren and end location, looking at
-        # the visually-equivalent coincident sites to which the open-paren can be moved.
-        commonAncestor = tryMoveOpenParenDown(matchingParen, fromIcon)
-        if commonAncestor is matchingParen:
-            return matchingParen  # No re-parenting is necessary
-        if commonAncestor is None:
-            # No common ancestor found at the open paren or more local: broaden the scope
-            commonAncestor = tryMoveOpenParenUp(matchingParen, fromIcon)
-        if commonAncestor is None:
-            # Failed to find a common ancestor.  Give up
-            return None
-        # The matching open-paren needs re-parenting to match the close-paren
-        oldArg = matchingParen.sites.argIcon.att
-        matchingParen.replaceChild(None, "argIcon")
-        oldParenParent = matchingParen.parent()
-        if oldParenParent is None:
-            self.window.replaceTop(matchingParen, oldArg)
-        else:
-            oldParenParent.replaceChild(oldArg, oldParenParent.siteOf(matchingParen))
-        newParenParent = commonAncestor.parent()
-        if newParenParent is None:
-            self.window.replaceTop(commonAncestor, matchingParen)
-        else:
-            newParenParent.replaceChild(matchingParen, newParenParent.siteOf(commonAncestor))
-        matchingParen.replaceChild(commonAncestor, "argIcon")
+        # A cursor paren was matched.  Rearrange the hierarchy so the cursor paren is
+        # above all the icons it should enclose and outside of those it does not enclose.
+        matchCursorParenWithEnd(matchingParen, fromIcon)
         return matchingParen
 
     def makeFunction(self, ic):
@@ -1066,6 +1163,9 @@ class CursorParenIcon(icon.Icon):
         if self.sites.argIcon.att is None:
             return "None"
         return self.sites.argIcon.att.textRepr()
+
+    def dumpName(self):
+        return "(cp)" if self.closed else "(cp"
 
     def clipboardRepr(self, offset):
         return self._serialize(offset, closed=self.closed)
@@ -1578,7 +1678,7 @@ def parseExprText(text, window):
     if text == 'await':
         return icon.AwaitIcon(window), None
     if text == '(':
-        return CursorParenIcon(False, window), None
+        return "openParen"
     if text == ')':
         return "endParen"
     if text == '[':
@@ -1598,10 +1698,6 @@ def parseExprText(text, window):
     if opDelimPattern.match(delim):
         if text in unaryOperators:
             return icon.UnaryOpIcon(text, window), delim
-        if text == '(':
-            return CursorParenIcon(False, window), delim
-        if text == '[':
-            return icon.ListIcon(window), delim
     if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
         return "reject"  # Precursor characters do not form valid identifier or number
     if len(text) == 0 or delim not in delimitChars:
@@ -1683,110 +1779,171 @@ def findTextOffset(text, pixelOffset):
         else:
             return guessedPos
 
-def tryMoveOpenParenDown(cursorParen, desiredChild):
-    """Cursor-parens are part of the icon hierarchy, but their meaning is partly defined
-    by the end-paren that the user eventually types to close them.  When they appear in
-    a site that has multiple coincident inputs, we don't really know which one the user
-    intends.  This function finds the most-local icon to which the parens can be moved
-    that is an ancestor to the icon holding the newly-typed end-paren.  If no such icon
-    exists, it returns None."""
-    ic = cursorParen
-    result = None
+def matchCursorParenWithEnd(cursorParen, desiredChild):
+    """Rearrange icons such that cursorParen is the parent of all icons visually
+    contained between it and desiredChild.  This entails both adjusting it's level in
+    the hierarchy and moving icons that appear to the right of desiredChild above it."""
+    # Move the cursor paren down to the lowest level at which it has a common ancestor
+    # with desiredChild
+    dcParents = set(desiredChild.parentage(includeSelf=True))
     while True:
-        for dcParent in [desiredChild, *desiredChild.parentage()]:
-            if dcParent is ic:
-                # It can be mated with the end-paren
-                result = ic
+        cpChild = cursorParen.childAt('argIcon')
+        if cpChild is None:
+            print('cpChild is None.  Is this supposed to happen?')
+            break
+        site = cpChild.hasCoincidentSite()
+        if site is None:
+            break
+        cpChildChild = cpChild.childAt(site)
+        if cpChildChild is None:
+            print('cpChildChild is None.  Is this supposed to happen?')
+            break
+        if cpChildChild not in dcParents:
+            break
+        # There is a lower coincident site, move the paren down to it
+        moveParenDownOneLevel(cursorParen)
+    # Compute the path from the desired child to the cursor paren that should be its
+    # ancestor
+    child = desiredChild
+    path = []
+    for parent in desiredChild.parentage():
+        if parent is cursorParen:
+            break
+        path.append((parent, parent.siteOf(child)))
+        child = parent
+    else:
+        print('matchCursorParenWithEnd failed to find path to desiredChild')
+        return
+    if len(path) == 0:
+        return  # desiredChild is a direct descendant of cursorParen
+    # Follow the path upward through the hierarchy, dividing it in to two trees:
+    # inParenTree which will go in to the parenthesis, and outParenTree, which will be
+    # applied to the parenthesized expression
+    cursorParen.replaceChild(None, 'argIcon')
+    inParenTree = desiredChild
+    outParenTree = None
+    for ic, site in path:
+        if isinstance(ic, icon.BinOpIcon) and site == 'leftArg':
+            # Operator is outside of parens
+            ic.replaceChild(outParenTree, site)
+            if outParenTree is None:
+                cpAttachIcon = ic
+                cpAttachSite = site
+            outParenTree = ic
+        else:
+            # Everything else is within the parens
+            ic.replaceChild(inParenTree, site)
+            inParenTree = ic
+    # Move the inParenTree tree in to the existing cursor paren (its original content is
+    # already stitched in
+    cursorParen.replaceChild(inParenTree, 'argIcon')
+    # Make outParenTree the parent of the cursor paren icon.
+    if outParenTree is not None:
+        # It may be necessary to move outParenTree up the hierarchy, since it is not a
+        # paren, but an operator with its own precedence and associativity.  The code
+        # below does this by collecting operators of higher precedence that need to
+        # associate with the cursor paren, and pushing them down along with it in to
+        # outParenTree.
+        cpTree = cursorParen  # Tree containing cursorParen and higher-precidence ops
+        while True:
+            cpTreeParent = cpTree.parent()
+            if cpTreeParent is None or not hasattr(cpTreeParent, 'precedence') or \
+             isinstance(cpTreeParent, icon.DivideIcon):
                 break
+            if cpTreeParent.precedence < outParenTree.precedence:
+                break
+            if cpTreeParent.precedence == outParenTree.precedence and (
+             cpTreeParent.leftAssoc() and cpTreeParent.leftArg() is cpTree or
+             cpTreeParent.rightAssoc() and cpTreeParent.rightArg() is cpTree):
+                break
+            cpTree = cpTreeParent
+        # Move outParenTree up to its new place in the hierarchy, replacing
+        # cpTree as determined above
+        if cpTreeParent is None:
+            cursorParen.window.replaceTop(cpTree, outParenTree)
         else:
-            return result
-        if ic.__class__ is CursorParenIcon:
-            cpChild = ic.childAt('argIcon')
-        else:
-            cpChild = ic.childAt(ic.hasCoincidentSite())
-        if cpChild is None or not cpChild.hasCoincidentSite():
-            return result
-        # There is a lower coincident site, try that
-        ic = cpChild
+            cpTreeParent.replaceChild(outParenTree, cpTreeParent.siteOf(cpTree))
+        cpAttachIcon.replaceChild(cpTree, cpAttachSite)
 
-def tryMoveOpenParenUp(cursorParen, desiredChild):
-    """Cursor-parens are part of the icon hierarchy, but their meaning is partly defined
-    by the end-paren that the user eventually types to close them.  When they appear in
-    a site that has multiple coincident inputs, we don't really know which one the user
-    intends.  This function looks for icons above the cursor paren in the hierarchy, to
-    which it may be moved such that it has a common ancestor with the icon holding the
-    newly-typed end-paren.  If no such icon exists, it returns None."""
+def moveParenDownOneLevel(cursorParen):
+    """If cursorParen can be moved down the hierarchy to a visually equivalent site
+    (due to its immediate child being a coincident site), do so and return True."""
+    # Find the site to which the cursor paren should be moved, and its current content
+    cpChild = cursorParen.childAt('argIcon')
+    cpChildDestSite = cpChild.hasCoincidentSite()
+    if not cpChildDestSite:
+        return False
+    cursorParen.replaceChild(None, 'argIcon')
+    newCpChild = cpChild.childAt(cpChildDestSite)
+    cpChild.replaceChild(None, cpChildDestSite)
+    # Since so far only binary operations have coincident sites, we can assume that
+    # cpChild is a binary operation
+    if not isinstance(cpChild, icon.BinOpIcon):
+        print('moveParenDownOneLevel did not expect type:', cpChild.__class__.__name__)
+        return False
+    # We may have to move more than just the cursor paren itself.  If the top operator
+    # within the cursor parens has a lower precedence than the parent of the cursor paren
+    # (or equal precedence but associativity necessitating rearrangement), we will need
+    # to move both it and the cursor paren.  In fact, multiple levels may need to be
+    # relocated if the parens contained an operator of sufficiently low  precedence.
+    # Set treeToMoveDown to the top of the tree needing relocation.
+    treeToMoveDown = cursorParen
     while True:
-        cpParent = cursorParen.parent()
-        if cpParent is None:
-            return None
-        cpSite = cpParent.siteOf(cursorParen)
-        if not icon.isCoincidentSite(cpParent, cpSite):
-            return None
-        # Found a visually-equivalent spot to which the open-paren could be relocated
-        for dcParent in [desiredChild, *desiredChild.parentage()]:
-            if dcParent is cpParent:
-                # It can be mated with the end-paren
-                return cpParent
-        cursorParen = cpParent
+        ttmdParent = treeToMoveDown.parent()
+        if ttmdParent is None or not hasattr(ttmdParent, 'precedence') or \
+         isinstance(ttmdParent, icon.DivideIcon):
+            break
+        if ttmdParent.precedence < cpChild.precedence:
+            break
+        if ttmdParent.precedence == cpChild.precedence and (
+         ttmdParent.leftAssoc() and ttmdParent.leftArg() is treeToMoveDown or
+         ttmdParent.rightAssoc() and ttmdParent.rightArg() is treeToMoveDown):
+            break
+        treeToMoveDown = ttmdParent
+    # Move the child of the cursor paren up to its new place in the hierarchy, replacing
+    # treeToMoveDown as determined above
+    if ttmdParent is None:
+        cursorParen.window.replaceTop(treeToMoveDown, cpChild)
+    else:
+        ttmdParent.replaceChild(cpChild, ttmdParent.siteOf(treeToMoveDown))
+    # Move the cursorParen (and possibly more ops above it as determined above) down
+    # to the next lower coincident site determined earlier
+    cpChild.replaceChild(treeToMoveDown, cpChildDestSite)
+    # Move the original content of the new cursor paren site in to the cursor paren
+    cursorParen.replaceChild(newCpChild, 'argIcon')
+    return True
 
-def searchForOpenCursorParen(ic, site):
-    """Traverse "leftward" across the expression hierarchy looking for an open paren that
-    can be mated with an end-paren at the specified icon and site.  If found, return it.
-    Otherwise, return None."""
+def searchForOpenParen(ic, site):
+    """Find an open cursor paren or unclosed tuple that would match an end paren placed
+    at a given cursor position (ic and site)."""
+    # Note that this takes advantage of the fact that insertCursorParen places cursor
+    # parens at the highest level possible, so the matching paren will always be a parent
+    # of any requested end paren.
     while True:
-        if ic.__class__ is CursorParenIcon and not ic.closed:
-            # Found an open paren
-            return ic
-        if ic.__class__ is icon.TupleIcon and ic.noParens:
+        siteType = ic.typeOf(site)
+        if isinstance(ic, CursorParenIcon):
+            if ic.closed and siteType == 'input':
+                # Don't allow search to escape enclosing (already closed) cursor paren
+                return None
+            elif not ic.closed:
+                # Found an open paren
+                return ic
+        if isinstance(ic, icon.TupleIcon) and ic.noParens:
             # Found a no-paren (top-level) tuple to parenthesize
             return ic
-        if site == "all":
-            siteType = "input"
-        else:
-            siteType = ic.typeOf(site)
-        nextSite = None
-        scanAll = False
-        if siteType == "attrIn":
-            if ic.childAt("output"):
-                nextSite = "output"
-            elif ic.childAt("attrOut"):
-                nextSite = "attrOut"
-        elif siteType == "output":
-            if ic.childAt("output"):
-                nextSite = "output"
-        elif siteType == "input":
-            # siteType is "input", but inputs inside of fns, lists, parenthesized ops are
-            # all dead ends, so all we care about are arithmetic operations
-            if ic.__class__ is icon.UnaryOpIcon:
-                if site == "all" and ic.childAt("argIcon"):
-                    nextSite = "argIcon"
-                    scanAll = True
-                elif ic.childAt("output"):
-                    nextSite = "output"
-            elif ic.__class__ is icon.BinOpIcon:
-                if site == "all" and ic.childAt("rightArg"):
-                    nextSite = "rightArg"
-                    scanAll = True
-                elif site == "rightArg" and ic.childAt("leftArg"):
-                    nextSite = "leftArg"
-                    scanAll = True
-                elif not ic.hasParens and ic.childAt("output"):
-                    nextSite = "output"
-        if nextSite is None:
+        if isinstance(ic, icon.BinOpIcon) and ic.hasParens and site != 'attrIcon':
+            # Don't allow search to escape enclosing arithmetic parens
             return None
-        nextIc = ic.childAt(nextSite)
-        if scanAll:
-            # Start at the right side of the icon and scan everything if it's an
-            # arithmetic expression, but skip over parenthesis
-            if nextIc.__class__ is icon.UnaryOpIcon or \
-             nextIc.__class__ is icon.BinOpIcon and not nextIc.hasParens:
-                site = "all"
-            else:
-                site = "output"
-        else:
-            site = nextIc.siteOf(ic)
-        ic = nextIc
+        if siteType == 'input' and ic.__class__ not in (icon.BinOpIcon,
+         icon.UnaryOpIcon, icon.YieldIcon, icon.YieldFromIcon):
+            # For anything but an arithmetic op, inputs are enclosed in something
+            # and search should not extend beyond (calls, tuples, subscripts, etc.)
+            return None
+        parent = ic.parent()
+        if parent is None:
+            return None
+        site = parent.siteOf(ic)
+        ic = parent
 
 def rightmostSite(ic, ignoreAutoParens=False):
     """Return the site that is rightmost on an icon.  For most icons, that is an attribute

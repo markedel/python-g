@@ -1026,6 +1026,8 @@ class Icon:
     def siteOf(self, ic, recursive=False):
         """Find the site name for an attached icon.  If recursive is True, ic is not
         required to be a direct descendant."""
+        if ic is None:
+            return None
         if recursive:
             while True:
                 parent = ic.parent()
@@ -1071,7 +1073,12 @@ class Icon:
             return self.coincidentSite
 
     def textRepr(self):
+        """Produce Python-equivalent text for clipboard text representation"""
         return repr(self)
+
+    def dumpName(self):
+        """Give the icon a name to be used in text dumps."""
+        return self.__class__.__name__
 
     def doLayout(self, outSiteX, outSiteY, layout):
         pass
@@ -1201,6 +1208,10 @@ class TextIcon(Icon):
     def textRepr(self):
         return self.text + _attrTextRepr(self)
 
+    def dumpName(self):
+        """Give the icon a name to be used in text dumps."""
+        return self.text
+
     def execute(self):
         # This execution method is a remnant from when the IdentIcon did numbers, strings,
         # and identifiers, and is probably no longer appropriate.  Not sure if the current
@@ -1315,6 +1326,9 @@ class AttrIcon(Icon):
 
     def textRepr(self):
         return '.' + self.name + _attrTextRepr(self)
+
+    def dumpName(self):
+        return "." + self.name
 
     def execute(self, attrOfValue):
         try:
@@ -1472,6 +1486,9 @@ class SubscriptIcon(Icon):
             upperText = stepText = ""
         return '[' + indexText + upperText + stepText + ']' + _attrTextRepr(self)
 
+    def dumpName(self):
+        return "." + "[]"
+
     def clipboardRepr(self, offset, iconsToCopy):
         if not hasattr(self.sites, 'upperIcon'):
             numSubscripts = 1
@@ -1582,6 +1599,9 @@ class UnaryOpIcon(Icon):
     def textRepr(self):
         addSpace = " " if self.operator[-1].isalpha() else ""
         return self.operator + addSpace + _singleArgTextRepr(self.sites.argIcon)
+
+    def dumpName(self):
+        return "unary " + self.operator
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.operator)
@@ -1829,6 +1849,9 @@ class ListTypeIcon(Icon):
         for site in self.sites.cprhIcons[:-1]:
             cprhText += " " + site.att.textRepr()
         return self.leftText + argText + cprhText+ self.rightText + _attrTextRepr(self)
+
+    def dumpName(self):
+        return self.leftText + self.rightText
 
 class ListIcon(ListTypeIcon):
     def __init__(self, window, location=None):
@@ -2088,6 +2111,9 @@ class CprhForIcon(Icon):
         iterText = _singleArgTextRepr(self.sites.iterIcon)
         return text + " " + tgtText + " in " + iterText
 
+    def dumpName(self):
+        return "for (cprh)"
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync)
 
@@ -2290,6 +2316,9 @@ class BinOpIcon(Icon):
             return "(" + text + ")" + _attrTextRepr(self)
         return text
 
+    def dumpName(self):
+        return ("(%s)" if self.hasParens else "%s") % self.operator
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.operator)
 
@@ -2403,6 +2432,9 @@ class CallIcon(Icon):
 
     def textRepr(self):
         return '(' + _seriesTextRepr(self.sites.argIcons) + ')' + _attrTextRepr(self)
+
+    def dumpName(self):
+        return "call()"
 
     def execute(self, attrOfValue):
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
@@ -2518,6 +2550,9 @@ class TwoArgIcon(Icon):
         leftArgText = _singleArgTextRepr(self.sites.leftArg)
         rightArgText = _singleArgTextRepr(self.sites.rightArg)
         return leftArgText + " " + self.operator + " " + rightArgText
+
+    def dumpName(self):
+        return self.operator
 
     def selectionRect(self):
         # Limit selection rectangle for extending selection to op itself
@@ -2915,6 +2950,9 @@ class AugmentedAssignIcon(Icon):
         argText = _seriesTextRepr(self.sites.values)
         return target + ' ' + self.op + '=' + ' ' + argText
 
+    def dumpName(self):
+        return self.op + '='
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.op)
 
@@ -3044,6 +3082,9 @@ class DivideIcon(Icon):
         if needsParens(self, forText=True):
             return "(" + text + ")" + _attrTextRepr(self)
         return text
+
+    def dumpName(self):
+        return '//' if self.floorDiv else '/'
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, floorDiv=self.floorDiv)
@@ -3191,6 +3232,9 @@ class WhileIcon(Icon):
     def textRepr(self):
         return "while " + _singleArgTextRepr(self.sites.condIcon) + ":"
 
+    def dumpName(self):
+        return "while"
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
@@ -3319,6 +3363,9 @@ class ForIcon(Icon):
         iterText = _seriesTextRepr(self.sites.iterIcons)
         return text + " " + tgtText + " in " + iterText + ":"
 
+    def dumpName(self):
+        return "for"
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
          createBlockEnd=False)
@@ -3431,6 +3478,9 @@ class IfIcon(Icon):
     def textRepr(self):
         return "if " + _singleArgTextRepr(self.sites.condIcon) + ":"
 
+    def dumpName(self):
+        return "if"
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
@@ -3506,6 +3556,9 @@ class ElifIcon(Icon):
     def textRepr(self):
         return "elif " + _singleArgTextRepr(self.sites.condIcon) + ":"
 
+    def dumpName(self):
+        return "elif"
+
     def execute(self):
         return None  # ... no idea what to do here, yet.
 
@@ -3565,6 +3618,9 @@ class ElseIcon(Icon):
 
     def textRepr(self):
         return "else:"
+
+    def dumpName(self):
+        return "else"
 
     def execute(self):
         return None  # ... no idea what to do here, yet.
@@ -3700,6 +3756,9 @@ class DefOrClassIcon(Icon):
             return text
         return text + "(" + _seriesTextRepr(self.sites.argIcons) + "):"
 
+    def dumpName(self):
+        return self.text
+
     def inRectSelect(self, rect):
         # Require selection rectangle to touch icon body
         if not Icon.inRectSelect(self, rect):
@@ -3797,6 +3856,9 @@ class NoArgStmtIcon(Icon):
         return Layout(self, *self.bodySize, 1)
 
     def textRepr(self):
+        return self.stmt
+
+    def dumpName(self):
         return self.stmt
 
     def execute(self):
@@ -3897,6 +3959,9 @@ class SeriesStmtIcon(Icon):
 
     def textRepr(self):
         return self.stmt + " " + _seriesTextRepr(self.sites.values)
+
+    def dumpName(self):
+        return self.stmt
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -4006,6 +4071,9 @@ class YieldIcon(Icon):
     def textRepr(self):
         return "yield " + _seriesTextRepr(self.sites.values)
 
+    def dumpName(self):
+        return "yield"
+
     def execute(self):
         return None  #... no idea what to do here, yet.
 
@@ -4041,6 +4109,9 @@ class ImageIcon(Icon):
 
     def execute(self):
         return None
+
+    def dumpName(self):
+        return "image"
 
 # Unfinished
 class ToDoIcon(TextIcon):
@@ -4967,3 +5038,8 @@ def _restoreConditionalTargets(ic, snapLists, directAttachmentClasses):
         else:
             snapLists['conditional'].append((ic, ic.posOfSite(site.name),
             site.name, site.type, snapFn))
+
+def dumpHier(ic, indent=0):
+    print("   " * indent, ic.dumpName())
+    for child in ic.children():
+        dumpHier(child, indent+1)

@@ -173,6 +173,7 @@ class Window:
         self.top.bind("<Left>", self._arrowCb)
         self.top.bind("<Right>", self._arrowCb)
         self.top.bind("<Key>", self._keyCb)
+        self.top.bind("<Control-d>", self._dumpCb)
         self.imgFrame.grid(row=0, column=0, sticky=tk.NSEW)
         self.xScrollbar = tk.Scrollbar(self.frame, orient=tk.HORIZONTAL,
          width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
@@ -1048,7 +1049,15 @@ class Window:
             else:
                 # Cursor is on argument site: remove if empty, otherwise, select
                 if arg is None:
-                    self.removeIcons([arg])
+                    parent = ic.parent()
+                    if parent is None:
+                        pos = ic.pos()
+                        self.removeIcons([ic])
+                        self.cursor.setToWindowPos(pos)
+                    else:
+                        site = parent.siteOf(ic)
+                        self.removeIcons([ic])
+                        self.cursor.setToIconSite(parent, site)
                 else:
                     self._select(ic, op='hier')
 
@@ -1938,6 +1947,11 @@ class Window:
             #     icon.drawSeqSiteConnection(topIcon, clip=region)
             if icon.seqRuleTouches(ic, region):
                 icon.drawSeqRule(ic, clip=region)
+
+    def _dumpCb(self, evt):
+        for seqStartPage in self.sequences:
+            for ic in icon.traverseSeq(seqStartPage.startIcon):
+                icon.dumpHier(ic)
 
     def refresh(self, region=None, redraw=True, clear=True, showOutlines=False):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
