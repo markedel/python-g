@@ -527,10 +527,8 @@ class EntryIcon(icon.Icon):
                 self.setPendingArg(None)
             elif self.pendingAttr():
                 self.window.replaceTop(self.pendingAttr())
-                self.window.cursor.setToIconSite(self.pendingArg(), 'attrOut')
+                self.window.cursor.setToIconSite(self.pendingAttr(), 'attrOut')
                 self.setPendingAttr(None)
-            else:
-                return False
         self.window.entryIcon = None
         return True
 
@@ -682,94 +680,24 @@ class EntryIcon(icon.Icon):
         code appearance is identical).  It is easier to maintain parens at the highest
         level than the lowest, since the paren itself makes this happen automatically,
         and they can be found by just looking up from a prospective end position."""
-        if self.attachedIcon is None:
-            # Entry icon is at the top level.  Process this simpler case separately
-            # and return (while this could be handled as part of the general code, its
-            # subtly different conditions would complicate an already hairy operation)
-            newParenIcon = CursorParenIcon(window=self.window)
-            newParenIcon.markLayoutDirty()
-            self.window.replaceTop(self, newParenIcon)
-            if self.pendingArg():
-                # If there was a pending argument, put it in the paren
-                newParenIcon.replaceChild(self.pendingArg(), 'argIcon')
-                self.window.cursor.setToIconSite(newParenIcon, "argIcon")
-                self.setPendingArg(None)
-                self.window.entryIcon = None
-            elif self.pendingAttr():
-                # If there was a pending attribute, keep the entry icon but put it
-                # inside the new paren
-                newParenIcon.replaceChild(self, 'argIcon')
-            else:
-                # There are no pending arguments or attributes.  Replace the entry
-                # icon with a cursor in the new paren
-                self.window.cursor.setToIconSite(newParenIcon, "argIcon")
-                self.window.entryIcon = None
-            return True
-        # (Entry icon is guaranteed to have a parent)
-        # Attempt to get rid of the entry icon
+        # Create a cursor paren icon and move the entry icon inside of it
+        newParenIcon = CursorParenIcon(window=self.window)
         attachedIc = self.attachedIcon
         attachedSite = self.attachedSite
-        entryIconRemoved = self._removeAndReplaceWithPending()
-        # Adjust attachedIc and attachedSite to ensure they point to the outermost
-        # coincident site, and set parenChild to the candidate icon to be placed within
-        # the new parentheses
-        parenChild = attachedIc.childAt(attachedSite)
-        if parenChild is not None:
-            parenChild = icon.highestCoincidentIcon(parenChild)
-            attachedIc = parenChild.parent()
-            attachedSite = None if attachedIc is None else attachedIc.siteOf(parenChild)
-        # Create the cursor paren icon
-        newParenIcon = CursorParenIcon(window=self.window)
         if attachedIc is None:
-            # If the new cursor paren is trivially at the top level, avoid all the work of
-            # integrating it in to the hierarchy
-            self.window.replaceTop(parenChild, newParenIcon)
+            self.window.replaceTop(self, newParenIcon)
         else:
-            #  Attach the new cursor paren icon at the requested site
             attachedIc.replaceChild(newParenIcon, attachedSite)
-            # While the cursor paren icon is now attached to highest level coincident
-            # site, there may be binary operations above it in the hierarchy whose
-            # operators appear to the right of the parenthesis.  Walk up the hierarchy
-            # of binary operations, pulling any operations that appear to the right of
-            # the new open-paren into it.
-            treeToMove = attachedIc
-            op = attachedIc.parent()
-            site = None if op is None else op.siteOf(attachedIc)
-            if op is not None and op.typeOf(site) != "input" or attachedIc.__class__ in (
-             icon.BinOpIcon, icon.UnaryOpIcon, icon.YieldIcon, icon.YieldFromIcon):
-                while op is not None and isinstance(op, icon.BinOpIcon):
-                    # Parent of the paren-owning icon (op) is a binary operation
-                    if op.hasParens:
-                        break  # op has own parens which the cursor paren must stay within
-                    parent = op.parent()
-                    parentSite = None if parent is None else parent.siteOf(op)
-                    if site == 'rightArg':
-                        # Operator of op is left (outside) of paren
-                        treeToMove = op
-                    else:
-                        # op operator is right of paren: make it the parent of the
-                        # paren content and replace it in the hierarchy with treeToMove
-                        op.replaceChild(parenChild, "leftArg")
-                        parenChild = op
-                        if parent is None:
-                            # Tree containing the open paren becomes a top icon
-                            self.window.replaceTop(op, treeToMove)
-                            break
-                        else:
-                            # Move the tree containing the open paren up to op's parent
-                            parent.replaceChild(treeToMove, parent.siteOf(op))
-                    op = parent
-                    site = parentSite
-        # Populate the new paren icon with the accumulated child icons
-        newParenIcon.replaceChild(parenChild, "argIcon")
-        if entryIconRemoved:
-            # Move the cursor inside the new cursor paren
-            self.window.cursor.setToIconSite(newParenIcon, "argIcon")
-        else:
-            # The entry icon was moved inside the cursorParen
-            self.attachedIcon = self.sites.output.att
-            self.attachedSite = self.attachedIcon.siteOf(self)
-        return True
+        newParenIcon.replaceChild(self, 'argIcon')
+        self.attachedIcon = newParenIcon
+        self.attachedSite = 'argIcon'
+        self.attachedSiteType = "input"
+        # Attempt to get rid of the entry icon and place pending arg in its place
+        self._removeAndReplaceWithPending()
+        # Reorder the expression with the new open paren in place (skip some work if the
+        # entry icon was at the top level, since no reordering is necessary, there)
+        if attachedIc is not None:
+            top = reorderArithExpr(icon.highestCoincidentIcon(newParenIcon))
 
     def getUnclosedParen(self, fromIcon, fromSite):
         """Find a matching open paren or paren-less tuple that could be closed by an end
@@ -786,7 +714,7 @@ class EntryIcon(icon.Icon):
             return matchingParen
         # A cursor paren was matched.  Rearrange the hierarchy so the cursor paren is
         # above all the icons it should enclose and outside of those it does not enclose.
-        matchCursorParenWithEnd(matchingParen, fromIcon)
+        reorderArithExpr(matchingParen, fromIcon)
         return matchingParen
 
     def makeFunction(self, ic):
@@ -1114,7 +1042,7 @@ class CursorParenIcon(icon.Icon):
             img.paste(icon.inSiteImage, (inSiteX, inImageY))
             textLeft = bodyLeft + icon.TEXT_MARGIN
             draw.text((textLeft, icon.TEXT_MARGIN), "(",
-             font=icon.globalFont, fill=(180, 180, 180, 255))
+             font=icon.globalFont, fill=(120, 120, 120, 255))
             self.drawList = [((0, 0), img)]
             if self.closed:
                 closeImg = Image.new('RGBA', (bodyWidth, bodyHeight))
@@ -1123,7 +1051,7 @@ class CursorParenIcon(icon.Icon):
                  outline=icon.OUTLINE_COLOR)
                 textLeft = icon.TEXT_MARGIN
                 draw.text((textLeft, icon.TEXT_MARGIN), ")",
-                    font=icon.globalFont, fill=(180, 180, 180, 255))
+                    font=icon.globalFont, fill=(120, 120, 120, 255))
                 attrX = bodyWidth - 1 - icon.ATTR_SITE_DEPTH
                 attrY = self.sites.attrIcon.yOffset
                 closeImg.paste(icon.attrInImage, (attrX, attrY))
@@ -1789,140 +1717,6 @@ def findTextOffset(text, pixelOffset):
         else:
             return guessedPos
 
-def matchCursorParenWithEnd(cursorParen, desiredChild):
-    """Rearrange icons such that cursorParen is the parent of all icons visually
-    contained between it and desiredChild.  This entails both adjusting it's level in
-    the hierarchy and moving icons that appear to the right of desiredChild above it."""
-    # Move the cursor paren down to the lowest level at which it has a common ancestor
-    # with desiredChild
-    dcParents = set(desiredChild.parentage(includeSelf=True))
-    while True:
-        cpChild = cursorParen.childAt('argIcon')
-        if cpChild is None:
-            print('cpChild is None.  Is this supposed to happen?')
-            break
-        site = cpChild.hasCoincidentSite()
-        if site is None:
-            break
-        cpChildChild = cpChild.childAt(site)
-        if cpChildChild is None:
-            print('cpChildChild is None.  Is this supposed to happen?')
-            break
-        if cpChildChild not in dcParents:
-            break
-        # There is a lower coincident site, move the paren down to it
-        moveParenDownOneLevel(cursorParen)
-    # Compute the path from the desired child to the cursor paren that should be its
-    # ancestor
-    child = desiredChild
-    path = []
-    for parent in desiredChild.parentage():
-        if parent is cursorParen:
-            break
-        path.append((parent, parent.siteOf(child)))
-        child = parent
-    else:
-        print('matchCursorParenWithEnd failed to find path to desiredChild')
-        return
-    if len(path) == 0:
-        return  # desiredChild is a direct descendant of cursorParen
-    # Follow the path upward through the hierarchy, dividing it in to two trees:
-    # inParenTree which will go in to the parenthesis, and outParenTree, which will be
-    # applied to the parenthesized expression
-    cursorParen.replaceChild(None, 'argIcon')
-    inParenTree = desiredChild
-    outParenTree = None
-    for ic, site in path:
-        if isinstance(ic, icon.BinOpIcon) and site == 'leftArg':
-            # Operator is outside of parens
-            ic.replaceChild(outParenTree, site)
-            if outParenTree is None:
-                cpAttachIcon = ic
-                cpAttachSite = site
-            outParenTree = ic
-        else:
-            # Everything else is within the parens
-            ic.replaceChild(inParenTree, site)
-            inParenTree = ic
-    # Move the inParenTree tree in to the existing cursor paren (its original content is
-    # already stitched in
-    cursorParen.replaceChild(inParenTree, 'argIcon')
-    # Make outParenTree the parent of the cursor paren icon.
-    if outParenTree is not None:
-        # It may be necessary to move outParenTree up the hierarchy, since it is not a
-        # paren, but an operator with its own precedence and associativity.  The code
-        # below does this by collecting operators of higher precedence that need to
-        # associate with the cursor paren, and pushing them down along with it in to
-        # outParenTree.
-        cpTree = cursorParen  # Tree containing cursorParen and higher-precidence ops
-        while True:
-            cpTreeParent = cpTree.parent()
-            if cpTreeParent is None or not hasattr(cpTreeParent, 'precedence') or \
-             isinstance(cpTreeParent, icon.DivideIcon):
-                break
-            if cpTreeParent.precedence < outParenTree.precedence:
-                break
-            if cpTreeParent.precedence == outParenTree.precedence and (
-             cpTreeParent.leftAssoc() and cpTreeParent.leftArg() is cpTree or
-             cpTreeParent.rightAssoc() and cpTreeParent.rightArg() is cpTree):
-                break
-            cpTree = cpTreeParent
-        # Move outParenTree up to its new place in the hierarchy, replacing
-        # cpTree as determined above
-        if cpTreeParent is None:
-            cursorParen.window.replaceTop(cpTree, outParenTree)
-        else:
-            cpTreeParent.replaceChild(outParenTree, cpTreeParent.siteOf(cpTree))
-        cpAttachIcon.replaceChild(cpTree, cpAttachSite)
-
-def moveParenDownOneLevel(cursorParen):
-    """If cursorParen can be moved down the hierarchy to a visually equivalent site
-    (due to its immediate child being a coincident site), do so and return True."""
-    # Find the site to which the cursor paren should be moved, and its current content
-    cpChild = cursorParen.childAt('argIcon')
-    cpChildDestSite = cpChild.hasCoincidentSite()
-    if not cpChildDestSite:
-        return False
-    cursorParen.replaceChild(None, 'argIcon')
-    newCpChild = cpChild.childAt(cpChildDestSite)
-    cpChild.replaceChild(None, cpChildDestSite)
-    # Since so far only binary operations have coincident sites, we can assume that
-    # cpChild is a binary operation
-    if not isinstance(cpChild, icon.BinOpIcon):
-        print('moveParenDownOneLevel did not expect type:', cpChild.__class__.__name__)
-        return False
-    # We may have to move more than just the cursor paren itself.  If the top operator
-    # within the cursor parens has a lower precedence than the parent of the cursor paren
-    # (or equal precedence but associativity necessitating rearrangement), we will need
-    # to move both it and the cursor paren.  In fact, multiple levels may need to be
-    # relocated if the parens contained an operator of sufficiently low  precedence.
-    # Set treeToMoveDown to the top of the tree needing relocation.
-    treeToMoveDown = cursorParen
-    while True:
-        ttmdParent = treeToMoveDown.parent()
-        if ttmdParent is None or not hasattr(ttmdParent, 'precedence') or \
-         isinstance(ttmdParent, icon.DivideIcon):
-            break
-        if ttmdParent.precedence < cpChild.precedence:
-            break
-        if ttmdParent.precedence == cpChild.precedence and (
-         ttmdParent.leftAssoc() and ttmdParent.leftArg() is treeToMoveDown or
-         ttmdParent.rightAssoc() and ttmdParent.rightArg() is treeToMoveDown):
-            break
-        treeToMoveDown = ttmdParent
-    # Move the child of the cursor paren up to its new place in the hierarchy, replacing
-    # treeToMoveDown as determined above
-    if ttmdParent is None:
-        cursorParen.window.replaceTop(treeToMoveDown, cpChild)
-    else:
-        ttmdParent.replaceChild(cpChild, ttmdParent.siteOf(treeToMoveDown))
-    # Move the cursorParen (and possibly more ops above it as determined above) down
-    # to the next lower coincident site determined earlier
-    cpChild.replaceChild(treeToMoveDown, cpChildDestSite)
-    # Move the original content of the new cursor paren site in to the cursor paren
-    cursorParen.replaceChild(newCpChild, 'argIcon')
-    return True
-
 def searchForOpenParen(ic, site):
     """Find an open cursor paren or unclosed tuple that would match an end paren placed
     at a given cursor position (ic and site)."""
@@ -1965,8 +1759,135 @@ def rightmostSite(ic, ignoreAutoParens=False):
         if ic.arg() is None:
             return ic, 'argIcon'
         return rightmostSite(icon.findLastAttrIcon(ic.arg()))
+    elif ic.__class__ in (icon.YieldIcon, icon.YieldFromIcon):
+        children = [site.att for site in ic.sites.values if site.att is not None]
+        if len(children) == 0:
+            return ic, 'values_0'
+        return rightmostSite(icon.findLastAttrIcon(children[-1]))
     elif isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ignoreAutoParens):
         if ic.rightArg() is None:
             return ic, 'rightArg'
         return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))
     return ic, 'attrIcon'
+
+def _reduceOperatorStack(operatorStack, operandStack):
+    """This is the inner component of reorderArithExpr (see below).  Pop a single operator
+    off of the operator stack, link it with operands popped from the operand stack, and
+    push the result on the operand stack."""
+    stackOp = operatorStack[-1]
+    if isinstance(stackOp, CursorParenIcon):
+        # Found matching paren.  Make it the parent of the top icon on the
+        # operand stack and take its place in the stack
+        stackOp = operatorStack.pop()
+        parenChild = operandStack.pop()
+        if stackOp.childAt('argIcon') is not parenChild:
+            stackOp.replaceChild(parenChild, 'argIcon')
+        operandStack.append(stackOp)
+    elif isinstance(stackOp, icon.BinOpIcon):
+        stackOp = operatorStack.pop()
+        rightArg = operandStack.pop()
+        leftArg = operandStack.pop()
+        if stackOp.leftArg() is not leftArg:
+            stackOp.replaceChild(leftArg, 'leftArg')
+        if stackOp.rightArg() is not rightArg:
+            stackOp.replaceChild(rightArg, 'rightArg')
+        operandStack.append(stackOp)
+    else:
+        print('_reduceOperatorStack: unexpected icon on operator stack')
+
+def reorderArithExpr(changedIcon, closeParenAt=None):
+    """Reorders the arithmetic operators surrounding changed icon to agree with the text
+    of the connected icons.  Because the icon representation reflects the hierarchy of
+    operations, as opposed to the precedence and associativity of operators that the user
+    types, changing an operator to one of a different precedence or adding or removing a
+    paren, can drastically change what the expression means to the user.  This routine
+    rearranges the hierarchy to match what the user sees.  changedIcon should specify an
+    icon involved in the change.  If the changed icon is a cursor paren that needs to be
+    closed, use closeParenAt to specify the rightmost icon to be enclosed."""
+    topNode = highestAffectedExpr(changedIcon)
+    topNodeParent = topNode.parent()
+    topNodeParentSite = None if topNodeParent is None else topNodeParent.siteOf(topNode)
+    operatorStack = []
+    operandStack = []
+    # Loop left to right over the expression below topNode, reassembling the expression
+    # per precedence and associativity (as if parsing the expression for the first time).
+    # Note that BinOpIcons with parens are treated as operands (because the expressions
+    # inside would not be affected by a change to changedIcon) EXCEPT for the case where
+    # ic is topNode, as those parens surround the expression we are processing.
+    for ic in tuple(traverseExprLeftToRight(topNode)):
+        if isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ic is topNode):
+            while len(operatorStack) > 0:
+                stackOp = operatorStack[-1]
+                if isinstance(stackOp, CursorParenIcon) or \
+                 isinstance(stackOp, icon.BinOpIcon) and (
+                 stackOp.precedence < ic.precedence or
+                 stackOp.precedence == ic.precedence and ic.rightAssoc()):
+                    break
+                _reduceOperatorStack(operatorStack, operandStack)
+            operatorStack.append(ic)
+        elif isinstance(ic, CursorParenIcon):
+            # Push open paren on the operator stack where it acts a barrier
+            operatorStack.append(ic)
+        elif closeParenAt is not None and closeParenAt in ic.traverse(includeSelf=True):
+            operandStack.append(ic)
+            while len(operatorStack) > 0:
+                _reduceOperatorStack(operatorStack, operandStack)
+                if isinstance(operandStack[-1], CursorParenIcon):
+                    break
+            if operandStack[-1] is not changedIcon:
+                print('reorderArithExpr found wrong open paren for closeParenAt')
+        else:
+            operandStack.append(ic)
+    while len(operatorStack) > 0:
+        _reduceOperatorStack(operatorStack, operandStack)
+    if len(operandStack) != 1:
+        print("reorderArithExpr failed to converge")
+    if operandStack[0] is not topNode:
+        if topNodeParent is None:
+            topNode.window.replaceTop(topNode, operandStack[0])
+        else:
+            topNodeParent.replaceChild(operandStack[0], topNodeParentSite)
+    # Parent links were not necessarily intact when icons were re-linked, and even though
+    # the icons themselves get marked dirty, they won't be found unless the page is
+    # marked as well.  Now that everything is back in place, mark the top icon again.
+    operandStack[0].markLayoutDirty()
+    return operandStack[0]
+
+def highestAffectedExpr(changedIcon):
+    for ic in changedIcon.parentage(includeSelf=True):
+        parent = ic.parent()
+        if parent is None:
+            return ic  # ic is at top level
+        parentClass = parent.__class__
+        if parentClass is icon.BinOpIcon and parent.hasParens:
+            # parent is a binary operation with parens.  It can be reordered but nothing
+            # above it should be touched.
+            return parent
+        if parentClass is CursorParenIcon:
+            return ic  # parent is a cursor paren (closed or unclosed)
+        site = parent.siteOf(ic)
+        siteType = parent.typeOf(site)
+        if siteType == "input" and parentClass not in (icon.BinOpIcon, icon.UnaryOpIcon):
+            return ic  # Everything other than arithmetic expressions encloses args
+
+def traverseExprLeftToRight(topNode, recurse=False):
+    """Traverse an expression from left to right.  Note that this is not a fully general
+    left to right traversal, but one specifically tailored to reorderArithExpr which
+    operates only within the bounds of a changed expression, skipping over anything
+    contained within icons other than binary operations and unclosed cursor parens.  The
+    optional  parameter, recurse, is used internally in recursive calls to distinguish
+    the very top binary operator, that must be explored even if it has parens, from other
+    binary operators, which are treated as a unit (not explored) if they have parens."""
+    if topNode is None:
+        yield None
+    elif isinstance(topNode, icon.BinOpIcon) and not (topNode.hasParens and recurse):
+        yield from traverseExprLeftToRight(topNode.leftArg(), recurse=True)
+        yield topNode
+        yield from traverseExprLeftToRight(topNode.rightArg(), recurse=True)
+    elif isinstance(topNode, CursorParenIcon):
+        yield topNode
+        yield from traverseExprLeftToRight(topNode.childAt('argIcon'), recurse=True)
+    else:
+        # Anything that is not a binary operator or a cursor paren can be treated as a
+        # unit rather than descending in to it.
+        yield topNode

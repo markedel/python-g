@@ -886,15 +886,26 @@ class Icon:
         return False
 
     def markLayoutDirty(self):
+        """Mark the icon layout dirty and mark the page it is found on dirty, as well
+        so that the icon can be found for layout.  Be aware that this code needs intact
+        parent links to find the page.  If the icon is not linked to a page, it is the
+        responsibility of the caller to ensure that the page gets marked.  Returns False
+        if the parent links are broken or cyclic and the page can not be found."""
         self.layoutDirty = True
         # Dirty layouts are found through the window Page structure, then iterating over
         # just the top icons of the page sequence, so mark the page and the top icon.
-        if self.window is not None:
-            topParent = self.topLevelParent()
-            topParent.layoutDirty = True
-            page = self.window.topIcons.get(topParent)
-            if page is not None:
-                page.layoutDirty = True
+        if self.window is None:
+            return False
+        topParent = self.topLevelParentSafe()
+        if topParent is None:
+            print('parent cycle in markLayoutDirty')
+            return False
+        topParent.layoutDirty = True
+        page = self.window.topIcons.get(topParent)
+        if page is None:
+            return False
+        page.layoutDirty = True
+        return True
 
     def children(self):
         return [c.att for c in self.sites.childSites() if c is not None and
@@ -931,6 +942,20 @@ class Icon:
         """Follow the icon hierarchy upwards and return the icon with no parent"""
         child = self
         while True:
+            parent = child.parent()
+            if parent is None:
+                return child
+            child = parent
+
+    def topLevelParentSafe(self):
+        """Same as topLevelParent, but tolerates bad parent links, returning None if
+        a cycle was found."""
+        child = self
+        visited = set()
+        while True:
+            if child in visited:
+                return None
+            visited.add(child)
             parent = child.parent()
             if parent is None:
                 return child
@@ -4658,6 +4683,22 @@ def highestCoincidentIcon(ic):
         if parent is None or not isCoincidentSite(parent, parent.siteOf(ic)):
             return ic
         ic = parent
+
+def lowestCoincidentIcon(ic, site):
+    """Return the icon at the lowest coincident input site at ic, site"""
+    while True:
+        child = ic.childAt(site)
+        if child is None:
+            return ic
+        if ic.hasCoincidentSite() == site:
+            childCoincidentSite = child.hasCoincidentSite()
+            if childCoincidentSite is None:
+                return child
+            else:
+                ic = child
+                site = childCoincidentSite
+        else:
+            return child
 
 class HorizListMgr:
     """Manage layout for a horizontal list of icon arguments."""
