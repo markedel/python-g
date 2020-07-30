@@ -1792,6 +1792,12 @@ def _reduceOperatorStack(operatorStack, operandStack):
         if stackOp.rightArg() is not rightArg:
             stackOp.replaceChild(rightArg, 'rightArg')
         operandStack.append(stackOp)
+    elif isinstance(stackOp, icon.UnaryOpIcon):
+        stackOp = operatorStack.pop()
+        arg = operandStack.pop()
+        if stackOp.arg() is not arg:
+            stackOp.replaceChild(arg, 'argIcon')
+        operandStack.append(stackOp)
     else:
         print('_reduceOperatorStack: unexpected icon on operator stack')
 
@@ -1815,11 +1821,11 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     # inside would not be affected by a change to changedIcon) EXCEPT for the case where
     # ic is topNode, as those parens surround the expression we are processing.
     for ic in tuple(traverseExprLeftToRight(topNode)):
-        if isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ic is topNode):
+        if isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ic is topNode) or \
+         isinstance(ic, icon.UnaryOpIcon):
             while len(operatorStack) > 0:
                 stackOp = operatorStack[-1]
-                if isinstance(stackOp, CursorParenIcon) or \
-                 isinstance(stackOp, icon.BinOpIcon) and (
+                if isinstance(stackOp, CursorParenIcon) or (
                  stackOp.precedence < ic.precedence or
                  stackOp.precedence == ic.precedence and ic.rightAssoc()):
                     break
@@ -1884,6 +1890,9 @@ def traverseExprLeftToRight(topNode, recurse=False):
         yield from traverseExprLeftToRight(topNode.leftArg(), recurse=True)
         yield topNode
         yield from traverseExprLeftToRight(topNode.rightArg(), recurse=True)
+    elif isinstance(topNode, icon.UnaryOpIcon):
+        yield topNode
+        yield from traverseExprLeftToRight(topNode.arg(), recurse=True)
     elif isinstance(topNode, CursorParenIcon):
         yield topNode
         yield from traverseExprLeftToRight(topNode.childAt('argIcon'), recurse=True)
