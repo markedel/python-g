@@ -1707,8 +1707,9 @@ class AwaitIcon(UnaryOpIcon):
 
 class ListTypeIcon(Icon):
     def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
-     location=None):
+     closed=True, location=None):
         Icon.__init__(self, window)
+        self.closed = closed
         self.leftText = leftText
         self.rightText = rightText
         self.leftImg = iconBoxedText(self.leftText) if leftImg is None else leftImg
@@ -1724,13 +1725,13 @@ class ListTypeIcon(Icon):
         self.argList = HorizListMgr(self, 'argIcons', leftWidth-1, height//2)
         self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)])
         width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
-        self.sites.add('attrIcon', 'attrIn', width-1,
-         self.sites.output.yOffset + ATTR_SITE_OFFSET)
         seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, height-2)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
+        if closed:
+            self.close()
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         needSeqSites = self.parent() is None and toDragImage is None
@@ -1754,19 +1755,26 @@ class ListTypeIcon(Icon):
             inSiteX = outSiteImage.width - 1 + self.leftImg.width - inSiteImage.width
             inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
             leftImg.paste(inSiteImage, (inSiteX, inSiteY))
+            # Unclosed icons need to be dimmed and crossed out
+            if not self.closed:
+                cntrY = self.sites.output.yOffset
+                draw = ImageDraw.Draw(leftImg)
+                draw.line((leftImgX+1, cntrY, inSiteX, cntrY),
+                    fill=ICON_BG_COLOR, width=3)
             self.drawList = [((0, 0), leftImg)]
             # Commas
             self.drawList += self.argList.drawListCommas(inSiteX,
              self.sites.output.yOffset)
             # End paren/brace/bracket
-            rightImg = Image.new('RGBA', self.rightImg.size, color=(0, 0, 0, 0))
-            rightImg.paste(self.rightImg, (0, 0))
-            if self.acceptsComprehension():
-                cphYOff = self.sites.output.yOffset - cphSiteImage.height // 2
-                rightImg.paste(cphSiteImage, (0, cphYOff))
-            parenY = self.sites.output.yOffset - self.rightImg.height // 2
-            parenX = self.sites.cprhIcons[-1].xOffset
-            self.drawList.append(((parenX, parenY), rightImg))
+            if self.closed:
+                rightImg = Image.new('RGBA', self.rightImg.size, color=(0, 0, 0, 0))
+                rightImg.paste(self.rightImg, (0, 0))
+                if self.acceptsComprehension():
+                    cphYOff = self.sites.output.yOffset - cphSiteImage.height // 2
+                    rightImg.paste(cphSiteImage, (0, cphYOff))
+                parenY = self.sites.output.yOffset - self.rightImg.height // 2
+                parenX = self.sites.cprhIcons[-1].xOffset
+                self.drawList.append(((parenX, parenY), rightImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
 
     def isComprehension(self):
@@ -1846,7 +1854,10 @@ class ListTypeIcon(Icon):
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         height = self.leftImg.height
-        width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
+        if self.closed:
+            width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
+        else:
+            width = self.sites.cprhIcons[-1].xOffset
         x = outSiteX
         y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x + width, y + height)
@@ -1864,9 +1875,31 @@ class ListTypeIcon(Icon):
             cprhLayout = _singleSiteSublayout(self, layout, site.name,
              leftCprhX + cprhWidth, cprhY)
             cprhWidth += 0 if cprhLayout is None else cprhLayout.width - 1
-        layout.width = leftWidth - 1 + argWidth - 1 + cprhWidth + self.rightImg.width
-        _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1, ATTR_SITE_OFFSET)
+        if self.closed:
+            layout.width = leftWidth - 1 + argWidth - 1 + cprhWidth + self.rightImg.width
+            _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1,
+             ATTR_SITE_OFFSET)
+        else:
+            layout.width = leftWidth - 1 + argWidth - 1 + cprhWidth
         return layout
+
+    def close(self):
+        self.closed = True
+        self.markLayoutDirty()
+        # Add back the attribute site on the end brace/bracket.  Done here to allow the
+        # site to be used for cursor or new attachments before layout knows where it goes
+        self.sites.add('attrIcon', 'attrIn', rectWidth(self.rect) -
+         ATTR_SITE_DEPTH, rectHeight(self.rect) // 2 + ATTR_SITE_OFFSET)
+        self.window.undo.registerCallback(self.reopen)
+
+    def reopen(self):
+        self.closed = False
+        self.markLayoutDirty()
+        self.sites.remove('attrIcon')
+        self.window.undo.registerCallback(self.close)
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, closed=self.closed)
 
     def textRepr(self):
         argText = _seriesTextRepr(self.sites.argIcons)
@@ -1875,20 +1908,23 @@ class ListTypeIcon(Icon):
             cprhText += " " + site.att.textRepr()
         return self.leftText + argText + cprhText+ self.rightText + _attrTextRepr(self)
 
-    def dumpName(self):
-        return self.leftText + self.rightText
-
-class ListIcon(ListTypeIcon):
-    def __init__(self, window, location=None):
-        ListTypeIcon.__init__(self, '[', ']', window, location=location,
-         leftImg=listLBktImage, rightImg=listRBktImage)
-
     def argIcons(self):
-        """Return list of list argument icons.  This is trivial, but exists to match
-        the identical TupleIcon method which has a more complicated function."""
+        """Return list of list argument icons.  This is trivial, but exists to give list
+        and dict icons an identical interface with that of the TupleIcon version which
+        which has to deal with."""
         return [site.att for site in self.sites.argIcons]
 
+    def dumpName(self):
+        return self.leftText + ("" if self.closed else self.rightText)
+
+class ListIcon(ListTypeIcon):
+    def __init__(self, window, closed=True, location=None):
+        ListTypeIcon.__init__(self, '[', ']', window, location=location,
+         closed=closed, leftImg=listLBktImage, rightImg=listRBktImage)
+
     def execute(self):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
         if self.isComprehension():
             return eval(self.textRepr())
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
@@ -1902,14 +1938,14 @@ class ListIcon(ListTypeIcon):
         return result
 
 class TupleIcon(ListTypeIcon):
-    def __init__(self, window, noParens=False, location=None):
+    def __init__(self, window, noParens=False, closed=True, location=None):
         if noParens:
             leftImg = inpOptionalSeqImage
             rightImg = emptyImage
         else:
             leftImg = tupleLParenImage
             rightImg = tupleRParenImage
-        ListTypeIcon.__init__(self, '(', ')', window, location=location,
+        ListTypeIcon.__init__(self, '(', ')', window, closed=closed, location=location,
          leftImg=leftImg, rightImg=rightImg)
         if noParens:
             self.sites.remove('attrIn')
@@ -1974,11 +2010,12 @@ class TupleIcon(ListTypeIcon):
         return result
 
     def clipboardRepr(self, offset, iconsToCopy):
-        return self._serialize(offset, iconsToCopy, noParens=self.noParens)
+        return self._serialize(offset, iconsToCopy, noParens=self.noParens,
+         closed=self.closed)
 
 class DictIcon(ListTypeIcon):
-    def __init__(self, window, location=None):
-        ListTypeIcon.__init__(self, '{', '}', window, location=location)
+    def __init__(self, window, closed=True, location=None):
+        ListTypeIcon.__init__(self, '{', '}', window, closed=closed, location=location)
 
     def execute(self):
         if self.isComprehension():
@@ -2592,6 +2629,12 @@ class TwoArgIcon(Icon):
         if not python_g.rectsTouch(rect, self.rect):
             return False
         return python_g.rectsTouch(rect, self.selectionRect())
+
+    def leftArg(self):
+        return self.sites.leftArg.att if self.sites.leftArg is not None else None
+
+    def rightArg(self):
+        return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
 class ArgAssignIcon(TwoArgIcon):
     """Special assignment statement for use only in function argument lists"""
@@ -4477,7 +4520,7 @@ class IconSiteList:
         seriesName, seriesIndex = splitSeriesSiteId(siteId)
         if seriesName is None:
             return None
-        series = getattr(self, seriesName)
+        series = getattr(self, seriesName, None)
         if not isinstance(series, IconSiteSeries) or seriesIndex >= len(series):
             return None
         return series[seriesIndex]

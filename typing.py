@@ -362,26 +362,67 @@ class EntryIcon(icon.Icon):
             if not self.insertColon():
                 beep()
             return
+        elif parseResult == "openBracket":
+            self.insertOpenParen(icon.ListIcon)
+            return
         elif parseResult == "endBracket":
-            if not self._removeAndReplaceWithPending():
-                # Cant unload pending args from cursor.  Don't allow move
-                beep()
-                return
-            if not cursor.movePastEndBracket():
-                beep()
+            matchedBracket = self.getUnclosedParen(parseResult, self.attachedIcon,
+             self.attachedSite)
+            if matchedBracket is None:
+                if not self._removeAndReplaceWithPending():
+                    # Cant unload pending args from cursor.  Don't allow move
+                    beep()
+                    return
+                if not cursor.movePastEndParen(parseResult):
+                    beep()
+            else:
+                matchedBracket.close()
+                if self._removeAndReplaceWithPending():
+                    cursor.setToIconSite(matchedBracket, "attrIcon")
+                else:
+                    self.attachedIcon.replaceChild(None, self.attachedSite)
+                    # Move entry icon with pending args past the paren
+                    self.attachedIcon = matchedBracket
+                    self.attachedSite = "attrIcon"
+                    self.attachedSiteType = "attrIn"
+            return
+        elif parseResult == "openBrace":
+            self.insertOpenParen(icon.DictIcon)
+            return
+        elif parseResult == "endBrace":
+            matchedBracket = self.getUnclosedParen(parseResult, self.attachedIcon,
+             self.attachedSite)
+            if matchedBracket is None:
+                if not self._removeAndReplaceWithPending():
+                    # Cant unload pending args from cursor.  Don't allow move
+                    beep()
+                    return
+                if not cursor.movePastEndParen(parseResult):
+                    beep()
+            else:
+                matchedBracket.close()
+                if self._removeAndReplaceWithPending():
+                    cursor.setToIconSite(matchedBracket, "attrIcon")
+                else:
+                    self.attachedIcon.replaceChild(None, self.attachedSite)
+                    # Move entry icon with pending args past the paren
+                    self.attachedIcon = matchedBracket
+                    self.attachedSite = "attrIcon"
+                    self.attachedSiteType = "attrIn"
             return
         elif parseResult == "openParen":
-            self.insertCursorParen()
+            self.insertOpenParen(CursorParenIcon)
             return
         elif parseResult == "endParen":
-            matchingParen = self.getUnclosedParen(self.attachedIcon, self.attachedSite)
+            matchingParen = self.getUnclosedParen(parseResult, self.attachedIcon,
+             self.attachedSite)
             if matchingParen is None:
                 # Maybe user was just trying to move past an existing paren by typing it
                 if not self._removeAndReplaceWithPending():
                     # Cant unload pending args from cursor.  Don't allow move
                     beep()
                     return
-                if not cursor.movePastEndParen():
+                if not cursor.movePastEndParen(parseResult):
                     beep()
             elif matchingParen.__class__ is CursorParenIcon and \
              matchingParen is self.attachedIcon:
@@ -404,8 +445,8 @@ class EntryIcon(icon.Icon):
                     self.window.entryIcon = None
                     self.window.cursor.setToIconSite(tupleIcon, "attrIcon")
             else:
-                # matchingParen is an open cursor paren or a tuple at the top level with
-                # no parens or an open cursor paren.  Add/close the parens
+                # matchingParen is an open cursor paren or a tuple with no parens or an
+                # open cursor paren.  Add/close the parens
                 if matchingParen.__class__ is icon.TupleIcon:
                     matchingParen.restoreParens()
                 else:
@@ -576,7 +617,7 @@ class EntryIcon(icon.Icon):
         elif onIcon.__class__ is icon.BinOpIcon and onIcon.hasParens:
             return False
         elif onIcon.__class__ is CursorParenIcon:  # Open-paren
-            tupleIcon = icon.TupleIcon(window=self.window)
+            tupleIcon = icon.TupleIcon(window=self.window, closed=True)
             args = [None]
             if onIcon.sites.argIcon.att and onIcon.sites.argIcon.att is not self:
                 args += [onIcon.sites.argIcon.att]
@@ -591,14 +632,16 @@ class EntryIcon(icon.Icon):
             onIcon.replaceChild(None, 'attrIcon')
             tupleIcon.replaceChild(attrIcon, 'attrIcon')
             return True
-        if onIcon.__class__ is icon.BinOpIcon and site == "leftArg":
+        if (isinstance(onIcon, icon.BinOpIcon) or isinstance(onIcon, icon.TwoArgIcon)) \
+         and site == "leftArg":
             leftArg = None
             rightArg = onIcon
             if onIcon.leftArg() is self:
                 onIcon.replaceChild(self.pendingArg(),"leftArg")
                 self.setPendingArg(None)
                 self.attachedIcon = None
-        elif onIcon.__class__ is icon.BinOpIcon and site == "rightArg":
+        elif (isinstance(onIcon, icon.BinOpIcon) or isinstance(onIcon, icon.TwoArgIcon)) \
+         and site == "rightArg":
             leftArg = onIcon
             rightArg = onIcon.rightArg()
             if rightArg is self:
@@ -620,6 +663,10 @@ class EntryIcon(icon.Icon):
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
                 seriesName, seriesIndex = icon.splitSeriesSiteId(childSite)
                 parent.insertChild(rightArg, seriesName, seriesIndex + 1)
+                if hasattr(parent, "closed") and not parent.closed:
+                    # Once an item has a comma, we know what it is and where it ends, and
+                    # an open paren/bracket/brace with commas would be hard to handle.
+                    parent.close()
                 if not cursorPlaced:
                     cursorIdx = seriesIndex if leftArg is None else seriesIndex + 1
                     self.window.cursor.setToIconSite(parent, seriesName, cursorIdx)
@@ -640,9 +687,10 @@ class EntryIcon(icon.Icon):
                     parent.replaceChild(None, 'attrIcon')
                     tupleIcon.replaceChild(attrIcon, 'attrIcon')
                 return True
-            if parent.__class__ is not icon.BinOpIcon:
+            if not (isinstance(parent, icon.BinOpIcon) or
+             isinstance(parent, icon.TwoArgIcon)):
                 return False
-            if parent.hasParens:
+            if parent.__class__ is icon.BinOpIcon and parent.hasParens:
                 return False
             # Parent is a binary op icon without parens, and site is one of the two
             # input sites
@@ -670,50 +718,56 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(tupleIcon, "argIcons", 1)
         return True
 
-    def insertCursorParen(self):
-        """When the user types an open paren, we insert a CursorParen icon, which
-        represents an un-closed parenthesis.  Managing these is complicated because they
-        have the power to completely rearrange the icon hierarchy depending where the
-        user eventually places the matching end paren.  For a consistent user-interface,
-        we maintain un-closed parens at the highest level of the hierarchy that they can
+    def insertOpenParen(self, iconClass):
+        """Called when the user types an open paren, bracket, or brace to insert an icon
+        of type given in iconClass.  Inserting an open paren/bracket/brace has the power
+        to completely rearrange the icon hierarchy.  For a consistent user-interface, we
+        maintain un-closed parens at the highest level of the hierarchy that they can
         influence (clicking and dragging behavior is dependent on the hierarchy, even if
         code appearance is identical).  It is easier to maintain parens at the highest
         level than the lowest, since the paren itself makes this happen automatically,
         and they can be found by just looking up from a prospective end position."""
-        # Create a cursor paren icon and move the entry icon inside of it
-        newParenIcon = CursorParenIcon(window=self.window)
+        # Create an icon of the requested class and move the entry icon inside of it
+        if iconClass is CursorParenIcon:
+            closed = False  # We leave even empty paren open to detect () for empty tuple
+            inputSite = 'argIcon'
+        else:
+            closed = self.pendingArg() is None
+            inputSite = 'argIcons_0'
+        newParenIcon = iconClass(window=self.window, closed=closed)
         attachedIc = self.attachedIcon
         attachedSite = self.attachedSite
         if attachedIc is None:
             self.window.replaceTop(self, newParenIcon)
         else:
             attachedIc.replaceChild(newParenIcon, attachedSite)
-        newParenIcon.replaceChild(self, 'argIcon')
+        newParenIcon.replaceChild(self, inputSite)
         self.attachedIcon = newParenIcon
-        self.attachedSite = 'argIcon'
+        self.attachedSite = inputSite
         self.attachedSiteType = "input"
         # Attempt to get rid of the entry icon and place pending arg in its place
         self._removeAndReplaceWithPending()
         # Reorder the expression with the new open paren in place (skip some work if the
         # entry icon was at the top level, since no reordering is necessary, there)
         if attachedIc is not None:
-            top = reorderArithExpr(icon.highestCoincidentIcon(newParenIcon))
+            top = reorderArithExpr(newParenIcon)
 
-    def getUnclosedParen(self, fromIcon, fromSite):
-        """Find a matching open paren or paren-less tuple that could be closed by an end
-        paren at fromIcon, fromSite.  If an unclosed cursor paren is found, relocate it
-        to the appropriate level and rearrange the icon hierarchy such that it can be
-        closed.  Rearrangement may be significant.  Unclosed cursor parens are inserted
-        and maintained at the highest level in the hierarchy that they can reach.  In
-        addition to changing the level of the cursor paren itself, closing can expose
-        lower-precedence operations that will end up above it in the hierarchy."""
-        matchingParen = searchForOpenParen(fromIcon, fromSite)
+    def getUnclosedParen(self, token, fromIcon, fromSite):
+        """Find a matching open paren/bracket/brace or paren-less tuple that could be
+        closed by an end paren/bracket/brace (which type is specified by token) at
+        fromIcon, fromSite.  If a matching unclosed item is found, relocate it to the
+        appropriate level and rearrange the icon hierarchy such that it can be closed.
+        Rearrangement may be significant.  Unclosed icons are inserted and maintained at
+        the highest level in the hierarchy that they can reach.  In addition to changing
+        the level of the matching item itself, closing can expose lower-precedence
+        operations that will get moved above it in the hierarchy."""
+        matchingParen = searchForOpenParen(token, fromIcon, fromSite)
         if matchingParen is None:
             return None
         if matchingParen is fromIcon or isinstance(matchingParen, icon.TupleIcon):
-            return matchingParen
-        # A cursor paren was matched.  Rearrange the hierarchy so the cursor paren is
-        # above all the icons it should enclose and outside of those it does not enclose.
+            return matchingParen  # No reordering necessary (save the extra work)
+        # Rearrange the hierarchy so the paren/bracket/brace is above all the icons it
+        # should enclose and outside of those it does not enclose.
         reorderArithExpr(matchingParen, fromIcon)
         return matchingParen
 
@@ -879,34 +933,81 @@ class EntryIcon(icon.Icon):
         # Look for an icon that supports colons (currently, only subscript)
         for parent in self.attachedIcon.parentage(includeSelf=True):
             if isinstance(parent, icon.SubscriptIcon):
+                if parent.hasSite('stepIcon'):
+                    # Subscript already has all 3 colons
+                    colonInserted = False
+                    break
+                # Subscript icon accepting colon, found.  Add a new site to it
                 subsIc = parent
+                if subsIc.hasSite('upperIcon'):
+                    subsIc.changeNumSubscripts(3)
+                    siteAdded = 'stepIcon'
+                else:
+                    subsIc.changeNumSubscripts(2)
+                    siteAdded = 'upperIcon'
+                # If the cursor was on the first site, may need to shift second-site icons
+                entrySite = subsIc.siteOf(self, recursive=True)
+                if entrySite == 'indexIcon' and siteAdded == "stepIcon":
+                    toShift = subsIc.childAt('upperIcon')
+                    subsIc.replaceChild(None, "upperIcon")
+                    subsIc.replaceChild(toShift, 'stepIcon')
+                    cursorToSite = 'upperIcon'
+                else:
+                    cursorToSite = siteAdded
+                cursorToIcon = subsIc
+                colonInserted = True
+                break
+            if isinstance(parent, icon.DictIcon):
+                dictIc = parent
+                site = parent.siteOf(self, recursive=True)
+                child = dictIc.childAt(site)
+                dictElem = icon.DictElemIcon(window=self.window)
+                if isinstance(child, icon.DictElemIcon):
+                    # There's already a colon in this clause.  We allow a colon to be
+                    # typed on the left of an existing clause, since that is how one
+                    # naturally types a new clause (when they begin after the comma or to
+                    # the left of the first clause).  Typing a colon on the right side of
+                    # a dictElem is not expected without a comma, and not supported.
+                    dictElemSite = child.siteOf(self, recursive=True)
+                    if dictElemSite != 'leftArg':
+                        colonInserted = False
+                        break
+                    # Splitting apart an expression is hard.  Here we cheat and use the
+                    # commaEntered function to do it (since we need a comma, too).
+                    if not self.commaEntered(self.attachedIcon, self.attachedSite):
+                        colonInserted = False
+                        break
+                    # commaEntered will set the cursor position to the site where any
+                    # pending args should be deposited.  If appropriate, deposit them.
+                    cursor = self.window.cursor
+                    if self.pendingArg() and cursor.type == 'icon' and \
+                     cursor.siteType == 'input' and \
+                     cursor.icon.childAt(cursor.site) is None:
+                        cursor.icon.replaceChild(self.pendingArg(), cursor.site)
+                        self.replaceChild(None, 'pendingArg')
+                    # Insert the new dictElem before the dictElem that originally held
+                    # the entry icon in its left argument.
+                    dictElemArg = parent.childAt(site)
+                    parent.replaceChild(dictElem, site)
+                    dictElem.replaceChild(dictElemArg, 'leftArg')
+                elif child is self:
+                    # There's nothing at the site, yet
+                    dictIc.replaceChild(dictElem, site)
+                    dictElem.replaceChild(self, 'rightArg')
+                else:
+                    # There's something at the site.  Put a colon after it
+                    dictIc.replaceChild(dictElem, site)
+                    dictElem.replaceChild(child, 'leftArg')
+                cursorToIcon = dictElem
+                cursorToSite = 'rightArg'
+                colonInserted = True
                 break
         else:
-            subsIc = None
-        if subsIc is not None and subsIc.hasSite('stepIcon'):
-            subsIc = None
-        if subsIc is None:
-            # Icon not found or already has the maximum # of sites
+            colonInserted = False
+        if not colonInserted:
+            # Icon not found or colon couldn't be placed
             cursorToIcon = self.attachedIcon
             cursorToSite = self.attachedSite
-        else:
-            # Subscript icon accepting colon, found.  Add a new site to it
-            if subsIc.hasSite('upperIcon'):
-                subsIc.changeNumSubscripts(3)
-                siteAdded = 'stepIcon'
-            else:
-                subsIc.changeNumSubscripts(2)
-                siteAdded = 'upperIcon'
-            # If the cursor was on the first site, may need to shift second-site icons
-            entrySite = subsIc.siteOf(self, recursive=True)
-            if entrySite == 'indexIcon' and siteAdded == "stepIcon":
-                toShift = subsIc.childAt('upperIcon')
-                subsIc.replaceChild(None, "upperIcon")
-                subsIc.replaceChild(toShift, 'stepIcon')
-                cursorToSite = 'upperIcon'
-            else:
-                cursorToSite = siteAdded
-            cursorToIcon = subsIc
         # Decide on appropriate disposition for entry icon and cursor.  Try to remove
         # entry icon if at all possible, even if the colon was rejected, since there
         # won't be any text left in it.
@@ -931,7 +1032,7 @@ class EntryIcon(icon.Icon):
             self.attachedIcon.replaceChild(None, self.attachedSite)
             self.window.entryIcon = None
             self.window.cursor.setToIconSite(cursorToIcon, cursorToSite)
-        return subsIc is not None
+        return colonInserted
 
     def click(self, evt):
         self.window.cursor.erase()
@@ -1105,8 +1206,8 @@ class CursorParenIcon(icon.Icon):
     def dumpName(self):
         return "(cp)" if self.closed else "(cp"
 
-    def clipboardRepr(self, offset):
-        return self._serialize(offset, closed=self.closed)
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, closed=self.closed)
 
     def execute(self):
         if not self.closed:
@@ -1514,34 +1615,25 @@ class Cursor:
                     site = 'seqOut'
             self.moveToIconSite(ic, site, evt)
 
-    def movePastEndParen(self):
+    def movePastEndParen(self, token):
+        """Move the cursor past the next end paren/bracket/brace (token is one of
+        "endParen", "endBracket", or "endBrace"."""
         if self.type is not "icon":
             return False
         siteType = self.siteType
         child = None
+        # Just tear intervening icons to the end, regardless how far (was this right?)
         for parent in self.icon.parentage(includeSelf=True):
             if child is not None:
                 siteType = parent.typeOf(parent.siteOf(child))
             if siteType == "input" and (
-             parent.__class__ is icon.BinOpIcon and parent.hasParens or
-             parent.__class__ in (icon.CallIcon, icon.TupleIcon, icon.DefIcon) or
-             parent.__class__ is CursorParenIcon and parent.closed):
-                self.setToIconSite(parent, "attrIcon")
-                return True
-            child = parent
-        return False
-
-    def movePastEndBracket(self):
-        if self.type is not "icon":
-            return False
-        siteType = self.siteType
-        child = None
-        # Just tear intervening icons to the end bracket (was this right?)
-        for parent in self.icon.parentage(includeSelf=True):
-            if child is not None:
-                siteType = parent.typeOf(parent.siteOf(child))
-            if siteType == "input" and parent.__class__ in (icon.ListIcon,
-             icon.SubscriptIcon):
+             (token == "endParen" and (
+              parent.__class__ is icon.BinOpIcon and parent.hasParens or
+              parent.__class__ in (icon.CallIcon, icon.TupleIcon, icon.DefIcon) or
+              parent.__class__ is CursorParenIcon and parent.closed)) or
+             (token == "endBrace" and isinstance(parent, icon.DictIcon)) or
+             (token == "endBracket" and
+              parent.__class__ in (icon.ListIcon, icon.SubscriptIcon))):
                 self.setToIconSite(parent, "attrIcon")
                 return True
             child = parent
@@ -1581,6 +1673,8 @@ def parseAttrText(text, window):
         return icon.SubscriptIcon(1, window), None
     if text == ']':
         return "endBracket"
+    if text == '}':
+        return "endBrace"
     if text == ',':
         return "comma"
     if text == ':':
@@ -1620,9 +1714,13 @@ def parseExprText(text, window):
     if text == ')':
         return "endParen"
     if text == '[':
-        return icon.ListIcon(window), None
+        return "openBracket"
     if text == ']':
         return "endBracket"
+    if text == '{':
+        return "openBrace"
+    if text == '}':
+        return "endBrace"
     if text == ',':
         return "comma"
     if text == ':':
@@ -1717,32 +1815,34 @@ def findTextOffset(text, pixelOffset):
         else:
             return guessedPos
 
-def searchForOpenParen(ic, site):
-    """Find an open cursor paren or unclosed tuple that would match an end paren placed
-    at a given cursor position (ic and site)."""
-    # Note that this takes advantage of the fact that insertCursorParen places cursor
-    # parens at the highest level possible, so the matching paren will always be a parent
-    # of any requested end paren.
+def searchForOpenParen(token, ic, site):
+    """Find an open paren/bracket/brace to match an end paren/bracket/brace placed at a
+    given cursor position (ic, site).  token indicates what type of paren-like-object is
+    to be closed.  In the case of an open paren, can also return a naked tuple that needs
+    parentheses added."""
+    # Note that this takes advantage of the fact that insertOpenParen places open parens/
+    # brackets/braces at the highest level possible, so the matching icon will always be
+    # a parent or owner of the site requested.
     while True:
         siteType = ic.typeOf(site)
-        if isinstance(ic, CursorParenIcon):
-            if ic.closed and siteType == 'input':
-                # Don't allow search to escape enclosing (already closed) cursor paren
-                return None
-            elif not ic.closed:
-                # Found an open paren
+        if siteType == 'input':
+            if token == "endParen" and isinstance(ic, CursorParenIcon) and not ic.closed:
                 return ic
-        if isinstance(ic, icon.TupleIcon) and ic.noParens:
-            # Found a no-paren (top-level) tuple to parenthesize
-            return ic
-        if isinstance(ic, icon.BinOpIcon) and ic.hasParens and site != 'attrIcon':
-            # Don't allow search to escape enclosing arithmetic parens
-            return None
-        if siteType == 'input' and ic.__class__ not in (icon.BinOpIcon,
-         icon.UnaryOpIcon, icon.YieldIcon, icon.YieldFromIcon):
-            # For anything but an arithmetic op, inputs are enclosed in something
-            # and search should not extend beyond (calls, tuples, subscripts, etc.)
-            return None
+            if token == "endParen" and isinstance(ic, icon.TupleIcon) and ic.noParens:
+                # Found a no-paren (top-level) tuple to parenthesize
+                return ic
+            if token == "endBracket" and \
+             ic.__class__ in (icon.ListIcon, icon.SubscriptIcon) and not ic.closed:
+                return ic
+            if token == "endBrace" and isinstance(ic, icon.DictIcon) and not ic.closed:
+                return ic
+            if isinstance(ic, icon.BinOpIcon) and ic.hasParens:
+                # Don't allow search to escape enclosing arithmetic parens
+                return None
+            if ic.__class__ not in (icon.BinOpIcon, icon.UnaryOpIcon, icon.DictElemIcon):
+                # For anything but an arithmetic op, inputs are enclosed in something
+                # and search should not extend beyond (calls, tuples, subscripts, etc.)
+                return None
         parent = ic.parent()
         if parent is None:
             return None
@@ -1764,7 +1864,8 @@ def rightmostSite(ic, ignoreAutoParens=False):
         if len(children) == 0:
             return ic, 'values_0'
         return rightmostSite(icon.findLastAttrIcon(children[-1]))
-    elif isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ignoreAutoParens):
+    elif isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ignoreAutoParens) or \
+     isinstance(ic, icon.TwoArgIcon):
         if ic.rightArg() is None:
             return ic, 'rightArg'
         return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))
@@ -1775,14 +1876,14 @@ def _reduceOperatorStack(operatorStack, operandStack):
     off of the operator stack, link it with operands popped from the operand stack, and
     push the result on the operand stack."""
     stackOp = operatorStack[-1]
-    if isinstance(stackOp, CursorParenIcon):
+    if isinstance(stackOp, ParenOp):
         # Found matching paren.  Make it the parent of the top icon on the
         # operand stack and take its place in the stack
         stackOp = operatorStack.pop()
         parenChild = operandStack.pop()
-        if stackOp.childAt('argIcon') is not parenChild:
-            stackOp.replaceChild(parenChild, 'argIcon')
-        operandStack.append(stackOp)
+        if stackOp.parenIcon.childAt(stackOp.contentSite) is not parenChild:
+            stackOp.parenIcon.replaceChild(parenChild, stackOp.contentSite)
+        operandStack.append(stackOp.outputIcon)
     elif isinstance(stackOp, icon.BinOpIcon):
         stackOp = operatorStack.pop()
         rightArg = operandStack.pop()
@@ -1813,6 +1914,12 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     topNode = highestAffectedExpr(changedIcon)
     topNodeParent = topNode.parent()
     topNodeParentSite = None if topNodeParent is None else topNodeParent.siteOf(topNode)
+    if changedIcon.__class__ in (CursorParenIcon, icon.ListIcon, icon.DictIcon,
+     icon.CallIcon, icon.DefIcon) or \
+     isinstance(changedIcon, icon.ClassDefIcon) and changedIcon.argList:
+        allowedParen = ParenOp(changedIcon)
+    else:
+        allowedParen = None
     operatorStack = []
     operandStack = []
     # Loop left to right over the expression below topNode, reassembling the expression
@@ -1820,30 +1927,30 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     # Note that BinOpIcons with parens are treated as operands (because the expressions
     # inside would not be affected by a change to changedIcon) EXCEPT for the case where
     # ic is topNode, as those parens surround the expression we are processing.
-    for ic in tuple(traverseExprLeftToRight(topNode)):
-        if isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ic is topNode) or \
-         isinstance(ic, icon.UnaryOpIcon):
+    for op in tuple(traverseExprLeftToRight(topNode, allowedParen)):
+        if isinstance(op, icon.BinOpIcon) and (not op.hasParens or op is topNode) or \
+         isinstance(op, icon.UnaryOpIcon):
             while len(operatorStack) > 0:
                 stackOp = operatorStack[-1]
-                if isinstance(stackOp, CursorParenIcon) or (
-                 stackOp.precedence < ic.precedence or
-                 stackOp.precedence == ic.precedence and ic.rightAssoc()):
+                if isinstance(stackOp, ParenOp) or (
+                 stackOp.precedence < op.precedence or
+                 stackOp.precedence == op.precedence and op.rightAssoc()):
                     break
                 _reduceOperatorStack(operatorStack, operandStack)
-            operatorStack.append(ic)
-        elif isinstance(ic, CursorParenIcon):
+            operatorStack.append(op)
+        elif op is allowedParen:
             # Push open paren on the operator stack where it acts a barrier
-            operatorStack.append(ic)
-        elif closeParenAt is not None and closeParenAt in ic.traverse(includeSelf=True):
-            operandStack.append(ic)
+            operatorStack.append(op)
+        elif closeParenAt is not None and closeParenAt in op.traverse(includeSelf=True):
+            operandStack.append(op)
             while len(operatorStack) > 0:
                 _reduceOperatorStack(operatorStack, operandStack)
-                if isinstance(operandStack[-1], CursorParenIcon):
+                if operandStack[-1] is allowedParen.outputIcon:
                     break
             if operandStack[-1] is not changedIcon:
                 print('reorderArithExpr found wrong open paren for closeParenAt')
         else:
-            operandStack.append(ic)
+            operandStack.append(op)
     while len(operatorStack) > 0:
         _reduceOperatorStack(operatorStack, operandStack)
     if len(operandStack) != 1:
@@ -1860,7 +1967,8 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     return operandStack[0]
 
 def highestAffectedExpr(changedIcon):
-    for ic in changedIcon.parentage(includeSelf=True):
+    topCoincidentIcon = icon.highestCoincidentIcon(changedIcon)
+    for ic in topCoincidentIcon.parentage(includeSelf=True):
         parent = ic.parent()
         if parent is None:
             return ic  # ic is at top level
@@ -1876,27 +1984,46 @@ def highestAffectedExpr(changedIcon):
         if siteType == "input" and parentClass not in (icon.BinOpIcon, icon.UnaryOpIcon):
             return ic  # Everything other than arithmetic expressions encloses args
 
-def traverseExprLeftToRight(topNode, recurse=False):
+def traverseExprLeftToRight(topNode, allowedParen, recurse=False):
     """Traverse an expression from left to right.  Note that this is not a fully general
     left to right traversal, but one specifically tailored to reorderArithExpr which
     operates only within the bounds of a changed expression, skipping over anything
-    contained within icons other than binary operations and unclosed cursor parens.  The
-    optional  parameter, recurse, is used internally in recursive calls to distinguish
-    the very top binary operator, that must be explored even if it has parens, from other
-    binary operators, which are treated as a unit (not explored) if they have parens."""
+    contained within icons other than binary operations and the single paren/bracket/brace
+    being modified.  The optional  parameter, recurse, is used internally in recursive
+    calls to distinguish the very top binary operator, that must be explored even if it
+    has parens, from other binary operators, which are treated as a unit (not explored)
+    if they have parens."""
     if topNode is None:
         yield None
     elif isinstance(topNode, icon.BinOpIcon) and not (topNode.hasParens and recurse):
-        yield from traverseExprLeftToRight(topNode.leftArg(), recurse=True)
+        yield from traverseExprLeftToRight(topNode.leftArg(), allowedParen, recurse=True)
         yield topNode
-        yield from traverseExprLeftToRight(topNode.rightArg(), recurse=True)
+        yield from traverseExprLeftToRight(topNode.rightArg(), allowedParen, recurse=True)
     elif isinstance(topNode, icon.UnaryOpIcon):
         yield topNode
-        yield from traverseExprLeftToRight(topNode.arg(), recurse=True)
-    elif isinstance(topNode, CursorParenIcon):
-        yield topNode
-        yield from traverseExprLeftToRight(topNode.childAt('argIcon'), recurse=True)
+        yield from traverseExprLeftToRight(topNode.arg(), allowedParen, recurse=True)
+    elif allowedParen is not None and topNode is allowedParen.outputIcon:
+        yield allowedParen
+        parenContent = topNode.childAt(allowedParen.contentSite)
+        yield from traverseExprLeftToRight(parenContent, allowedParen, recurse=True)
     else:
         # Anything that is not a binary operator or a cursor paren can be treated as a
         # unit rather than descending in to it.
         yield topNode
+
+class ParenOp:
+    """This class wraps various types of parentheses-like icon (brackets, braces, etc.)
+    to simplify paren handling in reorderArithExpr.  Most importantly, it allows
+    reorderArithExpr to treat an entire chain of attributes leading to paren types that
+    are connected to attribute sites (CallIcon and SubscriptIcon) as a unit, in the same
+    manner it treats cursor parens, lists, and dicts"""
+    def __init__(self, parenIcon):
+        self.parenIcon = parenIcon
+        if parenIcon.hasSite('attrOut'):
+            self.outputIcon = icon.findAttrOutputSite(parenIcon)
+        else:
+            self.outputIcon = parenIcon
+        if parenIcon.hasSite('argIcons_0'):
+            self.contentSite = 'argIcons_0'
+        else:
+            self.contentSite = 'argIcon'
