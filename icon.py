@@ -800,7 +800,7 @@ class Icon:
     def traverse(self, order="draw", includeSelf=True):
         """Iterator for traversing the tree below this icon.  Traversal can be in either
         drawing (order="draw") or picking (order="pick") order."""
-        if includeSelf and order is not "pick":
+        if includeSelf and order != "pick":
             yield self
         # For "pick" order to be the true opposite of "draw", this loop should run in
         # reverse, but child icons are not intended to overlap in a detectable way.
@@ -808,7 +808,7 @@ class Icon:
             if child is None:
                 print('icon has null child', self)
             yield from child.traverse(order)
-        if includeSelf and order is "pick":
+        if includeSelf and order == "pick":
             yield self
 
     def traverseBlock(self, includeSelf=True, hier=False):

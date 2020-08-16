@@ -809,7 +809,7 @@ class Window:
                 y -= yOff
             pastePos = x, y
         elif self.cursor.type == "icon":
-            if self.cursor.site[0] is not "input" or len(pastedIcons) != 1:
+            if self.cursor.site[0] != "input" or len(pastedIcons) != 1:
                 typing.beep()
                 return
             replaceParent = self.cursor.icon
@@ -1318,7 +1318,7 @@ class Window:
 
         elif ic.__class__ in (icon.YieldIcon, icon.ReturnIcon):
             siteName, index = icon.splitSeriesSiteId(site)
-            if siteName == "values" and index is 0:
+            if siteName == "values" and index == 0:
                 # Cursor is on first input site.  Remove icon and replace with cursor
                 valueIcons = [s.att for s in ic.sites.values if s.att is not None]
                 text = "return" if isinstance(ic, icon.ReturnIcon) else "yield"
@@ -1377,7 +1377,7 @@ class Window:
 
         elif isinstance(ic, icon.AugmentedAssignIcon):
             siteName, index = icon.splitSeriesSiteId(site)
-            if siteName == "values" and index is 0:
+            if siteName == "values" and index == 0:
                 # Cursor is on first input site.  Remove icon and replace with cursor
                 text = ic.op + '='
                 valueIcons = [s.att for s in ic.sites.values if s.att is not None]
@@ -2094,7 +2094,7 @@ class Window:
             changedIcons = [ic]
         for ic in changedIcons:
             refreshRegion.add(ic.rect)
-            if op is 'toggle':
+            if op == 'toggle':
                 ic.select(not ic.isSelected())
             else:
                 ic.select()
@@ -2562,7 +2562,7 @@ class Window:
                     break
         # As a check on the whole process, addedIcons should now have all been sorted in
         # sequencedIcons, so addedIcons should be empty.
-        if len(addedIcons) is not 0:
+        if len(addedIcons) != 0:
             print('addTop left icons unaccounted')
         return sequencedIcons
 

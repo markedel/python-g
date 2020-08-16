@@ -1,4 +1,5 @@
 import ast, time
+import numbers
 import icon
 
 binOps = {ast.Add:'+', ast.Sub:'-', ast.Mult:'*', ast.Div:'/', ast.FloorDiv:'//',
@@ -176,6 +177,14 @@ def parseExpr(expr):
         return (icon.NumericIcon, expr.n)
     elif expr.__class__ == ast.Str:
         return (icon.StringIcon, expr.s)
+    elif expr.__class__ == ast.Constant:
+        if isinstance(expr.value, numbers.Number):  # (oddly) includes True and False
+            return (icon.NumericIcon, expr.value)
+        if isinstance(expr.value, str) or isinstance(expr.value, bytes):
+            return (icon.StringIcon, expr.value)
+        # Documentation threatens to return constant tuples and frozensets (which could
+        # get quite complex), but 3.8 seems to stick to strings and numbers
+        return (icon.IdentifierIcon, "**Couldn't Parse Non number/string const**")
     # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
     elif expr.__class__ == ast.Name:
         return (icon.IdentifierIcon, expr.id)

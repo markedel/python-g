@@ -6,6 +6,7 @@ import winsound
 import ast
 from PIL import Image, ImageDraw
 import re
+import numbers
 from operator import itemgetter
 
 PEN_BG_COLOR = (255, 245, 245, 255)
@@ -338,7 +339,7 @@ class EntryIcon(icon.Icon):
                     self.attachedIcon.replaceChild(None, self.attachedSite)
                 if self.pendingArg() is None and self.pendingAttr() is None:
                     self.window.entryIcon = None
-                elif self.pendingArg() is not None and cursor.type is "icon" and \
+                elif self.pendingArg() is not None and cursor.type == "icon" and \
                  cursor.siteType == "input" and cursor.icon.childAt(cursor.site) is None:
                     # Pending args can safely be placed (note that commaEntered will not
                     # put the cursor on an attribute site, so don't bother with them)
@@ -512,12 +513,12 @@ class EntryIcon(icon.Icon):
         # to place the cursor at the most reasonable spot.  If vacant, place pending
         # args there
         if self.pendingArg() is not None and remainingText == "":
-            if cursor.type is "icon" and cursor.siteType == "input" and \
+            if cursor.type == "icon" and cursor.siteType == "input" and \
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingArg(), cursor.site)
                 self.setPendingArg(None)
         if self.pendingAttr() is not None and remainingText == "":
-            if cursor.type is "icon" and cursor.siteType == "attrIn" and \
+            if cursor.type == "icon" and cursor.siteType == "attrIn" and \
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingAttr(), cursor.site)
                 self.setPendingAttr(None)
@@ -526,7 +527,7 @@ class EntryIcon(icon.Icon):
             self.window.entryIcon = None
             return
         # There is remaining text or pending arguments.  Restore the entry icon
-        if cursor.type is not "icon":  # I don't think this can happen
+        if cursor.type != "icon":  # I don't think this can happen
             print('Cursor type not icon in _setText')
             return
         self.attachedIcon = cursor.icon
@@ -1289,7 +1290,7 @@ class Cursor:
         """Modify selection based on cursor movement (presumably with Shift key held)"""
         selectedIcons = set(self.window.selectedIcons())
         redrawRect = python_g.AccumRects()
-        if len(selectedIcons) == 0 and self.type is "icon":
+        if len(selectedIcons) == 0 and self.type == "icon":
             # This is a new cursor-based selection
             self.anchorIc = self.icon
             self.anchorSite = self.site
@@ -1618,7 +1619,7 @@ class Cursor:
     def movePastEndParen(self, token):
         """Move the cursor past the next end paren/bracket/brace (token is one of
         "endParen", "endBracket", or "endBrace"."""
-        if self.type is not "icon":
+        if self.type != "icon":
             return False
         siteType = self.siteType
         child = None
@@ -1750,6 +1751,8 @@ def parseExprText(text, window):
         return icon.IdentifierIcon(exprAst.id, window), delim
     if exprAst.__class__ == ast.Num:
         return icon.NumericIcon(exprAst.n, window), delim
+    if exprAst.__class__ == ast.Constant and isinstance(exprAst.value, numbers.Number):
+        return icon.NumericIcon(exprAst.value, window), delim
     return "reject"
 
 def parseTopLevelText(text, window):
