@@ -1301,6 +1301,10 @@ class StringIcon(TextIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, string=self.string)
 
+class PosOnlyMarkerIcon(TextIcon):
+    def __init__(self, window=None, location=None):
+        TextIcon.__init__(self, '/', window, location)
+
 class AttrIcon(Icon):
     def __init__(self, name, window=None, location=None):
         Icon.__init__(self, window)

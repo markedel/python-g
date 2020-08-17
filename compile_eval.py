@@ -116,14 +116,19 @@ def parseStmt(stmt):
         return (icon.IfIcon, parseExpr(stmt.test))
     if stmt.__class__ in (ast.FunctionDef, ast.AsyncFunctionDef):
         isAsync = stmt.__class__ is ast.AsyncFunctionDef
-        args = [arg.arg for arg in stmt.args.args]
+        if hasattr(stmt.args, 'posonlyargs'):
+            args = [arg.arg for arg in stmt.args.posonlyargs]
+        else:
+            args = []
+        nPosOnly = len(args)
+        args += [arg.arg for arg in stmt.args.args]
         defaults = [parseExpr(e) for e in stmt.args.defaults]
         varArg = stmt.args.vararg.arg if stmt.args.vararg is not None else None
         kwOnlyArgs = [arg.arg for arg in stmt.args.kwonlyargs]
         kwDefaults = [parseExpr(e) for e in stmt.args.kw_defaults]
         kwArg = stmt.args.kwarg.arg if stmt.args.kwarg is not None else None
-        return (icon.DefIcon, isAsync, stmt.name, args, defaults, varArg, kwOnlyArgs,
-         kwDefaults, kwArg)
+        return (icon.DefIcon, isAsync, stmt.name, args, nPosOnly, defaults, varArg,
+         kwOnlyArgs, kwDefaults, kwArg)
     if stmt.__class__ is ast.ClassDef:
         bases = [parseExpr(base) for base in stmt.bases]
         keywords = [(kwd.arg, parseExpr(kwd.value)) for kwd in stmt.keywords]
@@ -178,8 +183,8 @@ def parseExpr(expr):
     elif expr.__class__ == ast.Str:
         return (icon.StringIcon, expr.s)
     elif expr.__class__ == ast.Constant:
-        if isinstance(expr.value, numbers.Number):  # (oddly) includes True and False
-            return (icon.NumericIcon, expr.value)
+        if isinstance(expr.value, numbers.Number) or expr.value is None:
+            return (icon.NumericIcon, expr.value)  # Numbers includes True and False
         if isinstance(expr.value, str) or isinstance(expr.value, bytes):
             return (icon.StringIcon, expr.value)
         # Documentation threatens to return constant tuples and frozensets (which could
@@ -459,7 +464,7 @@ def makeIcons(parsedExpr, window, x, y):
         topIcon.insertChildren(kwdIcons, "argIcons", len(baseIcons))
         return topIcon
     if iconClass is icon.DefIcon:
-        isAsync, name, args, defaults, varArg, kwOnlyArgs, kwDefaults, kwArg = \
+        isAsync, name, args, nPosOnly, defaults, varArg, kwOnlyArgs, kwDefaults, kwArg =\
          parsedExpr[1:]
         defIcon = iconClass(isAsync, window=window, location=(x, y))
         nameIcon = icon.IdentifierIcon(name, window)
@@ -467,18 +472,23 @@ def makeIcons(parsedExpr, window, x, y):
         if len(defaults) < len(args):
             # Weird rule in defaults list for ast that defaults can be shorter than args
             defaults = ([None] * (len(args) - len(defaults))) + defaults
+        numArgs = 0
         for i, arg in enumerate(args):
             default = defaults[i]
             argNameIcon = icon.IdentifierIcon(arg, window)
+            if nPosOnly != 0 and numArgs == nPosOnly:
+                posOnlyMarker = icon.PosOnlyMarkerIcon(window=window)
+                defIcon.insertChild(posOnlyMarker, 'argIcons', numArgs)
+                numArgs += 1
             if default is None:
-                defIcon.insertChild(argNameIcon, 'argIcons', i)
+                defIcon.insertChild(argNameIcon, 'argIcons', numArgs)
             else:
                 defaultIcon = makeIcons(default, window, x, y)
                 argAssignIcon = icon.ArgAssignIcon(window)
                 argAssignIcon.replaceChild(argNameIcon, 'leftArg')
                 argAssignIcon.replaceChild(defaultIcon, 'rightArg')
-                defIcon.insertChild(argAssignIcon, "argIcons", i)
-        numArgs = len(args)
+                defIcon.insertChild(argAssignIcon, "argIcons", numArgs)
+            numArgs += 1
         if varArg is not None:
             argNameIcon = icon.IdentifierIcon(varArg, window)
             starIcon = icon.StarIcon(window)
