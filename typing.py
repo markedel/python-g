@@ -335,8 +335,15 @@ class EntryIcon(icon.Icon):
                 pendingAttr.markLayoutDirty()
                 self.window.cursor.setToIconSite(pendingAttr, "attrOut")
             else:
+                prevIcon = self.prevInSeq()
+                nextIcon = self.nextInSeq()
                 self.window.removeIcons([self])
-                self.window.cursor.setToWindowPos((self.rect[0], self.rect[1]))
+                if prevIcon:
+                    self.window.cursor.setToIconSite(prevIcon, 'seqOut')
+                elif nextIcon:
+                    self.window.cursor.setToIconSite(nextIcon, 'seqIn')
+                else:
+                    self.window.cursor.setToWindowPos((self.rect[0], self.rect[1]))
         self.window.entryIcon = None
 
     def _setText(self, newText, newCursorPos):
@@ -1894,7 +1901,7 @@ def rightmostSite(ic, ignoreAutoParens=False):
         if ic.arg() is None:
             return ic, 'argIcon'
         return rightmostSite(icon.findLastAttrIcon(ic.arg()))
-    elif ic.__class__ in (icon.YieldIcon, icon.YieldFromIcon):
+    elif ic.__class__ in (icon.AssignIcon, icon.YieldIcon, icon.YieldFromIcon):
         children = [site.att for site in ic.sites.values if site.att is not None]
         if len(children) == 0:
             return ic, 'values_0'
@@ -1904,6 +1911,13 @@ def rightmostSite(ic, ignoreAutoParens=False):
         if ic.rightArg() is None:
             return ic, 'rightArg'
         return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))
+    elif isinstance(ic, icon.DefIcon):
+        children = [site.att for site in ic.sites.argIcons if site.att is not None]
+        if len(children) == 0:
+            return ic, 'argIcons_0'
+        return rightmostSite(icon.findLastAttrIcon(children[-1]))
+    elif ic.childAt('attrIcon'):
+        return rightmostSite(ic.childAt('attrIcon'))
     return ic, 'attrIcon'
 
 def _reduceOperatorStack(operatorStack, operandStack):

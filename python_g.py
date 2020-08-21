@@ -873,7 +873,14 @@ class Window:
             if len(selectedIcons) > 0:
                 self.removeIcons(selectedIcons)
             elif self.cursor.type == "icon":
-                self._backspaceIcon(evt)
+                if self.cursor.siteType == 'seqIn' and self.cursor.icon.prevInSeq():
+                    ic, site = typing.rightmostSite(self.cursor.icon.prevInSeq())
+                    self.cursor.setToIconSite(ic, site)
+                if self.cursor.siteType == 'seqOut':
+                    ic, site = typing.rightmostSite(self.cursor.icon)
+                    self.cursor.setToIconSite(ic, site)
+                else:
+                    self._backspaceIcon(evt)
         else:
             topIcon = self.entryIcon.topLevelParent()
             redrawRect = topIcon.hierRect()
@@ -1480,7 +1487,8 @@ class Window:
                     argIcons += [valueSite.att for valueSite in ic.sites.values]
                     newTuple = icon.TupleIcon(window=self, noParens=True)
                     for i, arg in enumerate(argIcons):
-                        ic.replaceChild(None, ic.siteOf(arg))
+                        if arg is not None:
+                            ic.replaceChild(None, ic.siteOf(arg))
                         newTuple.insertChild(arg, "argIcons", i)
                     parent = ic.parent()
                     if parent is None:
@@ -2045,6 +2053,8 @@ class Window:
             outSiteY = (bottom + top) // 2
         else:
             outSiteX, outSiteY = outSitePos
+        resultIcon.layout()
+        resultIcon.markLayoutDirty()  # Initial layout call was just to measure size
         resultRect = resultIcon.hierRect()
         resultOutSitePos = resultIcon.posOfSite("output")
         if resultOutSitePos is None:
