@@ -877,7 +877,7 @@ class Window:
         else:
             topIcon = self.entryIcon.topLevelParent()
             redrawRect = topIcon.hierRect()
-            self.entryIcon.backspace()
+            self.entryIcon.backspace(evt)
             self._redisplayChangedEntryIcon(evt, redrawRect)
 
     def _backspaceIcon(self, evt):
@@ -910,8 +910,8 @@ class Window:
                 text = ic.name
             self._backspaceIconToEntry(evt, ic, text, site)
 
-        elif isinstance(ic, icon.ListTypeIcon):
-            # Lists, tuples, dicts, sets
+        elif isinstance(ic, icon.ListTypeIcon) or isinstance(ic, icon.CallIcon):
+            # Lists, tuples, dicts, sets, calls
             siteName, index = icon.splitSeriesSiteId(site)
             allArgs = ic.argIcons()
             nonEmptyArgs = [i for i in allArgs if i != None]
@@ -997,11 +997,22 @@ class Window:
                         topNode = typing.reorderArithExpr(content)
                         self.cursor.setToIconSite(topNode, 'output')
                     else:
-                        # List had a parent.  Remove by attaching content to parent
+                        # List had a parent.  Remove by attaching content to parent if
+                        # the parent site is an input site.  If it's not (CallIcon), then
+                        # load the content in to the pendingArg of an entry icon
                         parentSite = parent.siteOf(ic)
-                        parent.replaceChild(content, parentSite)
-                        typing.reorderArithExpr(content)
-                        self.cursor.setToIconSite(parent, parentSite)
+                        if parent.typeOf('parentSite') == 'input':
+                            parent.replaceChild(content, parentSite)
+                            typing.reorderArithExpr(content)
+                            self.cursor.setToIconSite(parent, parentSite)
+                        else:  # ic is on an attribute site.  Create an entry icon
+                            self.entryIcon = typing.EntryIcon(parent, parentSite,
+                             window=self)
+                            parent.replaceChild(self.entryIcon, parentSite)
+                            self.entryIcon.setPendingArg(content)
+                            self.cursor.setToEntryIcon()
+                            self._redisplayChangedEntryIcon(evt, redrawRegion.get())
+                            return
                     redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
                     self.refresh(redrawRegion.get())
                     return

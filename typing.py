@@ -260,12 +260,39 @@ class EntryIcon(icon.Icon):
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
 
-    def backspace(self):
-        if self.text == "":
-            self.remove()
-        else:
+    def backspace(self, evt=None):
+        if self.text != "":
             newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
             self._setText(newText, self.cursorPos-1)
+        elif self.pendingArg() or self.pendingAttr():
+            # There's no text left but a pending arg or attribute.  The nasty hack below
+            # calls the window backspace code and then restores pending args/attrs if it
+            # can.  The right thing to do is (probably) not to allow the backspace if
+            # pending data would be lost.  Suggest merging and integrating this code with
+            # the window backspace code as a first step.
+            pendingArg = self.pendingArg()
+            pendingAttr = self.pendingAttr()
+            self.remove()
+            self.window._backspaceIcon(evt)
+            entryIcon = self.window.entryIcon
+            if entryIcon:
+                if not (entryIcon.pendingArg() or entryIcon.pendingAttr()):
+                    if pendingArg:
+                        entryIcon.setPendingArg(pendingArg)
+                    elif pendingAttr:
+                        entryIcon.setPendingAttr(pendingAttr)
+            else:
+                self.window.entryIcon = self
+                cursor = self.window.cursor
+                if cursor.type == "icon":
+                    self.attachedIcon = cursor.icon
+                    self.attachedSite = cursor.site
+                    cursor.icon.replaceChild(self, cursor.site)
+                elif cursor.type == "window":
+                    icon.moveRect(self.rect, cursor.pos)
+                    self.window.addTop(self)
+        else:  # No text or pending icons
+            self.remove()
 
     def arrowAction(self, direction):
         newCursorPos = self.cursorPos
@@ -773,7 +800,7 @@ class EntryIcon(icon.Icon):
         return matchingParen
 
     def makeFunction(self, ic):
-        callIcon = icon.CallIcon(window=self.window)
+        callIcon = icon.CallIcon(window=self.window, closed=self.pendingArg() is None)
         ic.replaceChild(callIcon, 'attrIcon')
         if self.pendingAttr():
             self.attachedSite = 'argIcons_0'
@@ -1834,6 +1861,8 @@ def searchForOpenParen(token, ic, site):
             if token == "endParen" and isinstance(ic, icon.TupleIcon) and ic.noParens:
                 # Found a no-paren (top-level) tuple to parenthesize
                 return ic
+            if token == "endParen" and isinstance(ic, icon.CallIcon) and not ic.closed:
+                return ic
             if token == "endBracket" and \
              ic.__class__ in (icon.ListIcon, icon.SubscriptIcon) and not ic.closed:
                 return ic
@@ -1931,8 +1960,8 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     # inside would not be affected by a change to changedIcon) EXCEPT for the case where
     # ic is topNode, as those parens surround the expression we are processing.
     for op in tuple(traverseExprLeftToRight(topNode, allowedParen)):
-        if isinstance(op, icon.BinOpIcon) and (not op.hasParens or op is topNode) or \
-         isinstance(op, icon.UnaryOpIcon):
+        if isinstance(op, icon.BinOpIcon) and (not op.hasParens or op is topNode):
+            # Binary operation.  Check if left operand can be reduced
             while len(operatorStack) > 0:
                 stackOp = operatorStack[-1]
                 if isinstance(stackOp, ParenOp) or (
@@ -1940,6 +1969,9 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
                  stackOp.precedence == op.precedence and op.rightAssoc()):
                     break
                 _reduceOperatorStack(operatorStack, operandStack)
+            operatorStack.append(op)
+        elif isinstance(op, icon.UnaryOpIcon):
+            # It's an operator, but the only operand is on the right
             operatorStack.append(op)
         elif op is allowedParen:
             # Push open paren on the operator stack where it acts a barrier
@@ -1950,7 +1982,7 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
                 _reduceOperatorStack(operatorStack, operandStack)
                 if operandStack[-1] is allowedParen.outputIcon:
                     break
-            if operandStack[-1] is not changedIcon:
+            if operandStack[-1] is not allowedParen.outputIcon:
                 print('reorderArithExpr found wrong open paren for closeParenAt')
         else:
             operandStack.append(op)
@@ -2007,7 +2039,7 @@ def traverseExprLeftToRight(topNode, allowedParen, recurse=False):
         yield from traverseExprLeftToRight(topNode.arg(), allowedParen, recurse=True)
     elif allowedParen is not None and topNode is allowedParen.outputIcon:
         yield allowedParen
-        parenContent = topNode.childAt(allowedParen.contentSite)
+        parenContent = allowedParen.parenIcon.childAt(allowedParen.contentSite)
         yield from traverseExprLeftToRight(parenContent, allowedParen, recurse=True)
     else:
         # Anything that is not a binary operator or a cursor paren can be treated as a

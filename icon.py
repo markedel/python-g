@@ -407,6 +407,27 @@ fnLParenPixmap = (
  ".oooooooo",
 )
 
+fnLParenOpenPixmap = (
+ ".oooooooo",
+ ".o      o",
+ ".o      o",
+ ".o      o",
+ ".o   84 o",
+ ".o  81  o",
+ ".o  28  o",
+ ".o 73   o",
+ ".o 98  o.",
+ ".o    o..",
+ ".o 5   o.",
+ ".o 19   o",
+ ".o 18   o",
+ "oo 28   o",
+ "oo 68   o",
+ ".o      o",
+ ".o      o",
+ ".oooooooo",
+)
+
 defLParenPixmap = (
  "oooooooo",
  "o      o",
@@ -713,6 +734,7 @@ rParenImage = asciiToImage(binRParenPixmap)
 tupleLParenImage = asciiToImage(tupleLParenPixmap)
 tupleRParenImage = asciiToImage(tupleRParenPixmap)
 fnLParenImage = asciiToImage(fnLParenPixmap)
+fnLParenOpenImage = asciiToImage(fnLParenOpenPixmap)
 fnRParenImage = asciiToImage(fnRParenPixmap)
 defLParenImage = asciiToImage(defLParenPixmap)
 defRParenImage = asciiToImage(defRParenPixmap)
@@ -2429,33 +2451,40 @@ class BinOpIcon(Icon):
         return python_g.rectsTouch(rect, self.selectionRect())
 
 class CallIcon(Icon):
-    def __init__(self, window, location=None):
+    def __init__(self, window, closed=True, location=None):
         Icon.__init__(self, window)
+        self.closed = closed
         leftWidth, leftHeight = fnLParenImage.size
         attrSiteY = leftHeight // 2 + ATTR_SITE_OFFSET
         self.sites.add('attrOut', 'attrOut', 0, attrSiteY)
         self.argList = HorizListMgr(self, 'argIcons', leftWidth, leftHeight//2)
         width, height = self._size()
-        self.sites.add('attrIcon', 'attrIn', width-1, attrSiteY)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
+        if closed:
+            self.close()
 
     def _size(self):
         width, height = fnLParenImage.size
-        width += self.argList.width() + fnRParenImage.width - 1
+        if self.closed:
+            width += self.argList.width() + fnRParenImage.width - 1
+        else:
+            width += self.argList.width()
         return width, height
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             # Left paren/bracket/brace
-            self.drawList = [((0, 0), fnLParenImage)]
+            lParenImg = fnLParenImage if self.closed else fnLParenOpenImage
+            self.drawList = [((0, 0), lParenImg)]
             # Commas
             leftBoxWidth, leftBoxHeight = fnLParenImage.size
             inSiteX = leftBoxWidth - OUTPUT_SITE_DEPTH - 1
             self.drawList += self.argList.drawListCommas(inSiteX, leftBoxHeight//2)
             # End paren/brace/bracket
-            parenX = leftBoxWidth + self.argList.width() - ATTR_SITE_DEPTH - 1
-            self.drawList.append(((parenX, 0), fnRParenImage))
+            if self.closed:
+                parenX = leftBoxWidth + self.argList.width() - ATTR_SITE_DEPTH - 1
+                self.drawList.append(((parenX, 0), fnRParenImage))
         self._drawFromDrawList(toDragImage, location, clip, style)
 
     def argIcons(self):
@@ -2492,17 +2521,41 @@ class CallIcon(Icon):
         layout = Layout(self, bodyWidth, bodyHeight, bodyHeight // 2 + ATTR_SITE_OFFSET)
         argWidth = self.argList.calcLayout(layout, bodyWidth - 1, -ATTR_SITE_OFFSET)
         # layout now incorporates argument layout sizes, but not end paren
-        layout.width = fnLParenImage.width - 1 + argWidth - 1 + fnRParenImage.width - 1
-        _singleSiteSublayout(self, layout, 'attrIcon', layout.width - 1, 0)
+        if self.closed:
+            layout.width = fnLParenImage.width-1 + argWidth-1 + fnRParenImage.width-1
+            _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1, 0)
+        else:
+            layout.width = fnLParenImage.width-1 + argWidth-1
         return layout
+
+
+    def close(self):
+        self.closed = True
+        self.markLayoutDirty()
+        # Add back the attribute site on the end paren.  Done here to allow the site to
+        # be used for cursor or new attachments before layout knows where it goes
+        self.sites.add('attrIcon', 'attrIn', rectWidth(self.rect) -
+         ATTR_SITE_DEPTH, rectHeight(self.rect) // 2 + ATTR_SITE_OFFSET)
+        self.window.undo.registerCallback(self.reopen)
+
+    def reopen(self):
+        self.closed = False
+        self.markLayoutDirty()
+        self.sites.remove('attrIcon')
+        self.window.undo.registerCallback(self.close)
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, closed=self.closed)
 
     def textRepr(self):
         return '(' + _seriesTextRepr(self.sites.argIcons) + ')' + _attrTextRepr(self)
 
     def dumpName(self):
-        return "call()"
+        return "call("  + (")" if self.closed else "")
 
     def execute(self, attrOfValue):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
             return None
         for site in self.sites.argIcons:
