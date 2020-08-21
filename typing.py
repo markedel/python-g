@@ -544,6 +544,9 @@ class EntryIcon(icon.Icon):
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingArg(), cursor.site)
                 self.setPendingArg(None)
+                if cursor.icon.__class__ in (icon.BinOpIcon, icon.UnaryOpIcon):
+                    # Changing an operand of an arithmetic operator may require reorder
+                    reorderArithExpr(cursor.icon)
         if self.pendingAttr() is not None and remainingText == "":
             if cursor.type == "icon" and cursor.siteType == "attrIn" and \
              cursor.icon.childAt(cursor.site) is None:

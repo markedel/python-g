@@ -1243,7 +1243,17 @@ class Window:
                     self.cursor.setToIconSite(cursorIcParent,
                      cursorIcParent.siteOf(cursorIc))
                 return
+            # Cursor was on the operator itself
             redrawRect = ic.topLevelParent().hierRect()
+            if not isinstance(ic, icon.DivideIcon) and ic.hasParens:
+                # If the operation had parens, place temporary parens for continuity
+                cursorParen = typing.CursorParenIcon(window=self, closed=True)
+                cpParent = ic.parent()
+                if cpParent is None:
+                    self.replaceTop(ic, cursorParen)
+                else:
+                    cpParent.replaceChild(cursorParen, cpParent.siteOf(ic))
+                    cursorParen.replaceChild(ic, 'argIcon')
             parent = ic.parent()
             if isinstance(ic, icon.DivideIcon):
                 leftArg = ic.sites.topArg.att
