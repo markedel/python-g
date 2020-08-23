@@ -1052,39 +1052,82 @@ class Window:
                 redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
                 self.refresh(redrawRegion.get())
 
-        elif isinstance(ic, icon.CallIcon):
-            pass  # Not implemented, yet
         elif isinstance(ic, icon.DefIcon):
             pass  # Not implemented, yet
 
         elif isinstance(ic, icon.SubscriptIcon):
-            if site in ('indexIcon', 'attrIcon'):
-                # Cursor is on attribute site or index site
-                if ic.childAt('indexIcon') or \
-                 ic.hasSite('upperIcon') and ic.childAt('upperIcon') or \
-                 ic.hasSite('stepIcon') and ic.childAt('stepIcon'):
-                    # Icon is not empty.
-                    if site == 'attrIcon':
-                        # If cursor is on attr site, move it to end of args
-                        for siteId in ('stepIcon', 'upperIcon', 'indexIcon'):
-                            if ic.hasSite(siteId):
-                                break
-                        siteIcon = ic.childAt(siteId)
-                        if siteIcon:
-                            rightIcon = icon.findLastAttrIcon(siteIcon)
-                            rightIcon, rightSite = typing.rightmostSite(rightIcon)
-                            self.cursor.setToIconSite(rightIcon, rightSite)
-                        else:
-                            self.cursor.setToIconSite(ic, siteId)
-                    else:
-                        # If cursor is on the first subscript site, select it and children
-                        self._select(ic, op='hier')
-                else:
+            if site == 'indexIcon':
+                # Cursor is on the index site.  Try to remove brackets
+                if ic.hasSite('upperIcon') and ic.childAt('upperIcon') or \
+                 ic.hasSite('stepIcon') and ic.childAt('stepIcon') or \
+                 ic.hasSite('attrIcon') and ic.childAt('attrIcon'):
+                    # Can't remove brackets: select the icon and its children
+                    self._select(ic, op='hier')
+                elif not ic.childAt('indexIcon'):
                     # Icon is empty, remove
                     parent = ic.parent()
                     self.removeIcons([ic])
                     if parent is not None:
                         self.cursor.setToIconSite(parent, 'attrIcon')
+                else:
+                    # Icon has a single argument and it's in the first slot: unwrap
+                    # the bracket from around it.
+                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    parent = ic.parent()
+                    content = ic.childAt('indexIcon')
+                    if parent is None:
+                        # The icon was on the top level: replace it with its content
+                        ic.replaceChild(None, 'indexIcon')
+                        self.replaceTop(ic, content)
+                        self.cursor.setToIconSite(content, 'output')
+                    else:
+                        # The icon has a parent, but since the subscript icon sits on
+                        # an attribute site we can't attach, so create an entry icon
+                        # and make the content a pending argument to it.
+                        parentSite = parent.siteOf(ic)
+                        self.entryIcon = typing.EntryIcon(parent, parentSite, window=self)
+                        parent.replaceChild(self.entryIcon, parentSite)
+                        self.entryIcon.setPendingArg(content)
+                        self.cursor.setToEntryIcon()
+                        self._redisplayChangedEntryIcon(evt, redrawRegion.get())
+                        return
+                    redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
+                    self.refresh(redrawRegion.get())
+                return
+            elif site == 'attrIcon':
+                # The cursor is on the attr site, remove the end bracket if possible,
+                # otherwise move the cursor in to the bracket
+                if ic.hasSite('upperIcon') or ic.hasSite('stepIcon') or \
+                 ic.childAt('attrIcon'):
+                    # Subscript has colons (and may also have multiple arguments) or has
+                    # something attached to attribute site.  Don't remove end bracket,
+                    # just move cursor in to icon.
+                    for siteId in ('stepIcon', 'upperIcon', 'indexIcon'):
+                        if ic.hasSite(siteId):
+                            break
+                    siteIcon = ic.childAt(siteId)
+                    if siteIcon:
+                        rightIcon = icon.findLastAttrIcon(siteIcon)
+                        rightIcon, rightSite = typing.rightmostSite(rightIcon)
+                        self.cursor.setToIconSite(rightIcon, rightSite)
+                    else:
+                        self.cursor.setToIconSite(ic, siteId)
+                else:
+                    # Reopen right bracket
+                    arg = ic.sites.indexIcon.att
+                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    if arg is None:
+                        cursIc = ic
+                        cursSite = 'indexIcon'
+                    else:
+                        cursIc, cursSite = typing.rightmostSite(
+                            icon.findLastAttrIcon(arg))
+                    # Expand scope of bracket to its max, rearrange hierarchy around it
+                    typing.reorderArithExpr(ic)
+                    ic.reopen()
+                    self.cursor.setToIconSite(cursIc, cursSite)
+                    redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
+                    self.refresh(redrawRegion.get())
                 return
             # Site is after a colon.  Try to remove it
             redrawRegion = AccumRects(ic.topLevelParent().hierRect())

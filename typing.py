@@ -503,6 +503,10 @@ class EntryIcon(icon.Icon):
             if not self.makeFunction(self.attachedIcon):
                 beep()
             return
+        elif parseResult == "makeSubscript":
+            if not self.makeSubscript(self.attachedIcon):
+                beep()
+            return
         # Parser emitted an icon.  Splice it in to the hierarchy
         ic, remainingText = parseResult
         if remainingText is None or remainingText in emptyDelimiters:
@@ -527,9 +531,6 @@ class EntryIcon(icon.Icon):
             if ic.__class__ is icon.AttrIcon:
                 self.attachedIcon.replaceChild(ic, "attrIcon")
                 cursor.setToIconSite(ic, "attrIcon")
-            elif ic.__class__ is icon.SubscriptIcon:
-                self.attachedIcon.replaceChild(ic, "attrIcon")
-                cursor.setToIconSite(ic, "indexIcon")
             else:
                 if not self.appendOperator(ic):
                     beep()
@@ -822,6 +823,22 @@ class EntryIcon(icon.Icon):
             callIcon.replaceChild(self.pendingArg(), 'argIcons_0')
         self.window.entryIcon = None
         self.window.cursor.setToIconSite(callIcon, "argIcons", 0)
+        return True
+
+    def makeSubscript(self, ic):
+        closed = self.pendingArg() is None
+        subscriptIcon = icon.SubscriptIcon(window=self.window, closed=closed)
+        ic.replaceChild(subscriptIcon, 'attrIcon')
+        if self.pendingAttr():
+            self.attachedSite = 'indexIcon'
+            self.attachedIcon = subscriptIcon
+            self.attachedSiteType = 'input'
+            subscriptIcon.replaceChild(self, 'indexIcon')
+            return True
+        if self.pendingArg():
+            subscriptIcon.replaceChild(self.pendingArg(), 'indexIcon')
+        self.window.entryIcon = None
+        self.window.cursor.setToIconSite(subscriptIcon, 'indexIcon')
         return True
 
     def appendOperator(self, newOpIcon):
@@ -1708,7 +1725,7 @@ def parseAttrText(text, window):
     if text == ')':
         return "endParen"
     if text == '[':
-        return icon.SubscriptIcon(1, window), None
+        return "makeSubscript"
     if text == ']':
         return "endBracket"
     if text == '}':
@@ -1964,7 +1981,7 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     topNodeParent = topNode.parent()
     topNodeParentSite = None if topNodeParent is None else topNodeParent.siteOf(topNode)
     if changedIcon.__class__ in (CursorParenIcon, icon.ListIcon, icon.DictIcon,
-     icon.CallIcon, icon.DefIcon) or \
+     icon.CallIcon, icon.DefIcon, icon.SubscriptIcon) or \
      isinstance(changedIcon, icon.ClassDefIcon) and changedIcon.argList:
         allowedParen = ParenOp(changedIcon)
     else:
@@ -2077,5 +2094,7 @@ class ParenOp:
             self.outputIcon = parenIcon
         if parenIcon.hasSite('argIcons_0'):
             self.contentSite = 'argIcons_0'
+        elif isinstance(parenIcon, icon.SubscriptIcon):
+            self.contentSite = 'indexIcon'
         else:
             self.contentSite = 'argIcon'

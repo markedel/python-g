@@ -323,6 +323,27 @@ subscriptLBktPixmap = (
  "oooooo",
 )
 
+subscriptLBktOpenPixmap = (
+ "oooooo",
+ "o    o",
+ "o    o",
+ "o    o",
+ "o %% o",
+ "o %% o",
+ "o %  o",
+ "o %  o",
+ "o 7  o",
+ "o    o",
+ "o 7  o",
+ "o %  o",
+ "o %  o",
+ "o %% o",
+ "o %% o",
+ "o    o",
+ "o    o",
+ "oooooo",
+)
+
 subscriptRBktPixmap = (
  "oooooo",
  "o    o",
@@ -742,6 +763,7 @@ listLBktImage = asciiToImage(listLBktPixmap)
 listRBktImage = asciiToImage(listRBktPixmap)
 subscriptLBktImage = asciiToImage(subscriptLBktPixmap)
 subscriptRBktImage = asciiToImage(subscriptRBktPixmap)
+subscriptLBktOpenImage = asciiToImage(subscriptLBktOpenPixmap)
 inpSeqImage = asciiToImage(inpSeqPixmap)
 inpOptionalSeqImage = asciiToImage(inpOptionalSeqPixmap)
 binInSeqImage = asciiToImage(binInSeqPixmap)
@@ -1394,8 +1416,9 @@ class AttrIcon(Icon):
         return self._serialize(offset, iconsToCopy, name=self.name)
 
 class SubscriptIcon(Icon):
-    def __init__(self, numSubscripts=1, window=None, location=None):
+    def __init__(self, numSubscripts=1, window=None, closed=True, location=None):
         Icon.__init__(self, window)
+        self.closed = closed
         leftWidth, leftHeight = subscriptLBktImage.size
         attrY = leftHeight // 2 + ATTR_SITE_OFFSET
         self.sites.add('attrOut', 'attrOut', 0, attrY)
@@ -1403,17 +1426,19 @@ class SubscriptIcon(Icon):
          leftWidth + ATTR_SITE_DEPTH - outSiteImage.width + 1, leftHeight//2)
         self.argWidths = [LIST_EMPTY_ARG_WIDTH, 0, 0]
         totalWidth, totalHeight = self._size()
-        self.sites.add('attrIcon', 'attrIn', totalWidth - ATTR_SITE_DEPTH, attrY)
         if location is None:
             x, y = 0, 0
         else:
             x, y = location
         self.rect = (x, y, x + totalWidth, y + totalHeight)
         self.changeNumSubscripts(numSubscripts)
+        if closed:
+            self.close()
 
     def _size(self):
+        rBrktWidth = subscriptRBktImage.width - 1 if self.closed else 0
         return subscriptLBktImage.width + sum(self.argWidths) + \
-         subscriptRBktImage.width - 1 + ATTR_SITE_DEPTH, subscriptLBktImage.height
+         rBrktWidth + ATTR_SITE_DEPTH, subscriptLBktImage.height
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
@@ -1422,7 +1447,8 @@ class SubscriptIcon(Icon):
             leftImg = Image.new('RGBA', (leftBoxX + leftBoxWidth, leftBoxHeight),
              color=(0, 0, 0, 0))
             # Left bracket
-            leftImg.paste(subscriptLBktImage, (leftBoxX, 0))
+            lBrktImg = subscriptLBktImage if self.closed else subscriptLBktOpenImage
+            leftImg.paste(lBrktImg, (leftBoxX, 0))
             # attrOut site
             leftImg.paste(dimAttrOutImage,  (self.sites.attrOut.xOffset,
              self.sites.attrOut.yOffset), mask=dimAttrOutImage)
@@ -1441,7 +1467,8 @@ class SubscriptIcon(Icon):
                 self.drawList.append(((x, colonY), colonImage))
                 x += self.argWidths[2]
             # Right bracket
-            self.drawList.append(((x, 0), subscriptRBktImage))
+            if self.closed:
+                self.drawList.append(((x, 0), subscriptRBktImage))
         self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
@@ -1483,8 +1510,9 @@ class SubscriptIcon(Icon):
                 stepWidth = colonImage.width + stepLayout.width - 2
         else:
             stepWidth = 0
+        rBrktWidth = subscriptRBktImage.width - 1 if self.closed else 0
         totalWidth = subscriptLBktImage.width + indexWidth + upperWidth + stepWidth + \
-         subscriptRBktImage.width - 2 + ATTR_SITE_DEPTH
+         rBrktWidth - 1 + ATTR_SITE_DEPTH
         x, height = subscriptLBktImage.size
         x -= 1  # Icon overlap
         layout = Layout(self, totalWidth, height, height // 2 + ATTR_SITE_OFFSET)
@@ -1497,9 +1525,10 @@ class SubscriptIcon(Icon):
         if stepWidth > 0:
             layout.addSubLayout(stepLayout, 'stepIcon', x + colonImage.width - 1,
              -ATTR_SITE_OFFSET)
-        attrIcon = self.sites.attrIcon.att
-        attrLayout = None if attrIcon is None else attrIcon.calcLayout()
-        layout.addSubLayout(attrLayout, 'attrIcon', layout.width - 1, 0)
+        if self.closed:
+            attrIcon = self.sites.attrIcon.att
+            attrLayout = None if attrIcon is None else attrIcon.calcLayout()
+            layout.addSubLayout(attrLayout, 'attrIcon', layout.width - 1, 0)
         layout.argWidths = [indexWidth, upperWidth, stepWidth]
         return layout
 
@@ -1521,6 +1550,21 @@ class SubscriptIcon(Icon):
         self.window.undo.registerCallback(self.changeNumSubscripts, oldN)
         self.markLayoutDirty()
 
+    def close(self):
+        self.closed = True
+        self.markLayoutDirty()
+        # Add back the attribute site on the end paren.  Done here to allow the site to
+        # be used for cursor or new attachments before layout knows where it goes
+        self.sites.add('attrIcon', 'attrIn', rectWidth(self.rect) -
+         ATTR_SITE_DEPTH, rectHeight(self.rect) // 2 + ATTR_SITE_OFFSET)
+        self.window.undo.registerCallback(self.reopen)
+
+    def reopen(self):
+        self.closed = False
+        self.markLayoutDirty()
+        self.sites.remove('attrIcon')
+        self.window.undo.registerCallback(self.close)
+
     def textRepr(self):
         indexIcon = self.sites.indexIcon.att
         indexText = "" if indexIcon is None else indexIcon.textRepr()
@@ -1538,7 +1582,7 @@ class SubscriptIcon(Icon):
         return '[' + indexText + upperText + stepText + ']' + _attrTextRepr(self)
 
     def dumpName(self):
-        return "." + "[]"
+        return "." + "[" + ("]" if self.closed else "")
 
     def clipboardRepr(self, offset, iconsToCopy):
         if not hasattr(self.sites, 'upperIcon'):
@@ -1547,9 +1591,12 @@ class SubscriptIcon(Icon):
             numSubscripts = 2
         else:
             numSubscripts = 3
-        return self._serialize(offset, iconsToCopy, numSubscripts=numSubscripts)
+        return self._serialize(offset, iconsToCopy, numSubscripts=numSubscripts,
+         closed=self.closed)
 
     def execute(self, attrOfValue):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
         if self.sites.indexIcon.att is None:
             raise IconExecException(self, "Missing argument")
         indexValue = self.sites.indexIcon.att.execute()
