@@ -1,6 +1,7 @@
 # Copyright Mark Edel  All rights reserved
 # Python-g main module
 import tkinter as tk
+import ast
 import typing
 import icon
 import undo
@@ -125,10 +126,16 @@ def offsetRect(rect, xOff, yOff):
     return l+xOff, t+yOff, r+xOff, b+yOff
 
 class Window:
+    # Until we can open files, windows are just "Untitled n", name is needed to connect
+    # errors in executed code with icons to highlight
+    untitledWinNum = 1
+
     def __init__(self, master, size=None):
         self.top = tk.Toplevel(master)
         self.top.bind("<Destroy>", self._destroyCb)
-        self.top.title("Python-G")
+        self.winName = 'Untitled %d' % Window.untitledWinNum
+        Window.untitledWinNum += 1
+        self.top.title("Python-G - " + self.winName)
         self.frame = tk.Frame(self.top)
         self.menubar = tk.Menu(self.frame)
         menu = tk.Menu(self.menubar, tearoff=0)
@@ -241,6 +248,17 @@ class Window:
         self.cursor = typing.Cursor(self, None)
         self.execResultPositions = {}
         self.undo = undo.UndoRedoList(self)
+        # .iconIds holds a dictionary translating icon ID #s to icons.  Icon IDs have to
+        # be in the range of positive 32-bit integers, as they are passed to the compiler
+        # in the lineno field of generated asts so a stack trace can refer directly to
+        # them.  They are per-window to minimize the liklihood that the limit will ever
+        # be exceeded.  Icon IDs will also eventually be used by undo in place of pointers
+        # to icon structures, to allow deleted icons to be reclaimed.
+        self.iconIds = {}
+        self.nextId = 1
+        # Variables for icons executed in the window
+        self.locals = {}
+        self.globals = {}
 
     def selectedIcons(self):
         """Return a list of the icons in the window that are currently selected."""
@@ -275,6 +293,19 @@ class Window:
 
     def clearSelection(self):
         self.selectedSet = set()
+
+    def makeId(self, ic):
+        """Return an unused icon ID number.  ID numbers correlate icons with executing
+        code, via the lineno field in ASTs.  IDs are per-window as lineno field is of
+        limited size."""
+        # Currently creates a new ID for each request.  Eventually, this should re-use
+        # IDs as icons are deleted.
+        id = self.nextId
+        self.nextId += 1
+        if self.nextId == 2147483647:
+            print('Icon ID limit Exceeded!  Save your work and close window ASAP')
+        self.iconIds[id] = ic
+        return id
 
     def _btn3Cb(self, evt):
         x, y = self.imageToContentCoord(evt.x, evt.y)
@@ -2068,13 +2099,43 @@ class Window:
         self.lastStmtHighlightRects = None
 
     def _execute(self, iconToExecute):
-        # Execute the requested icon.  Icon execution methods will throw exception
-        # IconExecException which provides the icon where things went bad so it can
-        # be shown in self._handleExecErr
+        """Execute the requested top-level icon or sequence."""
+        # Begin by creating Python Abstract Syntax Tree (AST) for the icon or icons.
+        # Icon AST creation methods will throw exception IconExecException which provides
+        # the icon where things went bad so it can be shown in self._handleExecErr
+        # Icons can be executed either by "eval" or "exec".  Choose which based upon
+        # whether we need the result of the evaluation.
+        if iconToExecute.hasSite('output') and iconToExecute.prevInSeq() is None and \
+         iconToExecute.nextInSeq() is None:
+            # Create ast for eval
+            execType = 'eval'
+            try:
+                astToExecute = ast.Expression(iconToExecute.createAst())
+            except icon.IconExecException as excep:
+                self._handleExecErr(excep)
+                return
+        else:
+            # Create ast for exec (may be a sequence)
+            execType = 'exec'
+            iconToExecute = icon.findSeqStart(iconToExecute)
+            seqIcons = icon.traverseSeq(iconToExecute, skipInnerBlocks=True)
+            try:
+                body = [icon.createStmtAst(ic) for ic in seqIcons]
+            except icon.IconExecException as excep:
+                self._handleExecErr(excep)
+                return
+            astToExecute = ast.Module(body, type_ignores=[])
+        #print(ast.dump(astToExecute, include_attributes=True))
+        # Compile the AST
+        code = compile(astToExecute, self.winName, execType)
+        # Execute the compiled AST
         try:
-            result = iconToExecute.execute()
-        except icon.IconExecException as excep:
-            self._handleExecErr(excep)
+            if execType == 'eval':
+                result = eval(code, self.globals, self.locals)
+            else:
+                result = exec(code, self.globals, self.locals)
+        except Exception as excep:
+            self._handleExecErr(excep, iconToExecute)
             return
         # If the last execution result of the same icon is still laying where it was
         # placed, remove it so that results don't pile up
@@ -2125,14 +2186,25 @@ class Window:
             self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
         self.undo.addBoundary()
 
-    def _handleExecErr(self, excep):
-        iconRect = excep.icon.hierRect()
-        for ic in excep.icon.traverse():
-            style = "error" if ic==excep.icon else None
+    def _handleExecErr(self, excep, executedIcon=None):
+        """Process exceptions that need to point to an icon."""
+        # Does not yet handle tracebacks.  Eventually needs to allow examination of the
+        # entire stack (icon and text modules).
+        if isinstance(excep, icon.IconExecException):
+            excepIcon = excep.icon
+        else:
+            tb = excep.__traceback__.tb_next  # One level down in traceback stack
+            if tb is None:
+                excepIcon = executedIcon
+            else:
+                excepIcon = self.iconIds[tb.tb_lineno]
+        iconRect = excepIcon.hierRect()
+        for ic in excepIcon.traverse():
+            style = "error" if ic==excepIcon else None
             ic.draw(clip=iconRect, style=style)
         self.refresh(iconRect, redraw=False)
-        tkinter.messagebox.showerror("Error Executing", message=excep.message)
-        for ic in excep.icon.traverse():
+        tkinter.messagebox.showerror("Error Executing", message=str(excep))
+        for ic in excepIcon.traverse():
             ic.draw(clip=iconRect)
         self.refresh(iconRect, redraw=False)
 

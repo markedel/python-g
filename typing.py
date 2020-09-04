@@ -726,27 +726,29 @@ class EntryIcon(icon.Icon):
                     parent.replaceChild(None, 'attrIcon')
                     tupleIcon.replaceChild(attrIcon, 'attrIcon')
                 return True
-            if not (isinstance(parent, icon.BinOpIcon) or
-             isinstance(parent, icon.TwoArgIcon)):
-                return False
-            if parent.__class__ is icon.BinOpIcon and parent.hasParens:
-                return False
-            # Parent is a binary op icon without parens, and site is one of the two
-            # input sites
-            if parent.leftArg() is child:  # Insertion was on left side of operator
-                parent.replaceChild(rightArg, "leftArg")
-                if parent.leftArg() is None:
-                    self.window.cursor.setToIconSite(parent, "leftArg")
-                    cursorPlaced = True
-                rightArg = parent
-            elif parent.rightArg() is child:   # Insertion was on right side of operator
-                parent.replaceChild(leftArg, "rightArg")
-                if parent.rightArg() is None:
-                    self.window.cursor.setToIconSite(parent, "rightArg")
-                    cursorPlaced = True
+            if isinstance(parent, icon.UnaryOpIcon):
                 leftArg = parent
+            elif isinstance(parent, icon.BinOpIcon) and not parent.hasParens or \
+             isinstance(parent, icon.TwoArgIcon):
+                # Parent is a binary op icon without parens, and site is one of the two
+                # input sites
+                if parent.leftArg() is child:  # Insertion was on left side of operator
+                    parent.replaceChild(rightArg, "leftArg")
+                    if parent.leftArg() is None:
+                        self.window.cursor.setToIconSite(parent, "leftArg")
+                        cursorPlaced = True
+                    rightArg = parent
+                elif parent.rightArg() is child:   # Insertion on right side of operator
+                    parent.replaceChild(leftArg, "rightArg")
+                    if parent.rightArg() is None:
+                        self.window.cursor.setToIconSite(parent, "rightArg")
+                        cursorPlaced = True
+                    leftArg = parent
+                else:
+                    print('Unexpected site attachment in "commaEntered" function')
+                    return False
             else:
-                print('Unexpected site attachment in "commaEntered" function')
+                # Parent was not an arithmetic operator or had parens
                 return False
             child = parent
         # Reached top level.  Create Tuple

@@ -495,6 +495,9 @@ def makeIcons(parsedExpr, window, x, y):
             starIcon.replaceChild(argNameIcon, 'argIcon')
             defIcon.insertChild(starIcon, 'argIcons', numArgs)
             numArgs += 1
+        if len(kwOnlyArgs) > 0 and varArg is None:
+            defIcon.insertChild(icon.StarIcon(window), 'argIcons', numArgs)
+            numArgs += 1
         for i, arg in enumerate(kwOnlyArgs):
             default = kwDefaults[i]
             argNameIcon = icon.IdentifierIcon(arg, window)

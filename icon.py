@@ -53,10 +53,23 @@ binOpFn = {'+':operator.add, '-':operator.sub, '*':operator.mul, '/':operator.tr
  'is not':operator.is_not, '<':operator.lt, '<=':operator.le, '>':operator.gt,
  '>=':operator.ge, '==':operator.eq, '!=':operator.ne}
 
+binOpAsts = {'+':ast.Add, '-':ast.Sub, '*':ast.Mult, '/':ast.Div, '//':ast.FloorDiv,
+ '%':ast.Mod, '**':ast.Pow, '<<':ast.LShift, '>>':ast.RShift, '|':ast.Or, '^':ast.BitXor,
+ '&':ast.BitAnd}
+
+compareAsts = {'is':ast.Is, 'is not':ast.IsNot, '<':ast.Lt, '<=':ast.LtE, '>':ast.Gt,
+ '>=':ast.GtE, '==':ast.Eq, '!=':ast.NotEq}
+
 unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_,
  '*':lambda a:a, '**': lambda a:a, 'await': lambda a:a}
 
+unaryOpAsts = {'+':ast.UAdd, '-':ast.USub, '~':ast.Invert, 'not':ast.Not}
+
 namedConsts = {'True':True, 'False':False, 'None':None}
+
+stmtAstClasses = {ast.Assign, ast.AugAssign, ast.While, ast.For, ast.AsyncFor, ast.If,
+ ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Return, ast.With,
+ ast.AsyncWith, ast.Delete, ast.Pass, ast.Continue, ast.Break, ast.Global, ast.Nonlocal}
 
 parentSiteTypes = {'output', 'attrOut', 'cprhOut'}
 childSiteTypes = {'input', 'attrIn', 'cprhIn'}
@@ -784,6 +797,7 @@ class IconExecException(Exception):
     def __init__(self, ic, exceptionText):
         self.icon = ic
         self.message = exceptionText
+        super().__init__(self.message)
 
 class Icon:
     def __init__(self, window=None):
@@ -792,6 +806,7 @@ class Icon:
         self.layoutDirty = False
         self.drawList = None
         self.sites = IconSiteList()
+        self.id = None if window is None else self.window.makeId(self)
         window.undo.registerIconCreated(self)
 
     def draw(self, image=None, location=None, clip=None):
@@ -1205,6 +1220,20 @@ class Icon:
                 getattr(self.sites, siteName).attach(self,
                  clipboardDataToIcons(iconData, window, offset)[0])
 
+    def execute(self):
+        """Directly execute icon and return a value.  This method of execution is
+        deprecated in favor of creating and executing a Python AST.  Not all icons
+        support this.  It is currently left in as it may be useful for experimentation
+        (since the program retains control over each step of execution)."""
+        return None
+
+    def createAst(self):
+        """Create a Python Abstract Syntax Tree (AST) for the icon and everything below
+        it in the icon hierarchy.  The AST can be passed to the Python compiler to create
+        code for execution.  In the future it may also be used to create a version-
+        control-friendly Python-text-compatible save file format."""
+        return None
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy)
 
@@ -1281,18 +1310,6 @@ class TextIcon(Icon):
         """Give the icon a name to be used in text dumps."""
         return self.text
 
-    def execute(self):
-        # This execution method is a remnant from when the IdentIcon did numbers, strings,
-        # and identifiers, and is probably no longer appropriate.  Not sure if the current
-        # uses of naked text icons should even be executed at all
-        try:
-            result = eval(self.text)
-        except Exception as err:
-            raise IconExecException(self, err)
-        if self.sites.attrIcon.att:
-            return self.sites.attrIcon.att.execute(result)
-        return result
-
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, text=self.text)
 
@@ -1313,6 +1330,13 @@ class IdentifierIcon(TextIcon):
             return self.sites.attrIcon.att.execute(value)
         return value
 
+    def createAst(self):
+        if self.name in namedConsts:
+            return ast.NameConstant(namedConsts[self.name], lineno=self.id, col_offset=0)
+        ctx = determineCtx(self)
+        identAst = ast.Name(self.name, ctx=ctx, lineno=self.id, col_offset=0)
+        return composeAttrAst(self, identAst)
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
 
@@ -1329,6 +1353,9 @@ class NumericIcon(TextIcon):
     def execute(self):
         return self.value
 
+    def createAst(self):
+        return ast.Num(self.value, lineno=self.id, col_offset=0)
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, value=self.value)
 
@@ -1341,6 +1368,9 @@ class StringIcon(TextIcon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(self.string)
         return self.string
+
+    def createAst(self):
+        return composeAttrAst(self, ast.Str(self.string, lineno=self.id, col_offset=0))
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, string=self.string)
@@ -1411,6 +1441,10 @@ class AttrIcon(Icon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
+
+    def createAst(self, attrOfAst):
+        return composeAttrAst(self, ast.Attribute(value=attrOfAst, attr=self.name,
+         lineno=self.id, col_offset=0, ctx=determineCtx(self)))
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
@@ -1622,6 +1656,30 @@ class SubscriptIcon(Icon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def createAst(self, attrOfAst):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
+        if self.sites.indexIcon.att is None:
+            if not self.hasSite('upperIcon'):
+                raise IconExecException(self, "Missing subscript")
+            indexAst = None
+        else:
+            indexAst = self.sites.indexIcon.att.createAst()
+        if self.hasSite('upperIcon'):
+            if self.sites.upperIcon.att:
+                upperAst = self.sites.upperIcon.att.createAst()
+            else:
+                upperAst = None
+            if self.hasSite('stepIcon') and self.sites.stepIcon.att:
+                stepAst = self.sites.stepIcon.att.createAst()
+            else:
+                stepAst = None
+            slice = ast.Slice(indexAst, upperAst, stepAst)
+        else:
+            slice = ast.Index(value=indexAst)
+        return composeAttrAst(self, ast.Subscript(value=attrOfAst, slice=slice,
+         lineno=self.id, col_offset=0, ctx=determineCtx(self)))
+
 class UnaryOpIcon(Icon):
     def __init__(self, op, window, location=None):
         Icon.__init__(self, window)
@@ -1714,6 +1772,13 @@ class UnaryOpIcon(Icon):
             raise IconExecException(self, err)
         return result
 
+    def createAst(self):
+        if self.arg() is None:
+            raise IconExecException(self, "Missing argument")
+        operandAst = self.arg().createAst()
+        return ast.UnaryOp(unaryOpAsts[self.operator](), operandAst, lineno=self.id,
+         col_offset=0)
+
 class StarIcon(UnaryOpIcon):
     def __init__(self, window=None, location=None):
         UnaryOpIcon.__init__(self, '*', window, location)
@@ -1735,6 +1800,12 @@ class StarIcon(UnaryOpIcon):
         snapLists['output'] = []
         snapLists['conditional'] = [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
+
+    def createAst(self):
+        if self.arg() is None:
+            raise IconExecException(self, "Missing argument to star")
+        return ast.Starred(self.arg().createAst(), determineCtx(self), lineno=self.id,
+         col_offset=0)
 
     def clipboardRepr(self, offset, iconsToCopy):
         # Parent UnaryOp specifies op keyword, which this does not have
@@ -1770,6 +1841,11 @@ class YieldFromIcon(UnaryOpIcon):
         # Superclass UnaryOp specifies op keyword, which this does not have
         return self._serialize(offset, iconsToCopy)
 
+    def createAst(self):
+        if self.arg() is None:
+            raise IconExecException(self, "Missing argument to yield from")
+        return ast.YieldFrom(self.arg().createAst(), lineno=self.id, col_offset=0)
+
 class AwaitIcon(UnaryOpIcon):
     def __init__(self, window=None, location=None):
         UnaryOpIcon.__init__(self, 'await', window, location)
@@ -1777,6 +1853,11 @@ class AwaitIcon(UnaryOpIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         # Superclass UnaryOp specifies op keyword, which this does not have
         return self._serialize(offset, iconsToCopy)
+
+    def createAst(self):
+        if self.arg() is None:
+            raise IconExecException(self, "Missing argument to await")
+        return ast.Await(self.arg().createAst(), lineno=self.id, col_offset=0)
 
 class ListTypeIcon(Icon):
     def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
@@ -2010,6 +2091,24 @@ class ListIcon(ListTypeIcon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def createAst(self):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
+        if self.isComprehension():
+            return composeAttrAst(self, createComprehensionAst(self))
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            elts = []
+        else:
+            for site in self.sites.argIcons:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            for site in self.sites.argIcons:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            elts = [site.att.createAst() for site in self.sites.argIcons]
+        return composeAttrAst(self, ast.List(elts=elts, ctx=determineCtx(self),
+         lineno=self.id, col_offset=0))
+
 class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, closed=True, location=None):
         if noParens:
@@ -2082,6 +2181,27 @@ class TupleIcon(ListTypeIcon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def createAst(self):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
+        if self.isComprehension():
+            return composeAttrAst(self, createComprehensionAst(self))
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            elts = []
+        elif len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is not None \
+         and self.sites.argIcons[1].att is None:
+            elts = [self.sites.argIcons[0].att.createAst()]  # Traditional form: (1, )
+        else:
+            for site in self.sites.argIcons:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            for site in self.sites.argIcons:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            elts = [site.att.createAst() for site in self.sites.argIcons]
+        return composeAttrAst(self, ast.Tuple(elts=elts, ctx=determineCtx(self),
+         lineno=self.id, col_offset=0))
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, noParens=self.noParens,
          closed=self.closed)
@@ -2110,6 +2230,45 @@ class DictIcon(ListTypeIcon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
+
+    def createAst(self):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
+        if self.isComprehension():
+            return composeAttrAst(self, createComprehensionAst(self))
+        if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            # Empty Dict
+            return composeAttrAst(self, ast.Dict([], [], lineno=self.id, col_offset=0))
+        else:
+            for site in self.sites.argIcons:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            for site in self.sites.argIcons:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            elts = [site.att for site in self.sites.argIcons]
+            # Check for consistency: are we a set or a dictionary constant
+            isDict = len(elts) == 0 or isinstance(elts[0], DictElemIcon) or \
+             isinstance(elts[0], StarStarIcon)
+            for elt in elts:
+                if isDict and elt.__class__ not in (DictElemIcon, StarStarIcon):
+                    raise IconExecException(self, "Inconsistent dict/set content")
+            if isDict:
+                keyAsts = []
+                valueAsts = []
+                for elt in elts:
+                    if isinstance(elt, DictElemIcon):
+                        keyAsts.append(elt.childAt('leftArg').createAst())
+                        valueAsts.append(elt.childAt('rightArg').createAst())
+                    else:  # StarStarIcon
+                        keyAsts.append(None)
+                        valueAsts.append(elt.childAt('argIcon').createAst())
+                return composeAttrAst(self, ast.Dict(keyAsts, valueAsts, lineno=self.id,
+                 col_offset=0))
+            else:
+                eltAsts = [elt.createAst() for elt in elts]
+                return composeAttrAst(self, ast.Set(elts=eltAsts, lineno=self.id,
+                 col_offset=0))
 
     def snapLists(self, forCursor=False):
         siteSnapLists = ListTypeIcon.snapLists(self, forCursor=forCursor)
@@ -2162,6 +2321,11 @@ class CprhIfIcon(Icon):
 
     def textRepr(self):
         return "if " + _singleArgTextRepr(self.sites.testIcon)
+
+    def createAst(self):
+        if self.sites.testIcon.att is None:
+            raise IconExecException(self, 'Missing argument to "if" in comprehension')
+        return self.sites.testIcon.att.createAst()
 
 class CprhForIcon(Icon):
     def __init__(self, isAsync=False, window=None, location=None):
@@ -2254,6 +2418,20 @@ class CprhForIcon(Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+    def createAst(self, ifAsts):
+        if self.sites.iterIcon.att is None:
+            raise IconExecException(self, 'Missing iteration value in comprehension')
+        iterAst = self.sites.iterIcon.att.createAst()
+        for target in self.sites.targets:
+            if target.att is None:
+                raise IconExecException(self, 'Missing target in comprehension')
+        tgtAsts = [tgt.att.createAst() for tgt in self.sites.targets]
+        if len(tgtAsts) == 1:
+            targetAst = tgtAsts[0]
+        else:
+            targetAst = ast.Tuple(tgtAsts, ctx=ast.Store(), lineno=self.id, col_offset=0)
+        return ast.comprehension(targetAst, iterAst, ifAsts, self.isAsync)
 
     def inRectSelect(self, rect):
         # Require selection rectangle to touch icon body
@@ -2482,6 +2660,18 @@ class BinOpIcon(Icon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def createAst(self):
+        if self.leftArg() is None:
+            raise IconExecException(self, "Missing left operand")
+        if self.rightArg() is None:
+            raise IconExecException(self, "Missing right operand")
+        if self.operator in compareAsts:
+            return ast.Compare(left=self.leftArg().createAst(),
+             ops=[compareAsts[self.operator]()],
+             comparators=[self.rightArg().createAst()], lineno=self.id, col_offset=0)
+        return ast.BinOp(lineno=self.id, col_offset=0, left=self.leftArg().createAst(),
+         op=binOpAsts[self.operator](), right=self.rightArg().createAst())
+
     def selectionRect(self):
         # Limit selection rectangle for extending selection to op itself
         opWidth, opHeight = self.opSize
@@ -2575,7 +2765,6 @@ class CallIcon(Icon):
             layout.width = fnLParenImage.width-1 + argWidth-1
         return layout
 
-
     def close(self):
         self.closed = True
         self.markLayoutDirty()
@@ -2624,6 +2813,36 @@ class CallIcon(Icon):
         if self.sites.attrIcon.att:
             return self.sites.attrIcon.att.execute(result)
         return result
+
+    def createAst(self, attrOfAst):
+        if not self.closed:
+            raise IconExecException(self, "Unclosed temporary icon")
+        argAsts = []
+        kwdArgAsts = []
+        for site in self.sites.argIcons:
+            arg = site.att
+            if arg is None:
+                if site.name == 'argIcons_0':
+                    continue  # 1st site can be empty, meaning "no arguments"
+                raise IconExecException(self, "Missing argument(s)")
+            if isinstance(arg, ArgAssignIcon):
+                key = arg.sites.leftArg.att
+                value = arg.sites.rightArg.att
+                if key is None:
+                    raise IconExecException(arg, "Missing keyword")
+                if not isinstance(key, IdentifierIcon):
+                    raise IconExecException(arg, "Keyword must be identifier")
+                if value is None:
+                    raise IconExecException(arg, "Missing keyword value")
+                kwdArgAsts.append(ast.keyword(key.name, value.createAst()))
+            elif isinstance(arg, StarStarIcon):
+                if arg.sites.argIcon.att is None:
+                    raise IconExecException(arg, "Missing value for **")
+                kwdArgAsts.append(ast.keyword(None, arg.sites.argIcon.att.createAst()))
+            else:
+                argAsts.append(arg.createAst())
+        return composeAttrAst(self, ast.Call(attrOfAst, argAsts, kwdArgAsts,
+         lineno=self.id, col_offset=0))
 
     def inRectSelect(self, rect):
         # Require selection rectangle to touch both parens to be considered selected
@@ -2961,6 +3180,39 @@ class AssignIcon(Icon):
                 tgtIcon = tgts
             self.assignValues(tgtIcon, value)
 
+    def createAst(self):
+        # Get the target and value icons
+        tgtLists = []
+        for tgtList in self.tgtLists:
+            tgts = []
+            for site in getattr(self.sites, tgtList.siteSeriesName):
+                if site.att is None:
+                    raise IconExecException(self, "Missing assignment target(s)")
+                tgts.append(site.att)
+            tgtLists.append(tgts)
+        values = []
+        for site in self.sites.values:
+            if site.att is None:
+                raise IconExecException(self, "Missing assignment value")
+            values.append(site.att)
+        # Make asts for targets and values, adding tuples if packing/unpacking is
+        # specified
+        if len(values) == 1:
+            valueAst = values[0].createAst()
+        else:
+            valueAst = ast.Tuple([v.createAst() for v in values], ctx=ast.Load(),
+             lineno=self.id, col_offset=0)
+        tgtAsts = []
+        for tgts in tgtLists:
+            if len(tgts) == 1:
+                tgtAst = tgts[0].createAst()
+            else:
+                perTgtAsts = [tgt.createAst() for tgt in tgts]
+                tgtAst = ast.Tuple(perTgtAsts, ctx=ast.Store(), lineno=self.id,
+                 col_offset=0)
+            tgtAsts.append(tgtAst)
+        return ast.Assign(tgtAsts, valueAst, lineno=self.id, col_offset=0)
+
     def assignValues(self, tgtIcon, value):
         if isinstance(tgtIcon, IdentifierIcon):
             try:
@@ -3131,6 +3383,25 @@ class AugmentedAssignIcon(Icon):
     def execute(self):
         return None  #... no idea what to do here, yet.
 
+    def createAst(self):
+        # Get the target and value icons
+        if self.sites.targetIcon.att is None:
+            raise IconExecException(self, "Missing assignment target")
+        tgtAst = self.sites.targetIcon.att.createAst()
+        values = []
+        for site in self.sites.values:
+            if site.att is None:
+                raise IconExecException(self, "Missing assignment value")
+            values.append(site.att)
+        # If there are multiple values, make a tuple out of them
+        if len(values) == 1:
+            valueAst = values[0].createAst()
+        else:
+            valueAst = ast.Tuple([v.createAst() for v in values], ctx=ast.Load(),
+             lineno=self.id, col_offset=0)
+        opAst = binOpAsts[self.op]()
+        return ast.AugAssign(tgtAst, opAst, valueAst, lineno=self.id, col_offset=0)
+
 class DivideIcon(Icon):
     def __init__(self, floorDiv=False, window=None, location=None):
         Icon.__init__(self, window)
@@ -3285,6 +3556,16 @@ class DivideIcon(Icon):
             raise IconExecException(self, err)
         return result
 
+    def createAst(self):
+        if self.sites.topArg.att is None:
+            raise IconExecException(self, "Missing numerator")
+        if self.sites.bottomArg.att is None:
+            raise IconExecException(self, "Missing denominator")
+        left = self.sites.topArg.att.createAst()
+        right = self.sites.bottomArg.att.createAst()
+        op = ast.FloorDiv() if self.floorDiv else ast.Div()
+        return ast.BinOp(lineno=self.id, col_offset=0, left=left, op=op, right=right)
+
 class BlockEnd(Icon):
     def __init__(self, primary, window=None, location=None):
         Icon.__init__(self, window)
@@ -3412,6 +3693,13 @@ class WhileIcon(Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+    def createAst(self):
+        if self.sites.condIcon.att is None:
+            raise IconExecException(self, "Missing condition in while statement")
+        testAst = self.sites.condIcon.att.createAst()
+        bodyAsts, orElseAsts = createBlockAsts(self, allowsElse=True)
+        return ast.While(testAst, bodyAsts, orElseAsts, lineno=self.id, col_offset=0)
 
 class ForIcon(Icon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
@@ -3545,6 +3833,35 @@ class ForIcon(Icon):
     def execute(self):
         return None  #... no idea what to do here, yet.
 
+    def createAst(self):
+        # Get the target and iteration icons
+        tgts = []
+        for site in self.sites.targets:
+            if site.att is None:
+                raise IconExecException(self, "Missing assignment target(s)")
+            tgts.append(site.att)
+        if len(tgts) == 1:
+            tgtAst = tgts[0].createAst()
+        else:
+            perTgtAsts = [tgt.createAst() for tgt in tgts]
+            tgtAst = ast.Tuple(perTgtAsts, ctx=ast.Store(), lineno=self.id,
+             col_offset=0)
+        iterValues = []
+        for site in self.sites.iterIcons:
+            if site.att is None:
+                raise IconExecException(self, "Missing iteration value")
+            iterValues.append(site.att)
+        # Make asts for targets and values, adding tuples if packing/unpacking is
+        # specified
+        if len(iterValues) == 1:
+            valueAst = iterValues[0].createAst()
+        else:
+            valueAst = ast.Tuple([v.createAst() for v in iterValues], ctx=ast.Load(),
+             lineno=self.id, col_offset=0)
+        bodyAsts, orElseAsts = createBlockAsts(self, allowsElse=True)
+        return ast.For(tgtAst, valueAst, bodyAsts, orElseAsts, lineno=self.id,
+         col_offset=0)
+
     def inRectSelect(self, rect):
         # Require selection rectangle to touch icon body
         if not Icon.inRectSelect(self, rect):
@@ -3658,6 +3975,13 @@ class IfIcon(Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+    def createAst(self):
+        if self.sites.condIcon.att is None:
+            raise IconExecException(self, "Missing condition in if statement")
+        testAst = self.sites.condIcon.att.createAst()
+        bodyAsts, orElseAsts = createBlockAsts(self, allowsElifElse=True)
+        return ast.If(testAst, bodyAsts, orElseAsts, lineno=self.id, col_offset=0)
 
 class ElifIcon(Icon):
     def __init__(self, window, location=None):
@@ -3966,6 +4290,36 @@ class ClassDefIcon(DefOrClassIcon):
         return self._serialize(offset, iconsToCopy, hasArgs=self.argList is not None,
          createBlockEnd=False)
 
+    def createAst(self):
+        nameIcon = self.sites.nameIcon.att
+        if nameIcon is None:
+            raise IconExecException(self, "Definition missing function name")
+        if not isinstance(nameIcon, IdentifierIcon):
+            raise IconExecException(nameIcon, "Argument name must be identifier")
+        bases = []
+        kwds = []
+        if self.argList is not None:
+            for site in self.sites.argIcons:
+                base = site.att
+                if base is None:
+                    if site.name == 'argIcons_0':
+                        continue  # 1st site can be empty, meaning parens but no bases
+                    raise IconExecException(self, "Missing argument(s)")
+                if isinstance(base, ArgAssignIcon):
+                    keyIcon = base.sites.leftArg.att
+                    valueIcon = base.sites.rightArg.att
+                    if keyIcon is None:
+                        raise IconExecException(base, "Missing keyword name")
+                    if not isinstance(keyIcon, IdentifierIcon):
+                        raise IconExecException(keyIcon, "Keyword must be identifier")
+                    kwds.append(ast.keyword(keyIcon.name, valueIcon.createAst(),
+                     lineno=base.id, col_offset=0))
+                else:
+                    bases.append(base.createAst())
+        bodyAsts = createBlockAsts(self)
+        return ast.ClassDef(nameIcon.name, bases, keywords=kwds, body=bodyAsts,
+         decorator_list=[], lineno=self.id, col_offset=0)
+
 class DefIcon(DefOrClassIcon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
         self.isAsync = isAsync
@@ -3975,6 +4329,73 @@ class DefIcon(DefOrClassIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
          createBlockEnd=False)
+
+    def createAst(self):
+        nameIcon = self.sites.nameIcon.att
+        if nameIcon is None:
+            raise IconExecException(self, "Definition missing function name")
+        if not isinstance(nameIcon, IdentifierIcon):
+            raise IconExecException(nameIcon, "Argument name must be identifier")
+        posOnlyArgAsts = []
+        normalArgAsts = []
+        kwdOnlyAsts = []
+        normalArgDefaults = []
+        kwOnlyDefaults = []
+        accumArgAsts = normalArgAsts
+        accumArgDefaults = normalArgDefaults
+        starArgAst = None
+        starStarArgAst = None
+        for site in self.sites.argIcons:
+            arg = site.att
+            if arg is None:
+                if site.name == 'argIcons_0':
+                    continue  # 1st site can be empty, meaning "no arguments"
+                raise IconExecException(self, "Missing argument(s)")
+            if isinstance(arg, ArgAssignIcon):
+                argIcon = arg.sites.leftArg.att
+                defaultIcon = arg.sites.rightArg.att
+                if argIcon is None:
+                    raise IconExecException(arg, "Missing argument name")
+                if not isinstance(argIcon, IdentifierIcon):
+                    raise IconExecException(arg, "Argument name must be identifier")
+                if defaultIcon is None:
+                    raise IconExecException(arg, "Missing default value")
+                accumArgAsts.append(ast.arg(argIcon.name, lineno=arg.id, col_offset=0))
+                accumArgDefaults.append(defaultIcon.createAst())
+            elif isinstance(arg, StarStarIcon):
+                starStarArg = arg.sites.argIcon.att
+                if starStarArg is None:
+                    raise IconExecException(arg, "Missing value for **")
+                if not isinstance(starStarArg, IdentifierIcon):
+                    raise IconExecException(starStarArg, "Argument must be identifier")
+                starStarArgAst = ast.arg(starStarArg.name, lineno=arg.id, col_offset=0)
+            elif isinstance(arg, StarIcon):
+                # A star icon with an argument is a vararg list.  Without, it is a
+                # keyword-only marker.  Either way, subsequent arguments are keyword-only
+                # and should go in the kwdOnly lists
+                starArg = arg.sites.argIcon.att
+                if starArg is not None:
+                    if not isinstance(starArg, IdentifierIcon):
+                        raise IconExecException(starArg, "Argument must be identifier")
+                    starArgAst = ast.arg(starArg.name, lineno=arg.id, col_offset=0)
+                accumArgAsts = kwdOnlyAsts
+                accumArgDefaults = kwOnlyDefaults
+            elif isinstance(arg, PosOnlyMarkerIcon):
+                posOnlyArgAsts = normalArgAsts
+                normalArgAsts = []
+                accumArgAsts = normalArgAsts
+            else:
+                if not isinstance(arg, IdentifierIcon):
+                    raise IconExecException(arg, "Argument name must be identifier")
+                accumArgAsts.append(ast.arg(arg.name, lineno=arg.id, col_offset=0))
+        argumentAsts = ast.arguments(posOnlyArgAsts, normalArgAsts, starArgAst,
+         kwdOnlyAsts, kwOnlyDefaults, starStarArgAst, normalArgDefaults)
+        bodyAsts = createBlockAsts(self)
+        if self.isAsync:
+            return ast.AsyncFunctionDef(nameIcon.name, argumentAsts, bodyAsts,
+             decorator_list=[], returns=None, lineno=self.id, col_offset=0)
+        return ast.FunctionDef(nameIcon.name, argumentAsts, bodyAsts,
+         decorator_list=[], returns=None, lineno=self.id, col_offset=0)
 
 class NoArgStmtIcon(Icon):
     def __init__(self, stmt, window, location):
@@ -4040,13 +4461,22 @@ class PassIcon(NoArgStmtIcon):
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "pass", window, location)
 
+    def createAst(self):
+        return ast.Pass(lineno=self.id, col_offset=0)
+
 class ContinueIcon(NoArgStmtIcon):
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "continue", window, location)
 
+    def createAst(self):
+        return ast.Continue(lineno=self.id, col_offset=0)
+
 class BreakIcon(NoArgStmtIcon):
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "break", window, location)
+
+    def createAst(self):
+        return ast.Break(lineno=self.id, col_offset=0)
 
 class SeriesStmtIcon(Icon):
     def __init__(self, stmt, window, seqIndent=False, location=None):
@@ -4142,9 +4572,31 @@ class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "return", window, location=location)
 
+    def createAst(self):
+        if len(self.sites.values) == 1 and self.sites.values[0].att is None:
+            valueAst = None
+        else:
+            for site in self.sites.values:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            valueAsts = [site.att.createAst() for site in self.sites.values]
+            if len(valueAsts) == 1:
+                valueAst = valueAsts[0]
+            else:
+                valueAst = ast.Tuple(valueAsts, ctx=ast.Load(), lineno=self.id,
+                 col_offset=0)
+        return ast.Return(value=valueAst, lineno=self.id, col_offset=0)
+
 class DelIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "del", window, location=location)
+
+    def createAst(self):
+        for site in self.sites.values:
+            if site.att is None:
+                raise IconExecException(self, "Missing argument(s)")
+        targetAsts = [site.att.createAst() for site in self.sites.values]
+        return ast.Delete(targetAsts, lineno=self.id, col_offset=0)
 
 class WithIcon(SeriesStmtIcon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
@@ -4162,13 +4614,49 @@ class WithIcon(SeriesStmtIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
+    def createAst(self):
+        withItems = []
+        for site in self.sites.values:
+            if site.att is None:
+                raise IconExecException(self, "Missing argument(s)")
+            if isinstance(site.att, WithAsIcon):
+                leftArg = site.att.leftArg()
+                rightArg = site.att.rightArg()
+                if leftArg is None:
+                    raise IconExecException(site.att, "Missing argument")
+                if rightArg is None:
+                    raise IconExecException(site.att, 'Missing name(s) for "as"')
+                withItems.append(ast.withitem(leftArg.createAst(), rightArg.createAst()))
+            else:
+                withItems.append(ast.withitem(site.att.createAst(), None))
+        bodyAsts = createBlockAsts(self)
+        return ast.With(withItems, body=bodyAsts, lineno=self.id, col_offset=0)
+
 class GlobalIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "global", window, location=location)
 
+    def createAst(self):
+        for site in self.sites.values:
+            if site.att is None:
+                raise IconExecException(self, "Missing argument(s)")
+            if not isinstance(site.att, IdentifierIcon):
+                raise IconExecException(site.att, "Argument be identifier")
+        names = [site.att.name for site in self.sites.values]
+        return ast.Global(names, lineno=self.id, col_offset=0)
+
 class NonlocalIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "nonlocal", window, location=location)
+
+    def createAst(self):
+        for site in self.sites.values:
+            if site.att is None:
+                raise IconExecException(self, "Missing argument(s)")
+            if not isinstance(site.att, IdentifierIcon):
+                raise IconExecException(site.att, "Argument be identifier")
+        names = [site.att.name for site in self.sites.values]
+        return ast.Nonlocal(names, lineno=self.id, col_offset=0)
 
 class YieldIcon(Icon):
     def __init__(self, window=None, location=None):
@@ -4246,8 +4734,20 @@ class YieldIcon(Icon):
     def dumpName(self):
         return "yield"
 
-    def execute(self):
-        return None  #... no idea what to do here, yet.
+    def createAst(self):
+        if len(self.sites.values) == 1 and self.sites.values[0].att is None:
+            valueAst = None
+        else:
+            for site in self.sites.values:
+                if site.att is None:
+                    raise IconExecException(self, "Missing argument(s)")
+            valueAsts = [site.att.createAst() for site in self.sites.values]
+            if len(valueAsts) == 1:
+                valueAst = valueAsts[0]
+            else:
+                valueAst = ast.Tuple(valueAsts, ctx=ast.Load(), lineno=self.id,
+                 col_offset=0)
+        return ast.Yield(value=valueAst, lineno=self.id, col_offset=0)
 
 class ImageIcon(Icon):
     def __init__(self, image, window, location=None):
@@ -5037,7 +5537,7 @@ def findSeqEnd(ic, toEndOfBlock=False):
         ic = nextIc
 
 def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
- restrictToPage=None):
+ restrictToPage=None, skipInnerBlocks=False):
     if includeStartingIcon:
         if hier:
             yield from ic.traverse()
@@ -5047,9 +5547,12 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
         while True:
             if not hasattr(ic.sites, 'seqIn'):
                 return
-            if ic.sites.seqIn.att is None:
+            if skipInnerBlocks and isinstance(ic, BlockEnd):
+                ic = ic.primary.sites.seqIn.att
+            else:
+                ic = ic.sites.seqIn.att
+            if ic is None:
                 return
-            ic = ic.sites.seqIn.att
             if restrictToPage is not None and ic.window.topIcons[ic] != restrictToPage:
                 return
             if hier:
@@ -5060,9 +5563,12 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
         while True:
             if not hasattr(ic.sites, 'seqOut'):
                 return
-            if ic.sites.seqOut.att is None:
+            if skipInnerBlocks and hasattr(ic, 'blockEnd'):
+                ic = ic.blockEnd.sites.seqOut.att
+            else:
+                ic = ic.sites.seqOut.att
+            if ic is None:
                 return
-            ic = ic.sites.seqOut.att
             if restrictToPage is not None and ic.window.topIcons[ic] != restrictToPage:
                 return
             if hier:
@@ -5231,3 +5737,169 @@ def dumpHier(ic, indent=0):
     print("   " * indent, ic.dumpName())
     for child in ic.children():
         dumpHier(child, indent+1)
+
+def determineCtx(ic):
+    """Figure out the load/store/delete context of a given icon.  Returns an object
+    of class ast.Load, ast.Store, or ast.Del based on the result."""
+    # Architecture note: it would have been more direct and efficient to to add a
+    # parameter to createAst to pass the context from parent icons as asts are created.
+    # I am calculating this per-icon, because I suspect the information will be important
+    # for display and interaction purposes later on (for example, showing current errors).
+    if ic.hasSite('attrIcon') and ic.childAt('attrIcon'):
+        return ast.Load()  # Has attribute but is not at the end of the attribute chain
+    parent = ic.parent()
+    if parent is None:
+        return ast.Load()  # At the top level
+    if parent.siteOf(ic) == 'attrIcon':
+        # ic is the end of an attribute chain.  Determine ctx from parent of its root.
+        ic = findAttrOutputSite(ic)
+        if ic is None:
+            return ast.Load()
+        parent = ic.parent()
+        if parent is None:
+            return ast.Load()
+    parentClass = parent.__class__
+    if parentClass in (ListIcon, TupleIcon):
+        # A list or tuple can be an assignment target: look above for assignment
+        return determineCtx(parent)
+    # Return ast.Store() if parent site is an assignment target, ast.Del() if it is a
+    # deletion target, or ast.Load() if neither.
+    parentSite = parent.siteOf(ic, recursive=True)
+    if parentClass in (AssignIcon, AugmentedAssignIcon, ForIcon, CprhForIcon):
+        if parentSite[:6] == 'target':
+            return ast.Store()
+    elif parentClass in (DefIcon, ClassDefIcon):
+        if parentSite == 'nameIcon':
+            return ast.Store()
+    elif parentClass is WithAsIcon:
+        if parentSite == 'rightArg':
+            return ast.Store()
+    elif parentClass is DelIcon:
+        return ast.Del()
+    return ast.Load()
+
+def createComprehensionAst(ic):
+    eltIcon = ic.childAt('argIcons_0')
+    if eltIcon is None:
+        raise IconExecException(ic, "Missing expression")
+    generators = []
+    for site in ic.sites.cprhIcons:
+        cprhIcon = site.att
+        if cprhIcon is None:
+            continue
+        if isinstance(cprhIcon, CprhForIcon):
+            generators.append([cprhIcon])
+        elif isinstance(cprhIcon, CprhIfIcon):
+            generators[-1].append(cprhIcon)
+        else:
+            raise IconExecException(cprhIcon, 'Unexpected item in comprehension')
+    if len(generators) == 0:
+        raise IconExecException(ic, 'Missing "for" in comprehension')
+    generatorAsts = []
+    for generator in generators:
+        ifAsts = [ifClause.createAst() for ifClause in generator[1:]]
+        generatorAsts.append(generator[0].createAst(ifAsts))
+    if isinstance(ic, DictIcon):
+        if isinstance(eltIcon, DictElemIcon):
+            key = eltIcon.childAt('leftArg')
+            value = eltIcon.childAt('rightArg')
+            if not key or not value:
+                raise IconExecException(eltIcon, "Missing argument to dictionary element")
+            return ast.DictComp(key.createAst(), value.createAst(), generatorAsts,
+             lineno=ic.id, col_offset=0)
+        else:
+            return ast.SetComp(eltIcon.createAst(), generatorAsts, lineno=ic.id,
+             col_offset=0)
+    elif isinstance(ic, ListIcon):
+        return ast.ListComp(eltIcon.createAst(), generatorAsts, lineno=ic.id,
+         col_offset=0)
+    return ast.GeneratorExp(eltIcon.createAst(), generatorAsts, lineno=ic.id,
+     col_offset=0)
+
+def composeAttrAst(ic, icAst):
+    if ic.sites.attrIcon.att:
+        return ic.sites.attrIcon.att.createAst(icAst)
+    return icAst
+
+def createBlockAsts(ic, allowsElse=False, allowsElifElse=False):
+    """Create ASTs for icons in the block belonging to ic, suitable for the "body"
+    parameter to ASTs for statements that own an indented block.  If allowsElse is
+    True, the block can contain an else clause.  If allowsElifElse is True, the block
+    may also contain elif statements and the function returns two items: 1) a list of
+    the statement ASTs, and 2) a list of the else-clause ASTs (there is no elif AST,
+    elifs are converted to an else clause containing chained "if" ASTs).  Without
+    either allowsElse or allowsElifElse, the function returns just the list of statement
+    ASTs"""
+    stmtAsts = []
+    endBlock = ic.blockEnd
+    stmt = ic.nextInSeq()
+    while stmt is not endBlock:
+        if stmt is None:
+            raise IconExecException(ic, "Error processing code block")
+        if isinstance(stmt, ElifIcon):
+            if not allowsElifElse:
+                raise IconExecException(stmt, "Elif statement should not be here")
+            return stmtAsts, [createElifAst(stmt, endBlock)]
+        elif isinstance(stmt, ElseIcon):
+            if not (allowsElse or allowsElifElse):
+                raise IconExecException(stmt, "Else statement should not be here")
+            return stmtAsts, createElseAsts(stmt, endBlock)
+        else:
+            stmtAsts.append(createStmtAst(stmt))
+        if hasattr(stmt, 'blockEnd'):
+            stmt = stmt.blockEnd.nextInSeq()
+        else:
+            stmt = stmt.nextInSeq()
+    if allowsElse or allowsElifElse:
+        return stmtAsts, []
+    return stmtAsts
+
+def createElseAsts(ic, endBlock):
+    """Return a list of statement ASTs from the else clause starting at"""
+    stmtAsts = []
+    stmt = ic.nextInSeq()
+    while stmt is not endBlock:
+        if stmt is None:
+            raise IconExecException(ic, "Error processing code block")
+        if isinstance(stmt, ElifIcon):
+            raise IconExecException(stmt, "Elif statement found after else")
+        if isinstance(stmt, ElseIcon):
+            raise IconExecException(stmt, "Multiple else statements")
+        stmtAsts.append(createStmtAst(stmt))
+        if hasattr(stmt, 'blockEnd'):
+            stmt = stmt.blockEnd.nextInSeq()
+        else:
+            stmt = stmt.nextInSeq()
+    return stmtAsts
+
+def createElifAst(ic, endBlock):
+    """Returns a single "if" AST representing the remaining elif and else clauses starting
+    at elif icon, ic."""
+    if ic.sites.condIcon.att is None:
+        raise IconExecException(ic, "Missing condition in elif")
+    stmtAsts = []
+    stmt = ic.nextInSeq()
+    while stmt is not endBlock:
+        if stmt is None:
+            raise IconExecException(ic, "Error processing code block")
+        if isinstance(stmt, ElifIcon):
+            return ast.If(ic.sites.condIcon.att.createAst(), stmtAsts,
+             [createElifAst(stmt, endBlock)], lineno=ic.id, col_offset=0)
+        if isinstance(stmt, ElseIcon):
+            return ast.If(ic.sites.condIcon.att.createAst(), stmtAsts,
+             createElseAsts(stmt, endBlock), lineno=ic.id, col_offset=0)
+        stmtAsts.append(createStmtAst(stmt))
+        if hasattr(stmt, 'blockEnd'):
+            stmt = stmt.blockEnd.nextInSeq()
+        else:
+            stmt = stmt.nextInSeq()
+    return stmtAsts
+
+def createStmtAst(ic):
+    """Create the ast corresponding to a top-level icon (ic).  For statements, this
+    simply means calling the .createAst() method, but for expressions this additionally
+    entails wrapping it in an ast.Expr() node."""
+    stmtAst = ic.createAst()
+    if stmtAst.__class__ in stmtAstClasses:
+        return stmtAst
+    return ast.Expr(stmtAst, lineno=ic.id, col_offset=0)
