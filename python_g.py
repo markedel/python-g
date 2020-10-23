@@ -1215,6 +1215,17 @@ class Window:
         elif isinstance(ic, typing.CursorParenIcon):
             arg = ic.sites.argIcon.att
             redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+            # If an attribute is attached to the parens, don't delete, just select
+            attrIcon = ic.childAt('attrIcon')
+            if attrIcon:
+                self.unselectAll()
+                toSelect = list(attrIcon.traverse())
+                if site == 'argIcon':
+                    toSelect.append(ic)
+                for i in toSelect:
+                    self.select(i)
+                self.refresh(redrawRegion.get())
+                return
             if site == 'attrIcon':
                 # Cursor is on attribute site of right paren.  Re-open the paren
                 if arg is None:
@@ -1223,11 +1234,11 @@ class Window:
                 else:
                     cursIc, cursSite =  typing.rightmostSite(icon.findLastAttrIcon(arg))
                 # Expand the scope of the paren to its max, rearrange hierarchy around it
-                typing.reorderArithExpr(ic)
                 ic.reopen()
+                typing.reorderArithExpr(ic)
                 self.cursor.setToIconSite(cursIc, cursSite)
             else:
-                # Cursor is on the argument site: remove parens
+                # Cursor is on the argument site: remove the parens
                 parent = ic.parent()
                 content = ic.childAt('argIcon')
                 if parent is None:
@@ -1258,11 +1269,12 @@ class Window:
                     parentSite = parent.siteOf(ic)
                     if content is None:
                         self.removeIcons([ic])
+                        self.cursor.setToIconSite(parent, parentSite)
                     else:
                         parent.replaceChild(content, parentSite)
+                        self.cursor.setToIconSite(parent, parentSite)
                         typing.reorderArithExpr(content)
-                    self.cursor.setToIconSite(parent, parentSite)
-            redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
+            redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=True))
             self.refresh(redrawRegion.get())
 
         elif isinstance(ic, icon.BinOpIcon) or isinstance(ic, icon.DivideIcon):
@@ -1284,6 +1296,14 @@ class Window:
                     # Cursor is on attribute site of right paren.  Convert to open
                     # (unclosed) cursor paren
                     redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    attrIcon = ic.childAt('attrIcon')
+                    if attrIcon:
+                        # If an attribute is attached to the parens, just select
+                        self.unselectAll()
+                        for i in attrIcon.traverse():
+                            self.select(i)
+                        self.refresh(redrawRegion.get())
+                        return
                     parent = ic.parent()
                     cursorParen = typing.CursorParenIcon(window=self)
                     if parent is None:
@@ -1309,20 +1329,46 @@ class Window:
             if site == 'leftArg' and ic.hasParens:
                 # Cursor is on left paren: User wants to remove parens
                 redrawRegion = AccumRects(ic.topLevelParent().hierRect())
-                cursorIc = icon.lowestCoincidentIcon(ic, site)
+                attrIcon = ic.childAt('attrIcon')
+                if attrIcon:
+                    # If an attribute is attached to the parens, don't delete, just select
+                    self.unselectAll()
+                    for i in attrIcon.traverse():
+                        self.select(i)
+                    self.refresh(redrawRegion.get())
+                    return
+                # Finding the correct position for the cursor after reorderArithExpr is
+                # surprisingly difficult.  It is done by temporarily setting the cursor
+                # to the output site of the icon at the lowest coincident site and then
+                # restoring it to the parent site after reordering.  If the site is empty,
+                # use the further hack of creating a temporary icon to track the empty
+                # site.  The reason for setting the cursor position as opposed to just
+                # recording the lowest icon, is that reorderArithExpr can remove parens,
+                # but will relocate the cursor it does.
+                cursorIc, cursorSite = icon.lowestCoincidentSite(ic, site)
+                cursorChild = cursorIc.childAt(cursorSite)
+                if cursorChild is None:
+                    cursorChild = icon.TextIcon('***Internal Temporary***', window=self)
+                    cursorIc.replaceChild(cursorChild, cursorSite)
+                    removeTempCursorIcon = True
+                else:
+                    removeTempCursorIcon = False
+                self.cursor.setToIconSite(cursorChild, 'output')
+                # To remove the parens we run reorderArithExpr, hiding the parens from it
+                # by setting the icon's hasParens flag to false (which is what it uses to
+                # determine if parens are displayed).
                 ic.hasParens = False
                 ic.markLayoutDirty()
-                top = typing.reorderArithExpr(ic)
+                typing.reorderArithExpr(ic)
+                # Restore the cursor that was temporarily set to the output site to the
+                # parent icon and site (see above)
+                updatedCursorIc = self.cursor.icon.parent()
+                updatedCursorSite = updatedCursorIc.siteOf(self.cursor.icon)
+                if removeTempCursorIcon:
+                    updatedCursorIc.replaceChild(None, updatedCursorSite)
+                self.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
                 redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
                 self.refresh(redrawRegion.get())
-                # Set the cursor to the parent of the icon that was the lowest in the
-                # hierarchy next to the paren being removed
-                cursorIcParent = cursorIc.parent()
-                if cursorIcParent is None:
-                    self.cursor.setToIconSite(cursorIc, 'output')
-                else:
-                    self.cursor.setToIconSite(cursorIcParent,
-                     cursorIcParent.siteOf(cursorIc))
                 return
             # Cursor was on the operator itself
             redrawRect = ic.topLevelParent().hierRect()
@@ -2426,7 +2472,7 @@ class Window:
         self.removeTop([ic for ic in icons if ic.parent() is None])
         # deletedSet more efficiently determines if an icon is on the deleted list
         deletedSet = set(icons)
-        detachList = []
+        detachList = set()
         seqReconnectList = []
         reconnectList = {}
         # Find region needing erase, including following sequence connectors
@@ -2446,7 +2492,7 @@ class Window:
         # Find and unlink child icons from parents at deletion boundary.  Note use of
         # child icon rather than siteId in detachList because site names change as icons
         # are removed from variable-length sequences.
-        addTopIcons = []
+        addTopIcons = set()
         affectedTopIcons = set()
         for topIcon in findTopIcons(icons):
             affectedTopIcons.add(topIcon)
@@ -2462,10 +2508,10 @@ class Window:
             nextIcon = topIcon.nextInSeq()
             if nextIcon is not None:
                 if topIcon in deletedSet and nextIcon not in deletedSet:
-                    detachList.append((topIcon, nextIcon))
+                    detachList.add((topIcon, nextIcon))
                     topIcon.markLayoutDirty()
                 if topIcon not in deletedSet and nextIcon in deletedSet:
-                    detachList.append((topIcon, nextIcon))
+                    detachList.add((topIcon, nextIcon))
                     topIcon.markLayoutDirty()
                     while True:
                         nextIcon = nextIcon.nextInSeq()
@@ -2477,12 +2523,12 @@ class Window:
             for ic in topIcon.traverse():
                 for child in ic.children():
                     if ic in deletedSet and child not in deletedSet:
-                        detachList.append((ic, child))
+                        detachList.add((ic, child))
                         if child not in reconnectList:
-                            addTopIcons.append(child)
+                            addTopIcons.add(child)
                         redrawRegion.add(child.hierRect())
                     elif ic not in deletedSet and child in deletedSet:
-                        detachList.append((ic, child))
+                        detachList.add((ic, child))
                         if ic.siteOf(child) == 'attrIcon':
                             for i in icon.traverseAttrs(ic, includeStart=False):
                                 if i not in deletedSet:
@@ -2949,18 +2995,19 @@ class Window:
         return None, None
 
     def filterRedundantParens(self, ic, parentIcon=None, parentSite=None):
-        """Remove parenthesis whose arguments now have their own parenthesis"""
+        """Remove parentheses whose arguments are BinOpIcons that would deploy their own
+        parentheses upon the next layout if not for the enclosing cursor paren."""
         if ic.__class__ is not typing.CursorParenIcon or not ic.closed:
             for c in ic.children():
                 self.filterRedundantParens(c, ic, ic.siteOf(c))
-            return ic
+            return
         argIcon = ic.sites.argIcon.att
         if argIcon is None:
-            return ic
-        if not (argIcon.__class__ is typing.CursorParenIcon or
-         argIcon.__class__ is icon.BinOpIcon and icon.needsParens(argIcon, parentIcon)):
-            self.filterRedundantParens(argIcon, ic, "leftArg")
-            return ic
+            return
+        if not (argIcon.__class__ is icon.BinOpIcon and not argIcon.hasParens and
+         icon.needsParens(argIcon, parentIcon)):
+            self.filterRedundantParens(argIcon, ic, "argIcon")
+            return
         # Redundant parens found: remove them
         if parentIcon is None:
             # Not sure this ever happens: arithmetic ops require parent to force parens,
@@ -2969,6 +3016,7 @@ class Window:
         else:
             parentIcon.replaceChild(argIcon, parentSite)
             argIcon.markLayoutDirty()
+        # Transfer any attribute icons to the promoted expression
         attrIcon = ic.sites.attrIcon.att
         ic.replaceChild(None, 'attrIcon')
         if attrIcon is not None and argIcon.hasSite('attrIcon'):
@@ -2978,7 +3026,7 @@ class Window:
         if self.cursor.type == "icon" and self.cursor.icon is ic and \
          self.cursor.siteType == "attrIn":
             self.cursor.setToIconSite(argIcon, "attrIcon")
-        return argIcon
+        self.filterRedundantParens(argIcon)
 
     def redoLayout(self, topIcon, filterRedundantParens=True):
         """Recompute layout for a top-level icon and redraw all affected icons"""

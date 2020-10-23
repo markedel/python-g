@@ -212,6 +212,16 @@ class RemoveFromTopLevel(UndoListEntry):
         self.topOfSeq = topOfSeq
 
     def undo(self, undoData):
+        parent = self.icon.parent()
+        if parent is not None:
+            # Remove any parent link from the icon before adding it to the top level.
+            # I believe that the presence of such a link is benign, and happens when
+            # the original operation rearranged icons before changing the top-level icon
+            # (presumably a subsequent undo operation would have removed the link, but
+            # not before addTopSingle issued an error about a "lingering parent").
+            print('Undo RemoveFromTopLevel removing parent (is this normal?)')
+            parentSite = self.icon.siteOf(parent)
+            self.icon.replaceChild(None, parentSite)
         undoData.window.addTopSingle(self.icon, pos=self.topOfSeq, newSeq=self.topOfSeq)
         self.icon.markLayoutDirty()
         return None

@@ -1452,7 +1452,7 @@ class AttrIcon(Icon):
 class SubscriptIcon(Icon):
     def __init__(self, numSubscripts=1, window=None, closed=True, location=None):
         Icon.__init__(self, window)
-        self.closed = closed
+        self.closed = False
         leftWidth, leftHeight = subscriptLBktImage.size
         attrY = leftHeight // 2 + ATTR_SITE_OFFSET
         self.sites.add('attrOut', 'attrOut', 0, attrY)
@@ -1585,6 +1585,8 @@ class SubscriptIcon(Icon):
         self.markLayoutDirty()
 
     def close(self):
+        if self.closed:
+            return
         self.closed = True
         self.markLayoutDirty()
         # Add back the attribute site on the end paren.  Done here to allow the site to
@@ -1594,6 +1596,8 @@ class SubscriptIcon(Icon):
         self.window.undo.registerCallback(self.reopen)
 
     def reopen(self):
+        if not self.closed:
+            return
         self.closed = False
         self.markLayoutDirty()
         self.sites.remove('attrIcon')
@@ -1863,7 +1867,7 @@ class ListTypeIcon(Icon):
     def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
      closed=True, location=None):
         Icon.__init__(self, window)
-        self.closed = closed
+        self.closed = False
         self.leftText = leftText
         self.rightText = rightText
         self.leftImg = iconBoxedText(self.leftText) if leftImg is None else leftImg
@@ -2038,6 +2042,8 @@ class ListTypeIcon(Icon):
         return layout
 
     def close(self):
+        if self.closed:
+            return
         self.closed = True
         self.markLayoutDirty()
         # Add back the attribute site on the end brace/bracket.  Done here to allow the
@@ -2047,6 +2053,8 @@ class ListTypeIcon(Icon):
         self.window.undo.registerCallback(self.reopen)
 
     def reopen(self):
+        if not self.closed:
+            return
         self.closed = False
         self.markLayoutDirty()
         self.sites.remove('attrIcon')
@@ -2690,7 +2698,7 @@ class BinOpIcon(Icon):
 class CallIcon(Icon):
     def __init__(self, window, closed=True, location=None):
         Icon.__init__(self, window)
-        self.closed = closed
+        self.closed = False
         leftWidth, leftHeight = fnLParenImage.size
         attrSiteY = leftHeight // 2 + ATTR_SITE_OFFSET
         self.sites.add('attrOut', 'attrOut', 0, attrSiteY)
@@ -2766,6 +2774,8 @@ class CallIcon(Icon):
         return layout
 
     def close(self):
+        if self.closed:
+            return
         self.closed = True
         self.markLayoutDirty()
         # Add back the attribute site on the end paren.  Done here to allow the site to
@@ -2775,6 +2785,8 @@ class CallIcon(Icon):
         self.window.undo.registerCallback(self.reopen)
 
     def reopen(self):
+        if not self.closed:
+            return
         self.closed = False
         self.markLayoutDirty()
         self.sites.remove('attrIcon')
@@ -4899,12 +4911,14 @@ def tintSelectedImage(image, selected, style):
     selImg = Image.blend(image, colorImg, .15)
     return selImg
 
-def needsParens(ic, parent=None, forText=False):
+def needsParens(ic, parent=None, forText=False, parentSite=None):
     """Returns True if the BinOpIcon, ic, should have parenthesis.  Specify "parent" to
     compute for a parent which is not the actual icon parent.  If forText is True, ic
     can also be a DivideIcon, and the calculation is appropriate to text rather than
     icons, where division is just another binary operator and not laid out numerator /
     denominator."""
+    if ic.childAt('attrIcon'):
+        return True  # BinOps can have attributes, and need parens to support the site
     if parent is None:
         parent = ic.parent()
     if parent is None:
@@ -4926,9 +4940,11 @@ def needsParens(ic, parent=None, forText=False):
     if ic.precedence < parent.precedence:
         return True
     # Precedence is equal to parent.  Look at associativity
-    if parent.siteOf(ic, recursive=True) == "leftArg" and ic.rightAssoc():
+    if parentSite is None:
+        parentSite = parent.siteOf(ic, recursive=True)
+    if parentSite == "leftArg" and ic.rightAssoc():
         return True
-    if parent.siteOf(ic, recursive=True) == "rightArg" and ic.leftAssoc():
+    if parentSite == "rightArg" and ic.leftAssoc():
         return True
     return False
 
@@ -4980,12 +4996,6 @@ def findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon=None):
                 if left.__class__ is not BinOpIcon or not left.hasParens or \
                  left.locIsOnLeftParen(btnPressLoc):
                     return fromIcon  # Claim outermost status for this icon
-        # Pass on status from non-contiguous expressions below fromIcon in the hierarchy
-        if left is not None:
-            return left
-        if fromIcon.rightArg() is None:
-            return None
-        return findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon.rightArg())
     # Pass on any results from below fromIcon in the hierarchy
     children = fromIcon.children()
     if children is not None:
@@ -5331,21 +5341,31 @@ def highestCoincidentIcon(ic):
             return ic
         ic = parent
 
-def lowestCoincidentIcon(ic, site):
-    """Return the icon at the lowest coincident input site at ic, site"""
+def lowestCoincidentSite(ic, site):
+    """Return the icon and site occupying the lowest coincident input site at ic, site"""
+    # ic itself does not need to have a coincident site (site is coincident with itself)
+    child = ic.childAt(site)
+    if child is None:
+        return ic, site
+    childSite = child.hasCoincidentSite()
+    if not childSite:
+        return ic, site
+    ic = child
+    site = childSite
+    # Descend the hierarchy of icons with coincident sites
     while True:
         child = ic.childAt(site)
         if child is None:
-            return ic
+            return ic, site
         if ic.hasCoincidentSite() == site:
             childCoincidentSite = child.hasCoincidentSite()
             if childCoincidentSite is None:
-                return child
+                return ic, site
             else:
                 ic = child
                 site = childCoincidentSite
         else:
-            return child
+            return ic, site
 
 class HorizListMgr:
     """Manage layout for a horizontal list of icon arguments."""
@@ -5733,10 +5753,10 @@ def _restoreConditionalTargets(ic, snapLists, directAttachmentClasses):
             snapLists['conditional'].append((ic, ic.posOfSite(site.name),
             site.name, site.type, snapFn))
 
-def dumpHier(ic, indent=0):
-    print("   " * indent, ic.dumpName())
+def dumpHier(ic, indent=0, site=""):
+    print("   " * indent, site, ic.dumpName(), '#' + str(ic.id))
     for child in ic.children():
-        dumpHier(child, indent+1)
+        dumpHier(child, indent+1, ic.siteOf(child))
 
 def determineCtx(ic):
     """Figure out the load/store/delete context of a given icon.  Returns an object
