@@ -293,6 +293,7 @@ listLBktPixmap = (
  "o      o",
  "oooooooo",
 )
+listLBrktExtendDupRows = (9,)
 
 listRBktPixmap = (
  "oooooooo",
@@ -314,6 +315,7 @@ listRBktPixmap = (
  "o      o",
  "oooooooo",
 )
+listRBrktExtendDupRows = (9,)
 
 subscriptLBktPixmap = (
  "oooooo",
@@ -398,6 +400,7 @@ tupleLParenPixmap = (
  "o      o",
  "oooooooo",
 )
+tupleLParenExtendDupRows = (9,)
 
 tupleRParenPixmap = (
  "ooooooo",
@@ -419,6 +422,51 @@ tupleRParenPixmap = (
  "o     o",
  "ooooooo",
 )
+tupleRParenExtendDupRows = (9,)
+
+lBracePixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o  912 o",
+ "o  639 o",
+ "o  65  o",
+ "o  65  o",
+ "o 9%7  o",
+ "o %%   o",
+ "o 9%7  o",
+ "o  65  o",
+ "o  65  o",
+ "o  639 o",
+ "o  912 o",
+ "o      o",
+ "o      o",
+ "oooooooo",
+)
+lBraceExtendDupRows = 6, 12
+
+rBracePixmap = (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o 219  o",
+ "o 936  o",
+ "o  56  o",
+ "o  56  o",
+ "o  7%9 o",
+ "o   %% o",
+ "o  7%9 o",
+ "o  56  o",
+ "o  56  o",
+ "o 936  o",
+ "o 219  o",
+ "o      o",
+ "o      o",
+ "oooooooo",
+)
+rBraceExtendDupRows = 6, 12
 
 fnLParenPixmap = (
  ".oooooooo",
@@ -440,6 +488,7 @@ fnLParenPixmap = (
  ".o      o",
  ".oooooooo",
 )
+fnLParenExtendDupRows = 7, 11
 
 fnLParenOpenPixmap = (
  ".oooooooo",
@@ -729,7 +778,6 @@ def asciiToImage(asciiPixmap):
 asciiToImage.asciiMap = None
 
 def iconBoxedText(text, font=globalFont, color=BLACK):
-
     if (text, font, color) in renderCache:
         return renderCache[(text, font, color)]
     width, height = font.getsize(text)
@@ -767,6 +815,8 @@ lParenImage = asciiToImage(binLParenPixmap)
 rParenImage = asciiToImage(binRParenPixmap)
 tupleLParenImage = asciiToImage(tupleLParenPixmap)
 tupleRParenImage = asciiToImage(tupleRParenPixmap)
+lBraceImage = asciiToImage(lBracePixmap)
+rBraceImage = asciiToImage(rBracePixmap)
 fnLParenImage = asciiToImage(fnLParenPixmap)
 fnLParenOpenImage = asciiToImage(fnLParenOpenPixmap)
 fnRParenImage = asciiToImage(fnRParenPixmap)
@@ -1864,25 +1914,19 @@ class AwaitIcon(UnaryOpIcon):
         return ast.Await(self.arg().createAst(), lineno=self.id, col_offset=0)
 
 class ListTypeIcon(Icon):
-    def __init__(self, leftText, rightText, window, leftImg=None, rightImg=None,
+    def __init__(self, leftText, rightText, window, leftImgFn=None, rightImgFn=None,
      closed=True, location=None):
         Icon.__init__(self, window)
         self.closed = False
         self.leftText = leftText
         self.rightText = rightText
-        self.leftImg = iconBoxedText(self.leftText) if leftImg is None else leftImg
-        if rightImg is None:
-            self.rightImg = iconBoxedText( self.rightText)
-            attrInX = self.rightImg.width-2
-            attrInY = self.rightImg.height // 2 +  + ATTR_SITE_OFFSET
-            self.rightImg.paste(attrInImage, (attrInX, attrInY))
-        else:
-            self.rightImg = rightImg
-        leftWidth, height = self.leftImg.size
+        self.leftImgFn = leftImgFn
+        self.rightImgFn = rightImgFn
+        leftWidth, height = leftImgFn(0).size
         self.sites.add('output', 'output', 0, height // 2)
         self.argList = HorizListMgr(self, 'argIcons', leftWidth-1, height//2)
         self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)])
-        width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
+        width = self.sites.cprhIcons[-1].xOffset + rightImgFn(0).width
         seqX = OUTPUT_SITE_DEPTH - SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, height-2)
@@ -1897,20 +1941,21 @@ class ListTypeIcon(Icon):
          self.sites.seqOut.att is None or toDragImage is not None)
         if self.drawList is None:
             # Left paren/bracket/brace
-            leftBoxWidth, leftBoxHeight = self.leftImg.size
+            minLeftImg = self.leftImgFn(0)
+            leftBoxWidth, leftBoxHeight = minLeftImg.size
             leftImgX = outSiteImage.width - 1
             leftImg = Image.new('RGBA', (leftBoxWidth + leftImgX, leftBoxHeight),
              color=(0, 0, 0, 0))
-            leftImg.paste(self.leftImg, (leftImgX, 0))
+            leftImg.paste(minLeftImg, (leftImgX, 0))
             if needSeqSites:
-                drawSeqSites(leftImg, leftImgX, 0, self.leftImg.height)
+                drawSeqSites(leftImg, leftImgX, 0, minLeftImg.height)
             # Output site
             if needOutSite:
                 outSiteX = self.sites.output.xOffset
                 outSiteY = self.sites.output.yOffset - outSiteImage.height // 2
                 leftImg.paste(outSiteImage, (outSiteX, outSiteY), mask=outSiteImage)
             # Body input site
-            inSiteX = outSiteImage.width - 1 + self.leftImg.width - inSiteImage.width
+            inSiteX = outSiteImage.width - 1 + minLeftImg.width - inSiteImage.width
             inSiteY = self.sites.output.yOffset - inSiteImage.height // 2
             leftImg.paste(inSiteImage, (inSiteX, inSiteY))
             # Unclosed icons need to be dimmed and crossed out
@@ -1925,12 +1970,13 @@ class ListTypeIcon(Icon):
              self.sites.output.yOffset)
             # End paren/brace/bracket
             if self.closed:
-                rightImg = Image.new('RGBA', self.rightImg.size, color=(0, 0, 0, 0))
-                rightImg.paste(self.rightImg, (0, 0))
+                minRightImg = self.rightImgFn(0)
+                rightImg = Image.new('RGBA', minRightImg.size, color=(0, 0, 0, 0))
+                rightImg.paste(minRightImg, (0, 0))
                 if self.acceptsComprehension():
                     cphYOff = self.sites.output.yOffset - cphSiteImage.height // 2
                     rightImg.paste(cphSiteImage, (0, cphYOff))
-                parenY = self.sites.output.yOffset - self.rightImg.height // 2
+                parenY = self.sites.output.yOffset - minRightImg.height // 2
                 parenX = self.sites.cprhIcons[-1].xOffset
                 self.drawList.append(((parenX, parenY), rightImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
@@ -2001,9 +2047,9 @@ class ListTypeIcon(Icon):
             return False
         selLeft, selTop, selRight, selBottom = rect
         icLeft, icTop, icRight, icBottom = self.rect
-        if selLeft > icLeft + self.leftImg.width:
+        if selLeft > icLeft + self.leftImgFn(0).width:
             return False
-        if selRight < icRight - self.rightImg.width:
+        if selRight < icRight - self.rightImgFn(0).width:
             return False
         return True
 
@@ -2011,9 +2057,9 @@ class ListTypeIcon(Icon):
         self.argList.doLayout(layout)
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-        height = self.leftImg.height
+        height = self.leftImgFn(0).height
         if self.closed:
-            width = self.sites.cprhIcons[-1].xOffset + self.rightImg.width
+            width = self.sites.cprhIcons[-1].xOffset + self.rightImgFn(0).width
         else:
             width = self.sites.cprhIcons[-1].xOffset
         x = outSiteX
@@ -2023,7 +2069,7 @@ class ListTypeIcon(Icon):
         self.layoutDirty = False
 
     def calcLayout(self):
-        leftWidth, height = self.leftImg.size
+        leftWidth, height = self.leftImgFn(0).size
         layout = Layout(self, leftWidth, height, height // 2)
         argWidth = self.argList.calcLayout(layout, leftWidth - 1, 0)
         cprhWidth = 0
@@ -2034,7 +2080,8 @@ class ListTypeIcon(Icon):
              leftCprhX + cprhWidth, cprhY)
             cprhWidth += 0 if cprhLayout is None else cprhLayout.width - 1
         if self.closed:
-            layout.width = leftWidth - 1 + argWidth - 1 + cprhWidth + self.rightImg.width
+            layout.width = leftWidth - 1 + argWidth - 1 + cprhWidth + \
+                           self.rightImgFn(0).width
             _singleSiteSublayout(self, layout, 'attrIcon', layout.width-1,
              ATTR_SITE_OFFSET)
         else:
@@ -2082,7 +2129,8 @@ class ListTypeIcon(Icon):
 class ListIcon(ListTypeIcon):
     def __init__(self, window, closed=True, location=None):
         ListTypeIcon.__init__(self, '[', ']', window, location=location,
-         closed=closed, leftImg=listLBktImage, rightImg=listRBktImage)
+                closed=closed, leftImgFn=self._stretchedLBracketImage,
+                rightImgFn=self._stretchedRBracketImage)
 
     def execute(self):
         if not self.closed:
@@ -2117,6 +2165,14 @@ class ListIcon(ListTypeIcon):
         return composeAttrAst(self, ast.List(elts=elts, ctx=determineCtx(self),
          lineno=self.id, col_offset=0))
 
+    @staticmethod
+    def _stretchedLBracketImage(desiredHeight):
+        return yStretchImage(listLBktImage, listLBrktExtendDupRows, desiredHeight)
+
+    @staticmethod
+    def _stretchedRBracketImage(desiredHeight):
+        return yStretchImage(listRBktImage, listRBrktExtendDupRows, desiredHeight)
+
 class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, closed=True, location=None):
         if noParens:
@@ -2126,7 +2182,7 @@ class TupleIcon(ListTypeIcon):
             leftImg = tupleLParenImage
             rightImg = tupleRParenImage
         ListTypeIcon.__init__(self, '(', ')', window, closed=closed, location=location,
-         leftImg=leftImg, rightImg=rightImg)
+         leftImgFn=self._stretchedLTupleImage, rightImgFn=self._stretchedRTupleImage)
         if noParens:
             self.sites.remove('attrIn')
         self.noParens = noParens
@@ -2214,9 +2270,19 @@ class TupleIcon(ListTypeIcon):
         return self._serialize(offset, iconsToCopy, noParens=self.noParens,
          closed=self.closed)
 
+    @staticmethod
+    def _stretchedLTupleImage(desiredHeight):
+        return yStretchImage(tupleLParenImage, tupleLParenExtendDupRows, desiredHeight)
+
+    @staticmethod
+    def _stretchedRTupleImage(desiredHeight):
+        return yStretchImage(tupleRParenImage, tupleRParenExtendDupRows, desiredHeight)
+
 class DictIcon(ListTypeIcon):
     def __init__(self, window, closed=True, location=None):
-        ListTypeIcon.__init__(self, '{', '}', window, closed=closed, location=location)
+        ListTypeIcon.__init__(self, '{', '}', window,
+                leftImgFn=self._stretchedLBraceImage,
+                rightImgFn=self._stretchedRBraceImage, closed=closed, location=location)
 
     def execute(self):
         if self.isComprehension():
@@ -2288,6 +2354,14 @@ class DictIcon(ListTypeIcon):
         # argument list (*, **, =).
         _restoreConditionalTargets(self, siteSnapLists, (DictElemIcon, StarStarIcon))
         return siteSnapLists
+
+    @staticmethod
+    def _stretchedLBraceImage(desiredHeight):
+        return yStretchImage(lBraceImage, lBraceExtendDupRows, desiredHeight)
+
+    @staticmethod
+    def _stretchedRBraceImage(desiredHeight):
+        return yStretchImage(rBraceImage, rBraceExtendDupRows, desiredHeight)
 
 class CprhIfIcon(Icon):
     def __init__(self, window, location=None):
@@ -5923,3 +5997,24 @@ def createStmtAst(ic):
     if stmtAst.__class__ in stmtAstClasses:
         return stmtAst
     return ast.Expr(stmtAst, lineno=ic.id, col_offset=0)
+
+def yStretchImage(img, stretchPts, desiredHeight):
+    """Function used to stretch parens/brackets/braces over vertically wrapped list-type
+    content."""
+    if desiredHeight <= img.height:
+        return img
+    newImg = Image.new('RGBA', (img.width, desiredHeight))
+    insertCount = (desiredHeight - img.height) // len(stretchPts)
+    oldY = newY = 0
+    for stretchPt in stretchPts:
+        copyImg = img.crop((0, oldY, img.width, stretchPt))
+        newImg.paste(copyImg, (0, newY, img.width, newY + copyImg.height))
+        dupImg = img.crop((0, stretchPt, img.width, stretchPt+1))
+        newY += copyImg.height
+        for i in range(insertCount):
+            newImg.paste(dupImg, (0, newY + i, img.width, newY + i + 1))
+        newY += insertCount
+        oldY += copyImg.height + 1
+    copyImg = img.crop((0, oldY, img.width, img.height))
+    newImg.paste(copyImg, (0, newY, img.width, newY + copyImg.height))
+    return newImg
