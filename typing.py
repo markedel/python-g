@@ -1126,23 +1126,30 @@ class EntryIcon(icon.Icon):
         self.layoutDirty = False
         self.drawList = None
 
-    def calcLayout(self):
+    def calcLayouts(self):
+        if self.pendingArg():
+            pendingArgLayouts = self.pendingArg().calcLayouts()
+        elif self.pendingAttr():
+            pendingArgLayouts = self.pendingAttr().calcLayouts()
+        else:
+            pendingArgLayouts = (None,)
         width = self._width() - (1 if self.attachedToAttribute() else 2)
         siteOffset = self.height // 2
         if self.attachedSite and self.attachedSite == "attrIcon":
             siteOffset += icon.ATTR_SITE_OFFSET
-        layout = icon.Layout(self, width, self.height, siteOffset)
-        if self.pendingArg():
-            pendingArgLayout = self.pendingArg().calcLayout()
-            layout.addSubLayout(pendingArgLayout, 'pendingArg', width, 0)
-            width += pendingArgLayout.width
-        elif self.pendingAttr():
-            pendingAttrLayout = self.pendingAttr().calcLayout()
-            layout.addSubLayout(pendingAttrLayout, 'pendingAttr', width,
-             icon.ATTR_SITE_OFFSET)
-            width += pendingAttrLayout.width
-        layout.width = width + ENTRY_ICON_GAP
-        return layout
+        layouts = []
+        for pendingArgLayout in pendingArgLayouts:
+            layout = icon.Layout(self, width, self.height, siteOffset)
+            if self.pendingArg():
+                layout.addSubLayout(pendingArgLayout, 'pendingArg', width, 0)
+                width += pendingArgLayout.width
+            elif self.pendingAttr():
+                layout.addSubLayout(pendingArgLayout, 'pendingAttr', width,
+                 icon.ATTR_SITE_OFFSET)
+                width += pendingArgLayout.width
+            layout.width = width + ENTRY_ICON_GAP
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
 
     def clipboardRepr(self, offset):
         return None
@@ -1238,27 +1245,27 @@ class CursorParenIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayout(self):
+    def calcLayouts(self):
         singleParenWidth, height = self.bodySize
         width = singleParenWidth
-        layout = icon.Layout(self, width, height, height//2)
-        if self.sites.argIcon.att is None:
-            layout.addSubLayout(None, 'argIcon', singleParenWidth-1, 0)
-            width += icon.EMPTY_ARG_WIDTH
+        argIcon = self.sites.argIcon.att
+        argLayouts = [None] if argIcon is None else argIcon.calcLayouts()
+        if self.closed and self.sites.attrIcon.att is not None:
+            attrLayouts = self.sites.attrIcon.att.calcLayouts()
         else:
-            argLayout = self.sites.argIcon.att.calcLayout()
-            layout.addSubLayout(argLayout, 'argIcon', singleParenWidth-1, 0)
-            width += argLayout.width - 1
-        if self.closed:
-            if self.sites.attrIcon.att:
-                attrLayout = self.sites.attrIcon.att.calcLayout()
-            else:
-                attrLayout = None
-            width += singleParenWidth - 1
-            layout.width = width
-            layout.addSubLayout(attrLayout, 'attrIcon', width - icon.ATTR_SITE_DEPTH,
-             icon.ATTR_SITE_OFFSET)
-        return layout
+            attrLayouts = [None]
+        layouts = []
+        for argLayout, attrLayout in icon.allCombinations((argLayouts, attrLayouts)):
+            layout = icon.Layout(self, width, height, height//2)
+            layout.addSubLayout(argLayout, 'argIcon', singleParenWidth - 1, 0)
+            width += icon.EMPTY_ARG_WIDTH if argLayout is None else argLayout.width - 1
+            if self.closed:
+                width += singleParenWidth - 1
+                layout.width = width
+                layout.addSubLayout(attrLayout, 'attrIcon', width - icon.ATTR_SITE_DEPTH,
+                        icon.ATTR_SITE_OFFSET)
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
         if self.sites.argIcon.att is None:

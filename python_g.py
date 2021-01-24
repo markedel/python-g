@@ -181,6 +181,8 @@ class Window:
         self.top.bind("<Right>", self._arrowCb)
         self.top.bind("<Key>", self._keyCb)
         self.top.bind("<Control-d>", self._dumpCb)
+        self.top.bind("<Control-l>", self._debugLayoutCb)
+        self.top.bind("<Alt-l>", self._undebugLayoutCb)
         self.imgFrame.grid(row=0, column=0, sticky=tk.NSEW)
         self.xScrollbar = tk.Scrollbar(self.frame, orient=tk.HORIZONTAL,
          width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
@@ -231,6 +233,8 @@ class Window:
         self.inStmtSelect = False
         self.lastStmtHighlightRects = None
         self.rectSelectInitialStates = {}
+
+        self.margin = 800
 
         # .sequences holds the first Page structure for each sequence in the window.  The
         # ordering the list controls which icons are drawn on top when sequences overlap.
@@ -1973,12 +1977,14 @@ class Window:
                 statIcon.replaceChild(movIcon, siteName)
             elif siteType == "insertInput":
                 topDraggedIcons.remove(movIcon)
-                if icon.isSeriesSiteId(siteName) and isinstance(movIcon, icon.TupleIcon) \
-                 and movIcon.noParens:  # Splice in naked tuple
-                    seriesName, seriesIdx = icon.splitSeriesSiteId(siteName)
+                seriesName, seriesIdx = icon.splitSeriesSiteId(siteName)
+                if seriesName[-3:] == "Dup":
+                    seriesName = seriesName[:-3]
+                if isinstance(movIcon, icon.TupleIcon) and movIcon.noParens:
+                    # Splice in naked tuple
                     statIcon.insertChildren(movIcon.argIcons(), seriesName, seriesIdx)
                 else:
-                    statIcon.insertChild(movIcon, siteName)
+                    statIcon.insertChild(movIcon, seriesName, seriesIdx)
             elif siteType == "insertAttr":
                 topDraggedIcons.remove(movIcon)
                 statIcon.insertAttr(movIcon)
@@ -2335,6 +2341,24 @@ class Window:
         for seqStartPage in self.sequences:
             for ic in icon.traverseSeq(seqStartPage.startIcon):
                 icon.dumpHier(ic)
+
+    def _debugLayoutCb(self, evt):
+        topIcons = findTopIcons(self.selectedIcons())
+        for ic in topIcons:
+            if hasattr(ic, 'debugLayoutFilterIdx'):
+                ic.debugLayoutFilterIdx += 1
+            else:
+                ic.debugLayoutFilterIdx = 0
+            ic.markLayoutDirty()
+        self.refresh(self.layoutDirtyIcons(), redraw=True)
+
+    def _undebugLayoutCb(self, evt):
+        print('undebug')
+        for ic in self.selectedIcons():
+            if hasattr(ic, 'debugLayoutFilterIdx'):
+                delattr(ic, 'debugLayoutFilterIdx')
+                ic.markLayoutDirty()
+        self.refresh(self.layoutDirtyIcons(), redraw=True)
 
     def refresh(self, region=None, redraw=True, clear=True, showOutlines=False):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
@@ -2831,7 +2855,7 @@ class Window:
         redrawRegion = AccumRects()
         if draggingIcons is not None:
             for seq in self.findSequences(draggingIcons):
-                redraw = self.layoutIconsInSeq(seq, filterRedundantParens)[0]
+                redraw, _, _ = self.layoutIconsInSeq(seq, filterRedundantParens)
                 redrawRegion.add(redraw)
         else:
             for seqStartPage in self.sequences:
@@ -2885,7 +2909,7 @@ class Window:
                 offsetDelta = bottomY - page.nextPage.topY
                 nextIcon = page.nextPage.startIcon
                 if nextIcon is not None:
-                    x, y = nextIcon.pos()
+                    x, y = nextIcon.pos(preferSeqIn=True)
                     if x != seqOutX:
                         # X shifts are rare as edits are usually balanced, but can
                         # happen: propagate to next page and force layout.
@@ -2910,7 +2934,7 @@ class Window:
         window, the new bottomY of the sequence/page, and the seqOut site offset of the
         last icon on the page."""
         redrawRegion = AccumRects()
-        x, y = seqStartIcon.pos()
+        x, y = seqStartIcon.pos(preferSeqIn=True)
         if fromTopY is not None:
             y = fromTopY
         if not seqStartIcon.hasSite('seqIn'):
@@ -2933,11 +2957,16 @@ class Window:
                 redrawRegion.add(seqIcOrigRect)
                 layout = seqIc.layout((0, 0))
                 # Find y offset from top of layout to the seqIn site by which the icon
-                # needs to be positioned.  If seqIc has an output site, parentSiteOffset
-                # of layout is to the output site and needs to be moved to the seqIn site.
-                yOffsetToSeqIn = layout.parentSiteOffset
+                # needs to be positioned.  parentSiteOffset of layout may represent either
+                # output site or seqInsert site and needs to be moved to the seqIn.
                 if seqIc.hasSite('output'):
-                    yOffsetToSeqIn += seqIc.sites.seqIn.yOffset-seqIc.sites.output.yOffset
+                    anchorSite = seqIc.sites.output
+                elif seqIc.hasSite('seqInsert'):
+                    anchorSite = seqIc.sites.seqInsert
+                else:
+                    anchorSite = seqIc.sites.seqIn  # Only BlockEndIcon
+                yOffsetToSeqIn = layout.parentSiteOffset + seqIc.sites.seqIn.yOffset - \
+                        anchorSite.yOffset
             # At this point, y is the seqIn site position if it is the first icon in the
             # sequence and fromTopY is False.  Otherwise y is the bottom of the layout of
             # the statement above.  Adjust it to be the desired y of the seqIn site.
