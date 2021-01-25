@@ -2893,6 +2893,12 @@ class Window:
                     redrawRegion.add((windowLeft, page.topY, windowRight, page.bottomY))
                 continue
             # The page is marked as needing layout.
+            if page.startIcon.nextInSeq() is None and page.startIcon.prevInSeq() is None:
+                # The page contains a single icon that is not part of a sequence
+                redrawRegion.add(page.startIcon.hierRect())
+                page.startIcon.layout()
+                redrawRegion.add(page.startIcon.hierRect())
+                continue
             # Traverse the sequence of icons in the page looking for icons that need to
             # be laid out.  The page may have unapplied offset, but that will be remedied
             # by layoutIconsInSeq (unapplied offset will mess up the call's redraw rect

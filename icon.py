@@ -917,6 +917,14 @@ class Icon:
          drawn can be optionally overridden by specifying image and/or location."""
         pass
 
+    def _anchorSite(self):
+        """Return the name of the site that establishes the "official" position of the
+        icon (as returned by .pos())"""
+        for siteId in ['seqInsert', 'output', 'attrOut', 'cprhOut']:
+            if hasattr(self.sites, siteId):
+                return siteId
+        return None
+
     def pos(self, preferSeqIn=False):
         """The "official" position of an icon is defined by the location of its seqInsert
         site if it has one, or output site if it doesn't.  Icons that don't have either
@@ -926,14 +934,7 @@ class Icon:
         to True will return the position of the seqIn site over the seqInsert site."""
         if preferSeqIn and hasattr(self.sites, 'seqIn'):
             return self.posOfSite('seqIn')
-        if hasattr(self.sites, 'seqInsert'):
-            return self.posOfSite('seqInsert')
-        elif hasattr(self.sites, 'output'):
-            return self.posOfSite('output')
-        elif hasattr(self.sites, 'attrOut'):
-            return self.posOfSite('attrOut')
-        else:
-            return self.rect[:2]
+        return self.posOfSite(self._anchorSite())
 
     def select(self, select=True):
         """Use this method to select (select=True) or unselect (select=False) an icon.
@@ -947,30 +948,33 @@ class Icon:
     def isSelected(self):
         return self.window.isSelected(self)
 
-    def layout(self, location=None):
+    def layout(self, location=None, siteId=None):
         """Compute layout and set locations for icon and its children (do not redraw).
-        location (at least for the moment) is upper left corner of .rect, not .pos().
-        This should only be called on top-level icons."""
+        If location and site are specified, position the icon with the given site at the
+        given location.  If site is not specified, default to the same site as .pos(). If
+        location is not specified, maintain the icon the icon's existing position
+        (anchored on the specified siteId).  This should only be called on top-level
+        icons."""
+        if siteId is None:
+            siteId = self._anchorSite()
         if location is None:
-            x, y = self.rect[:2]
-        else:
-            x, y = location
-        # The calcLayouts and doLayout calls use the icon's output, seqInsert, attrOut
-        # or cphrOut site in that order (if it has none of those, use the rect position).
-        forSeq = self.nextInSeq() or self.prevInSeq()
-        if forSeq:
-            layouts = self.calcLayouts()  # ... Hint sequential layout for optimization
-            if layouts[0].width > self.window.margin:
-                layouts = self.calcLayouts()
-        else:
-            layouts = self.calcLayouts()
+            if siteId is None:
+                location = self.rect[:2]
+            else:
+                location = self.posOfSite(siteId)
+        # Calculate layout choices (... This would be a good place to add a hint when
+        # the layout is sequential for optimization)
+        layouts = self.calcLayouts()
         # Determine the best of the calculated layouts based on size and "badness" rating
         # recorded in each of the layouts.  Incorporate size and margin exceeded penalties
         # directly in to the layout badness score
+        if layouts is None:
+            print("No viable layouts for top level icon", self.dumpName())
+            return
         for layout in layouts:
             if layout.width > self.window.margin:
                 layout.badness += 100 + 2 * layout.width - self.window.margin
-        if forSeq:
+        if self.nextInSeq() or self.prevInSeq():
             # Icon is part of a sequence.  Optimize for height
             minHeight = min((layout.height for layout in layouts))
             for layout in layouts:
@@ -980,27 +984,46 @@ class Icon:
             minBadness = min((layout.width + layout.height * 4 for layout in layouts))
             for layout in layouts:
                 layout.badness += (layout.width + layout.height * 4 - minBadness) // 8
-        bestScore = None
+        bestScore = bestLayout = None
         for layout in layouts:
             if bestScore is None or layout.badness < bestScore:
                 bestLayout = layout
                 bestScore = layout.badness
-        if hasattr(self.sites, 'output'):
-            # ... The only reason the code below works, is that the only callers to this
-            #     function reposition the icon no matter where this puts it (the old
-            #     output site offset will be incorrect if doLayout changes it).
-            self.doLayout(x+self.sites.output.xOffset, y+self.sites.output.yOffset,
-                    bestLayout)
-        elif hasattr(self.sites, 'seqInsert'):
-            self.doLayout(x, y, bestLayout)
-        elif hasattr(self.sites, 'attrOut'):
-            self.doLayout(x+self.sites.attrOut.xOffset, y+self.sites.attrOut.yOffset,
-                    bestLayout)
-        elif hasattr(self.sites, 'cprhOut'):
-            self.doLayout(x+self.sites.cprhOut.xOffset, y+self.sites.cprhOut.yOffset,
-                    bestLayout)
+        # Arrange the icon and its children according to bestLayout.  Attempt to pick
+        # appropriate x and y for doLayout for on the requested location using the site
+        # offset of the current layout.  However, because the act of laying out the icon
+        # and its children can shift sites around within the icon rectangle, the
+        # resulting layout may still need to be shifted after the layout is completed.
+        x, y = location
+        if siteId is None:
+            rectLeft, rectTop = location
         else:
-            self.doLayout(x, y, bestLayout)
+            site = self.sites.lookup(siteId)
+            rectLeft = x - site.xOffset
+            rectTop = y - site.yOffset
+        for layoutAnchor in ['output', 'attrOut', 'cprhOut']:
+            if hasattr(self.sites, layoutAnchor):
+                anchorSite = self.sites.lookup(layoutAnchor)
+                anchorX = rectLeft + anchorSite.xOffset
+                anchorY = rectTop + anchorSite.yOffset
+                self.doLayout(anchorX, anchorY, bestLayout)
+                break
+        else:
+            self.doLayout(rectLeft, rectTop, bestLayout)
+        # Relocate the icon if the requested site did not land at the requested location
+        if location != self.posOfSite(siteId):
+            if siteId is None:
+                newLeft = x
+                newTop = y
+            else:
+                site = self.sites.lookup(siteId)
+                newLeft = x - site.xOffset
+                newTop = y - site.yOffset
+            xOff = newLeft - self.rect[0]
+            yOff = newTop - self.rect[1]
+            for ic in self.traverse():
+                left, top = ic.rect[:2]
+                ic.rect = moveRect(ic.rect, (left + xOff, top + yOff))
         return bestLayout
 
     def traverse(self, order="draw", includeSelf=True):
@@ -1273,8 +1296,11 @@ class Icon:
     def hasSite(self, siteId):
         return self.sites.lookup(siteId) is not None
 
-    def posOfSite(self, siteId):
-        """Return the window position of a given site of the icon"""
+    def posOfSite(self, siteId=None):
+        """Return the window position of a given site of the icon.  If siteId is not
+        specified, return the top left corner of the icon's rectangle."""
+        if siteId is None:
+            return self.rect[:2]
         site = self.sites.lookup(siteId)
         if site is None:
             return None
@@ -3551,7 +3577,7 @@ class AssignIcon(Icon):
         self.sites.seqOut.yOffset = leftSpineTop + self.tgtLists[0].spineHeight -1
         self.sites.seqInsert.yOffset = heightAbove
         layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + heightAbove)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
         height = heightAbove + heightBelow
         width = self.sites.seqIn.xOffset - 1 + layout.width
         self.rect = (left, top, left + width, top + height)
@@ -3674,7 +3700,7 @@ class AugmentedAssignIcon(Icon):
         height = heightAbove + heightBelow
         self.rect = (left, top, left + width, top + height)
         layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + heightAbove)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
         self.drawList = None
         self.layoutDirty = False
 
@@ -4002,7 +4028,7 @@ class WhileIcon(Icon):
         width += dragSeqImage.width - 1
         self.rect = (left, top, left + width, top + height)
         layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + height // 2)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
         self.layoutDirty = False
 
     def calcLayouts(self):
@@ -4144,7 +4170,7 @@ class ForIcon(Icon):
         self.sites.seqInsert.yOffset = heightAbove
         self.rect = (left, top, left + width, top + height)
         layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + heightAbove)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
         self.drawList = None
         self.layoutDirty = False
 
@@ -4298,7 +4324,7 @@ class IfIcon(Icon):
         width, height = self.bodySize
         width = max(BLOCK_INDENT + 3, width) + dragSeqImage.width - 1
         self.rect = (left, top, left + width, top + height)
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + height // 2)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
         self.layoutDirty = False
 
     def calcLayouts(self):
@@ -4382,7 +4408,7 @@ class ElifIcon(Icon):
         width += dragSeqImage.width - 1
         self.rect = (left, top, left + width, top + height)
         layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + height // 2)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
         self.layoutDirty = False
 
     def calcLayouts(self):
@@ -4584,7 +4610,7 @@ class DefOrClassIcon(Icon):
         layout.updateSiteOffsets(self.sites.seqInsert)
         # ... The parent site offsets need to be adjusted one pixel left and up, here, for
         #     the child icons to draw in the right place, but I have no idea why.
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + centerY)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + centerY)
         self.drawList = None
         self.layoutDirty = False
 
@@ -4919,7 +4945,7 @@ class SeriesStmtIcon(Icon):
         height = heightAbove + heightBelow
         self.rect = left, top, left + width, top + height
         layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, 0, top + heightAbove)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
         self.drawList = None
         self.layoutDirty = False
 
