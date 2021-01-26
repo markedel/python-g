@@ -1024,8 +1024,15 @@ class Window:
                             self.cursor.setToIconSite(cursorIc, cursorSite)
                     else:
                         parentSite = None if parent is None else parent.siteOf(ic)
-                        self.removeIcons([ic])
+                        redrawRect = self.removeIcons([ic], refresh=False)
+                        redrawRegion.add(redrawRect)
+                        if not parent.hasSite(parentSite):
+                            # Last element of a list can disappear when icon is removed
+                            parent.insertChild(None, parentSite)
+                            redrawRegion.add(self.layoutDirtyIcons(
+                                    filterRedundantParens=False))
                         self.cursor.setToIconSite(parent, parentSite)
+                        self.refresh(redrawRegion.get())
                     return
                 elif numArgs == 1 and not attrAttached:
                     # Just one item left in the list.  Unwrap the parens/brackets/braces
@@ -1272,7 +1279,10 @@ class Window:
                     # Open paren had a parent.  Remove by attaching content to parent
                     parentSite = parent.siteOf(ic)
                     if content is None:
-                        self.removeIcons([ic])
+                        redrawRegion.add(self.removeIcons([ic], refresh=False))
+                        if not parent.hasSite(parentSite):
+                            # Last element of a list can disappear when icon is removed
+                            parent.insertChild(None, parentSite)
                         self.cursor.setToIconSite(parent, parentSite)
                     else:
                         parent.replaceChild(content, parentSite)
