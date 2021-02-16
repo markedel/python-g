@@ -1,5 +1,14 @@
 # Copyright Mark Edel  All rights reserved
+import comn
+import iconlayout
+import iconsites
 import icon
+import opicons
+import blockicons
+import nameicons
+import listicons
+import assignicons
+import subscripticon
 import compile_eval
 import python_g
 import winsound
@@ -49,14 +58,18 @@ keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
  'return', 'try', 'while', 'with', 'yield', 'await'}
 
-topLevelStmts = {'async def':icon.DefIcon, 'def':icon.DefIcon, 'class':icon.ClassDefIcon,
- 'break':icon.BreakIcon, 'return':icon.ReturnIcon, 'continue':icon.ContinueIcon,
- 'yield':icon.YieldIcon, 'del':icon.DelIcon, 'elif':icon.ElifIcon, 'else':icon.ElseIcon,
- 'except':icon.ExceptIcon, 'finally':icon.FinallyIcon, 'async for':icon.ForIcon,
- 'for':icon.ForIcon, 'from':icon.FromIcon, 'global':icon.GlobalIcon, 'if':icon.IfIcon,
- 'import':icon.ImportIcon, 'nonlocal':icon.NonlocalIcon, 'pass':icon.PassIcon,
- 'raise':icon.RaiseIcon, 'try':icon.TryIcon, 'async while':icon.WhileIcon,
- 'while':icon.WhileIcon, 'async with':icon.WithIcon, 'with':icon.WithIcon}
+topLevelStmts = {'async def':blockicons.DefIcon, 'def':blockicons.DefIcon,
+    'class':blockicons.ClassDefIcon, 'break':nameicons.BreakIcon,
+    'return':nameicons.ReturnIcon, 'continue':nameicons.ContinueIcon,
+    'yield':nameicons.YieldIcon, 'del':nameicons.DelIcon, 'elif':blockicons.ElifIcon,
+    'else':blockicons.ElseIcon, 'except':nameicons.ExceptIcon,
+    'finally':nameicons.FinallyIcon, 'async for':blockicons.ForIcon,
+    'for':blockicons.ForIcon, 'from':nameicons.FromIcon, 'global':nameicons.GlobalIcon,
+    'if':blockicons.IfIcon, 'import':nameicons.ImportIcon,
+    'nonlocal':nameicons.NonlocalIcon, 'pass':nameicons.PassIcon,
+    'raise':nameicons.RaiseIcon, 'try':nameicons.TryIcon,
+    'async while':blockicons.WhileIcon,  'while':blockicons.WhileIcon,
+    'async with':blockicons.WithIcon, 'with':blockicons.WithIcon}
 
 identPattern = re.compile('^[a-zA-z_][a-zA-Z_\\d]*$')
 numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
@@ -65,7 +78,7 @@ attrPattern = re.compile('^\\.[a-zA-z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
 opDelimPattern = re.compile('[a-zA-z\\d_.\\(\\[\\{\\s+-~]')
 
-inputSiteCursorPixmap = (
+inputSiteCursorImage = comn.asciiToImage((
     "..% ",
     "..% ",
     "..% ",
@@ -78,12 +91,10 @@ inputSiteCursorPixmap = (
     "..% ",
     "..% ",
     "..% ",
-    "..% ",
-)
+    "..% ",))
 inputSiteCursorOffset = 6
-inputSiteCursorImage = icon.asciiToImage(inputSiteCursorPixmap)
 
-attrSiteCursorPixmap = (
+attrSiteCursorImage = comn.asciiToImage((
     ".%",
     ".%",
     ".%",
@@ -98,33 +109,28 @@ attrSiteCursorPixmap = (
     "%.",
     "%.",
     ".%",
-    ".%",
-)
+    ".%",))
 attrSiteCursorOffset = 11
-attrSiteCursorImage = icon.asciiToImage(attrSiteCursorPixmap)
 
-seqInSiteCursorPixmap = (
+seqInSiteCursorImage = comn.asciiToImage((
     "   .   ",
     "%%% %%%",
     "...%...",
-)
+))
 seqInSiteCursorXOffset = 3
 seqInSiteCursorYOffset = 3
-seqInSiteCursorImage = icon.asciiToImage(seqInSiteCursorPixmap)
 
-seqOutSiteCursorPixmap = (
+seqOutSiteCursorImage = comn.asciiToImage((
     "   %   ",
     "%%%.%%%",
-    ".......",
-)
+    ".......",))
 seqOutSiteCursorXOffset = 3
 seqOutSiteCursorYOffset = 0
-seqOutSiteCursorImage = icon.asciiToImage(seqOutSiteCursorPixmap)
 
 textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
-penPixmap = (
+penImage = comn.asciiToImage((
     "....oooo    ",
     "...o%%%%oo  ",
     "..o%%%%%%%oo",
@@ -135,11 +141,9 @@ penPixmap = (
     "..o%%%%%%%%%",
     "..o%%%%%%%oo",
     "...o%%%%oo  ",
-    "....oooo    "
-)
-penImage = icon.asciiToImage(penPixmap)
+    "....oooo    "))
 
-attrPenPixmap = (
+attrPenImage = comn.asciiToImage((
     "....oooo...",
     "...o%%%%o..",
     "..o%%%%%%o.",
@@ -151,8 +155,7 @@ attrPenPixmap = (
     "o%7%%%%%o..",
     "o7%%oooo...",
     "oooo......."
-)
-attrPenImage = icon.asciiToImage(attrPenPixmap)
+))
 
 class EntryIcon(icon.Icon):
     def __init__(self, attachedIcon, attachedSite, initialString="", window=None,
@@ -216,7 +219,7 @@ class EntryIcon(icon.Icon):
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if self.drawList is None:
             boxWidth = self._width(boxOnly=True) - 1
-            img = Image.new('RGBA', (icon.rectWidth(self.rect), self.height))
+            img = Image.new('RGBA', (comn.rectWidth(self.rect), self.height))
             bgColor = PEN_OUTLINE_COLOR if style else PEN_BG_COLOR
             draw = ImageDraw.Draw(img)
             draw.rectangle((self.penOffset(), 0, self.penOffset() + boxWidth,
@@ -317,9 +320,9 @@ class EntryIcon(icon.Icon):
                 self.attachedIcon.replaceChild(None, self.attachedSite, leavePlace=True)
             if self.attachedIcon.hasSite(self.attachedSite):
                 self.window.cursor.setToIconSite(self.attachedIcon, self.attachedSite)
-            else: # The last element of list can disappear when entry icon is removed
-                seriesName, seriesIdx = icon.splitSeriesSiteId(self.attachedSite)
-                newSite = icon.makeSeriesSiteId(seriesName, seriesIdx-1)
+            else:  # The last element of list can disappear when entry icon is removed
+                seriesName, seriesIdx = iconsites.splitSeriesSiteId(self.attachedSite)
+                newSite = iconsites.makeSeriesSiteId(seriesName, seriesIdx-1)
                 self.window.cursor.setToIconSite(self.attachedIcon, newSite)
         else:  # Entry icon is not attached to icon (independent in window or in seq)
             pendingArg = self.pendingArg()
@@ -352,7 +355,7 @@ class EntryIcon(icon.Icon):
             parseResult = parseAttrText(newText, self.window)
         elif self.attachedIcon is None or self.attachedSite in ('seqIn', 'seqOut'):
             parseResult = parseTopLevelText(newText, self.window)
-        else: # Currently no other cursor places, must be expr
+        else:  # Currently no other cursor places, must be expr
             parseResult = parseExprText(newText, self.window)
         # print('parse result', parseResult)
         if parseResult == "reject":
@@ -398,7 +401,7 @@ class EntryIcon(icon.Icon):
                 beep()
             return
         elif parseResult == "openBracket":
-            self.insertOpenParen(icon.ListIcon)
+            self.insertOpenParen(listicons.ListIcon)
             return
         elif parseResult == "endBracket":
             matchedBracket = self.getUnclosedParen(parseResult, self.attachedIcon,
@@ -422,7 +425,7 @@ class EntryIcon(icon.Icon):
                     self.attachedSiteType = "attrIn"
             return
         elif parseResult == "openBrace":
-            self.insertOpenParen(icon.DictIcon)
+            self.insertOpenParen(listicons.DictIcon)
             return
         elif parseResult == "endBrace":
             matchedBracket = self.getUnclosedParen(parseResult, self.attachedIcon,
@@ -464,7 +467,7 @@ class EntryIcon(icon.Icon):
                 # The entry icon is directly on the input site of a cursor paren icon to
                 # be closed, this is the special case of an empty tuple: convert it to one
                 parent = matchingParen.parent()
-                tupleIcon = icon.TupleIcon(window=self.window)
+                tupleIcon = listicons.TupleIcon(window=self.window)
                 if parent is None:
                     self.window.replaceTop(matchingParen, tupleIcon)
                     tupleIcon.markLayoutDirty()
@@ -506,13 +509,13 @@ class EntryIcon(icon.Icon):
                 cursor.setToIconSite(ic, "attrIcon")
             elif "seqOut" in snapLists:
                 cursor.setToIconSite(ic, "seqOut")
-        elif ic.__class__ in (icon.AssignIcon, icon.AugmentedAssignIcon):
+        elif ic.__class__ in (assignicons.AssignIcon, assignicons.AugmentedAssignIcon):
             if not self.insertAssign(ic):
                 beep()
                 return
         elif self.attachedToAttribute():
             # Entry icon is attached to an attribute site (ic is operator or attribute)
-            if ic.__class__ is icon.AttrIcon:
+            if ic.__class__ is nameicons.AttrIcon:
                 self.attachedIcon.replaceChild(ic, "attrIcon")
                 cursor.setToIconSite(ic, "attrIcon")
             else:
@@ -536,7 +539,7 @@ class EntryIcon(icon.Icon):
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingArg(), cursor.site)
                 self.setPendingArg(None)
-                if cursor.icon.__class__ in (icon.BinOpIcon, icon.UnaryOpIcon):
+                if cursor.icon.__class__ in (opicons.BinOpIcon, opicons.UnaryOpIcon):
                     # Changing an operand of an arithmetic operator may require reorder
                     reorderArithExpr(cursor.icon)
         if self.pendingAttr() is not None and remainingText == "":
@@ -545,7 +548,8 @@ class EntryIcon(icon.Icon):
                 cursor.icon.replaceChild(self.pendingAttr(), cursor.site)
                 self.setPendingAttr(None)
         # If the entry icon can go away, remove it and we're done
-        if self.pendingArg() is None and self.pendingAttr() is None and remainingText == "":
+        if self.pendingArg() is None and self.pendingAttr() is None and \
+                remainingText == "":
             self.window.entryIcon = None
             return
         # There is remaining text or pending arguments.  Restore the entry icon
@@ -610,19 +614,19 @@ class EntryIcon(icon.Icon):
         cursorPlaced = False
         if onIcon is None:
             # The cursor is on the top level
-            tupleIcon = icon.TupleIcon(window=self.window)
+            tupleIcon = listicons.TupleIcon(window=self.window)
             tupleIcon.insertChildren([None, self.pendingArg()], "argIcons", 0)
             self.setPendingArg(None)
             self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
             self.window.replaceTop(self, tupleIcon)
             return True
         siteType = onIcon.typeOf(site)
-        if icon.isSeriesSiteId(site) and siteType == "input":
+        if iconsites.isSeriesSiteId(site) and siteType == "input":
             # This is essentially ",,", which means leave a new space for an arg
             # Entry icon holds pending arguments
-            seriesName, seriesIndex = icon.splitSeriesSiteId(site)
+            seriesName, seriesIndex = iconsites.splitSeriesSiteId(site)
             onIcon.insertChildren([None], seriesName, seriesIndex)
-            siteAfterComma = icon.makeSeriesSiteId(seriesName, seriesIndex + 1)
+            siteAfterComma = iconsites.makeSeriesSiteId(seriesName, seriesIndex + 1)
             if onIcon.childAt(siteAfterComma) == self:
                 # Remove the Entry Icon and restore its pending arguments
                 if self.pendingArg() is None:
@@ -634,13 +638,13 @@ class EntryIcon(icon.Icon):
                 self.attachedIcon = None
             self.window.cursor.setToIconSite(onIcon, siteAfterComma)
             return True
-        if onIcon.__class__ in (icon.UnaryOpIcon, icon.DivideIcon) and \
+        if onIcon.__class__ in (opicons.UnaryOpIcon, opicons.DivideIcon) and \
          siteType == "input":
             return False
-        elif onIcon.__class__ is icon.BinOpIcon and onIcon.hasParens:
+        elif onIcon.__class__ is opicons.BinOpIcon and onIcon.hasParens:
             return False
         elif onIcon.__class__ is CursorParenIcon:  # Open-paren
-            tupleIcon = icon.TupleIcon(window=self.window, closed=True)
+            tupleIcon = listicons.TupleIcon(window=self.window, closed=True)
             args = [None]
             if onIcon.sites.argIcon.att and onIcon.sites.argIcon.att is not self:
                 args += [onIcon.sites.argIcon.att]
@@ -655,16 +659,16 @@ class EntryIcon(icon.Icon):
             onIcon.replaceChild(None, 'attrIcon')
             tupleIcon.replaceChild(attrIcon, 'attrIcon')
             return True
-        if (isinstance(onIcon, icon.BinOpIcon) or isinstance(onIcon, icon.TwoArgIcon)) \
-         and site == "leftArg":
+        if (isinstance(onIcon, opicons.BinOpIcon) or
+                isinstance(onIcon, listicons.TwoArgIcon)) and site == "leftArg":
             leftArg = None
             rightArg = onIcon
             if onIcon.leftArg() is self:
                 onIcon.replaceChild(self.pendingArg(),"leftArg")
                 self.setPendingArg(None)
                 self.attachedIcon = None
-        elif (isinstance(onIcon, icon.BinOpIcon) or isinstance(onIcon, icon.TwoArgIcon)) \
-         and site == "rightArg":
+        elif (isinstance(onIcon, opicons.BinOpIcon) or
+              isinstance(onIcon, listicons.TwoArgIcon)) and site == "rightArg":
             leftArg = onIcon
             rightArg = onIcon.rightArg()
             if rightArg is self:
@@ -681,10 +685,10 @@ class EntryIcon(icon.Icon):
         child = onIcon
         for parent in onIcon.parentage():
             childSite = parent.siteOf(child)
-            if icon.isSeriesSiteId(childSite):
+            if iconsites.isSeriesSiteId(childSite):
                 onIcon.markLayoutDirty()
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
-                seriesName, seriesIndex = icon.splitSeriesSiteId(childSite)
+                seriesName, seriesIndex = iconsites.splitSeriesSiteId(childSite)
                 parent.insertChild(rightArg, seriesName, seriesIndex + 1)
                 if hasattr(parent, "closed") and not parent.closed:
                     # Once an item has a comma, we know what it is and where it ends, and
@@ -695,7 +699,7 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToIconSite(parent, seriesName, cursorIdx)
                 return True
             if parent.__class__ is CursorParenIcon:
-                tupleIcon = icon.TupleIcon(window=self.window)
+                tupleIcon = listicons.TupleIcon(window=self.window)
                 tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
                 if not cursorPlaced:
                     idx = 0 if leftArg is None else 1
@@ -710,10 +714,10 @@ class EntryIcon(icon.Icon):
                     parent.replaceChild(None, 'attrIcon')
                     tupleIcon.replaceChild(attrIcon, 'attrIcon')
                 return True
-            if isinstance(parent, icon.UnaryOpIcon):
+            if isinstance(parent, opicons.UnaryOpIcon):
                 leftArg = parent
-            elif isinstance(parent, icon.BinOpIcon) and not parent.hasParens or \
-             isinstance(parent, icon.TwoArgIcon):
+            elif isinstance(parent, opicons.BinOpIcon) and not parent.hasParens or \
+             isinstance(parent, listicons.TwoArgIcon):
                 # Parent is a binary op icon without parens, and site is one of the two
                 # input sites
                 if parent.leftArg() is child:  # Insertion was on left side of operator
@@ -736,7 +740,7 @@ class EntryIcon(icon.Icon):
                 return False
             child = parent
         # Reached top level.  Create Tuple
-        tupleIcon = icon.TupleIcon(window=self.window, noParens=True)
+        tupleIcon = listicons.TupleIcon(window=self.window, noParens=True)
         self.window.replaceTop(child, tupleIcon)
         tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
         if not cursorPlaced:
@@ -775,7 +779,7 @@ class EntryIcon(icon.Icon):
         # Reorder the expression with the new open paren in place (skip some work if the
         # entry icon was at the top level, since no reordering is necessary, there)
         if attachedIc is not None:
-            top = reorderArithExpr(newParenIcon)
+            reorderArithExpr(newParenIcon)
 
     def getUnclosedParen(self, token, fromIcon, fromSite):
         """Find a matching open paren/bracket/brace or paren-less tuple that could be
@@ -803,10 +807,10 @@ class EntryIcon(icon.Icon):
                 print('getUnclosedParen failed to find close-paren site')
         if matchingParen is None:
             return None
-        if matchingParen is fromIcon or isinstance(matchingParen, icon.TupleIcon):
+        if matchingParen is fromIcon or isinstance(matchingParen, listicons.TupleIcon):
             # matchingParen is an open cursor paren or a tuple with no parens or an
             # open cursor paren.  No reordering necessary, just add/close the parens
-            if matchingParen.__class__ is icon.TupleIcon:
+            if matchingParen.__class__ is listicons.TupleIcon:
                 matchingParen.restoreParens()
             else:
                 matchingParen.close()
@@ -818,7 +822,8 @@ class EntryIcon(icon.Icon):
         return matchingParen
 
     def makeFunction(self, ic):
-        callIcon = icon.CallIcon(window=self.window, closed=self.pendingArg() is None)
+        callIcon = listicons.CallIcon(window=self.window,
+            closed=self.pendingArg() is None)
         ic.replaceChild(callIcon, 'attrIcon')
         if self.pendingAttr():
             self.attachedSite = 'argIcons_0'
@@ -834,7 +839,7 @@ class EntryIcon(icon.Icon):
 
     def makeSubscript(self, ic):
         closed = self.pendingArg() is None
-        subscriptIcon = icon.SubscriptIcon(window=self.window, closed=closed)
+        subscriptIcon = subscripticon.SubscriptIcon(window=self.window, closed=closed)
         ic.replaceChild(subscriptIcon, 'attrIcon')
         if self.pendingAttr():
             self.attachedSite = 'indexIcon'
@@ -866,14 +871,14 @@ class EntryIcon(icon.Icon):
         # operation has equal precedence, and the associativity of the operation matches
         # the side of the operation on which the insertion is being made.
         for op in argIcon.parentage():
-            if stopAtParens or op.__class__ not in (icon.BinOpIcon, icon.UnaryOpIcon) or \
-                    newOpIcon.precedence > op.precedence or \
+            if stopAtParens or op.__class__ not in (opicons.BinOpIcon,
+                    opicons.UnaryOpIcon) or newOpIcon.precedence > op.precedence or \
                     newOpIcon.precedence == op.precedence and (
                      op.leftAssoc() and op.leftArg() is childOp or
                      op.rightAssoc() and op.rightArg() is childOp):
                 op.replaceChild(newOpIcon, op.siteOf(childOp))
                 break
-            if op.__class__ is icon.UnaryOpIcon:
+            if op.__class__ is opicons.UnaryOpIcon:
                 op.replaceChild(leftArg, "argIcon")
                 leftArg = op
             else:  # BinaryOp
@@ -892,8 +897,9 @@ class EntryIcon(icon.Icon):
             childOp = op
         else:  # Reached the top level without finding a parent for newOpIcon
             self.window.replaceTop(childOp, newOpIcon)
-        leftSite = "topArg" if newOpIcon.__class__ is icon.DivideIcon else "leftArg"
-        rightSite = "bottomArg" if newOpIcon.__class__ is icon.DivideIcon else "rightArg"
+        leftSite = "topArg" if newOpIcon.__class__ is opicons.DivideIcon else "leftArg"
+        rightSite = "bottomArg" if newOpIcon.__class__ is opicons.DivideIcon else \
+                "rightArg"
         if rightArg is None:
             self.window.cursor.setToIconSite(newOpIcon, rightSite)
         newOpIcon.markLayoutDirty()
@@ -905,7 +911,7 @@ class EntryIcon(icon.Icon):
         # Removing them here (when the divide icon is first inserted) rather than as a
         # general rule in filterRedundantParens, allows the user to add them back later
         # if needed for subsequent edits and not be unexpectedly removed.
-        if newOpIcon.__class__ is icon.DivideIcon:
+        if newOpIcon.__class__ is opicons.DivideIcon:
             topArgChild = newOpIcon.childAt('topArg')
             if isinstance(topArgChild, CursorParenIcon) and topArgChild.closed:
                 newOpIcon.replaceChild(topArgChild.childAt('argIcon'), 'topArg')
@@ -914,13 +920,15 @@ class EntryIcon(icon.Icon):
     def insertAssign(self, assignIcon):
         attIcon = icon.findAttrOutputSite(self.attachedIcon)
         attIconClass = attIcon.__class__
-        isAugmentedAssign = assignIcon.__class__ is icon.AugmentedAssignIcon
-        if not (attIconClass is icon.AssignIcon or attIconClass is icon.TupleIcon and
-         attIcon.noParens or self.attachedToAttribute() and attIconClass in
-         (icon.IdentifierIcon, icon.TupleIcon, icon.ListIcon, icon.AttrIcon)):
+        isAugmentedAssign = assignIcon.__class__ is assignicons.AugmentedAssignIcon
+        if not (attIconClass is assignicons.AssignIcon or
+                attIconClass is listicons.TupleIcon and attIcon.noParens or
+                self.attachedToAttribute() and attIconClass in
+                (nameicons.IdentifierIcon, listicons.TupleIcon, listicons.ListIcon,
+                 nameicons.AttrIcon)):
             return False
         if self.attachedToAttribute():
-            highestCoincidentIcon = icon.highestCoincidentIcon(attIcon)
+            highestCoincidentIcon = iconsites.highestCoincidentIcon(attIcon)
             if highestCoincidentIcon in self.window.topIcons:
                 # The cursor is attached to an attribute of a top-level icon of a type
                 # appropriate as a target. Insert assignment icon and make it the target.
@@ -940,7 +948,7 @@ class EntryIcon(icon.Icon):
                     assignIcon.replaceChild(attIcon, "targets0_0")
                 return True
         topParent = attIcon.topLevelParent()
-        if topParent.__class__ is icon.TupleIcon and topParent.noParens:
+        if topParent.__class__ is listicons.TupleIcon and topParent.noParens:
             # There is a no-paren tuple at the top level waiting to be converted in to an
             # assignment statement.  Do the conversion.
             targetIcons = topParent.argIcons()
@@ -956,7 +964,7 @@ class EntryIcon(icon.Icon):
                 insertSiteId = topParent.siteOf(attIcon, recursive=True)
                 for tgtIcon in targetIcons:
                     topParent.replaceChild(None, topParent.siteOf(tgtIcon))
-                seriesName, seriesIdx = icon.splitSeriesSiteId(insertSiteId)
+                seriesName, seriesIdx = iconsites.splitSeriesSiteId(insertSiteId)
                 splitIdx = seriesIdx + (0 if topParent is self.attachedIcon else 1)
                 assignIcon.insertChildren(targetIcons[:splitIdx], 'targets0', 0)
                 assignIcon.insertChildren(targetIcons[splitIdx:], 'values', 0)
@@ -965,12 +973,12 @@ class EntryIcon(icon.Icon):
             self.window.replaceTop(topParent, assignIcon)
             self.window.cursor.setToIconSite(assignIcon, "values_0")
             return True
-        if topParent.__class__ is icon.AssignIcon and not isAugmentedAssign:
+        if topParent.__class__ is assignicons.AssignIcon and not isAugmentedAssign:
             # There is already an assignment icon.  Add a new clause, splitting the
             # target list at the entry location.  (assignIcon is thrown away)
             self.attachedIcon.replaceChild(None, self.attachedSite)
             insertSiteId = topParent.siteOf(attIcon, recursive=True)
-            seriesName, seriesIdx = icon.splitSeriesSiteId(insertSiteId)
+            seriesName, seriesIdx = iconsites.splitSeriesSiteId(insertSiteId)
             splitIdx = seriesIdx + (0 if topParent is self.attachedIcon else 1)
             if seriesName == 'values':  # = was typed in the value series
                 newTgtGrpIdx = len(topParent.tgtLists)
@@ -994,7 +1002,7 @@ class EntryIcon(icon.Icon):
     def insertColon(self):
         # Look for an icon that supports colons (currently, only subscript)
         for parent in self.attachedIcon.parentage(includeSelf=True):
-            if isinstance(parent, icon.SubscriptIcon):
+            if isinstance(parent, subscripticon.SubscriptIcon):
                 if parent.hasSite('stepIcon'):
                     # Subscript already has all 3 colons
                     colonInserted = False
@@ -1019,12 +1027,12 @@ class EntryIcon(icon.Icon):
                 cursorToIcon = subsIc
                 colonInserted = True
                 break
-            if isinstance(parent, icon.DictIcon):
+            if isinstance(parent, listicons.DictIcon):
                 dictIc = parent
                 site = parent.siteOf(self, recursive=True)
                 child = dictIc.childAt(site)
-                dictElem = icon.DictElemIcon(window=self.window)
-                if isinstance(child, icon.DictElemIcon):
+                dictElem = listicons.DictElemIcon(window=self.window)
+                if isinstance(child, listicons.DictElemIcon):
                     # There's already a colon in this clause.  We allow a colon to be
                     # typed on the left of an existing clause, since that is how one
                     # naturally types a new clause (when they begin after the comma or to
@@ -1139,7 +1147,7 @@ class EntryIcon(icon.Icon):
             siteOffset += icon.ATTR_SITE_OFFSET
         layouts = []
         for pendingArgLayout in pendingArgLayouts:
-            layout = icon.Layout(self, width, self.height, siteOffset)
+            layout = iconlayout.Layout(self, width, self.height, siteOffset)
             if self.pendingArg():
                 layout.addSubLayout(pendingArgLayout, 'pendingArg', width, 0)
                 width += pendingArgLayout.width
@@ -1199,7 +1207,7 @@ class CursorParenIcon(icon.Icon):
             draw = ImageDraw.Draw(img)
             height = textHeight + 2 * icon.TEXT_MARGIN
             draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth-1, bodyHeight-1),
-             fill=icon.ICON_BG_COLOR, outline=icon.OUTLINE_COLOR)
+             fill=comn.ICON_BG_COLOR, outline=comn.OUTLINE_COLOR)
             if needSeqSites:
                 icon.drawSeqSites(img, bodyLeft, 0, bodyHeight)
             outSiteX = self.sites.output.xOffset
@@ -1217,19 +1225,19 @@ class CursorParenIcon(icon.Icon):
             if self.closed:
                 closeImg = Image.new('RGBA', (bodyWidth, bodyHeight))
                 draw = ImageDraw.Draw(closeImg)
-                draw.rectangle((0, 0, bodyWidth-1, bodyHeight-1), fill=icon.ICON_BG_COLOR,
-                 outline=icon.OUTLINE_COLOR)
+                draw.rectangle((0, 0, bodyWidth-1, bodyHeight-1), fill=comn.ICON_BG_COLOR,
+                 outline=comn.OUTLINE_COLOR)
                 textLeft = icon.TEXT_MARGIN
                 draw.text((textLeft, icon.TEXT_MARGIN), ")",
                     font=icon.globalFont, fill=(120, 120, 120, 255))
                 attrX = bodyWidth - 1 - icon.ATTR_SITE_DEPTH
                 attrY = self.sites.attrIcon.yOffset
                 closeImg.paste(icon.attrInImage, (attrX, attrY))
-                endParenLeft = icon.rectWidth(self.rect) - bodyWidth
+                endParenLeft = comn.rectWidth(self.rect) - bodyWidth
                 self.drawList.append(((endParenLeft, 0), closeImg))
             else:
                 draw.line((bodyLeft, outSiteY, inSiteX, outSiteY),
-                 fill=icon.ICON_BG_COLOR, width=3)
+                 fill=comn.ICON_BG_COLOR, width=3)
         self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self, outSiteX, outSiteY, layout):
@@ -1255,8 +1263,9 @@ class CursorParenIcon(icon.Icon):
         else:
             attrLayouts = [None]
         layouts = []
-        for argLayout, attrLayout in icon.allCombinations((argLayouts, attrLayouts)):
-            layout = icon.Layout(self, width, height, height//2)
+        for argLayout, attrLayout in iconlayout.allCombinations(
+                (argLayouts, attrLayouts)):
+            layout = iconlayout.Layout(self, width, height, height//2)
             layout.addSubLayout(argLayout, 'argIcon', singleParenWidth - 1, 0)
             width += icon.EMPTY_ARG_WIDTH if argLayout is None else argLayout.width - 1
             if self.closed:
@@ -1294,8 +1303,8 @@ class CursorParenIcon(icon.Icon):
         self.closed = True
         self.markLayoutDirty()
         # Allow cursor to be set to the end paren before layout knows where it goes
-        self.sites.add('attrIcon', 'attrIn', icon.rectWidth(self.rect) -
-         icon.ATTR_SITE_DEPTH, icon.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
+        self.sites.add('attrIcon', 'attrIn', comn.rectWidth(self.rect) -
+         icon.ATTR_SITE_DEPTH, comn.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
         self.window.undo.registerCallback(self.reopen)
 
     def reopen(self):
@@ -1338,7 +1347,7 @@ class Cursor:
         if seriesIndex is None:
             self.site = siteIdOrSeriesName
         else:
-            self.site = icon.makeSeriesSiteId(siteIdOrSeriesName, seriesIndex)
+            self.site = iconsites.makeSeriesSiteId(siteIdOrSeriesName, seriesIndex)
         self.siteType = ic.typeOf(self.site)
         self.blinkState = True
         self.draw()
@@ -1361,7 +1370,7 @@ class Cursor:
     def selectToCursor(self, ic, site, direction):
         """Modify selection based on cursor movement (presumably with Shift key held)"""
         selectedIcons = set(self.window.selectedIcons())
-        redrawRect = python_g.AccumRects()
+        redrawRect = comn.AccumRects()
         if len(selectedIcons) == 0 and self.type == "icon":
             # This is a new cursor-based selection
             self.anchorIc = self.icon
@@ -1378,7 +1387,7 @@ class Cursor:
             # The current selection is not valid, assume it was made via mouse.  Choose
             # an anchor line as the farthest side of the selection rectangle from the
             # cursor using the direction of arrow motion to choose horiz/vert
-            selectedRect = python_g.AccumRects()
+            selectedRect = comn.AccumRects()
             for i in selectedIcons:
                 selectedRect.add(i.selectionRect())
             left, top, right, bottom = selectedRect.get()
@@ -1433,18 +1442,18 @@ class Cursor:
             elif siteX < anchorX:
                 siteX += 4
                 anchorX -= 3
-            selectRect = python_g.AccumRects((anchorX, anchorY - 3, anchorX, anchorY + 3))
+            selectRect = comn.AccumRects((anchorX, anchorY - 3, anchorX, anchorY + 3))
             selectRect.add((siteX, siteY - 3, siteX, siteY + 3))
         else:
             if self.anchorLine[0] == self.anchorLine[2]:
                 anchorX = self.anchorLine[0]
                 if anchorX < siteX:
-                    self.anchorLine = python_g.offsetRect(self.anchorLine, 4, 0)
+                    self.anchorLine = comn.offsetRect(self.anchorLine, 4, 0)
                     siteX -= 3
                 elif siteX < anchorX:
                     siteX += 4
                     icon.moveRect(self.anchorLine, (-3, 0))
-            selectRect = python_g.AccumRects(self.anchorLine)
+            selectRect = comn.AccumRects(self.anchorLine)
             selectRect.add((siteX, siteY, siteX, siteY))
         # Get the icons that would be covered by a rectangular selection of the box
         iconsToSelect = self.window.findIconsInRegion(selectRect.get())
@@ -1563,7 +1572,7 @@ class Cursor:
         shiftPressed = evt.state & python_g.SHIFT_MASK
         if not shiftPressed:
             self.window.unselectAll()
-        selectedRects = python_g.AccumRects()
+        selectedRects = comn.AccumRects()
         for ic in selectedIcons:
             selectedRects.add(ic.selectionRect())
         selectedRect = selectedRects.get()
@@ -1701,12 +1710,13 @@ class Cursor:
                 siteType = parent.typeOf(parent.siteOf(child))
             if siteType == "input" and (
              (token == "endParen" and (
-              parent.__class__ is icon.BinOpIcon and icon.needsParens(parent) or
-              parent.__class__ in (icon.CallIcon, icon.TupleIcon, icon.DefIcon) or
+              parent.__class__ is opicons.BinOpIcon and opicons.needsParens(parent) or
+              parent.__class__ in (listicons.CallIcon, listicons.TupleIcon,
+               blockicons.DefIcon) or
               parent.__class__ is CursorParenIcon and parent.closed)) or
-             (token == "endBrace" and isinstance(parent, icon.DictIcon)) or
+             (token == "endBrace" and isinstance(parent, listicons.DictIcon)) or
              (token == "endBracket" and
-              parent.__class__ in (icon.ListIcon, icon.SubscriptIcon))):
+              parent.__class__ in (listicons.ListIcon, subscripticon.SubscriptIcon))):
                 self.setToIconSite(parent, "attrIcon")
                 return True
             child = parent
@@ -1729,15 +1739,15 @@ def parseAttrText(text, window):
     if text in ("i", "a", "o", "an"):
         return "accept"  # Legal precursor characters to binary keyword operation
     if text in ("and", "is", "in", "or"):
-        return icon.BinOpIcon(text, window), None # Binary keyword operation
+        return opicons.BinOpIcon(text, window), None # Binary keyword operation
     if text in ("*", "/", "@", "<", ">", "=", "!"):
         return "accept"  # Legal precursor characters to binary operation
     if text in compareOperators:
-        return icon.BinOpIcon(text, window), None
+        return opicons.BinOpIcon(text, window), None
     if text in binaryOperators:
         return "accept"  # Binary ops can be part of augmented assign (i.e. +=)
     if text[:-1] in binaryOperators and text[-1] == '=':
-        return icon.AugmentedAssignIcon(text[:-1], window), None
+        return assignicons.AugmentedAssignIcon(text[:-1], window), None
     if text == '(':
         return "makeFunction"  # Make a function from the attached icon
     if text == ')':
@@ -1755,21 +1765,21 @@ def parseAttrText(text, window):
     op = text[:-1]
     delim = text[-1]
     if attrPattern.fullmatch(op):
-        return icon.AttrIcon(op[1:], window), delim
+        return nameicons.AttrIcon(op[1:], window), delim
     if opDelimPattern.match(delim):
         if op in compareOperators:
-            return icon.BinOpIcon(op, window), delim
+            return opicons.BinOpIcon(op, window), delim
         if op in binaryOperators:
             # Valid binary operator followed by allowable operand character
             if op == '/':
-                return icon.DivideIcon(False, window), delim
+                return opicons.DivideIcon(False, window), delim
             elif op == '//':
-                return icon.DivideIcon(True, window), delim
-            return icon.BinOpIcon(op, window), delim
+                return opicons.DivideIcon(True, window), delim
+            return opicons.BinOpIcon(op, window), delim
         if op[:-1] in binaryOperators and op[-1] == '=':
-            return icon.AugmentedAssignIcon(op[:-1], window), delim
+            return assignicons.AugmentedAssignIcon(op[:-1], window), delim
     if op == '=':
-        return icon.AssignIcon(1, window), delim
+        return assignicons.AssignIcon(1, window), delim
     return "reject"
 
 def parseExprText(text, window):
@@ -1777,11 +1787,11 @@ def parseExprText(text, window):
         return "accept"
     if text in unaryOperators:
         # Unary operator
-        return icon.UnaryOpIcon(text, window), None
+        return opicons.UnaryOpIcon(text, window), None
     if text == 'yield':
-        return icon.YieldIcon(window), None
+        return nameicons.YieldIcon(window), None
     if text == 'await':
-        return icon.AwaitIcon(window), None
+        return nameicons.AwaitIcon(window), None
     if text == '(':
         return "openParen"
     if text == ')':
@@ -1799,32 +1809,32 @@ def parseExprText(text, window):
     if text == ':':
         return "colon"
     if text == '=':
-        return icon.AssignIcon(1, window), None
+        return assignicons.AssignIcon(1, window), None
     if identPattern.fullmatch(text) or numPattern.fullmatch(text):
         return "accept"  # Nothing but legal identifier and numeric
     delim = text[-1]
     text = text[:-1]
     if opDelimPattern.match(delim):
         if text in unaryOperators:
-            return icon.UnaryOpIcon(text, window), delim
+            return opicons.UnaryOpIcon(text, window), delim
     if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
         return "reject"  # Precursor characters do not form valid identifier or number
     if len(text) == 0 or delim not in delimitChars:
         return "reject"  # No legal text or not followed by a legal delimiter
     # All but the last character is ok and the last character is a valid delimiter
     if text in ('False', 'None', 'True'):
-        return icon.IdentifierIcon(text, window), delim
+        return nameicons.IdentifierIcon(text, window), delim
     if text in keywords:
         return "reject"
     exprAst = compile_eval.parseExprToAst(text)
     if exprAst is None:
         return "reject"
     if exprAst.__class__ == ast.Name:
-        return icon.IdentifierIcon(exprAst.id, window), delim
+        return nameicons.IdentifierIcon(exprAst.id, window), delim
     if exprAst.__class__ == ast.Num:
-        return icon.NumericIcon(exprAst.n, window), delim
+        return nameicons.NumericIcon(exprAst.n, window), delim
     if exprAst.__class__ == ast.Constant and isinstance(exprAst.value, numbers.Number):
-        return icon.NumericIcon(exprAst.value, window), delim
+        return nameicons.NumericIcon(exprAst.value, window), delim
     return "reject"
 
 def parseTopLevelText(text, window):
@@ -1903,20 +1913,25 @@ def searchForOpenParen(token, ic, site):
         if siteType == 'input':
             if token == "endParen" and isinstance(ic, CursorParenIcon) and not ic.closed:
                 return ic
-            if token == "endParen" and isinstance(ic, icon.TupleIcon) and ic.noParens:
+            if token == "endParen" and isinstance(ic, listicons.TupleIcon) and \
+                    ic.noParens:
                 # Found a no-paren (top-level) tuple to parenthesize
                 return ic
-            if token == "endParen" and isinstance(ic, icon.CallIcon) and not ic.closed:
+            if token == "endParen" and isinstance(ic, listicons.CallIcon) and \
+                    not ic.closed:
                 return ic
             if token == "endBracket" and \
-             ic.__class__ in (icon.ListIcon, icon.SubscriptIcon) and not ic.closed:
+             ic.__class__ in (listicons.ListIcon, subscripticon.SubscriptIcon) and \
+                    not ic.closed:
                 return ic
-            if token == "endBrace" and isinstance(ic, icon.DictIcon) and not ic.closed:
+            if token == "endBrace" and isinstance(ic, listicons.DictIcon) and \
+                    not ic.closed:
                 return ic
-            if isinstance(ic, icon.BinOpIcon) and ic.hasParens:
+            if isinstance(ic, opicons.BinOpIcon) and ic.hasParens:
                 # Don't allow search to escape enclosing arithmetic parens
                 return None
-            if ic.__class__ not in (icon.BinOpIcon, icon.UnaryOpIcon, icon.DictElemIcon):
+            if ic.__class__ not in (opicons.BinOpIcon, opicons.UnaryOpIcon,
+                    listicons.DictElemIcon):
                 # For anything but an arithmetic op, inputs are enclosed in something
                 # and search should not extend beyond (calls, tuples, subscripts, etc.)
                 return None
@@ -1932,21 +1947,22 @@ def rightmostSite(ic, ignoreAutoParens=False):
     input site.  While binary op icons may have a fake invisible attribute site, it should
     be used carefully (if ever).  ignoreAutoParens prevents choosing auto-paren attribute
     site of BinOpIcon, even if it the rightmost."""
-    if isinstance(ic, icon.UnaryOpIcon):
+    if isinstance(ic, opicons.UnaryOpIcon):
         if ic.arg() is None:
             return ic, 'argIcon'
         return rightmostSite(icon.findLastAttrIcon(ic.arg()))
-    elif ic.__class__ in (icon.AssignIcon, icon.YieldIcon, icon.YieldFromIcon):
+    elif ic.__class__ in (assignicons.AssignIcon, nameicons.YieldIcon,
+            nameicons.YieldFromIcon):
         children = [site.att for site in ic.sites.values if site.att is not None]
         if len(children) == 0:
             return ic, 'values_0'
         return rightmostSite(icon.findLastAttrIcon(children[-1]))
-    elif isinstance(ic, icon.BinOpIcon) and (not ic.hasParens or ignoreAutoParens) or \
-     isinstance(ic, icon.TwoArgIcon):
+    elif isinstance(ic, opicons.BinOpIcon) and (not ic.hasParens or ignoreAutoParens) \
+            or isinstance(ic, listicons.TwoArgIcon):
         if ic.rightArg() is None:
             return ic, 'rightArg'
         return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))
-    elif isinstance(ic, icon.DefIcon):
+    elif isinstance(ic, blockicons.DefIcon):
         children = [site.att for site in ic.sites.argIcons if site.att is not None]
         if len(children) == 0:
             return ic, 'argIcons_0'
@@ -1984,9 +2000,9 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     topNode = highestAffectedExpr(changedIcon)
     topNodeParent = topNode.parent()
     topNodeParentSite = None if topNodeParent is None else topNodeParent.siteOf(topNode)
-    if changedIcon.__class__ in (icon.ListIcon, icon.DictIcon,
-     icon.CallIcon, icon.DefIcon, icon.SubscriptIcon) or \
-     isinstance(changedIcon, icon.ClassDefIcon) and changedIcon.argList:
+    if changedIcon.__class__ in (listicons.ListIcon, listicons.DictIcon,
+     listicons.CallIcon, blockicons.DefIcon, subscripticon.SubscriptIcon) or \
+     isinstance(changedIcon, blockicons.ClassDefIcon) and changedIcon.argList:
         allowedNonParen = OpenParenToken(changedIcon)
     else:
         allowedNonParen = None
@@ -2064,15 +2080,15 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     return newTopNode
 
 def highestAffectedExpr(changedIcon):
-    topCoincidentIcon = icon.highestCoincidentIcon(changedIcon)
+    topCoincidentIcon = iconsites.highestCoincidentIcon(changedIcon)
     for ic in topCoincidentIcon.parentage(includeSelf=True):
         parent = ic.parent()
         if parent is None:
             return ic  # ic is at top level
         site = parent.siteOf(ic)
         siteType = parent.typeOf(site)
-        if siteType == "input" and parent.__class__ not in (icon.BinOpIcon,
-         icon.UnaryOpIcon, CursorParenIcon):
+        if siteType == "input" and parent.__class__ not in (opicons.BinOpIcon,
+         opicons.UnaryOpIcon, CursorParenIcon):
             return ic  # Everything other than arithmetic expressions encloses args
 
 def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None):
@@ -2086,7 +2102,7 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
     representedIcons = (topNode, )
     if topNode is None:
         yield MissingArgToken()
-    elif isinstance(topNode, icon.BinOpIcon):
+    elif isinstance(topNode, opicons.BinOpIcon):
         if topNode.hasParens:
             yield OpenParenToken(topNode)
         yield from traverseExprLeftToRight(topNode.leftArg(), allowedNonParen,
@@ -2096,7 +2112,7 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
          closeParenAfter)
         if topNode.hasParens:
             yield CloseParenToken(topNode)
-    elif isinstance(topNode, icon.UnaryOpIcon):
+    elif isinstance(topNode, opicons.UnaryOpIcon):
         yield UnaryOpToken(topNode)
         yield from traverseExprLeftToRight(topNode.arg(), allowedNonParen,
          closeParenAfter)
@@ -2145,15 +2161,16 @@ class OpenParenToken:
             attrIcon = parenIcon.childAt('attrIcon')
             if attrIcon is not None:
                 self.representedIcons += list(attrIcon.traverse())
-        if isinstance(parenIcon, icon.BinOpIcon):
+        if isinstance(parenIcon, opicons.BinOpIcon):
             self.contentSite = None
         elif parenIcon.hasSite('argIcons_0'):
             self.contentSite = 'argIcons_0'
-        elif isinstance(parenIcon, icon.SubscriptIcon):
+        elif isinstance(parenIcon, subscripticon.SubscriptIcon):
             self.contentSite = 'indexIcon'
         else:
             self.contentSite = 'argIcon'
-        self.closed = isinstance(self.parenIcon, icon.BinOpIcon) or self.parenIcon.closed
+        self.closed = isinstance(self.parenIcon, opicons.BinOpIcon) or \
+                self.parenIcon.closed
         self.arg = None
         self.endParenAttr = None
         self.endParenIc = None
@@ -2216,7 +2233,7 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
         return token.ic
     elif isinstance(token, OpenParenToken):
         if token.closed and isinstance(token.arg, BinaryOpToken) and \
-                icon.needsParens(token.arg.ic, parentIc, parentSite=parentSite):
+                opicons.needsParens(token.arg.ic, parentIc, parentSite=parentSite):
             # Binary op child icon will provide its own auto-parens
             parenIc = relinkExprFromTokens(token.arg, parentIc, parentSite)
             outIc = parenIc
@@ -2235,7 +2252,7 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
         else:
             # Add parens around argument using existing icon if possible.  If not
             # (because parens were bin op auto-parens), create a new cursor paren
-            if isinstance(token.ic, icon.BinOpIcon):
+            if isinstance(token.ic, opicons.BinOpIcon):
                 parenIc = CursorParenIcon(window=token.ic.window, closed=token.closed)
                 contentSite = 'argIcon'
                 outIc = parenIc
@@ -2284,11 +2301,11 @@ def dumpTok(token, indent=0):
         dumpTok(token.leftArg, indent+1)
         dumpTok(token.rightArg, indent+1)
     elif isinstance(token, OpenParenToken):
-        parenType = "BinOp" if isinstance(token.parenIcon, icon.BinOpIcon) else ""
+        parenType = "BinOp" if isinstance(token.parenIcon, opicons.BinOpIcon) else ""
         attr = ""
         if token.endParenAttr is not None:
             attr = token.endParenAttr.dumpName() + " <- " + \
                     token.endParenIc.dumpName() + " " + str(token.endParenIc.id)
-        print("   " * indent, parenType + "Paren", token.parenIcon.dumpName(), \
+        print("   " * indent, parenType + "Paren", token.parenIcon.dumpName(),
                 token.parenIcon.id, attr)
         dumpTok(token.arg, indent+1)

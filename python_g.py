@@ -2,8 +2,16 @@
 # Python-g main module
 import tkinter as tk
 import ast
+import comn
 import typing
+import iconsites
 import icon
+import blockicons
+import listicons
+import opicons
+import nameicons
+import subscripticon
+import assignicons
 import undo
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
@@ -90,12 +98,6 @@ startUpTime = time.monotonic()
 # very long in the state where both are present, so take any reasonable opportunity to
 # remove the selection.
 
-def combineRects(rect1, rect2):
-    """Find the minimum rectangle enclosing rect1 and rect2"""
-    l1, t1, r1, b1 = rect1
-    l2, t2, r2, b2 = rect2
-    return min(l1, l2), min(t1, t2), max(r1, r2), max(b1, b2)
-
 def msTime():
     """Return a millisecond-resolution timestamp"""
     return int(time.monotonic() - startUpTime * 1000)
@@ -120,10 +122,6 @@ def exposedRegions(oldRect, newRect):
     if bo > bn:
         exposed.append((lo, bn, ro, bo))
     return exposed
-
-def offsetRect(rect, xOff, yOff):
-    l, t, r, b = rect
-    return l+xOff, t+yOff, r+xOff, b+yOff
 
 class Window:
     # Until we can open files, windows are just "Untitled n", name is needed to connect
@@ -323,9 +321,10 @@ class Window:
         # Add context-sensitive items to pop-up menu
         if len(selectedIcons) == 1:
             selIcon = selectedIcons[0]
-            if isinstance(selIcon, icon.ListTypeIcon):
+            if isinstance(selIcon, listicons.ListTypeIcon):
                 self.listPopupIcon = selIcon
-                self.listPopupVal.set('(' if isinstance(selIcon, icon.TupleIcon) else '[')
+                self.listPopupVal.set('(' if isinstance(selIcon,
+                        listicons.TupleIcon) else '[')
                 self.popup.add_separator()
                 self.popup.add_cascade(label="Change To", menu=self.listPopup)
         # Pop it up
@@ -477,7 +476,7 @@ class Window:
             x, y = self.cursor.pos
             self.entryIcon = typing.EntryIcon(None, None, window=self)
             y -= self.entryIcon.sites.output.yOffset
-            self.entryIcon.rect = offsetRect(self.entryIcon.rect, x, y)
+            self.entryIcon.rect = comn.offsetRect(self.entryIcon.rect, x, y)
             self.addTopSingle(self.entryIcon, newSeq=True)
             self.cursor.setToEntryIcon()
             self.entryIcon.addText(char)
@@ -534,7 +533,7 @@ class Window:
         self._redisplayChangedEntryIcon()
 
     def _redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
-        redrawRegion = AccumRects(oldLoc)
+        redrawRegion = comn.AccumRects(oldLoc)
         if self.entryIcon is not None:
             redrawRegion.add(self.entryIcon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
@@ -603,11 +602,11 @@ class Window:
                 self._startDrag(evt, list(ic.traverseBlock(hier=True)))
             elif isinstance(ic, icon.BlockEnd):
                 self._startDrag(evt, list(ic.primary.traverseBlock(hier=True)))
-            elif ic.__class__ in (icon.ElseIcon, icon.ElifIcon):
-                self._startDrag(evt, icon.elseElifBlockIcons(ic))
+            elif ic.__class__ in (blockicons.ElseIcon, blockicons.ElifIcon):
+                self._startDrag(evt, blockicons.elseElifBlockIcons(ic))
             else:
-                self._startDrag(evt, list(icon.findLeftOuterIcon(
-                 self.assocGrouping(ic), self.buttonDownLoc).traverse()))
+                self._startDrag(evt, list(findLeftOuterIcon(self.assocGrouping(ic),
+                        self.buttonDownLoc).traverse()))
 
     def _mouseWheelCb(self, evt):
         delta = -int(evt.delta * MOUSE_WHEEL_SCALE)
@@ -647,8 +646,8 @@ class Window:
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
         ic = self.findIconAt(x, y)
-        if (ic is None or not ic.isSelected()) and not (evt.state & SHIFT_MASK or \
-         evt.state & CTRL_MASK):
+        if (ic is None or not ic.isSelected()) and not (evt.state & SHIFT_MASK or
+                evt.state & CTRL_MASK):
             self.unselectAll()
 
     def _buttonReleaseCb(self, evt):
@@ -674,8 +673,8 @@ class Window:
                         return
                     self._select(ic, op="block")
                 else:
-                    iconToExecute = icon.findLeftOuterIcon(
-                     self.assocGrouping(iconToExecute), self.buttonDownLoc)
+                    iconToExecute = findLeftOuterIcon(self.assocGrouping(iconToExecute),
+                            self.buttonDownLoc)
                     if iconToExecute not in self.topIcons:
                         self.doubleClickFlag = False
                         self._delayedBtnUpActions(evt)
@@ -741,8 +740,8 @@ class Window:
         currentSel = self.selectedIcons()
         singleSel = [clickedIcon]
         hierSel = list(clickedIcon.traverse())
-        leftSel = list(icon.findLeftOuterIcon(self.assocGrouping(clickedIcon),
-         self.buttonDownLoc).traverse())
+        leftSel = list(findLeftOuterIcon(self.assocGrouping(clickedIcon),
+            self.buttonDownLoc).traverse())
         if hasattr(clickedIcon, 'blockEnd'):
             singleSel.append(clickedIcon.blockEnd)
             hierSel.append(clickedIcon.blockEnd)
@@ -821,7 +820,7 @@ class Window:
                 pastedIcons = compile_eval.parsePasted(text, self, (0, 0))
                 # Not usable python code, put in to single icon as string
                 if pastedIcons is None:
-                    pastedIcons = [icon.TextIcon(repr(text), self, (0, 0))]
+                    pastedIcons = [nameicons.TextIcon(repr(text), self, (0, 0))]
             else:
                 # No text available in a form we can use.  Try for image
                 clipImage = ImageGrab.grabclipboard()
@@ -868,7 +867,7 @@ class Window:
         # window at position given by pastePos
         if replaceParent is not None:
             topIcon = replaceParent.topLevelParent()
-            redrawRegion = AccumRects(topIcon.hierRect())
+            redrawRegion = comn.AccumRects(topIcon.hierRect())
             replaceParent.replaceChild(pastedIcons[0], replaceSite)
             print('start layout', time.monotonic())
             redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
@@ -879,7 +878,7 @@ class Window:
             x, y = pastePos
             for topIcon in pastedIcons:
                 for ic in topIcon.traverse():
-                    ic.rect = offsetRect(ic.rect, x, y)
+                    ic.rect = comn.offsetRect(ic.rect, x, y)
             self.addTop(pastedIcons)
             print('start layout', time.monotonic())
             redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
@@ -940,30 +939,30 @@ class Window:
         # identifiers, strings, and numeric constants, it's simply replacing the icon
         # with an entry icon containing the text of the icon.  Other types of icons are
         # more complicated  (see code below).
-        if isinstance(ic, icon.TextIcon) or isinstance(ic, icon.UnaryOpIcon) or \
-         isinstance(ic, icon.AttrIcon):
-            if isinstance(ic, icon.UnaryOpIcon):
+        if isinstance(ic, nameicons.TextIcon) or isinstance(ic, opicons.UnaryOpIcon) or \
+         isinstance(ic, nameicons.AttrIcon):
+            if isinstance(ic, opicons.UnaryOpIcon):
                 text = ic.operator
-            elif isinstance(ic, icon.AttrIcon):
+            elif isinstance(ic, nameicons.AttrIcon):
                 text = "." + ic.name
-            elif isinstance(ic, icon.NumericIcon):
+            elif isinstance(ic, nameicons.NumericIcon):
                 text = ic.text
             else:
                 text = ic.name
             self._backspaceIconToEntry(evt, ic, text, site)
 
-        elif isinstance(ic, icon.ListTypeIcon) or isinstance(ic, icon.CallIcon):
+        elif isinstance(ic, listicons.ListTypeIcon) or isinstance(ic, listicons.CallIcon):
             # Lists, tuples, dicts, sets, calls
-            siteName, index = icon.splitSeriesSiteId(site)
+            siteName, index = iconsites.splitSeriesSiteId(site)
             allArgs = ic.argIcons()
             nonEmptyArgs = [i for i in allArgs if i != None]
             numArgs = len(nonEmptyArgs)
-            redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             attrAttached = ic.closed and ic.childAt('attrIcon')
             if site == "attrIcon":
                 # On backspace from the outside right paren
                 if len(allArgs) < 2 and not attrAttached:
-                    if isinstance(ic, icon.TupleIcon):
+                    if isinstance(ic, listicons.TupleIcon):
                         # For tuple icons, turn back in to cursor paren
                         cursorParen = typing.CursorParenIcon(window=self)
                         parent = ic.parent()
@@ -1070,19 +1069,19 @@ class Window:
                     # site.  Not safe to remove.  Pop  up context menu to change type.
                     self.listPopupIcon = ic
                     self.listPopupVal.set(
-                        '(' if isinstance(ic, icon.TupleIcon) else '[')
+                        '(' if isinstance(ic, listicons.TupleIcon) else '[')
                     # Tkinter's pop-up grab does not allow accelerator keys to operate
                     # while up, which is unfortunate as you'd really like to type [ or (
                     self.listPopup.tk_popup(evt.x_root, evt.y_root, 0)
             else:
                 # Cursor is on comma input.  Delete if empty or previous site is empty
-                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                prevSite = iconsites.makeSeriesSiteId(siteName, index-1)
                 childAtCursor = ic.childAt(site)
                 if childAtCursor and ic.childAt(prevSite):
                     typing.beep()
                     return
                 topIcon = ic.topLevelParent()
-                redrawRegion = AccumRects(topIcon.hierRect())
+                redrawRegion = comn.AccumRects(topIcon.hierRect())
                 if not ic.childAt(prevSite):
                     ic.removeEmptySeriesSite(prevSite)
                     self.cursor.setToIconSite(ic, prevSite)
@@ -1094,10 +1093,10 @@ class Window:
                 redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
                 self.refresh(redrawRegion.get())
 
-        elif isinstance(ic, icon.DefIcon):
+        elif isinstance(ic, blockicons.DefIcon):
             pass  # Not implemented, yet
 
-        elif isinstance(ic, icon.SubscriptIcon):
+        elif isinstance(ic, subscripticon.SubscriptIcon):
             if site == 'indexIcon':
                 # Cursor is on the index site.  Try to remove brackets
                 if ic.hasSite('upperIcon') and ic.childAt('upperIcon') or \
@@ -1114,7 +1113,7 @@ class Window:
                 else:
                     # Icon has a single argument and it's in the first slot: unwrap
                     # the bracket from around it.
-                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
                     parent = ic.parent()
                     content = ic.childAt('indexIcon')
                     if parent is None:
@@ -1157,7 +1156,7 @@ class Window:
                 else:
                     # Reopen right bracket
                     arg = ic.sites.indexIcon.att
-                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
                     if arg is None:
                         cursIc = ic
                         cursSite = 'indexIcon'
@@ -1172,7 +1171,7 @@ class Window:
                     self.refresh(redrawRegion.get())
                 return
             # Site is after a colon.  Try to remove it
-            redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             if site == 'upperIcon':
                 # Remove first colon
                 mergeSite1 = 'indexIcon'
@@ -1225,7 +1224,7 @@ class Window:
 
         elif isinstance(ic, typing.CursorParenIcon):
             arg = ic.sites.argIcon.att
-            redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             # If an attribute is attached to the parens, don't delete, just select
             attrIcon = ic.childAt('attrIcon')
             if attrIcon:
@@ -1291,12 +1290,12 @@ class Window:
             redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=True))
             self.refresh(redrawRegion.get())
 
-        elif isinstance(ic, icon.BinOpIcon) or isinstance(ic, icon.DivideIcon):
+        elif isinstance(ic, opicons.BinOpIcon) or isinstance(ic, opicons.DivideIcon):
             # Binary operations replace the icon with its left argument and attach the
             # entry icon to its attribute site, with the right argument as a pending
             # argument.
             if site == 'attrIcon':
-                if isinstance(ic, icon.DivideIcon):
+                if isinstance(ic, opicons.DivideIcon):
                     # On a divide icon, just move cursor to denominator
                     bottomArg = ic.sites.bottomArg.att
                     if bottomArg is None:
@@ -1309,7 +1308,7 @@ class Window:
                 else:
                     # Cursor is on attribute site of right paren.  Convert to open
                     # (unclosed) cursor paren
-                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
                     attrIcon = ic.childAt('attrIcon')
                     if attrIcon:
                         # If an attribute is attached to the parens, just select
@@ -1342,7 +1341,7 @@ class Window:
                 return
             if site == 'leftArg' and ic.hasParens:
                 # Cursor is on left paren: User wants to remove parens
-                redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
                 attrIcon = ic.childAt('attrIcon')
                 if attrIcon:
                     # If an attribute is attached to the parens, don't delete, just select
@@ -1359,10 +1358,11 @@ class Window:
                 # site.  The reason for setting the cursor position as opposed to just
                 # recording the lowest icon, is that reorderArithExpr can remove parens,
                 # but will relocate the cursor it does.
-                cursorIc, cursorSite = icon.lowestCoincidentSite(ic, site)
+                cursorIc, cursorSite = iconsites.lowestCoincidentSite(ic, site)
                 cursorChild = cursorIc.childAt(cursorSite)
                 if cursorChild is None:
-                    cursorChild = icon.TextIcon('***Internal Temporary***', window=self)
+                    cursorChild = nameicons.TextIcon('***Internal Temporary***',
+                            window=self)
                     cursorIc.replaceChild(cursorChild, cursorSite)
                     removeTempCursorIcon = True
                 else:
@@ -1386,7 +1386,7 @@ class Window:
                 return
             # Cursor was on the operator itself
             redrawRect = ic.topLevelParent().hierRect()
-            if not isinstance(ic, icon.DivideIcon) and ic.hasParens:
+            if not isinstance(ic, opicons.DivideIcon) and ic.hasParens:
                 # If the operation had parens, place temporary parens for continuity
                 cursorParen = typing.CursorParenIcon(window=self, closed=True)
                 cpParent = ic.parent()
@@ -1396,7 +1396,7 @@ class Window:
                     cpParent.replaceChild(cursorParen, cpParent.siteOf(ic))
                     cursorParen.replaceChild(ic, 'argIcon')
             parent = ic.parent()
-            if isinstance(ic, icon.DivideIcon):
+            if isinstance(ic, opicons.DivideIcon):
                 leftArg = ic.sites.topArg.att
                 rightArg = ic.sites.bottomArg.att
                 op = '//' if ic.floorDiv else '/'
@@ -1431,7 +1431,7 @@ class Window:
                 if leftArg is not None:
                     parent.replaceChild(leftArg, parentSite)
                 entryAttachedIcon.replaceChild(self.entryIcon, entryAttachedSite)
-            if isinstance(ic, icon.DivideIcon):
+            if isinstance(ic, opicons.DivideIcon):
                 ic.replaceChild(None, 'topArg')
                 ic.replaceChild(None, 'bottomArg')
             else:
@@ -1440,7 +1440,7 @@ class Window:
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt, redrawRect)
 
-        elif isinstance(ic, icon.TwoArgIcon):
+        elif isinstance(ic, listicons.TwoArgIcon):
             # DictElemIcon, ArgAssignIcon, WithAsIcon
             redrawRect = ic.topLevelParent().hierRect()
             parent = ic.parent()
@@ -1478,12 +1478,12 @@ class Window:
             self.cursor.setToEntryIcon()
             self._redisplayChangedEntryIcon(evt, redrawRect)
 
-        elif ic.__class__ in (icon.YieldIcon, icon.ReturnIcon):
-            siteName, index = icon.splitSeriesSiteId(site)
+        elif ic.__class__ in (nameicons.YieldIcon, nameicons.ReturnIcon):
+            siteName, index = iconsites.splitSeriesSiteId(site)
             if siteName == "values" and index == 0:
                 # Cursor is on first input site.  Remove icon and replace with cursor
                 valueIcons = [s.att for s in ic.sites.values if s.att is not None]
-                text = "return" if isinstance(ic, icon.ReturnIcon) else "yield"
+                text = "return" if isinstance(ic, nameicons.ReturnIcon) else "yield"
                 if len(valueIcons) in (0, 1):
                     # Zero or one argument, convert to entry icon (with pending arg if
                     # there was an argument)
@@ -1495,9 +1495,9 @@ class Window:
                 else:
                     # Multiple remaining arguments: convert to tuple with entry icon as
                     # first element
-                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
                     valueIcons = [s.att for s in ic.sites.values]
-                    newTuple = icon.TupleIcon(window=self, noParens=True)
+                    newTuple = listicons.TupleIcon(window=self, noParens=True)
                     self.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
                      initialString= text, window=self)
                     newTuple.replaceChild(self.entryIcon, "argIcons_0")
@@ -1518,13 +1518,13 @@ class Window:
                     self._redisplayChangedEntryIcon(evt, redrawRegion.get())
             elif siteName == "values":
                 # Cursor is on comma input.  Delete if empty or previous site is empty
-                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                prevSite = iconsites.makeSeriesSiteId(siteName, index-1)
                 childAtCursor = ic.childAt(site)
                 if childAtCursor and ic.childAt(prevSite):
                     typing.beep()
                     return
                 topIcon = ic.topLevelParent()
-                redrawRegion = AccumRects(topIcon.hierRect())
+                redrawRegion = comn.AccumRects(topIcon.hierRect())
                 if not ic.childAt(prevSite):
                     ic.removeEmptySeriesSite(prevSite)
                     self.cursor.setToIconSite(ic, prevSite)
@@ -1537,8 +1537,8 @@ class Window:
                 self.refresh(redrawRegion.get())
                 self.undo.addBoundary()
 
-        elif isinstance(ic, icon.AugmentedAssignIcon):
-            siteName, index = icon.splitSeriesSiteId(site)
+        elif isinstance(ic, assignicons.AugmentedAssignIcon):
+            siteName, index = iconsites.splitSeriesSiteId(site)
             if siteName == "values" and index == 0:
                 # Cursor is on first input site.  Remove icon and replace with cursor
                 text = ic.op + '='
@@ -1547,7 +1547,7 @@ class Window:
                 if len(valueIcons) in (0, 1):
                     # Zero or one argument, convert to entry icon (with pending arg if
                     # there was an argument) attached to name icon
-                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
                     if ic.parent() is not None:
                         print('AugmentedAssign has parent?????')
                         return
@@ -1565,9 +1565,9 @@ class Window:
                 else:
                     # Multiple remaining arguments: convert to tuple with entry icon as
                     # first element
-                    redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+                    redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
                     valueIcons = [s.att for s in ic.sites.values if s.att is not None]
-                    newTuple = icon.TupleIcon(window=self, noParens=True)
+                    newTuple = listicons.TupleIcon(window=self, noParens=True)
                     if targetIcon is None:
                         self.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
                          initialString=text, window=self)
@@ -1588,13 +1588,13 @@ class Window:
                 self._redisplayChangedEntryIcon(evt, redrawRegion.get())
             elif siteName == "values":
                 # Cursor is on comma input.  Delete if empty or previous site is empty
-                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                prevSite = iconsites.makeSeriesSiteId(siteName, index-1)
                 childAtCursor = ic.childAt(site)
                 if childAtCursor and ic.childAt(prevSite):
                     typing.beep()
                     return
                 topIcon = ic.topLevelParent()
-                redrawRegion = AccumRects(topIcon.hierRect())
+                redrawRegion = comn.AccumRects(topIcon.hierRect())
                 if not ic.childAt(prevSite):
                     ic.removeEmptySeriesSite(prevSite)
                     self.cursor.setToIconSite(ic, prevSite)
@@ -1607,10 +1607,10 @@ class Window:
                 self.refresh(redrawRegion.get())
                 self.undo.addBoundary()
 
-        elif isinstance(ic, icon.AssignIcon):
-            siteName, index = icon.splitSeriesSiteId(site)
+        elif isinstance(ic, assignicons.AssignIcon):
+            siteName, index = iconsites.splitSeriesSiteId(site)
             topIcon = ic.topLevelParent()
-            redrawRegion = AccumRects(topIcon.hierRect())
+            redrawRegion = comn.AccumRects(topIcon.hierRect())
             if index == 0:
                 if siteName == "targets0":
                     return
@@ -1619,7 +1619,7 @@ class Window:
                     argIcons = [tgtSite.att for tgtSite in ic.sites.targets0]
                     numTargets = len(argIcons)
                     argIcons += [valueSite.att for valueSite in ic.sites.values]
-                    newTuple = icon.TupleIcon(window=self, noParens=True)
+                    newTuple = listicons.TupleIcon(window=self, noParens=True)
                     for i, arg in enumerate(argIcons):
                         if arg is not None:
                             ic.replaceChild(None, ic.siteOf(arg))
@@ -1632,12 +1632,12 @@ class Window:
                         print("Assign icon has parent?????")
                         parentSite = parent.siteOf(ic)
                         parent.replaceChild(newTuple, parentSite)
-                    cursorSite = icon.makeSeriesSiteId('argIcons', numTargets)
+                    cursorSite = iconsites.makeSeriesSiteId('argIcons', numTargets)
                     self.cursor.setToIconSite(newTuple, cursorSite)
                 else:
                     # Merge lists around '=' to convert it to ','
                     topIcon = ic.topLevelParent()
-                    redrawRegion = AccumRects(topIcon.hierRect())
+                    redrawRegion = comn.AccumRects(topIcon.hierRect())
                     if siteName == "values":
                         removetgtGrpIdx = len(ic.tgtLists) - 1
                         srcSite = "targets%d" % removetgtGrpIdx
@@ -1655,7 +1655,7 @@ class Window:
                         ic.replaceChild(None, ic.siteOf(arg))
                         ic.insertChild(arg, destSite, destIdx + i)
                     ic.removeTargetGroup(removetgtGrpIdx)
-                    cursorSite = icon.makeSeriesSiteId(destSite, cursorIdx)
+                    cursorSite = iconsites.makeSeriesSiteId(destSite, cursorIdx)
                     cursorIc = ic.childAt(cursorSite)
                     if cursorIc is None:
                         cursorIc = ic
@@ -1665,13 +1665,13 @@ class Window:
                     self.cursor.setToIconSite(cursorIc, cursorSite)
             else:
                 # Cursor is on comma input.  Delete if empty or previous site is empty
-                prevSite = icon.makeSeriesSiteId(siteName, index-1)
+                prevSite = iconsites.makeSeriesSiteId(siteName, index-1)
                 childAtCursor = ic.childAt(site)
                 if childAtCursor and ic.childAt(prevSite):
                     typing.beep()
                     return
                 topIcon = ic.topLevelParent()
-                redrawRegion = AccumRects(topIcon.hierRect())
+                redrawRegion = comn.AccumRects(topIcon.hierRect())
                 if not ic.childAt(prevSite):
                     ic.removeEmptySeriesSite(prevSite)
                     self.cursor.setToIconSite(ic, prevSite)
@@ -1687,7 +1687,7 @@ class Window:
     def _backspaceIconToEntry(self, evt, ic, entryText, pendingArgSite=None):
         """Replace the icon holding the cursor with the entry icon, pre-loaded with text,
         entryText"""
-        redrawRegion = AccumRects(ic.topLevelParent().hierRect())
+        redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
         parent = ic.parent()
         if parent is None:
             self.entryIcon = typing.EntryIcon(None, None, initialString=entryText,
@@ -1712,14 +1712,14 @@ class Window:
     def _listPopupCb(self):
         char = self.listPopupVal.get()
         fromIcon = self.listPopupIcon
-        if char == "[" and not isinstance(fromIcon, icon.ListIcon):
-            ic = icon.ListIcon(fromIcon.window)
-        elif char == "(" and not isinstance(fromIcon, icon.TupleIcon):
-            ic = icon.TupleIcon(fromIcon.window)
+        if char == "[" and not isinstance(fromIcon, listicons.ListIcon):
+            ic = listicons.ListIcon(fromIcon.window)
+        elif char == "(" and not isinstance(fromIcon, listicons.TupleIcon):
+            ic = listicons.TupleIcon(fromIcon.window)
         else:
             return
         topIcon = fromIcon.topLevelParent()
-        redrawRegion = AccumRects(topIcon.hierRect())
+        redrawRegion = comn.AccumRects(topIcon.hierRect())
         argIcons = fromIcon.argIcons()
         for i, arg in enumerate(argIcons):
             fromIcon.replaceChild(None, fromIcon.siteOf(arg))
@@ -1829,12 +1829,12 @@ class Window:
         self.dragging += restoreSeries(sequences)
         topDraggingIcons = findTopIcons(self.dragging)
         for ic in topDraggingIcons:
-            if isinstance(ic, icon.BinOpIcon) and ic.hasParens:
+            if isinstance(ic, opicons.BinOpIcon) and ic.hasParens:
                 ic.markLayoutDirty()  # BinOp icons need to check check auto-parens
         self.layoutDirtyIcons(topDraggingIcons, filterRedundantParens=False)
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
-        moveRegion = AccumRects()
+        moveRegion = comn.AccumRects()
         for ic in self.dragging:
             moveRegion.add(ic.rect)
         el, et, er, eb = moveRegion.get()
@@ -1842,7 +1842,7 @@ class Window:
         self.dragImage = Image.new('RGBA', (er - el, eb - et), color=(0, 0, 0, 0))
         self.lastDragImageRegion = None
         for ic in self.dragging:
-            ic.rect = offsetRect(ic.rect, -el, -et)
+            ic.rect = comn.offsetRect(ic.rect, -el, -et)
             ic.draw(self.dragImage, style="outline")
             # Looks better without connectors, but not willing to remove permanently, yet
             # icon.drawSeqSiteConnection(ic, image=self.dragImage)
@@ -1969,16 +1969,17 @@ class Window:
         topDraggedIcons = findTopIcons(self.dragging)
         l, t, r, b = self.lastDragImageRegion
         for ic in self.dragging:
-            ic.rect = offsetRect(ic.rect, l, t)
+            ic.rect = comn.offsetRect(ic.rect, l, t)
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             statIcon, movIcon, siteType, siteName = self.snapped
             if siteType == "input":
                 topDraggedIcons.remove(movIcon)
-                if icon.isSeriesSiteId(siteName) and isinstance(movIcon, icon.TupleIcon) \
-                 and movIcon.noParens:  # Splice in naked tuple
+                if iconsites.isSeriesSiteId(siteName) and \
+                        isinstance(movIcon, listicons.TupleIcon) and movIcon.noParens:
+                    # Splice in naked tuple
                     statIcon.replaceChild(None, siteName)
-                    seriesName, seriesIdx = icon.splitSeriesSiteId(siteName)
+                    seriesName, seriesIdx = iconsites.splitSeriesSiteId(siteName)
                     statIcon.insertChildren(movIcon.argIcons(), seriesName, seriesIdx)
                 else:
                     statIcon.replaceChild(movIcon, siteName)
@@ -1987,10 +1988,10 @@ class Window:
                 statIcon.replaceChild(movIcon, siteName)
             elif siteType == "insertInput":
                 topDraggedIcons.remove(movIcon)
-                seriesName, seriesIdx = icon.splitSeriesSiteId(siteName)
+                seriesName, seriesIdx = iconsites.splitSeriesSiteId(siteName)
                 if seriesName[-3:] == "Dup":
                     seriesName = seriesName[:-3]
-                if isinstance(movIcon, icon.TupleIcon) and movIcon.noParens:
+                if isinstance(movIcon, listicons.TupleIcon) and movIcon.noParens:
                     # Splice in naked tuple
                     statIcon.insertChildren(movIcon.argIcons(), seriesName, seriesIdx)
                 else:
@@ -2044,9 +2045,9 @@ class Window:
         if self.lastRectSelect is None:
             combinedRegion = newRect
         else:
-            combinedRegion = combineRects(newRect, self.lastRectSelect)
+            combinedRegion = comn.combineRects(newRect, self.lastRectSelect)
             self._eraseRectSelect()
-        redrawRegion = AccumRects()
+        redrawRegion = comn.AccumRects()
         for ic in self.findIconsInRegion(combinedRegion):
             if ic.inRectSelect(newRect):
                 newSelect = (ic not in self.rectSelectInitialState) if toggle else True
@@ -2093,7 +2094,7 @@ class Window:
         seqTopY = self.stmtSelectSeqStart.posOfSite('seqIn')[1]
         if drawTop < seqTopY:
             drawTop = seqTopY
-        redrawRegion = AccumRects()
+        redrawRegion = comn.AccumRects()
         # Traverse sequence of icons, selecting those whose top icons touch new range
         # and deselecting any that are selected and out of the range.  Also collect X
         # coordinate change points within the range
@@ -2151,7 +2152,7 @@ class Window:
         self.lastStmtHighlightRects = drawRects
 
     def _endStmtSelect(self):
-        redrawRegion = AccumRects()
+        redrawRegion = comn.AccumRects()
         self.inStmtSelect = False
         # Erase the shaded zone
         if self.lastStmtHighlightRects is not None:
@@ -2211,7 +2212,7 @@ class Window:
         # Convert results to icon form
         resultIcons = compile_eval.parsePasted(repr(result), self, (0, 0))
         if resultIcons is None:
-            resultIcons = [icon.TextIcon(repr(result), self, (0, 0))]
+            resultIcons = [nameicons.TextIcon(repr(result), self, (0, 0))]
         resultIcon = resultIcons[0]
         # Place the results to the left of the icon being executed
         if outSitePos is None:
@@ -2228,9 +2229,9 @@ class Window:
             resultOutSiteY = (bottom + top) // 2
         else:
             resultOutSiteX, resultOutSiteY = resultOutSitePos
-        resultX = outSiteX - RESULT_X_OFFSET - icon.rectWidth(resultRect)
+        resultX = outSiteX - RESULT_X_OFFSET - comn.rectWidth(resultRect)
         resultY = outSiteY - resultOutSiteY - resultIcon.rect[1]
-        resultIcon.rect = offsetRect(resultIcon.rect, resultX, resultY)
+        resultIcon.rect = comn.offsetRect(resultIcon.rect, resultX, resultY)
         self.addTopSingle(resultIcon, newSeq=True)
         self.layoutDirtyIcons()
         resultRect = resultIcon.hierRect()
@@ -2281,7 +2282,7 @@ class Window:
             self.unselectAll()
         if ic is None or ic is self.entryIcon:
             return
-        refreshRegion = AccumRects()
+        refreshRegion = comn.AccumRects()
         if op == 'hier':
             changedIcons = list(ic.traverse())
         elif op == 'block':
@@ -2296,7 +2297,7 @@ class Window:
         elif op == 'icAndblock':
             changedIcons = list(ic.traverseBlock(hier=True))
         elif op == 'left':
-            ic = icon.findLeftOuterIcon(self.assocGrouping(ic), self.buttonDownLoc)
+            ic = findLeftOuterIcon(self.assocGrouping(ic), self.buttonDownLoc)
             changedIcons = list(ic.traverse())
         else:
             changedIcons = [ic]
@@ -2310,7 +2311,7 @@ class Window:
         self.cursor.removeCursor()
 
     def unselectAll(self):
-        refreshRegion = AccumRects()
+        refreshRegion = comn.AccumRects()
         selectedIcons = self.selectedIcons()
         if len(selectedIcons) == 0:
             return
@@ -2433,7 +2434,7 @@ class Window:
                     page.applyOffset()
                     for topIc in page.traverseSeq():
                         for ic in topIc.traverse(order=order):
-                            if rectsTouch(rect, ic.rect):
+                            if comn.rectsTouch(rect, ic.rect):
                                 iconsInRegion.append(ic)
                         if inclSeqRules and seqRuleSeed is None and topIc.rect[1] >= top:
                             seqRuleSeed = topIc
@@ -2510,7 +2511,7 @@ class Window:
         seqReconnectList = []
         reconnectList = {}
         # Find region needing erase, including following sequence connectors
-        redrawRegion = AccumRects()
+        redrawRegion = comn.AccumRects()
         for ic in icons:
             redrawRegion.add(ic.rect)
             nextIc = ic.nextInSeq()
@@ -2579,7 +2580,7 @@ class Window:
         self.addTop(addTopIcons)
         # Remove unsightly "naked tuples" left behind empty by deletion of their children
         for ic, child in detachList:
-            if child in deletedSet and isinstance(ic, icon.TupleIcon) and \
+            if child in deletedSet and isinstance(ic, listicons.TupleIcon) and \
              ic.noParens and len(ic.children()) == 0 and ic.parent() is None and \
              ic.nextInSeq() is None and ic.prevInSeq() is None and ic in self.topIcons:
                 redrawRegion.add(ic.rect)
@@ -2605,10 +2606,10 @@ class Window:
         """Find the root binary operation associated with a group of equal precedence
         operations"""
         child = ic
-        if ic.__class__ is not icon.BinOpIcon:
+        if ic.__class__ is not opicons.BinOpIcon:
             return ic
         for parent in ic.parentage():
-            if parent.__class__ is not icon.BinOpIcon or parent.precedence !=\
+            if parent.__class__ is not opicons.BinOpIcon or parent.precedence != \
              ic.precedence:
                 return child
             child = parent
@@ -2862,7 +2863,7 @@ class Window:
         specified, assume a stand-alone list of top icons not of the window.  Otherwise
         look at all of the icons in the window.  Returns a rectangle representing the
         changed areas that need to be redrawn, or None if nothing changed."""
-        redrawRegion = AccumRects()
+        redrawRegion = comn.AccumRects()
         if draggingIcons is not None:
             for seq in self.findSequences(draggingIcons):
                 redraw, _, _ = self.layoutIconsInSeq(seq, filterRedundantParens)
@@ -2881,7 +2882,7 @@ class Window:
         extent has changed."""
         # Traverse the pages in the sequence: 1) looking for pages that need to be laid
         # out, and 2) applying accumulated changes to y position from earlier changes.
-        redrawRegion = AccumRects()
+        redrawRegion = comn.AccumRects()
         offsetDelta = 0
         pagesNeedingSplit = []
         for page in startPage.traversePages():
@@ -2929,7 +2930,7 @@ class Window:
                     if x != seqOutX:
                         # X shifts are rare as edits are usually balanced, but can
                         # happen: propagate to next page and force layout.
-                        nextIcon.rect = offsetRect(nextIcon.rect, seqOutX - x, 0)
+                        nextIcon.rect = comn.offsetRect(nextIcon.rect, seqOutX - x, 0)
                         page.nextPage.layoutDirty = True
                         nextIcon.markLayoutDirty()
         # If a page was found with more than PAGE_SPLIT_THRESHOLD icons, split it up
@@ -2949,7 +2950,7 @@ class Window:
         entire sequence.  Returns three values: the modified region (rectangle) of the
         window, the new bottomY of the sequence/page, and the seqOut site offset of the
         last icon on the page."""
-        redrawRegion = AccumRects()
+        redrawRegion = comn.AccumRects()
         x, y = seqStartIcon.pos(preferSeqIn=True)
         if fromTopY is not None:
             y = fromTopY
@@ -2998,7 +2999,7 @@ class Window:
             else:
                 redrawRegion.add(seqIcOrigRect)
                 for ic in seqIc.traverse():
-                    ic.rect = offsetRect(ic.rect, xOffset, yOffset)
+                    ic.rect = comn.offsetRect(ic.rect, xOffset, yOffset)
                 seqIcNewRect = seqIc.hierRect()
                 redrawRegion.add(seqIcNewRect)
             y = seqIcNewRect[3] - 1  # Minimal line spacing (overlap icon borders)
@@ -3049,8 +3050,8 @@ class Window:
         argIcon = ic.sites.argIcon.att
         if argIcon is None:
             return
-        if not (argIcon.__class__ is icon.BinOpIcon and not argIcon.hasParens and
-         icon.needsParens(argIcon, parentIcon)):
+        if not (argIcon.__class__ is opicons.BinOpIcon and not argIcon.hasParens and
+         opicons.needsParens(argIcon, parentIcon)):
             self.filterRedundantParens(argIcon, ic, "argIcon")
             return
         # Redundant parens found: remove them
@@ -3090,7 +3091,7 @@ class Window:
         return contentX - self.scrollOrigin[0], contentY - self.scrollOrigin[1]
 
     def contentToImageRect(self, contentRect):
-        return offsetRect(contentRect, -self.scrollOrigin[0], -self.scrollOrigin[1])
+        return comn.offsetRect(contentRect, -self.scrollOrigin[0], -self.scrollOrigin[1])
 
 class Page:
     """The fact that icons know their own window positions becomes problematic for very
@@ -3184,34 +3185,79 @@ class Page:
             ic.rect = l, t + self.unappliedOffset, r, b + self.unappliedOffset
         self.unappliedOffset = 0
 
-class AccumRects:
-    """Make one big rectangle out of all rectangles added."""
-    def __init__(self, initRect=None):
-        self.rect = initRect
+def findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon=None):
+    """Because we have icons with no pickable structure left of their arguments (binary
+    operations), we have to make rules about what it means to click or drag the leftmost
+    icon in an expression.  For the purpose of selection, that is simply the icon that was
+    clicked.  For dragging and double clicking (execution), this function finds the
+    outermost operation that claims the clicked icon as its leftmost operand."""
+    # One idiotic case we have to distinguish, is when the clicked icon is a BinOpIcon
+    # with automatic parens visible: only if the user clicked on the left paren can
+    # the icon be the leftmost object in an expression.  Clicking on the body or the
+    # right paren does not count.
+    if fromIcon is None:
+        fromIcon = clickedIcon.topLevelParent()
+    if clickedIcon.__class__ is opicons.BinOpIcon and clickedIcon.hasParens:
+        if not clickedIcon.locIsOnLeftParen(btnPressLoc):
+            return clickedIcon
+    if clickedIcon is fromIcon:
+        return clickedIcon
+    # Only binary operations are candidates, and only when the expression directly below
+    # has claimed itself to be the leftmost operand of an expression
+    if fromIcon.__class__ is assignicons.AssignIcon:
+        leftSiteIcon = fromIcon.sites.targets0[0].att
+        if leftSiteIcon is not None:
+            left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
+            if left is leftSiteIcon:
+                return fromIcon  # Claim outermost status for this icon
+    if fromIcon.__class__ is assignicons.AugmentedAssignIcon:
+        leftSiteIcon = fromIcon.sites.targetIcon.att
+        if leftSiteIcon is not None:
+            left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
+            if left is leftSiteIcon:
+                return fromIcon  # Claim outermost status for this icon
+    if fromIcon.__class__ is listicons.TupleIcon and fromIcon.noParens:
+        leftSiteIcon = fromIcon.childAt('argIcons_0')
+        if leftSiteIcon is not None:
+            left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
+            if left is leftSiteIcon:
+                return fromIcon  # Claim outermost status for this icon
+    if fromIcon.__class__ is opicons.BinOpIcon and fromIcon.leftArg() is not None:
+        left = findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon.leftArg())
+        if left is fromIcon.leftArg():
+            targetIsBinOpIcon = clickedIcon.__class__ is opicons.BinOpIcon
+            if not targetIsBinOpIcon or targetIsBinOpIcon and clickedIcon.hasParens:
+                # Again, we have to check before claiming outermost status for fromIcon,
+                # if its left argument has parens, whether its status as outermost icon
+                # was earned by promotion or by a direct click on its parens.
+                if left.__class__ is not opicons.BinOpIcon or not left.hasParens or \
+                 left.locIsOnLeftParen(btnPressLoc):
+                    return fromIcon  # Claim outermost status for this icon
+    # Pass on any results from below fromIcon in the hierarchy
+    children = fromIcon.children()
+    if children is not None:
+        for child in fromIcon.children():
+            result = findLeftOuterIcon(clickedIcon, btnPressLoc, child)
+            if result is not None:
+                return result
+    return None
 
-    def add(self, rect):
-        if rect is None:
-            return
-        if self.rect is None:
-            self.rect = rect
+def textRepr(icons):
+    topIcons = findTopIcons(icons)
+    branchDepth = 0
+    clipText = []
+    for ic in topIcons:
+        if isinstance(ic, icon.BlockEnd):
+            branchDepth -= 1
         else:
-            self.rect = combineRects(rect, self.rect)
-
-    def get(self):
-        """Return the enclosing rectangle.  Returns None if no rectangles were added"""
-        return self.rect
-
-def rectsTouch(rect1, rect2):
-    """Returns true if rectangles rect1 and rect2 overlap"""
-    l1, t1, r1, b1 = rect1
-    l2, t2, r2, b2 = rect2
-    # One is to the right side of the other
-    if l1 > r2 or l2 > r1:
-        return False
-    # One is above the other
-    if t1 > b2 or t2 > b1:
-        return False
-    return True
+            if ic.__class__ in (blockicons.ElifIcon, blockicons.ElseIcon):
+                indent = "    " * max(0, branchDepth-1)
+            else:
+                indent = "    " * max(0, branchDepth)
+            if hasattr(ic, 'blockEnd'):
+                branchDepth += 1
+            clipText.append(indent + ic.textRepr())
+    return "\n".join(clipText)
 
 class App:
     def __init__(self):
@@ -3260,6 +3306,22 @@ def findTopIcons(icons, stmtLvlOnly=False):
     iconSet = set(icons)
     return [ic for ic in icons if ic.parent() not in iconSet]
 
+def clipboardRepr(icons, offset):
+    """Top level function for converting icons into their serialized string representation
+    for copying to the clipboard.  icons should be a list of icons to be copied."""
+    seriesLists = findSeries(icons)
+    iconsToCopy = set(icons)
+    seqLists = []
+    for sequence in seriesLists['sequences']:
+        seqLists.append([ic.clipboardRepr(offset, iconsToCopy) for ic in sequence])
+    for series in seriesLists['lists']:
+        children = ["argIcons"] + [ic.clipboardRepr(offset, iconsToCopy) for ic in series]
+        seqLists.append([("TupleIcon", icon.addPoints(series[0].rect[:2], (0, 5)),
+         {'noParens':True}, [children])])
+    for ic in seriesLists['individual']:
+        seqLists.append([ic.clipboardRepr(offset, iconsToCopy)])
+    return repr(seqLists)
+
 def findSeries(icons):
     """Returns a list of groups of icons that appear on the same sequence, list, tuple,
     set, parameter list, or dictionary(disregarding intervening icons not in "icons", in
@@ -3302,9 +3364,9 @@ def findSeries(icons):
             continue
         argGrps = {}
         for child, parentSite in children:
-            if not icon.isSeriesSiteId(parentSite):
+            if not iconsites.isSeriesSiteId(parentSite):
                 continue
-            seriesName, idx = icon.splitSeriesSiteId(parentSite)
+            seriesName, idx = iconsites.splitSeriesSiteId(parentSite)
             if seriesName not in argGrps:
                 argGrps[seriesName] = []
             argGrps[seriesName].append(child)
@@ -3328,7 +3390,7 @@ def restoreSeries(series):
             prevIcon = ic
     newIcons = []
     for icons in series['lists']:
-        newTuple = icon.TupleIcon(icons[0].window, noParens=True,
+        newTuple = listicons.TupleIcon(icons[0].window, noParens=True,
          location=icons[0].rect[:2])
         newTuple.insertChildren(icons, 'argIcons', 0)
         newTuple.select(icons[0].isSelected())
