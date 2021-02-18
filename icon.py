@@ -778,6 +778,13 @@ class Icon:
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy)
 
+    def backspace(self, siteId, evt):
+        """Icon-specific action to perform when user presses backspace with the cursor
+        positioned on one of the icon's sites.  This usually results in the deletion of
+        the icon with its text being loaded in to an entry icon, and its arguments
+        and attributes attached to the entry icon as pending args/attributes."""
+        print('Backspace method not yet implemented for', self.dumpName())
+
     @staticmethod
     def fromClipboard(clipData, window, offset):
         iconClass, location, args, childData = clipData

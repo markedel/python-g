@@ -9,6 +9,7 @@ import nameicons
 import opicons
 import blockicons
 import assignicons
+import typing
 
 listLBktImage = comn.asciiToImage((
  "..oooooooo",
@@ -457,6 +458,9 @@ class ListTypeIcon(icon.Icon):
         return self.leftText + argText + cprhText + self.rightText + \
                icon.attrTextRepr(self)
 
+    def backspace(self, siteId, evt):
+        backspaceListIcon(self, siteId, evt)
+
     def argIcons(self):
         """Return list of list argument icons.  This is trivial, but exists to give list
         and dict icons an identical interface with that of the TupleIcon version which
@@ -899,6 +903,9 @@ class CallIcon(icon.Icon):
         return icon.composeAttrAst(self, ast.Call(attrOfAst, argAsts, kwdArgAsts,
          lineno=self.id, col_offset=0))
 
+    def backspace(self, siteId, evt):
+        backspaceListIcon(self, siteId, evt)
+
     def inRectSelect(self, rect):
         # Require selection rectangle to touch both parens to be considered selected
         if not icon.Icon.inRectSelect(self, rect):
@@ -1213,6 +1220,44 @@ class TwoArgIcon(icon.Icon):
     def rightArg(self):
         return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
+    def backspace(self, siteId, evt):
+        redrawRect = self.topLevelParent().hierRect()
+        parent = self.parent()
+        leftArg = self.leftArg()
+        rightArg = self.rightArg()
+        op = self.operator
+        win = self.window
+        if parent is None and leftArg is None:
+            entryAttachedIcon, entryAttachedSite = None, None
+        elif parent is not None and leftArg is None:
+            entryAttachedIcon = parent
+            entryAttachedSite = parent.siteOf(self)
+        else:  # leftArg is not None, attach to that
+            entryAttachedIcon, entryAttachedSite = typing.rightmostSite(
+                icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
+        win.entryIcon = typing.EntryIcon(entryAttachedIcon, entryAttachedSite,
+            initialString=op, window=win)
+        if leftArg is not None:
+            leftArg.replaceChild(None, 'output')
+        if rightArg is not None:
+            rightArg.replaceChild(None, 'output')
+            win.entryIcon.setPendingArg(rightArg)
+        if parent is None:
+            if leftArg is None:
+                win.replaceTop(self, win.entryIcon)
+            else:
+                win.replaceTop(self, leftArg)
+                entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+        else:
+            parentSite = parent.siteOf(self)
+            if leftArg is not None:
+                parent.replaceChild(leftArg, parentSite)
+            entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+        self.replaceChild(None, 'leftArg')
+        self.replaceChild(None, 'rightArg')
+        win.cursor.setToEntryIcon()
+        win.redisplayChangedEntryIcon(evt, redrawRect)
+
 class DictElemIcon(TwoArgIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
@@ -1380,3 +1425,145 @@ def restoreConditionalTargets(ic, snapLists, directAttachmentClasses):
         else:
             snapLists['conditional'].append((ic, ic.posOfSite(site.name),
             site.name, site.type, snapFn))
+
+def backspaceListIcon(ic, site, evt):
+    siteName, index = iconsites.splitSeriesSiteId(site)
+    allArgs = ic.argIcons()
+    nonEmptyArgs = [i for i in allArgs if i is not None]
+    numArgs = len(nonEmptyArgs)
+    redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
+    attrAttached = ic.closed and ic.childAt('attrIcon')
+    win = ic.window
+    if site == "attrIcon":
+        # On backspace from the outside right paren
+        if len(allArgs) < 2 and not attrAttached:
+            if isinstance(ic, TupleIcon):
+                # For tuple icons, turn back in to cursor paren
+                cursorParen = typing.CursorParenIcon(window=win)
+                parent = ic.parent()
+                child = ic.childAt('argIcons_0')
+                if parent is None:
+                    ic.replaceChild(None, 'argIcons_0')
+                    win.replaceTop(ic, cursorParen)
+                else:
+                    parent.replaceChild(cursorParen, parent.siteOf(ic))
+                cursorParen.replaceChild(child, 'argIcon')
+                ic = cursorParen
+            # With either 0 or 1 argument, safe to remove right bracket
+            if numArgs == 0:
+                cursIc = ic
+                cursSite = 'argIcon' if isinstance(ic, typing.CursorParenIcon) \
+                    else 'argIcons_0'
+            else:
+                cursIc, cursSite = typing.rightmostSite(
+                    icon.findLastAttrIcon(allArgs[-1]))
+            # Expand scope of the paren to its max, rearrange hierarchy around it
+            typing.reorderArithExpr(ic)
+            ic.reopen()
+            win.cursor.setToIconSite(cursIc, cursSite)
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
+            return
+        else:
+            # Multiple arguments remaining or attribute attached to right paren.
+            # Not safe to open.  Just move the cursor in to the list.
+            lastIdx = len(allArgs) - 1
+            if allArgs[lastIdx] is None:
+                win.cursor.setToIconSite(ic, "argIcons", lastIdx)
+            else:
+                rightmostIcon = icon.findLastAttrIcon(allArgs[lastIdx])
+                rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                win.cursor.setToIconSite(rightmostIcon, rightmostSite)
+            return
+    elif index == 0:
+        # Backspace in to the open paren/bracket/brace: delete if possible
+        parent = ic.parent()
+        if numArgs == 0 and not attrAttached:
+            # Delete the list if it's empty
+            if parent is None:
+                # Open paren was the only thing left of the statement.  Remove
+                if ic.prevInSeq() is not None:
+                    cursorIc = ic.prevInSeq()
+                    cursorSite = 'seqOut'
+                elif ic.nextInSeq() is not None:
+                    cursorIc = ic.nextInSeq()
+                    cursorSite = 'seqIn'
+                else:
+                    cursorIc = None
+                    pos = ic.pos()
+                win.removeIcons([ic])
+                if cursorIc is None:
+                    win.cursor.setToWindowPos(pos)
+                else:
+                    win.cursor.setToIconSite(cursorIc, cursorSite)
+            else:
+                parentSite = None if parent is None else parent.siteOf(ic)
+                redrawRect = win.removeIcons([ic], refresh=False)
+                redrawRegion.add(redrawRect)
+                if not parent.hasSite(parentSite):
+                    # Last element of a list can disappear when icon is removed
+                    parent.insertChild(None, parentSite)
+                    redrawRegion.add(win.layoutDirtyIcons(
+                        filterRedundantParens=False))
+                win.cursor.setToIconSite(parent, parentSite)
+                win.refresh(redrawRegion.get())
+            return
+        elif numArgs == 1 and not attrAttached:
+            # Just one item left in the list.  Unwrap the parens/brackets/braces
+            # from around the content
+            parent = ic.parent()
+            content = nonEmptyArgs[0]
+            if parent is None:
+                # List was on top level
+                ic.replaceChild(None, ic.siteOf(content))
+                win.replaceTop(ic, content)
+                topNode = typing.reorderArithExpr(content)
+                win.cursor.setToIconSite(topNode, 'output')
+            else:
+                # List had a parent.  Remove by attaching content to parent if
+                # the parent site is an input site.  If it's not (CallIcon), then
+                # load the content in to the pendingArg of an entry icon
+                parentSite = parent.siteOf(ic)
+                if parent.typeOf('parentSite') == 'input':
+                    parent.replaceChild(content, parentSite)
+                    typing.reorderArithExpr(content)
+                    win.cursor.setToIconSite(parent, parentSite)
+                else:  # ic is on an attribute site.  Create an entry icon
+                    win.entryIcon = typing.EntryIcon(parent, parentSite,
+                        window=win)
+                    parent.replaceChild(win.entryIcon, parentSite)
+                    win.entryIcon.setPendingArg(content)
+                    win.cursor.setToEntryIcon()
+                    win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+                    return
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
+            return
+        else:
+            # Multiple arguments remaining in list, or icon attached to attribute
+            # site.  Not safe to remove.  Pop  up context menu to change type.
+            win.listPopupIcon = ic
+            win.listPopupVal.set(
+                '(' if isinstance(ic, TupleIcon) else '[')
+            # Tkinter's pop-up grab does not allow accelerator keys to operate
+            # while up, which is unfortunate as you'd really like to type [ or (
+            win.listPopup.tk_popup(evt.x_root, evt.y_root, 0)
+    else:
+        # Cursor is on comma input.  Delete if empty or previous site is empty
+        prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
+        childAtCursor = ic.childAt(site)
+        if childAtCursor and ic.childAt(prevSite):
+            typing.beep()
+            return
+        topIcon = ic.topLevelParent()
+        redrawRegion = comn.AccumRects(topIcon.hierRect())
+        if not ic.childAt(prevSite):
+            ic.removeEmptySeriesSite(prevSite)
+            win.cursor.setToIconSite(ic, prevSite)
+        else:
+            rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
+            rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+            ic.removeEmptySeriesSite(site)
+            win.cursor.setToIconSite(rightmostIcon, rightmostSite)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+        win.refresh(redrawRegion.get())

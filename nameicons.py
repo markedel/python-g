@@ -3,11 +3,13 @@ from PIL import Image
 import ast
 import comn
 import iconlayout
+import iconsites
 import icon
 import opicons
 import listicons
 import assignicons
 import blockicons
+import typing
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
@@ -86,6 +88,9 @@ class TextIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, text=self.text)
+
+    def backspace(self, siteId, evt):
+        self.window.backspaceIconToEntry(evt, self, self.text, pendingArgSite=siteId)
 
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
@@ -219,10 +224,14 @@ class AttrIcon(icon.Icon):
 
     def createAst(self, attrOfAst):
         return icon.composeAttrAst(self, ast.Attribute(value=attrOfAst, attr=self.name,
-         lineno=self.id, col_offset=0, ctx=icon.determineCtx(self)))
+         lineno=self.id, col_offset=0, ctx=determineCtx(self)))
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
+
+    def backspace(self, siteId, evt):
+        self.window.backspaceIconToEntry(evt, self, '.' + self.name,
+                pendingArgSite=siteId)
 
 class NoArgStmtIcon(icon.Icon):
     def __init__(self, stmt, window, location):
@@ -236,6 +245,8 @@ class NoArgStmtIcon(icon.Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        self.sites.add('attrIcon', 'attrIn', bodyWidth,
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
         totalWidth = icon.dragSeqImage.width + bodyWidth
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
@@ -283,6 +294,9 @@ class NoArgStmtIcon(icon.Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+    def backspace(self, siteId, evt):
+        self.window.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite=siteId)
 
 class PassIcon(NoArgStmtIcon):
     def __init__(self, window, location=None):
@@ -407,6 +421,9 @@ class SeriesStmtIcon(icon.Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+    def backspace(self, siteId, evt):
+        return backspaceSeriesStmt(self, siteId, evt, self.stmt)
 
 class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
@@ -569,6 +586,9 @@ class YieldIcon(icon.Icon):
                  col_offset=0)
         return ast.Yield(value=valueAst, lineno=self.id, col_offset=0)
 
+    def backspace(self, siteId, evt):
+        return backspaceSeriesStmt(self, siteId, evt, "yield")
+
 class YieldFromIcon(opicons.UnaryOpIcon):
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, 'yield from', window, location)
@@ -595,6 +615,64 @@ class AwaitIcon(opicons.UnaryOpIcon):
             raise icon.IconExecException(self, "Missing argument to await")
         return ast.Await(self.arg().createAst(), lineno=self.id, col_offset=0)
 
+def backspaceSeriesStmt(ic, site, evt, text):
+    siteName, index = iconsites.splitSeriesSiteId(site)
+    win = ic.window
+    if siteName == "values" and index == 0:
+        # Cursor is on first input site.  Remove icon and replace with cursor
+        valueIcons = [s.att for s in ic.sites.values if s.att is not None]
+        if len(valueIcons) in (0, 1):
+            # Zero or one argument, convert to entry icon (with pending arg if
+            # there was an argument)
+            if len(valueIcons) == 1:
+                pendingArgSite = ic.siteOf(valueIcons[0])
+            else:
+                pendingArgSite = None
+            win.backspaceIconToEntry(evt, ic, text, pendingArgSite)
+        else:
+            # Multiple remaining arguments: convert to tuple with entry icon as
+            # first element
+            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
+            valueIcons = [s.att for s in ic.sites.values]
+            newTuple = listicons.TupleIcon(window=win, noParens=True)
+            win.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
+             initialString=text, window=win)
+            newTuple.replaceChild(win.entryIcon, "argIcons_0")
+            for i, arg in enumerate(valueIcons):
+                if i == 0:
+                    win.entryIcon.setPendingArg(arg)
+                else:
+                    if arg is not None:
+                        ic.replaceChild(None, ic.siteOf(arg))
+                    newTuple.insertChild(arg, "argIcons", i)
+            parent = ic.parent()
+            if parent is None:
+                win.replaceTop(ic, newTuple)
+            else:
+                parentSite = parent.siteOf(ic)
+                parent.replaceChild(newTuple, parentSite)
+            win.cursor.setToEntryIcon()
+            win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+    elif siteName == "values":
+        # Cursor is on comma input.  Delete if empty or previous site is empty
+        prevSite = iconsites.makeSeriesSiteId(siteName, index-1)
+        childAtCursor = ic.childAt(site)
+        if childAtCursor and ic.childAt(prevSite):
+            typing.beep()
+            return
+        topIcon = ic.topLevelParent()
+        redrawRegion = comn.AccumRects(topIcon.hierRect())
+        if not ic.childAt(prevSite):
+            ic.removeEmptySeriesSite(prevSite)
+            win.cursor.setToIconSite(ic, prevSite)
+        else:
+            rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
+            rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+            ic.removeEmptySeriesSite(site)
+            win.cursor.setToIconSite(rightmostIcon, rightmostSite)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+        win.refresh(redrawRegion.get())
+        win.undo.addBoundary()
 
 def determineCtx(ic):
     """Figure out the load/store/delete context of a given icon.  Returns an object

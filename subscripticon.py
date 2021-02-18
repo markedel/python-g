@@ -1,8 +1,10 @@
 from PIL import Image
 import ast
 import comn
-import icon
 import iconlayout
+import icon
+import nameicons
+import typing
 
 SLICE_EMPTY_ARG_WIDTH = 1
 
@@ -310,4 +312,131 @@ class SubscriptIcon(icon.Icon):
         else:
             slice = ast.Index(value=indexAst)
         return icon.composeAttrAst(self, ast.Subscript(value=attrOfAst, slice=slice,
-         lineno=self.id, col_offset=0, ctx=icon.determineCtx(self)))
+         lineno=self.id, col_offset=0, ctx=nameicons.determineCtx(self)))
+
+    def backspace(self, siteId, evt):
+        win = self.window
+        if siteId == 'indexIcon':
+            # Cursor is on the index site.  Try to remove brackets
+            if self.hasSite('upperIcon') and self.childAt('upperIcon') or \
+                    self.hasSite('stepIcon') and self.childAt('stepIcon') or \
+                    self.hasSite('attrIcon') and self.childAt('attrIcon'):
+                # Can't remove brackets: select the icon and its children
+                win._select(self, op='hier')
+            elif not self.childAt('indexIcon'):
+                # Icon is empty, remove
+                parent = self.parent()
+                win.removeIcons([self])
+                if parent is not None:
+                    win.cursor.setToIconSite(parent, 'attrIcon')
+            else:
+                # Icon has a single argument and it's in the first slot: unwrap
+                # the bracket from around it.
+                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                parent = self.parent()
+                content = self.childAt('indexIcon')
+                if parent is None:
+                    # The icon was on the top level: replace it with its content
+                    self.replaceChild(None, 'indexIcon')
+                    win.replaceTop(self, content)
+                    win.cursor.setToIconSite(content, 'output')
+                else:
+                    # The icon has a parent, but since the subscript icon sits on
+                    # an attribute site we can't attach, so create an entry icon
+                    # and make the content a pending argument to it.
+                    parentSite = parent.siteOf(self)
+                    win.entryIcon = typing.EntryIcon(parent, parentSite, window=win)
+                    parent.replaceChild(win.entryIcon, parentSite)
+                    win.entryIcon.setPendingArg(content)
+                    win.cursor.setToEntryIcon()
+                    win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+                    return
+                redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+                win.refresh(redrawRegion.get())
+            return
+        elif siteId == 'attrIcon':
+            # The cursor is on the attr site, remove the end bracket if possible,
+            # otherwise move the cursor in to the bracket
+            if self.hasSite('upperIcon') or self.hasSite('stepIcon') or \
+                    self.childAt('attrIcon'):
+                # Subscript has colons (and may also have multiple arguments) or has
+                # something attached to attribute site.  Don't remove end bracket,
+                # just move cursor in to icon.
+                for siteId in ('stepIcon', 'upperIcon', 'indexIcon'):
+                    if self.hasSite(siteId):
+                        break
+                siteIcon = self.childAt(siteId)
+                if siteIcon:
+                    rightIcon = icon.findLastAttrIcon(siteIcon)
+                    rightIcon, rightSite = typing.rightmostSite(rightIcon)
+                    win.cursor.setToIconSite(rightIcon, rightSite)
+                else:
+                    win.cursor.setToIconSite(self, siteId)
+            else:
+                # Reopen right bracket
+                arg = self.sites.indexIcon.att
+                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                if arg is None:
+                    cursIc = self
+                    cursSite = 'indexIcon'
+                else:
+                    cursIc, cursSite = typing.rightmostSite(
+                        icon.findLastAttrIcon(arg))
+                # Expand scope of bracket to its max, rearrange hierarchy around it
+                typing.reorderArithExpr(self)
+                self.reopen()
+                win.cursor.setToIconSite(cursIc, cursSite)
+                redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+                win.refresh(redrawRegion.get())
+            return
+            # Site is after a colon.  Try to remove it
+        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+        if siteId == 'upperIcon':
+            # Remove first colon
+            mergeSite1 = 'indexIcon'
+            mergeSite2 = 'upperIcon'
+        else:
+            # Remove second colon
+            mergeSite1 = 'upperIcon'
+            mergeSite2 = 'stepIcon'
+        mergeIcon1 = self.childAt(mergeSite1)
+        mergeIcon2 = self.childAt(mergeSite2)
+        if mergeIcon2 is None:
+            # Site after colon is empty (no need to merge)
+            pass
+        elif mergeIcon1 is None:
+            # Site before colon is empty, move the icon after the colon to it
+            self.replaceChild(mergeIcon2, mergeSite1)
+        elif mergeIcon1.hasSite('attrIcon'):
+            # Site before colon is not empty, but has site for entry icon
+            win.entryIcon = typing.EntryIcon(mergeIcon1, 'attrIcon', window=win)
+            win.entryIcon.setPendingArg(mergeIcon2)
+            mergeIcon1.replaceChild(win.entryIcon, 'attrIcon')
+        else:
+            # Can't safely remove the colon
+            typing.beep()
+            return
+        # If there is a step site that wasn't part of the merge, shift it.
+        if self.hasSite('stepIcon') and mergeSite2 != 'stepIcon':
+            moveIcon = self.childAt('stepIcon')
+            self.replaceChild(moveIcon, 'upperIcon')
+        # Clear the site to be removed (may not be necessary, but may be safer) and
+        # remove the colon (colonectomy)
+        if self.hasSite('stepIcon'):
+            self.replaceChild(None, 'stepIcon')
+            self.changeNumSubscripts(2)
+        else:
+            self.replaceChild(None, 'upperIcon')
+            self.changeNumSubscripts(1)
+        # Place the cursor or new entry icon, and redraw
+        if win.entryIcon is None:
+            if mergeIcon2 is None and mergeIcon1 is not None and \
+                    mergeIcon1.hasSite('attrIcon'):
+                win.cursor.setToIconSite(mergeIcon1, "attrIcon")
+            else:
+                win.cursor.setToIconSite(self, mergeSite1)
+            redrawRegion.add(win.layoutDirtyIcons())
+            win.refresh(redrawRegion.get())
+        else:
+            win.cursor.setToEntryIcon()
+            win.redisplayChangedEntryIcon(evt, redrawRegion.get())

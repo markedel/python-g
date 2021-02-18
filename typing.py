@@ -263,7 +263,7 @@ class EntryIcon(icon.Icon):
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
 
-    def backspace(self, evt=None):
+    def backspaceInText(self, evt=None):
         if self.text != "":
             newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
             self._setText(newText, self.cursorPos-1)
@@ -285,13 +285,15 @@ class EntryIcon(icon.Icon):
                     elif pendingAttr:
                         entryIcon.setPendingAttr(pendingAttr)
             else:
-                self.window.entryIcon = self
                 cursor = self.window.cursor
                 if cursor.type == "icon":
-                    self.attachedIcon = cursor.icon
-                    self.attachedSite = cursor.site
-                    cursor.icon.replaceChild(self, cursor.site)
+                    if cursor.site not in ('output', 'attrOut'):
+                        self.window.entryIcon = self
+                        self.attachedIcon = cursor.icon
+                        self.attachedSite = cursor.site
+                        cursor.icon.replaceChild(self, cursor.site)
                 elif cursor.type == "window":
+                    self.window.entryIcon = self
                     icon.moveRect(self.rect, cursor.pos)
                     self.window.addTop(self)
         else:  # No text or pending icons
@@ -1314,6 +1316,76 @@ class CursorParenIcon(icon.Icon):
         self.markLayoutDirty()
         self.sites.remove('attrIcon')
         self.window.undo.registerCallback(self.close)
+
+    def backspace(self, siteId, evt):
+        arg = self.sites.argIcon.att
+        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+        # If an attribute is attached to the parens, don't delete, just select
+        attrIcon = self.childAt('attrIcon')
+        win = self.window
+        if attrIcon:
+            win.unselectAll()
+            toSelect = list(attrIcon.traverse())
+            if siteId == 'argIcon':
+                toSelect.append(self)
+            for i in toSelect:
+                win.select(i)
+            win.refresh(redrawRegion.get())
+            return
+        if siteId == 'attrIcon':
+            # Cursor is on attribute site of right paren.  Re-open the paren
+            if arg is None:
+                cursIc = self
+                cursSite = 'argIcon'
+            else:
+                cursIc, cursSite = rightmostSite(icon.findLastAttrIcon(arg))
+            # Expand the scope of the paren to its max, rearrange hierarchy around it
+            self.reopen()
+            reorderArithExpr(self)
+            win.cursor.setToIconSite(cursIc, cursSite)
+        else:
+            # Cursor is on the argument site: remove the parens
+            parent = self.parent()
+            content = self.childAt('argIcon')
+            if parent is None:
+                if content is None:
+                    # Open paren was the only thing left of the statement.  Remove
+                    if self.prevInSeq() is not None:
+                        cursorIc = self.prevInSeq()
+                        cursorSite = 'seqOut'
+                    elif self.nextInSeq() is not None:
+                        cursorIc = self.nextInSeq()
+                        cursorSite = 'seqIn'
+                    else:
+                        cursorIc = None
+                        pos = self.pos()
+                    win.removeIcons([self])
+                    if cursorIc is None:
+                        win.cursor.setToWindowPos(pos)
+                    else:
+                        win.cursor.setToIconSite(cursorIc, cursorSite)
+                else:
+                    # Open paren on top level had content
+                    self.replaceChild(None, 'argIcon')
+                    win.replaceTop(self, content)
+                    topNode = reorderArithExpr(content)
+                    win.cursor.setToIconSite(topNode, 'output')
+            else:
+                # Open paren had a parent.  Remove by attaching content to parent
+                parentSite = parent.siteOf(self)
+                if content is None:
+                    redrawRegion.add(win.removeIcons([self], refresh=False))
+                    if not parent.hasSite(parentSite):
+                        # Last element of a list can disappear when icon is removed
+                        parent.insertChild(None, parentSite)
+                    win.cursor.setToIconSite(parent, parentSite)
+                else:
+                    parent.replaceChild(content, parentSite)
+                    win.cursor.setToIconSite(parent, parentSite)
+                    reorderArithExpr(content)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=True))
+        win.refresh(redrawRegion.get())
+
 
 class Cursor:
     def __init__(self, window, cursorType):

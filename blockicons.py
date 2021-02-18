@@ -655,6 +655,8 @@ class DefOrClassIcon(icon.Icon):
             self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, siteYOffset)
             rParenWidth = defRParenImage.width
             totalWidth = argX + self.argList.width + rParenWidth - 3
+            self.sites.add('attrIcon', 'attrIn', totalWidth,
+                bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
         else:
             totalWidth = max(bodyWidth, comn.BLOCK_INDENT+2) + icon.dragSeqImage.width
             self.argList = None
