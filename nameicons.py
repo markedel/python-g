@@ -9,7 +9,8 @@ import opicons
 import listicons
 import assignicons
 import blockicons
-import typing
+import entryicon
+import cursors
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
@@ -635,7 +636,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
             redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             valueIcons = [s.att for s in ic.sites.values]
             newTuple = listicons.TupleIcon(window=win, noParens=True)
-            win.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
+            win.entryIcon = entryicon.EntryIcon(newTuple, 'argIcons_0',
              initialString=text, window=win)
             newTuple.replaceChild(win.entryIcon, "argIcons_0")
             for i, arg in enumerate(valueIcons):
@@ -658,7 +659,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
         prevSite = iconsites.makeSeriesSiteId(siteName, index-1)
         childAtCursor = ic.childAt(site)
         if childAtCursor and ic.childAt(prevSite):
-            typing.beep()
+            cursors.beep()
             return
         topIcon = ic.topLevelParent()
         redrawRegion = comn.AccumRects(topIcon.hierRect())
@@ -667,7 +668,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
             win.cursor.setToIconSite(ic, prevSite)
         else:
             rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
-            rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+            rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
             ic.removeEmptySeriesSite(site)
             win.cursor.setToIconSite(rightmostIcon, rightmostSite)
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))

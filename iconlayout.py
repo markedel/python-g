@@ -281,7 +281,8 @@ class ListLayoutMgr:
                     lo = ListMgrLayout(self.siteSeriesName, rowWidths)
                     rowNum = 0
                     x = leftSublayoutOffset
-                    centerY = height // 2
+                    # If only one row, align with the output, otherwise, center by height
+                    centerY = rowData[0][1] if len(rowData) == 1 else height // 2
                     for siteNum, sublayout in enumerate(sublayouts):
                         if rowNum < len(rowData)-1 and siteNum == rowData[rowNum+1][0]:
                             rowNum += 1

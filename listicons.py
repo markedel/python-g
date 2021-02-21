@@ -9,7 +9,10 @@ import nameicons
 import opicons
 import blockicons
 import assignicons
-import typing
+import parenicon
+import entryicon
+import cursors
+import reorderexpr
 
 listLBktImage = comn.asciiToImage((
  "..oooooooo",
@@ -1233,9 +1236,9 @@ class TwoArgIcon(icon.Icon):
             entryAttachedIcon = parent
             entryAttachedSite = parent.siteOf(self)
         else:  # leftArg is not None, attach to that
-            entryAttachedIcon, entryAttachedSite = typing.rightmostSite(
+            entryAttachedIcon, entryAttachedSite = cursors.rightmostSite(
                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
-        win.entryIcon = typing.EntryIcon(entryAttachedIcon, entryAttachedSite,
+        win.entryIcon = entryicon.EntryIcon(entryAttachedIcon, entryAttachedSite,
             initialString=op, window=win)
         if leftArg is not None:
             leftArg.replaceChild(None, 'output')
@@ -1439,7 +1442,7 @@ def backspaceListIcon(ic, site, evt):
         if len(allArgs) < 2 and not attrAttached:
             if isinstance(ic, TupleIcon):
                 # For tuple icons, turn back in to cursor paren
-                cursorParen = typing.CursorParenIcon(window=win)
+                cursorParen = parenicon.CursorParenIcon(window=win)
                 parent = ic.parent()
                 child = ic.childAt('argIcons_0')
                 if parent is None:
@@ -1452,13 +1455,13 @@ def backspaceListIcon(ic, site, evt):
             # With either 0 or 1 argument, safe to remove right bracket
             if numArgs == 0:
                 cursIc = ic
-                cursSite = 'argIcon' if isinstance(ic, typing.CursorParenIcon) \
+                cursSite = 'argIcon' if isinstance(ic, parenicon.CursorParenIcon) \
                     else 'argIcons_0'
             else:
-                cursIc, cursSite = typing.rightmostSite(
+                cursIc, cursSite = cursors.rightmostSite(
                     icon.findLastAttrIcon(allArgs[-1]))
             # Expand scope of the paren to its max, rearrange hierarchy around it
-            typing.reorderArithExpr(ic)
+            reorderexpr.reorderArithExpr(ic)
             ic.reopen()
             win.cursor.setToIconSite(cursIc, cursSite)
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -1472,7 +1475,7 @@ def backspaceListIcon(ic, site, evt):
                 win.cursor.setToIconSite(ic, "argIcons", lastIdx)
             else:
                 rightmostIcon = icon.findLastAttrIcon(allArgs[lastIdx])
-                rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
                 win.cursor.setToIconSite(rightmostIcon, rightmostSite)
             return
     elif index == 0:
@@ -1517,7 +1520,7 @@ def backspaceListIcon(ic, site, evt):
                 # List was on top level
                 ic.replaceChild(None, ic.siteOf(content))
                 win.replaceTop(ic, content)
-                topNode = typing.reorderArithExpr(content)
+                topNode = reorderexpr.reorderArithExpr(content)
                 win.cursor.setToIconSite(topNode, 'output')
             else:
                 # List had a parent.  Remove by attaching content to parent if
@@ -1526,10 +1529,10 @@ def backspaceListIcon(ic, site, evt):
                 parentSite = parent.siteOf(ic)
                 if parent.typeOf('parentSite') == 'input':
                     parent.replaceChild(content, parentSite)
-                    typing.reorderArithExpr(content)
+                    reorderexpr.reorderArithExpr(content)
                     win.cursor.setToIconSite(parent, parentSite)
                 else:  # ic is on an attribute site.  Create an entry icon
-                    win.entryIcon = typing.EntryIcon(parent, parentSite,
+                    win.entryIcon = entryicon.EntryIcon(parent, parentSite,
                         window=win)
                     parent.replaceChild(win.entryIcon, parentSite)
                     win.entryIcon.setPendingArg(content)
@@ -1553,7 +1556,7 @@ def backspaceListIcon(ic, site, evt):
         prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
         childAtCursor = ic.childAt(site)
         if childAtCursor and ic.childAt(prevSite):
-            typing.beep()
+            cursors.beep()
             return
         topIcon = ic.topLevelParent()
         redrawRegion = comn.AccumRects(topIcon.hierRect())
@@ -1562,7 +1565,7 @@ def backspaceListIcon(ic, site, evt):
             win.cursor.setToIconSite(ic, prevSite)
         else:
             rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
-            rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+            rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
             ic.removeEmptySeriesSite(site)
             win.cursor.setToIconSite(rightmostIcon, rightmostSite)
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))

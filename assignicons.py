@@ -8,7 +8,8 @@ import iconsites
 import nameicons
 import listicons
 import opicons
-import typing
+import entryicon
+import cursors
 
 assignDragImage = comn.asciiToImage((
  "......",
@@ -309,7 +310,8 @@ class AssignIcon(icon.Icon):
     def textRepr(self):
         text = ""
         for tgtList in self.tgtLists:
-            text += icon.seriesTextRepr(getattr(self.sites, tgtList.siteSeriesName)) + " = "
+            text += icon.seriesTextRepr(getattr(self.sites, tgtList.siteSeriesName)) + \
+                    " = "
         return text + icon.seriesTextRepr(self.sites.values)
 
     def backspace(self, siteId, evt):
@@ -366,7 +368,7 @@ class AssignIcon(icon.Icon):
                 if cursorIc is None:
                     cursorIc = self
                 else:
-                    cursorIc, cursorSite = typing.rightmostSite(
+                    cursorIc, cursorSite = cursors.rightmostSite(
                         icon.findLastAttrIcon(cursorIc))
                 win.cursor.setToIconSite(cursorIc, cursorSite)
         else:
@@ -374,7 +376,7 @@ class AssignIcon(icon.Icon):
             prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
             childAtCursor = self.childAt(siteId)
             if childAtCursor and self.childAt(prevSite):
-                typing.beep()
+                cursors.beep()
                 return
             topIcon = self.topLevelParent()
             redrawRegion = comn.AccumRects(topIcon.hierRect())
@@ -383,7 +385,7 @@ class AssignIcon(icon.Icon):
                 win.cursor.setToIconSite(self, prevSite)
             else:
                 rightmostIcon = icon.findLastAttrIcon(self.childAt(prevSite))
-                rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
                 self.removeEmptySeriesSite(siteId)
                 win.cursor.setToIconSite(rightmostIcon, rightmostSite)
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -551,11 +553,11 @@ class AugmentedAssignIcon(icon.Icon):
                     print('AugmentedAssign has parent?????')
                     return
                 if targetIcon is None:
-                    win.entryIcon = typing.EntryIcon(None, None,
+                    win.entryIcon = entryicon.EntryIcon(None, None,
                         initialString=text, window=win)
                     win.replaceTop(self, win.entryIcon)
                 else:
-                    win.entryIcon = typing.EntryIcon(targetIcon, 'attrIcon',
+                    win.entryIcon = entryicon.EntryIcon(targetIcon, 'attrIcon',
                         initialString=text, window=win)
                     win.replaceTop(self, targetIcon)
                     targetIcon.replaceChild(win.entryIcon, 'attrIcon')
@@ -568,11 +570,11 @@ class AugmentedAssignIcon(icon.Icon):
                 valueIcons = [s.att for s in self.sites.values if s.att is not None]
                 newTuple = listicons.TupleIcon(window=win, noParens=True)
                 if targetIcon is None:
-                    win.entryIcon = typing.EntryIcon(newTuple, 'argIcons_0',
+                    win.entryIcon = entryicon.EntryIcon(newTuple, 'argIcons_0',
                         initialString=text, window=win)
                     newTuple.replaceChild(win.entryIcon, "argIcons_0")
                 else:
-                    win.entryIcon = typing.EntryIcon(targetIcon, 'attrIcon',
+                    win.entryIcon = entryicon.EntryIcon(targetIcon, 'attrIcon',
                         initialString=text, window=win)
                     targetIcon.replaceChild(win.entryIcon, 'attrIcon')
                     newTuple.replaceChild(targetIcon, 'argIcons_0')
@@ -590,7 +592,7 @@ class AugmentedAssignIcon(icon.Icon):
             prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
             childAtCursor = self.childAt(siteId)
             if childAtCursor and self.childAt(prevSite):
-                typing.beep()
+                cursors.beep()
                 return
             topIcon = self.topLevelParent()
             redrawRegion = comn.AccumRects(topIcon.hierRect())
@@ -599,7 +601,7 @@ class AugmentedAssignIcon(icon.Icon):
                 win.cursor.setToIconSite(self, prevSite)
             else:
                 rightmostIcon = icon.findLastAttrIcon(self.childAt(prevSite))
-                rightmostIcon, rightmostSite = typing.rightmostSite(rightmostIcon)
+                rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
                 self.removeEmptySeriesSite(siteId)
                 win.cursor.setToIconSite(rightmostIcon, rightmostSite)
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))

@@ -3,15 +3,16 @@
 import tkinter as tk
 import ast
 import comn
-import typing
+import cursors
 import iconsites
 import icon
 import blockicons
 import listicons
 import opicons
 import nameicons
-import subscripticon
 import assignicons
+import entryicon
+import parenicon
 import undo
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
@@ -247,7 +248,7 @@ class Window:
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
         self.entryIcon = None
-        self.cursor = typing.Cursor(self, None)
+        self.cursor = cursors.Cursor(self, None)
         self.execResultPositions = {}
         self.undo = undo.UndoRedoList(self)
         # .iconIds holds a dictionary translating icon ID #s to icons.  Icon IDs have to
@@ -459,7 +460,7 @@ class Window:
     def _keyCb(self, evt):
         if evt.state & (CTRL_MASK | LEFT_ALT_MASK):
             return
-        char = typing.tkCharFromEvt(evt)
+        char = cursors.tkCharFromEvt(evt)
         if char is None:
             return
         # If there's a cursor displayed somewhere, use it
@@ -474,7 +475,7 @@ class Window:
             return
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
-            self.entryIcon = typing.EntryIcon(None, None, window=self)
+            self.entryIcon = entryicon.EntryIcon(None, None, window=self)
             y -= self.entryIcon.sites.output.yOffset
             self.entryIcon.rect = comn.offsetRect(self.entryIcon.rect, x, y)
             self.addTopSingle(self.entryIcon, newSeq=True)
@@ -491,10 +492,10 @@ class Window:
             pendingAttr = replaceIcon.childAt('attrIcon')
             if iconParent is None:
                 # Icon is at top, but may be part of a sequence
-                self.entryIcon = typing.EntryIcon(None, None, window=self)
+                self.entryIcon = entryicon.EntryIcon(None, None, window=self)
                 self.replaceTop(replaceIcon, self.entryIcon)
             else:
-                self.entryIcon = typing.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
+                self.entryIcon = entryicon.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
                  window=self)
                 iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
             self.entryIcon.setPendingAttr(pendingAttr)
@@ -504,28 +505,28 @@ class Window:
         else:
             # Either no icons were selected, or multiple icons were selected (so
             # we don't know what to replace).
-            typing.beep()
+            cursors.beep()
 
     def _insertEntryIconAtCursor(self, initialText):
         if self.cursor.siteType == "output":
-            self.entryIcon = typing.EntryIcon(None, None, window=self)
+            self.entryIcon = entryicon.EntryIcon(None, None, window=self)
             self.entryIcon.setPendingArg(self.cursor.icon)
             self.replaceTop(self.cursor.icon, self.entryIcon)
             self.cursor.setToEntryIcon()
         elif self.cursor.siteType == "attrOut":
-            self.entryIcon = typing.EntryIcon(None, None, window=self)
+            self.entryIcon = entryicon.EntryIcon(None, None, window=self)
             self.entryIcon.setPendingAttr(self.cursor.icon)
             self.replaceTop(self.cursor.icon, self.entryIcon)
             self.cursor.setToEntryIcon()
         elif self.cursor.siteType in ("seqIn", "seqOut"):
-            self.entryIcon = typing.EntryIcon(None, None, window=self,
+            self.entryIcon = entryicon.EntryIcon(None, None, window=self,
              location=self.cursor.icon.rect[:2])
             before = self.cursor.siteType == "seqIn"
             icon.insertSeq(self.entryIcon, self.cursor.icon, before=before)
             self.cursor.setToEntryIcon()
             self.addTopSingle(self.entryIcon)
         else:  # Cursor site type is input or attrIn
-            self.entryIcon = typing.EntryIcon(self.cursor.icon, self.cursor.site,
+            self.entryIcon = entryicon.EntryIcon(self.cursor.icon, self.cursor.site,
              window=self)
             pendingArg = self.cursor.icon.childAt(self.cursor.site)
             self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
@@ -789,8 +790,8 @@ class Window:
         if selectedRect is None:
             return
         xOff, yOff = selectedRect[:2]
-        clipIcons = icon.clipboardRepr(selectedIcons, (-xOff, -yOff))
-        clipTxt = icon.textRepr(selectedIcons)
+        clipIcons = clipboardRepr(selectedIcons, (-xOff, -yOff))
+        clipTxt = textRepr(selectedIcons)
         self.top.clipboard_clear()
         self.top.clipboard_append(clipIcons, type='ICONS')
         self.top.clipboard_append(clipTxt, type='STRING')
@@ -849,7 +850,7 @@ class Window:
             pastePos = x, y
         elif self.cursor.type == "icon":
             if self.cursor.site[0] != "input" or len(pastedIcons) != 1:
-                typing.beep()
+                cursors.beep()
                 return
             replaceParent = self.cursor.icon
             replaceSite = self.cursor.site
@@ -857,7 +858,7 @@ class Window:
             # There's no cursor.  See if there's a selection
             selectedIcons = self.selectedIcons()
             if len(selectedIcons) == 0:
-                typing.beep()
+                cursors.beep()
                 return
             selectedIcons = findTopIcons(self.selectedIcons())
             if len(selectedIcons) == 1 and len(pastedIcons) == 1:
@@ -913,10 +914,10 @@ class Window:
                 self.removeIcons(selectedIcons)
             elif self.cursor.type == "icon":
                 if self.cursor.siteType == 'seqIn' and self.cursor.icon.prevInSeq():
-                    ic, site = typing.rightmostSite(self.cursor.icon.prevInSeq())
+                    ic, site = cursors.rightmostSite(self.cursor.icon.prevInSeq())
                     self.cursor.setToIconSite(ic, site)
                 if self.cursor.siteType == 'seqOut':
-                    ic, site = typing.rightmostSite(self.cursor.icon)
+                    ic, site = cursors.rightmostSite(self.cursor.icon)
                     self.cursor.setToIconSite(ic, site)
                 else:
                     self._backspaceIcon(evt)
@@ -953,12 +954,12 @@ class Window:
         redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
         parent = ic.parent()
         if parent is None:
-            self.entryIcon = typing.EntryIcon(None, None, initialString=entryText,
+            self.entryIcon = entryicon.EntryIcon(None, None, initialString=entryText,
                 window=self)
             self.replaceTop(ic, self.entryIcon)
         else:
             parentSite = parent.siteOf(ic)
-            self.entryIcon = typing.EntryIcon(parent, parentSite,
+            self.entryIcon = entryicon.EntryIcon(parent, parentSite,
                 initialString=entryText, window=self)
             parent.replaceChild(self.entryIcon, parentSite)
         if pendingArgSite is not None:
@@ -2077,8 +2078,9 @@ class Window:
             if nextIcon is None or newSeq:
                 page = Page()
                 page.startIcon = ic
-                page.topY = ic.rect[1]
-                page.bottomY = ic.rect[3]
+                pageRect = ic.hierRect()
+                page.topY = pageRect[1]
+                page.bottomY = pageRect[3]
                 page.iconCount = 0
                 self.sequences.append(page)
             else:
@@ -2173,7 +2175,10 @@ class Window:
                 if filterRedundantParens:
                     self.filterRedundantParens(page.startIcon)
                 page.startIcon.layout()
-                redrawRegion.add(page.startIcon.hierRect())
+                pageRect = page.startIcon.hierRect()
+                page.topY = pageRect[1]
+                page.bottomY = pageRect[3]
+                redrawRegion.add(pageRect)
                 continue
             # Traverse the sequence of icons in the page looking for icons that need to
             # be laid out.  The page may have unapplied offset, but that will be remedied
@@ -2308,7 +2313,7 @@ class Window:
     def filterRedundantParens(self, ic, parentIcon=None, parentSite=None):
         """Remove parentheses whose arguments are BinOpIcons that would deploy their own
         parentheses upon the next layout if not for the enclosing cursor paren."""
-        if ic.__class__ is not typing.CursorParenIcon or not ic.closed:
+        if ic.__class__ is not parenicon.CursorParenIcon or not ic.closed:
             for c in ic.children():
                 self.filterRedundantParens(c, ic, ic.siteOf(c))
             return
