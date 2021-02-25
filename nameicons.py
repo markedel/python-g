@@ -8,7 +8,6 @@ import icon
 import opicons
 import listicons
 import assignicons
-import blockicons
 import entryicon
 import cursors
 
@@ -636,8 +635,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
             redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             valueIcons = [s.att for s in ic.sites.values]
             newTuple = listicons.TupleIcon(window=win, noParens=True)
-            win.entryIcon = entryicon.EntryIcon(newTuple, 'argIcons_0',
-             initialString=text, window=win)
+            win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
             newTuple.replaceChild(win.entryIcon, "argIcons_0")
             for i, arg in enumerate(valueIcons):
                 if i == 0:
@@ -674,6 +672,35 @@ def backspaceSeriesStmt(ic, site, evt, text):
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
         win.refresh(redrawRegion.get())
         win.undo.addBoundary()
+
+# Unfinished
+class ToDoIcon(TextIcon):
+    def __init__(self, window=None, location=None):
+        name = self.__class__.__name__
+        TextIcon.__init__(self, 'ToDo: ' + name + 'Not implemented', window, location)
+
+class ExceptIcon(ToDoIcon):
+    pass
+
+class FinallyIcon(ToDoIcon):
+    pass
+
+class FromIcon(ToDoIcon):
+    pass
+
+class ImportIcon(ToDoIcon):
+    pass
+
+class RaiseIcon(ToDoIcon):
+    pass
+
+class TryIcon(ToDoIcon):
+    pass
+
+# Getting resources (particularly icon class definitions) from other icon files requires
+# circular imports, unfortunately.  Here, the import is deferred far enough down the file
+# that the dependencies can resolve.
+import blockicons
 
 def determineCtx(ic):
     """Figure out the load/store/delete context of a given icon.  Returns an object
@@ -715,27 +742,3 @@ def determineCtx(ic):
     elif parentClass is DelIcon:
         return ast.Del()
     return ast.Load()
-
-# Unfinished
-class ToDoIcon(TextIcon):
-    def __init__(self, window=None, location=None):
-        name = self.__class__.__name__
-        TextIcon.__init__(self, 'ToDo: ' + name + 'Not implemented', window, location)
-
-class ExceptIcon(ToDoIcon):
-    pass
-
-class FinallyIcon(ToDoIcon):
-    pass
-
-class FromIcon(ToDoIcon):
-    pass
-
-class ImportIcon(ToDoIcon):
-    pass
-
-class RaiseIcon(ToDoIcon):
-    pass
-
-class TryIcon(ToDoIcon):
-    pass

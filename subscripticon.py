@@ -4,7 +4,9 @@ import comn
 import iconlayout
 import icon
 import nameicons
-import typing
+import cursors
+import entryicon
+import reorderexpr
 
 SLICE_EMPTY_ARG_WIDTH = 1
 
@@ -345,7 +347,7 @@ class SubscriptIcon(icon.Icon):
                     # an attribute site we can't attach, so create an entry icon
                     # and make the content a pending argument to it.
                     parentSite = parent.siteOf(self)
-                    win.entryIcon = typing.EntryIcon(parent, parentSite, window=win)
+                    win.entryIcon = entryicon.EntryIcon(parent, parentSite, window=win)
                     parent.replaceChild(win.entryIcon, parentSite)
                     win.entryIcon.setPendingArg(content)
                     win.cursor.setToEntryIcon()
@@ -368,7 +370,7 @@ class SubscriptIcon(icon.Icon):
                 siteIcon = self.childAt(siteId)
                 if siteIcon:
                     rightIcon = icon.findLastAttrIcon(siteIcon)
-                    rightIcon, rightSite = typing.rightmostSite(rightIcon)
+                    rightIcon, rightSite = cursors.rightmostSite(rightIcon)
                     win.cursor.setToIconSite(rightIcon, rightSite)
                 else:
                     win.cursor.setToIconSite(self, siteId)
@@ -380,10 +382,10 @@ class SubscriptIcon(icon.Icon):
                     cursIc = self
                     cursSite = 'indexIcon'
                 else:
-                    cursIc, cursSite = typing.rightmostSite(
+                    cursIc, cursSite = cursors.rightmostSite(
                         icon.findLastAttrIcon(arg))
                 # Expand scope of bracket to its max, rearrange hierarchy around it
-                typing.reorderArithExpr(self)
+                reorderexpr.reorderArithExpr(self)
                 self.reopen()
                 win.cursor.setToIconSite(cursIc, cursSite)
                 redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -409,12 +411,12 @@ class SubscriptIcon(icon.Icon):
             self.replaceChild(mergeIcon2, mergeSite1)
         elif mergeIcon1.hasSite('attrIcon'):
             # Site before colon is not empty, but has site for entry icon
-            win.entryIcon = typing.EntryIcon(mergeIcon1, 'attrIcon', window=win)
+            win.entryIcon = entryicon.EntryIcon(mergeIcon1, 'attrIcon', window=win)
             win.entryIcon.setPendingArg(mergeIcon2)
             mergeIcon1.replaceChild(win.entryIcon, 'attrIcon')
         else:
             # Can't safely remove the colon
-            typing.beep()
+            cursors.beep()
             return
         # If there is a step site that wasn't part of the merge, shift it.
         if self.hasSite('stepIcon') and mergeSite2 != 'stepIcon':

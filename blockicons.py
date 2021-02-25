@@ -7,6 +7,7 @@ import iconsites
 import icon
 import nameicons
 import listicons
+import infixicon
 
 # Number of pixels to the left of sequence site to start else and elif icons
 ELSE_DEDENT = 21
@@ -53,9 +54,9 @@ defRParenImage = comn.asciiToImage((
  "oooooooo"))
 defRParenExtendDupRows = 7,
 
-class WithAsIcon(listicons.TwoArgIcon):
+class WithAsIcon(infixicon.InfixIcon):
     def __init__(self, window=None, location=None):
-        listicons.TwoArgIcon.__init__(self, "as", None, window, location)
+        infixicon.InfixIcon.__init__(self, "as", None, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent being a "with" statement

@@ -11,6 +11,7 @@ import blockicons
 import assignicons
 import parenicon
 import entryicon
+import infixicon
 import cursors
 import reorderexpr
 
@@ -1261,10 +1262,10 @@ class TwoArgIcon(icon.Icon):
         win.cursor.setToEntryIcon()
         win.redisplayChangedEntryIcon(evt, redrawRect)
 
-class DictElemIcon(TwoArgIcon):
+class DictElemIcon(infixicon.InfixIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
-        TwoArgIcon.__init__(self, ":", icon.colonImage, window, location)
+        infixicon.InfixIcon.__init__(self, ":", icon.colonImage, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent being a dictionary constant
@@ -1289,10 +1290,10 @@ class DictElemIcon(TwoArgIcon):
         value = self.sites.rightArg.att.execute()
         return key, value
 
-class ArgAssignIcon(TwoArgIcon):
+class ArgAssignIcon(infixicon.InfixIcon):
     """Special assignment statement for use only in function argument lists"""
     def __init__(self, window=None, location=None):
-        TwoArgIcon.__init__(self, "=", argAssignImage, window, location)
+        infixicon.InfixIcon.__init__(self, "=", argAssignImage, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on being part of an argument or parameter list
@@ -1532,8 +1533,7 @@ def backspaceListIcon(ic, site, evt):
                     reorderexpr.reorderArithExpr(content)
                     win.cursor.setToIconSite(parent, parentSite)
                 else:  # ic is on an attribute site.  Create an entry icon
-                    win.entryIcon = entryicon.EntryIcon(parent, parentSite,
-                        window=win)
+                    win.entryIcon = entryicon.EntryIcon(window=win)
                     parent.replaceChild(win.entryIcon, parentSite)
                     win.entryIcon.setPendingArg(content)
                     win.cursor.setToEntryIcon()

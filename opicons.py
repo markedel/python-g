@@ -1,12 +1,12 @@
 # Copyright Mark Edel  All rights reserved
+import ast
+from PIL import Image, ImageDraw
+import iconlayout
 import iconsites
 import icon
 import operator
-import ast
-from PIL import Image, ImageDraw
 import comn
-import iconlayout
-import typing
+import cursors
 
 DEPTH_EXPAND = 4
 
@@ -689,6 +689,12 @@ def needsParens(ic, parent=None, forText=False, parentSite=None):
         return True
     return False
 
+# The ugly hack of not putting these at the top of the file allows the backspace code
+# to be in the same module as the icon definitions, and but not mess up initialization
+import parenicon
+import entryicon
+import reorderexpr
+
 def backspaceBinOpIcon(ic, site, evt):
     win = ic.window
     if site == 'attrIcon':
@@ -699,7 +705,7 @@ def backspaceBinOpIcon(ic, site, evt):
                 cursorIc = ic
                 cursorSite = 'bottomArg'
             else:
-                cursorIc, cursorSite = typing.rightmostSite(
+                cursorIc, cursorSite = cursors.rightmostSite(
                     icon.findLastAttrIcon(bottomArg))
             win.cursor.setToIconSite(cursorIc, cursorSite)
         else:
@@ -715,7 +721,7 @@ def backspaceBinOpIcon(ic, site, evt):
                 win.refresh(redrawRegion.get())
                 return
             parent = ic.parent()
-            cursorParen = typing.CursorParenIcon(window=win)
+            cursorParen = parenicon.CursorParenIcon(window=win)
             if parent is None:
                 # Insert cursor paren at top level with ic as its child
                 cursorParen.replaceChild(ic, 'argIcon')
@@ -728,10 +734,10 @@ def backspaceBinOpIcon(ic, site, evt):
             # Manually change status of icon to no-parens so it will be treated
             # as not parenthesised as icons are rearranged
             ic.hasParens = False
-            cursIc, cursSite = typing.rightmostSite(icon.findLastAttrIcon(ic))
+            cursIc, cursSite = cursors.rightmostSite(icon.findLastAttrIcon(ic))
             # Expand the scope of the paren to its max, by rearranging the icon
             # hierarchy around it
-            typing.reorderArithExpr(cursorParen)
+            reorderexpr.reorderArithExpr(cursorParen)
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
             win.cursor.setToIconSite(cursIc, cursSite)
@@ -769,7 +775,7 @@ def backspaceBinOpIcon(ic, site, evt):
         # determine if parens are displayed).
         ic.hasParens = False
         ic.markLayoutDirty()
-        typing.reorderArithExpr(ic)
+        reorderexpr.reorderArithExpr(ic)
         # Restore the cursor that was temporarily set to the output site to the
         # parent icon and site (see above)
         updatedCursorIc = win.cursor.icon.parent()
@@ -784,7 +790,7 @@ def backspaceBinOpIcon(ic, site, evt):
     redrawRect = ic.topLevelParent().hierRect()
     if not isinstance(ic, DivideIcon) and ic.hasParens:
         # If the operation had parens, place temporary parens for continuity
-        cursorParen = typing.CursorParenIcon(window=win, closed=True)
+        cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
         cpParent = ic.parent()
         if cpParent is None:
             win.replaceTop(ic, cursorParen)
@@ -807,9 +813,9 @@ def backspaceBinOpIcon(ic, site, evt):
         entryAttachedSite = parent.siteOf(ic)
     else:  # leftArg is not None, attach to that
         # Ignore auto parens because we are removing the supporting operator
-        entryAttachedIcon, entryAttachedSite = typing.rightmostSite(
+        entryAttachedIcon, entryAttachedSite = cursors.rightmostSite(
             icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
-    win.entryIcon = typing.EntryIcon(entryAttachedIcon, entryAttachedSite,
+    win.entryIcon = entryicon.EntryIcon(entryAttachedIcon, entryAttachedSite,
         initialString=op, window=win)
     if leftArg is not None:
         leftArg.replaceChild(None, 'output')

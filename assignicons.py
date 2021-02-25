@@ -553,12 +553,10 @@ class AugmentedAssignIcon(icon.Icon):
                     print('AugmentedAssign has parent?????')
                     return
                 if targetIcon is None:
-                    win.entryIcon = entryicon.EntryIcon(None, None,
-                        initialString=text, window=win)
+                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                     win.replaceTop(self, win.entryIcon)
                 else:
-                    win.entryIcon = entryicon.EntryIcon(targetIcon, 'attrIcon',
-                        initialString=text, window=win)
+                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                     win.replaceTop(self, targetIcon)
                     targetIcon.replaceChild(win.entryIcon, 'attrIcon')
                 if len(valueIcons) == 1:
@@ -570,12 +568,10 @@ class AugmentedAssignIcon(icon.Icon):
                 valueIcons = [s.att for s in self.sites.values if s.att is not None]
                 newTuple = listicons.TupleIcon(window=win, noParens=True)
                 if targetIcon is None:
-                    win.entryIcon = entryicon.EntryIcon(newTuple, 'argIcons_0',
-                        initialString=text, window=win)
+                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                     newTuple.replaceChild(win.entryIcon, "argIcons_0")
                 else:
-                    win.entryIcon = entryicon.EntryIcon(targetIcon, 'attrIcon',
-                        initialString=text, window=win)
+                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                     targetIcon.replaceChild(win.entryIcon, 'attrIcon')
                     newTuple.replaceChild(targetIcon, 'argIcons_0')
                 for i, arg in enumerate(valueIcons):

@@ -475,7 +475,7 @@ class Window:
             return
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
-            self.entryIcon = entryicon.EntryIcon(None, None, window=self)
+            self.entryIcon = entryicon.EntryIcon(window=self)
             y -= self.entryIcon.sites.output.yOffset
             self.entryIcon.rect = comn.offsetRect(self.entryIcon.rect, x, y)
             self.addTopSingle(self.entryIcon, newSeq=True)
@@ -492,11 +492,10 @@ class Window:
             pendingAttr = replaceIcon.childAt('attrIcon')
             if iconParent is None:
                 # Icon is at top, but may be part of a sequence
-                self.entryIcon = entryicon.EntryIcon(None, None, window=self)
+                self.entryIcon = entryicon.EntryIcon(window=self)
                 self.replaceTop(replaceIcon, self.entryIcon)
             else:
-                self.entryIcon = entryicon.EntryIcon(iconParent, iconParent.siteOf(replaceIcon),
-                 window=self)
+                self.entryIcon = entryicon.EntryIcon(window=self)
                 iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
             self.entryIcon.setPendingAttr(pendingAttr)
             self.cursor.setToEntryIcon()
@@ -509,25 +508,24 @@ class Window:
 
     def _insertEntryIconAtCursor(self, initialText):
         if self.cursor.siteType == "output":
-            self.entryIcon = entryicon.EntryIcon(None, None, window=self)
+            self.entryIcon = entryicon.EntryIcon(window=self)
             self.entryIcon.setPendingArg(self.cursor.icon)
             self.replaceTop(self.cursor.icon, self.entryIcon)
             self.cursor.setToEntryIcon()
         elif self.cursor.siteType == "attrOut":
-            self.entryIcon = entryicon.EntryIcon(None, None, window=self)
+            self.entryIcon = entryicon.EntryIcon(window=self)
             self.entryIcon.setPendingAttr(self.cursor.icon)
             self.replaceTop(self.cursor.icon, self.entryIcon)
             self.cursor.setToEntryIcon()
         elif self.cursor.siteType in ("seqIn", "seqOut"):
-            self.entryIcon = entryicon.EntryIcon(None, None, window=self,
+            self.entryIcon = entryicon.EntryIcon(window=self,
              location=self.cursor.icon.rect[:2])
             before = self.cursor.siteType == "seqIn"
             icon.insertSeq(self.entryIcon, self.cursor.icon, before=before)
             self.cursor.setToEntryIcon()
             self.addTopSingle(self.entryIcon)
         else:  # Cursor site type is input or attrIn
-            self.entryIcon = entryicon.EntryIcon(self.cursor.icon, self.cursor.site,
-             window=self)
+            self.entryIcon = entryicon.EntryIcon(window=self)
             pendingArg = self.cursor.icon.childAt(self.cursor.site)
             self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
             if self.cursor.site == 'attrIcon':
@@ -954,13 +952,11 @@ class Window:
         redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
         parent = ic.parent()
         if parent is None:
-            self.entryIcon = entryicon.EntryIcon(None, None, initialString=entryText,
-                window=self)
+            self.entryIcon = entryicon.EntryIcon(initialString=entryText, window=self)
             self.replaceTop(ic, self.entryIcon)
         else:
             parentSite = parent.siteOf(ic)
-            self.entryIcon = entryicon.EntryIcon(parent, parentSite,
-                initialString=entryText, window=self)
+            self.entryIcon = entryicon.EntryIcon(initialString=entryText, window=self)
             parent.replaceChild(self.entryIcon, parentSite)
         if pendingArgSite is not None:
             child = ic.childAt(pendingArgSite)
@@ -1014,7 +1010,7 @@ class Window:
     def _cancelCb(self, evt=None):
         if self.entryIcon is not None:
             oldLoc = self.entryIcon.hierRect()
-            self.entryIcon.remove()
+            self.entryIcon.remove(forceDelete=True)
             self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
         else:
             self.cursor.removeCursor()
@@ -1067,11 +1063,11 @@ class Window:
         self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
         # If the entry icon is still there, check if it's empty and attached to an icon.
         # If so, remove.  Otherwise, give up and fail out
-        if self.entryIcon is not None and self.entryIcon.attachedIcon is not None:
+        if self.entryIcon is not None and self.entryIcon.attachedIcon() is not None:
             if len(self.entryIcon.text) == 0 and \
              self.entryIcon.pendingAttr() is None and \
              self.entryIcon.pendingArg() is None:
-                self.cursor.setToIconSite(self.entryIcon.attachedIcon,
+                self.cursor.setToIconSite(self.entryIcon.attachedIcon(),
                  self.entryIcon.attachedSite)
                 self.removeIcons([self.entryIcon])
                 self.entryIcon = None

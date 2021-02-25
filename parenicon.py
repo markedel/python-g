@@ -4,7 +4,7 @@ import comn
 import iconlayout
 import icon
 import reorderexpr
-import typing
+#import cursors
 
 class CursorParenIcon(icon.Icon):
     def __init__(self, closed=False, window=None, location=None):
@@ -169,7 +169,7 @@ class CursorParenIcon(icon.Icon):
                 cursIc = self
                 cursSite = 'argIcon'
             else:
-                cursIc, cursSite = typing.rightmostSite(icon.findLastAttrIcon(arg))
+                cursIc, cursSite = cursors.rightmostSite(icon.findLastAttrIcon(arg))
             # Expand the scope of the paren to its max, rearrange hierarchy around it
             self.reopen()
             reorderexpr.reorderArithExpr(self)

@@ -1,4 +1,4 @@
-import typing
+import cursors
 
 class UndoRedoList:
     def __init__(self, window):
@@ -68,7 +68,7 @@ class UndoRedoList:
     def _undoOrRedoToBoundary(self, isRedo):
         undoList = self.redoList if isRedo else self.undoList
         if len(undoList) == 0:
-            typing.beep()
+            cursors.beep()
             return
         #... I don't understand why I put the boundary before the operation, here.
         #    Normally, the convention is to put it at the end of an operation,

@@ -91,19 +91,6 @@ def parseCodeBlock(bodyAst, window, location):
             icons += bodyIcons
     return icons
 
-def parseExprToAst(text):  #... Not used. what is this for?
-    try:
-        modAst = ast.parse(text, "Pasted text")
-    except:
-        return None
-    if not isinstance(modAst, ast.Module):
-        return None
-    if len(modAst.body) != 1:
-        return None
-    if not isinstance(modAst.body[0], ast.Expr):
-        return None
-    return modAst.body[0].value
-
 def parseStmt(stmt):
     if stmt.__class__ == ast.Assign:
         targets = [parseExpr(e) for e in stmt.targets]

@@ -5,7 +5,6 @@ import listicons
 import blockicons
 import subscripticon
 import parenicon
-import entryicon
 
 def _reduceOperatorStack(operatorStack, operandStack):
     """This is the inner component of reorderArithExpr (see below).  Pop a single operator
@@ -279,8 +278,6 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
                 deletedIconAttr = token.parenIcon.childAt('attrIcon')
                 if deletedIconAttr:
                     parenIc.replaceChild(deletedIconAttr, 'attrIcon')
-                    if isinstance(deletedIconAttr, entryicon.EntryIcon):
-                        deletedIconAttr.attachedIcon = parenIc
                 cursor = parenIc.window.cursor
                 if cursor.type == 'icon' and cursor.icon is token.parenIcon:
                     cursorSite = 'leftArg' if cursor.site == 'argIcon' else 'attrIcon'
@@ -307,8 +304,6 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
             if token.endParenIc.childAt('attrIcon') is token.endParenAttr:
                 token.endParenIc.replaceChild(None, 'attrIcon')
             parenIc.replaceChild(token.endParenAttr, 'attrIcon')
-            if isinstance(token.endParenAttr, entryicon.EntryIcon):
-                token.endParenAttr.attachedIcon = parenIc
         # Move cursor and entry icon if directed
         if token.takeCursor:
             parenIc.window.cursor.setToIconSite(token.endParenAttr, 'attrIcon')
@@ -318,9 +313,6 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
                 eiParent = entryIcon.parent()
                 eiParent.replaceChild(None, eiParent.siteOf(entryIcon))
                 parenIc.replaceChild(entryIcon, 'attrIcon')
-                entryIcon.attachedIcon = parenIc
-                entryIcon.attachedSite = 'attrIcon'
-                entryIcon.attachedSiteType = 'attrIn'
         return outIc
     print('Unrecognized token in relinkExprFromTokens')
     return None

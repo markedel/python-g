@@ -6,6 +6,7 @@
 import winsound
 from PIL import Image, ImageDraw
 from operator import itemgetter
+import ast
 import comn
 import iconsites
 import icon
@@ -16,6 +17,7 @@ import listicons
 import assignicons
 import subscripticon
 import parenicon
+import infixicon
 import python_g
 
 # How far to move the cursor per arrow keystroke on the window background
@@ -535,7 +537,7 @@ def rightmostSite(ic, ignoreAutoParens=False):
             return ic, 'values_0'
         return rightmostSite(icon.findLastAttrIcon(children[-1]))
     elif isinstance(ic, opicons.BinOpIcon) and (not ic.hasParens or ignoreAutoParens) \
-            or isinstance(ic, listicons.TwoArgIcon):
+            or isinstance(ic, infixicon.InfixIcon):
         if ic.rightArg() is None:
             return ic, 'rightArg'
         return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))
