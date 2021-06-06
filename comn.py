@@ -14,8 +14,9 @@ ICON_BG_COLOR = (255, 255, 255, 255)
 
 def asciiToImage(asciiPixmap):
     if asciiToImage.asciiMap is None:
-        asciiToImage.asciiMap = {'.': (0, 0, 0, 0), 'o': OUTLINE_COLOR,
-         ' ': ICON_BG_COLOR, '%': (0, 0, 0, 255)}
+        asciiToImage.asciiMap = {'.':(0, 0, 0, 0), 'o': OUTLINE_COLOR,
+                ' ': ICON_BG_COLOR, '%':(0, 0, 0, 255), 'R':(255, 0, 0, 255),
+                'r':(255, 128, 128, 255)}
         for i in range(1, 10):
             pixel = int(int(i) * 255 * 0.1)
             asciiToImage.asciiMap[str(i)] = (pixel, pixel, pixel, 255)

@@ -1,5 +1,6 @@
 # Copyright Mark Edel  All rights reserved
 import ast
+import numbers
 from PIL import Image, ImageDraw
 import iconlayout
 import iconsites
@@ -221,6 +222,21 @@ class UnaryOpIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.operator, pendingArgSite=siteId)
+
+    def compareData(self, data):
+        # The UnaryOp icon can be used in data representation (though maybe it should not
+        # be), so must supply a function for checking against real data.  The only case
+        # in which it is considered legitimate as data, is when its argument is a single
+        # positive numeric value.  Any other use is considered code and rejected.
+        if self.operator != "-":
+            return False
+        if not isinstance(data, numbers.Number):
+            return False
+        if data >= 0:
+            return False
+        argIcon = self.sites.argIcon.att
+        return argIcon is not None and argIcon.compareData(-data)
+
 
 class BinOpIcon(icon.Icon):
     def __init__(self, op, window, location=None):

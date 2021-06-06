@@ -137,6 +137,9 @@ class NumericIcon(TextIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, value=self.value)
 
+    def compareData(self, data):
+        return data == self.value
+
 class StringIcon(TextIcon):
     def __init__(self, string, window=None, location=None):
         TextIcon.__init__(self, repr(string), window, location)
@@ -153,6 +156,9 @@ class StringIcon(TextIcon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, string=self.string)
+
+    def compareData(self, data):
+        return data == self.string and self.sites.attrIcon.att is None
 
 class AttrIcon(icon.Icon):
     def __init__(self, name, window=None, location=None):

@@ -438,6 +438,8 @@ class Icon:
         """Return True if any of the drawn part of the icon falls at x, y"""
         if not pointInRect((x, y), self.rect):
             return False
+        if self.drawList is None:
+            print('Missing drawlist (%s)?' % self.dumpName())
         for imgOffset, img in self.drawList:
             if img is commaImage:
                 continue
@@ -457,7 +459,7 @@ class Icon:
         if not comn.rectsTouch(self.rect, rect):
             return False
         if self.drawList is None:
-            print('Missing drawlist?')
+            print('Missing drawlist (%s)?' % self.dumpName())
         for imgOffset, img in self.drawList:
             if img is commaImage:
                 continue
@@ -803,6 +805,14 @@ class Icon:
                 selectedIdx, len(layouts), layouts[selectedIdx].badness,
                 layouts[selectedIdx].height))
         return [layouts[selectedIdx]]
+
+    def compareData(self, data):
+        """Icons that are used to represent Python data (as opposed to operations) must
+        supply a comparison function to match live data against the icon.  This is used
+        to detect when mutable data is in an edited state.  Icons representing code must
+        return False (leave this method unimplemented), as code can be pasted in to live
+        mutable data, but must be executed to re-sync."""
+        return False
 
 class BlockEnd(Icon):
     def __init__(self, primary, window=None, location=None):

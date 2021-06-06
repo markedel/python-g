@@ -181,6 +181,8 @@ def parseExpr(expr):
             return (nameicons.NumericIcon, expr.value)  # Numbers includes True and False
         if isinstance(expr.value, str) or isinstance(expr.value, bytes):
             return (nameicons.StringIcon, expr.value)
+        if isinstance(expr.value, type(...)):
+            return (nameicons.NumericIcon, expr.value)
         # Documentation threatens to return constant tuples and frozensets (which could
         # get quite complex), but 3.8 seems to stick to strings and numbers
         return (nameicons.IdentifierIcon, "**Couldn't Parse Non number/string const**")

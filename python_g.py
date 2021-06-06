@@ -1,5 +1,6 @@
 # Copyright Mark Edel  All rights reserved
 # Python-g main module
+import copy
 import tkinter as tk
 import ast
 import comn
@@ -149,6 +150,14 @@ class Window:
         menu.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
         menu.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
         menu.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
+
+        menu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="Run", menu=menu)
+        menu.add_command(label="Execute", command=self._execCb,
+                accelerator="Ctrl+Enter")
+        menu.add_command(label="Update Mutables", command=self._execMutablesCb,
+                accelerator="Ctrl+U")
+
         self.top.config(menu=self.menubar)
         if size is None:
             size = DEFAULT_WINDOW_SIZE
@@ -174,6 +183,7 @@ class Window:
         self.top.bind("<Escape>", self._cancelCb)
         self.top.bind("<Return>", self._enterCb)
         self.top.bind("<Control-Return>", self._execCb)
+        self.top.bind("<Control-u>", self._execMutablesCb)
         self.top.bind("<Up>", self._arrowCb)
         self.top.bind("<Down>", self._arrowCb)
         self.top.bind("<Left>", self._arrowCb)
@@ -261,7 +271,9 @@ class Window:
         self.nextId = 1
         # Variables for icons executed in the window
         self.locals = {}
-        self.globals = {}
+        self.globals = {'__windowExecContext__': {}}
+        # List of mutable icons displayed in the window
+        self.liveMutableIcons = set()
 
     def selectedIcons(self):
         """Return a list of the icons in the window that are currently selected."""
@@ -296,6 +308,76 @@ class Window:
 
     def clearSelection(self):
         self.selectedSet = set()
+
+    def watchMutableIcon(self, ic):
+        self.liveMutableIcons.add(ic)
+
+    def dirtyMutableIcons(self, iconsBeingExecuted=None):
+        """Returns a list of icons in the window that are mutable and have been modified
+        since last updated in the window.  If iconsBeingExecuted is not None, icons
+        beneath those in the list are returned as in need of update regardless if they
+        have edits."""
+        # Since we don't track removal of mutable icons (only addition), the list must
+        # be pruned of removed icons before use:
+        removeList = []
+        for ic in self.liveMutableIcons:
+            topParent = ic.topLevelParent()
+            if topParent is None or topParent not in self.topIcons:
+                removeList.append(ic)
+        for ic in removeList:
+            self.liveMutableIcons.remove(ic)
+        # Check each displayed mutable icon for modification
+        inExecTree = set()
+        if iconsBeingExecuted is not None:
+            for topIcon in iconsBeingExecuted:
+                for ic in topIcon.traverse(includeSelf=True):
+                    if ic in self.liveMutableIcons:
+                        inExecTree.add(ic)
+        changedList = []
+        for ic in self.liveMutableIcons:
+            if ic in inExecTree or not ic.compareData(ic.object):
+                changedList.append(ic)
+        return changedList
+
+    def updateMutableIcons(self, iconsBeingExecuted=None):
+        """Update any mutable icons in the window whose content has changed.  Does
+        layout and redraw for changed icons."""
+        # Find the highest level of the hierarchy that needs updating and do so
+        needUpdate = set(self.dirtyMutableIcons(iconsBeingExecuted))
+        ignore = set()
+        for ic in needUpdate:
+            for parent in ic.parentage(includeSelf=False):
+                if parent in needUpdate:
+                    ignore.add(ic)
+                    break
+        redrawRegion = comn.AccumRects()
+        for ic in needUpdate:
+            if ic in ignore:
+                continue
+            redrawRegion.add(ic.topLevelParent().hierRect())
+            # Update the icon.  For the moment, this is brutal reconstruction and
+            # replacement of the entire hierarchy from the data (losing selections and
+            # attached comments).  This also blows away the cursor attachment, if that
+            # is in the deleted icons, as well as whatever is attached to the attribute
+            # site.  The cursor is is restored by a very hacky method, and the attribute
+            # is transferred to the new icon. It would be desirable to replace this with
+            # something that better preserves icon identities.
+            cursorPath = self.recordCursorPositionInData(ic)
+            newIcon = self.objectToIcons(ic.object)
+            parent = ic.parent()
+            attrIcon = ic.sites.attrIcon.att
+            ic.replaceChild(None, "attrIcon")
+            if parent is None:
+                self.replaceTop(ic, newIcon)
+            else:
+                parent.replaceChild(newIcon, parent.siteOf(ic))
+            newIcon.replaceChild(attrIcon, "attrIcon")
+            self.restoreCursorPositionInData(newIcon, cursorPath)
+        # Redraw the areas affected by the updated layouts
+        layoutNeeded = self.layoutDirtyIcons()
+        if layoutNeeded:
+            redrawRegion.add(layoutNeeded)
+            self.refresh(redrawRegion.get())
 
     def makeId(self, ic):
         """Return an unused icon ID number.  ID numbers correlate icons with executing
@@ -1052,6 +1134,24 @@ class Window:
             return
         self._execute(iconToExecute)
 
+    def _execMutablesCb(self, evt):
+        """Execute and update the content of mutable icons below the top level icon
+         currently holding the entry or icon cursor.  No results are displayed."""
+        # Find the icon at the cursor.  If there's still an entry icon, try to process
+        # its content before executing.
+        if not self._completeEntry(evt):
+            return
+        if self.cursor.type == "icon":
+            iconToExecute = self.cursor.icon
+        else:
+            return  # Nothing to execute
+        # Find and execute the top level icon associated with the icon at the cursor
+        iconToExecute = iconToExecute.topLevelParent()
+        if iconToExecute is None:
+            print("Could not find top level icon to execute")
+            return
+        self._executeMutablesOnly(iconToExecute)
+
     def _completeEntry(self, evt):
         """Attempt to finish any text entry in progress.  Returns True if successful,
         false if text remains unprocessed in the entry icon."""
@@ -1421,17 +1521,81 @@ class Window:
         self.refresh(redrawRegion.get(), clear=False)
         self.lastStmtHighlightRects = None
 
-    def _execute(self, iconToExecute):
+    def _executeMutablesOnly(self, topLevelIcon):
+        """Execute only the icons under topLevelIcon within mutable data, update
+        them in place, and don't create icons for the results."""
+        # Find the icons to be executed, which are the top mutable icons under
+        # topLevelIcon (since all the code under these icons will be executed, nested
+        # mutable icons therefore need to be excluded).  self._execute itself redraws
+        # by virtue of detecting changes to mutable icons
+        for ic in self.findTopMutableIcons(topLevelIcon):
+            self._execute(ic, drawResults=False)
+
+    def findTopMutableIcons(self, topIcon):
+        if topIcon in self.liveMutableIcons:
+            return [topIcon]
+        topMutableIcons = []
+        for child in topIcon.children():
+            topMutableIcons += self.findTopMutableIcons(child)
+        return topMutableIcons
+
+    def recordCursorPositionInData(self, topIcon):
+        if self.cursor.type != "icon":
+            return None
+        cursorParentage = self.cursor.icon.parentage(includeSelf=True)
+        if topIcon not in cursorParentage:
+            return None
+        # Loop through cursor icon parentage from topIcon down to cursor location,
+        # creating a tuple with class and child site for each icon.
+        cursorParentage = cursorParentage[:cursorParentage.index(topIcon)]
+        cursorLocSteps = []
+        parent = topIcon
+        for child in reversed(cursorParentage):
+            childSite = parent.siteOf(child)
+            if childSite is None:
+                print("Internal error transfering cursor position")
+                return None
+            cursorLocSteps.append((parent.__class__, childSite))
+            parent = child
+        # Add a final entry for the cursor icon and site
+        return cursorLocSteps + [(self.cursor.icon.__class__, self.cursor.site)]
+
+    def restoreCursorPositionInData(self, topIcon, recordedPos):
+        if recordedPos is None:
+            return  # Cursor was not in this expression
+        ic = topIcon
+        for cls, site in recordedPos[:-1]:
+            if not isinstance(ic, cls):
+                cursorIc, cursorSite = cursors.rightmostSite(ic)
+                break
+            child = ic.childAt(site)
+            if child is None:
+                cursorIc, cursorSite = cursors.rightmostSite(ic)
+                break
+            ic = child
+        else:
+            # If we made it all the way through the loop, ic is equivalent to cursor.icon
+            cursorIcCls, cursorSite = recordedPos[-1]
+            if isinstance(ic, cursorIcCls):
+                cursorIc = ic
+            else:
+                cursorIc, cursorSite = cursors.rightmostSite(ic)
+        # Move the cursor
+        self.cursor.setToIconSite(cursorIc, cursorSite)
+
+    def _execute(self, iconToExecute, drawResults=True):
         """Execute the requested top-level icon or sequence."""
         # Begin by creating Python Abstract Syntax Tree (AST) for the icon or icons.
         # Icon AST creation methods will throw exception IconExecException which provides
         # the icon where things went bad so it can be shown in self._handleExecErr
         # Icons can be executed either by "eval" or "exec".  Choose which based upon
         # whether we need the result of the evaluation.
+        self.globals['__windowExecContext__'] = {}
         if iconToExecute.hasSite('output') and iconToExecute.prevInSeq() is None and \
          iconToExecute.nextInSeq() is None:
             # Create ast for eval
             execType = 'eval'
+            seqIcons = [iconToExecute]
             try:
                 astToExecute = ast.Expression(iconToExecute.createAst())
             except icon.IconExecException as excep:
@@ -1451,7 +1615,8 @@ class Window:
         #print(ast.dump(astToExecute, include_attributes=True))
         # Compile the AST
         code = compile(astToExecute, self.winName, execType)
-        # Execute the compiled AST
+        # Execute the compiled AST, providing variable __windowExecContext__ for
+        # mutable icons to use to pass their live data into the compiled code.
         try:
             if execType == 'eval':
                 result = eval(code, self.globals, self.locals)
@@ -1459,6 +1624,13 @@ class Window:
                 result = exec(code, self.globals, self.locals)
         except Exception as excep:
             self._handleExecErr(excep, iconToExecute)
+            return
+        self.globals['__windowExecContext__'] = {}
+        # Update any displayed mutable icons that might have been affected by execution
+        self.updateMutableIcons(seqIcons)
+        # If the caller does not want the results drawn, we're done
+        if not drawResults:
+            self.undo.addBoundary()
             return
         # If the last execution result of the same icon is still laying where it was
         # placed, remove it so that results don't pile up
@@ -1470,10 +1642,7 @@ class Window:
                 self.removeIcons(list(lastResultIcon.traverse()))
             del self.execResultPositions[outSitePos]
         # Convert results to icon form
-        resultIcons = compile_eval.parsePasted(repr(result), self, (0, 0))
-        if resultIcons is None:
-            resultIcons = [nameicons.TextIcon(repr(result), self, (0, 0))]
-        resultIcon = resultIcons[0]
+        resultIcon = self.objectToIcons(result)
         # Place the results to the left of the icon being executed
         if outSitePos is None:
             outSiteX, top, right, bottom = iconToExecute.rect
@@ -1493,12 +1662,16 @@ class Window:
         resultY = outSiteY - resultOutSiteY - resultIcon.rect[1]
         resultIcon.rect = comn.offsetRect(resultIcon.rect, resultX, resultY)
         self.addTopSingle(resultIcon, newSeq=True)
-        self.layoutDirtyIcons()
+        layoutRect = self.layoutDirtyIcons()
         resultRect = resultIcon.hierRect()
-        for ic in resultIcon.traverse():
-            ic.select()
-            ic.draw(clip=resultRect)
-        self.refresh(resultRect, redraw=False)
+        # There is a mystery here.  Attribute icons in the expression being executed are
+        # marked dirty, so where, previously, the commented-out code below could redraw
+        # just the result, it is now necessary to also redraw bits of the expression.
+        # for ic in resultIcon.traverse():
+        #    ic.select()
+        #    ic.draw(clip=resultRect)
+        # self.refresh(resultRect)
+        self.refresh(comn.combineRects(layoutRect, resultRect))
         # For expressions that yield "None", show it, then automatically erase
         if result is None:
             time.sleep(0.4)
@@ -1508,6 +1681,34 @@ class Window:
             # there the next time the same icon is executed
             self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
         self.undo.addBoundary()
+
+    def objectToIcons(self, obj):
+        objClass = obj.__class__
+        if objClass is list:
+            ic = listicons.ListIcon(window=self, mutable=obj)
+            ic.insertChildren([self.objectToIcons(elem) for elem in obj], 'argIcons', 0)
+            self.watchMutableIcon(ic)
+        elif objClass is tuple:
+            ic = listicons.TupleIcon(window=self)
+            ic.insertChildren([self.objectToIcons(elem) for elem in obj], 'argIcons', 0)
+        elif objClass is dict:
+            ic = listicons.DictIcon(window=self, mutable=obj)
+            elems = []
+            for key, value in obj.items():
+                dictElem = listicons.DictElemIcon(window=self)
+                dictElem.replaceChild(self.objectToIcons(key), 'leftArg')
+                dictElem.replaceChild(self.objectToIcons(value), 'rightArg')
+                elems.append(dictElem)
+            ic.insertChildren(elems, 'argIcons', 0)
+            self.watchMutableIcon(ic)
+        elif objClass is set:
+            ic = listicons.DictIcon(window=self, mutable=obj)
+            elems = [self.objectToIcons(value) for value in obj]
+            ic.insertChildren(elems, 'argIcons', 0)
+            self.watchMutableIcon(ic)
+        else:
+            ic = compile_eval.parsePasted(repr(obj), self, (0, 0))[0]
+        return ic
 
     def _handleExecErr(self, excep, executedIcon=None):
         """Process exceptions that need to point to an icon."""
@@ -1526,7 +1727,8 @@ class Window:
             style = "error" if ic==excepIcon else None
             ic.draw(clip=iconRect, style=style)
         self.refresh(iconRect, redraw=False)
-        tkinter.messagebox.showerror("Error Executing", message=str(excep))
+        message = excep.__class__.__name__ + ': ' + str(excep)
+        tkinter.messagebox.showerror("Error Executing", message=message)
         for ic in excepIcon.traverse():
             ic.draw(clip=iconRect)
         self.refresh(iconRect, redraw=False)
