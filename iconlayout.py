@@ -114,7 +114,7 @@ class ListLayoutMgr:
         xOff = bodyImg.width - icon.inSiteImage.width
         yOff = self.spineTop - icon.inSiteImage.height // 2
         for x, y in self.bodySitePositions:
-            bodyImg.paste(icon.inSiteImage, (x+xOff, y+yOff))
+            bodyImg.paste(icon.inSiteImage, (x + xOff, y + yOff), mask=icon.inSiteMask)
 
     def drawSimpleSpine(self, leftSiteX, leftSiteY, drawOutputSite=True):
         """Returns left and right spine images suitable for an icon draw list for the

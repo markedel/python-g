@@ -21,6 +21,7 @@ import compile_eval
 import tkinter.messagebox
 
 WINDOW_BG_COLOR = (255, 255, 255)
+#WINDOW_BG_COLOR = (128, 128, 128)
 RECT_SELECT_COLOR = (128, 128, 255, 255)
 
 DEFAULT_WINDOW_SIZE = (800, 800)
@@ -335,7 +336,8 @@ class Window:
                         inExecTree.add(ic)
         changedList = []
         for ic in self.liveMutableIcons:
-            if ic in inExecTree or not ic.compareData(ic.object):
+            if ic in inExecTree or (not ic.compareData(ic.object, compareContent=True)
+                    and not ic.mutableModified):
                 changedList.append(ic)
         return changedList
 
@@ -357,21 +359,12 @@ class Window:
             redrawRegion.add(ic.topLevelParent().hierRect())
             # Update the icon.  For the moment, this is brutal reconstruction and
             # replacement of the entire hierarchy from the data (losing selections and
-            # attached comments).  This also blows away the cursor attachment, if that
-            # is in the deleted icons, as well as whatever is attached to the attribute
-            # site.  The cursor is is restored by a very hacky method, and the attribute
-            # is transferred to the new icon. It would be desirable to replace this with
-            # something that better preserves icon identities.
+            # attached comments).  This also blows away the cursor attachment (if that
+            # is attached to one of the deleted icons), which is restored by a very hacky
+            # method. It would be desirable to replace this with something that better
+            # preserves icon identities.
             cursorPath = self.recordCursorPositionInData(ic)
-            newIcon = self.objectToIcons(ic.object)
-            parent = ic.parent()
-            attrIcon = ic.sites.attrIcon.att
-            ic.replaceChild(None, "attrIcon")
-            if parent is None:
-                self.replaceTop(ic, newIcon)
-            else:
-                parent.replaceChild(newIcon, parent.siteOf(ic))
-            newIcon.replaceChild(attrIcon, "attrIcon")
+            newIcon = self.objectToIcons(ic.object, updateMutable=ic)
             self.restoreCursorPositionInData(newIcon, cursorPath)
         # Redraw the areas affected by the updated layouts
         layoutNeeded = self.layoutDirtyIcons()
@@ -765,6 +758,7 @@ class Window:
                         self.doubleClickFlag = False
                         self._delayedBtnUpActions(evt)
                         return
+                    self._executeMutableIcons(iconToExecute)
                     self._execute(iconToExecute)
             self.buttonDownTime = None
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
@@ -1132,6 +1126,7 @@ class Window:
         if iconToExecute is None:
             print("Could not find top level icon to execute")
             return
+        self._executeMutableIcons(iconToExecute)
         self._execute(iconToExecute)
 
     def _execMutablesCb(self, evt):
@@ -1150,7 +1145,7 @@ class Window:
         if iconToExecute is None:
             print("Could not find top level icon to execute")
             return
-        self._executeMutablesOnly(iconToExecute)
+        self._executeMutableIcons(iconToExecute)
 
     def _completeEntry(self, evt):
         """Attempt to finish any text entry in progress.  Returns True if successful,
@@ -1521,23 +1516,21 @@ class Window:
         self.refresh(redrawRegion.get(), clear=False)
         self.lastStmtHighlightRects = None
 
-    def _executeMutablesOnly(self, topLevelIcon):
+    def _executeMutableIcons(self, topIcon):
         """Execute only the icons under topLevelIcon within mutable data, update
         them in place, and don't create icons for the results."""
-        # Find the icons to be executed, which are the top mutable icons under
-        # topLevelIcon (since all the code under these icons will be executed, nested
-        # mutable icons therefore need to be excluded).  self._execute itself redraws
-        # by virtue of detecting changes to mutable icons
-        for ic in self.findTopMutableIcons(topLevelIcon):
-            self._execute(ic, drawResults=False)
-
-    def findTopMutableIcons(self, topIcon):
-        if topIcon in self.liveMutableIcons:
-            return [topIcon]
-        topMutableIcons = []
+        # Find the icons to be executed, which are the mutable icons under topLevelIcon.
+        # and execute them bottom-up (ordering is mostly unimportant as execution
+        # of data icons stops when icon data matches, but special cases, such as user
+        # changing a dict to a set could remove mutability, which would go undetected
+        # in top-down execution.  self._execute itself redraws content by virtue of
+        # detecting changes to mutable icons.
         for child in topIcon.children():
-            topMutableIcons += self.findTopMutableIcons(child)
-        return topMutableIcons
+            if not self._executeMutableIcons(child):
+                return False
+        if topIcon in self.liveMutableIcons:
+            return self._execute(topIcon, drawResults=False)
+        return True
 
     def recordCursorPositionInData(self, topIcon):
         if self.cursor.type != "icon":
@@ -1584,7 +1577,12 @@ class Window:
         self.cursor.setToIconSite(cursorIc, cursorSite)
 
     def _execute(self, iconToExecute, drawResults=True):
-        """Execute the requested top-level icon or sequence."""
+        """Execute the requested top-level icon or sequence.  Note that if the expression
+        to execute might include mutable icons, call self._executeMutableIcons() before
+        calling this, since code generation stops at mutables, even if they are modified,
+        and instead generates a direct reference to the data object they represent.
+        (the ordering of the two calls is important because, in rare cases, executing a
+        mutable icon can cause it to lose its status as representing live data)."""
         # Begin by creating Python Abstract Syntax Tree (AST) for the icon or icons.
         # Icon AST creation methods will throw exception IconExecException which provides
         # the icon where things went bad so it can be shown in self._handleExecErr
@@ -1600,7 +1598,7 @@ class Window:
                 astToExecute = ast.Expression(iconToExecute.createAst())
             except icon.IconExecException as excep:
                 self._handleExecErr(excep)
-                return
+                return False
         else:
             # Create ast for exec (may be a sequence)
             execType = 'exec'
@@ -1610,7 +1608,7 @@ class Window:
                 body = [icon.createStmtAst(ic) for ic in seqIcons]
             except icon.IconExecException as excep:
                 self._handleExecErr(excep)
-                return
+                return False
             astToExecute = ast.Module(body, type_ignores=[])
         #print(ast.dump(astToExecute, include_attributes=True))
         # Compile the AST
@@ -1624,14 +1622,14 @@ class Window:
                 result = exec(code, self.globals, self.locals)
         except Exception as excep:
             self._handleExecErr(excep, iconToExecute)
-            return
+            return False
         self.globals['__windowExecContext__'] = {}
         # Update any displayed mutable icons that might have been affected by execution
         self.updateMutableIcons(seqIcons)
         # If the caller does not want the results drawn, we're done
         if not drawResults:
             self.undo.addBoundary()
-            return
+            return True
         # If the last execution result of the same icon is still laying where it was
         # placed, remove it so that results don't pile up
         outSitePos = iconToExecute.posOfSite("output")
@@ -1681,18 +1679,33 @@ class Window:
             # there the next time the same icon is executed
             self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
         self.undo.addBoundary()
+        return True
 
-    def objectToIcons(self, obj):
+    def objectToIcons(self, obj, updateMutable=None):
+        """Create icons representing a data object.  Returns the top-level created icon.
+        If updateMutable is specified, fill in the children of the given icon, rather
+        than creating a new one (this icon must be a mutable icon of the type appropriate
+        for representing the data in obj)."""
+        ic = updateMutable
         objClass = obj.__class__
         if objClass is list:
-            ic = listicons.ListIcon(window=self, mutable=obj)
+            if ic is None:
+                ic = listicons.ListIcon(window=self, obj=obj)
+                self.watchMutableIcon(ic)
+            else:
+                for site in tuple(ic.sites.argIcons):
+                    ic.replaceChild(None, site.name)
             ic.insertChildren([self.objectToIcons(elem) for elem in obj], 'argIcons', 0)
-            self.watchMutableIcon(ic)
         elif objClass is tuple:
-            ic = listicons.TupleIcon(window=self)
+            ic = listicons.TupleIcon(window=self, obj=obj)
             ic.insertChildren([self.objectToIcons(elem) for elem in obj], 'argIcons', 0)
         elif objClass is dict:
-            ic = listicons.DictIcon(window=self, mutable=obj)
+            if ic is None:
+                ic = listicons.DictIcon(window=self, obj=obj)
+                self.watchMutableIcon(ic)
+            else:
+                for site in tuple(ic.sites.argIcons):
+                    ic.replaceChild(None, site.name)
             elems = []
             for key, value in obj.items():
                 dictElem = listicons.DictElemIcon(window=self)
@@ -1700,12 +1713,17 @@ class Window:
                 dictElem.replaceChild(self.objectToIcons(value), 'rightArg')
                 elems.append(dictElem)
             ic.insertChildren(elems, 'argIcons', 0)
-            self.watchMutableIcon(ic)
         elif objClass is set:
-            ic = listicons.DictIcon(window=self, mutable=obj)
+            if ic is None:
+                ic = listicons.DictIcon(window=self, obj=obj)
+                self.watchMutableIcon(ic)
+            else:
+                for site in tuple(ic.sites.argIcons):
+                    ic.replaceChild(None, site.name)
             elems = [self.objectToIcons(value) for value in obj]
             ic.insertChildren(elems, 'argIcons', 0)
-            self.watchMutableIcon(ic)
+        elif isinstance(obj, (int, float)):
+            ic = nameicons.NumericIcon(obj, window=self)
         else:
             ic = compile_eval.parsePasted(repr(obj), self, (0, 0))[0]
         return ic

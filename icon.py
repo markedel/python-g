@@ -84,6 +84,13 @@ inSiteImage = comn.asciiToImage((
  " o.",
  "  o"))
 
+inSiteMask = comn.asciiToImage((
+ "..%",
+ ".%%",
+ "%%%",
+ ".%%",
+ "..%"))
+
 attrOutImage = comn.asciiToImage((
  "%%",
  "%%"))
@@ -806,12 +813,28 @@ class Icon:
                 layouts[selectedIdx].height))
         return [layouts[selectedIdx]]
 
-    def compareData(self, data):
+    def compareData(self, data, compareContent=False):
         """Icons that are used to represent Python data (as opposed to operations) must
         supply a comparison function to match live data against the icon.  This is used
-        to detect when mutable data is in an edited state.  Icons representing code must
-        return False (leave this method unimplemented), as code can be pasted in to live
-        mutable data, but must be executed to re-sync."""
+        to detect when  data is in an edited state.  Icons representing code must return
+        False (leave this method unimplemented), as code can be pasted in to live mutable
+        data, but must be executed to re-sync.  To preserve "is" identity in data for
+        compound data objects, the compareData function should be based on object
+        identity, rather than equality.  Simple immutable data objects (numbers in
+        particular) are still compared by value, because any code that depends upon the
+        identity of a numeric object is almost certainly doing so in error, and if we act
+        upon such differences, lots of simple editing operations on values risk
+        needlessly invalidating whatever compound data structures enclose them.
+
+        For icons representing mutable data, the function must operate either from the
+        point of view of the parent icon, asking if the data represented by the icon has
+        changed (compareContent=False), or of the icon itself, asking if its own data has
+        changed (compareContent=True).  From the point of view of the parent, mutable
+        data retains its identity even when modified, so generally comparison stops at
+        mutable icons and ignores changes to their content.  This is, of course, the
+        opposite of what we need to figure out if the data *within* the object has
+        changed, which is why mutable icons must supply the second (compareContent=True)
+        mode of operation."""
         return False
 
 class BlockEnd(Icon):
@@ -1270,3 +1293,18 @@ def yStretchImage(img, stretchPts, desiredHeight):
     copyImg = img.crop((0, oldY, img.width, img.height + 1))
     newImg.paste(copyImg, (0, newY, img.width, newImg.height+1))
     return newImg
+
+def createAstDataRef(ic):
+    """Icons representing data objects which need their execution to return a particular
+    object (to satisfy an "is" comparison) can call this function to create an AST for
+    a reference to the object, rather than creating an AST that will create a new one.
+    The object is taken from ic.object.  This enters the value in a special dictionary
+    in the execution namespace (__windowExecContext__), indexed by icon id, and creates
+    and returns an AST representing code to fetch the value from that dictionary."""
+    ic.window.globals['__windowExecContext__'][ic.id] = ic.object
+    nameAst = ast.Name(id='__windowExecContext__', ctx=ast.Load(), lineno=ic.id,
+        col_offset=0)
+    iconIdAst = ast.Index(value=ast.Constant(value=ic.id, lineno=ic.id,
+        col_offset=0))
+    return ast.Subscript(value=nameAst, slice=iconIdAst, ctx=ast.Load(), lineno=ic.id,
+        col_offset=0)
