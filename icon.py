@@ -1294,14 +1294,17 @@ def yStretchImage(img, stretchPts, desiredHeight):
     newImg.paste(copyImg, (0, newY, img.width, newImg.height+1))
     return newImg
 
-def createAstDataRef(ic):
+def createAstDataRef(ic, value=None):
     """Icons representing data objects which need their execution to return a particular
     object (to satisfy an "is" comparison) can call this function to create an AST for
     a reference to the object, rather than creating an AST that will create a new one.
-    The object is taken from ic.object.  This enters the value in a special dictionary
-    in the execution namespace (__windowExecContext__), indexed by icon id, and creates
-    and returns an AST representing code to fetch the value from that dictionary."""
-    ic.window.globals['__windowExecContext__'][ic.id] = ic.object
+    The object is taken from ic.object, unless "value" is specified, in which case, that
+    value is used.  The function enters the value in a special dictionary in the
+    execution namespace (__windowExecContext__), indexed by icon id, and creates and
+    returns an AST representing code to fetch the value from that dictionary."""
+    if value is None:
+        value = ic.object
+    ic.window.globals['__windowExecContext__'][ic.id] = value
     nameAst = ast.Name(id='__windowExecContext__', ctx=ast.Load(), lineno=ic.id,
         col_offset=0)
     iconIdAst = ast.Index(value=ast.Constant(value=ic.id, lineno=ic.id,

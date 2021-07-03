@@ -758,7 +758,6 @@ class Window:
                         self.doubleClickFlag = False
                         self._delayedBtnUpActions(evt)
                         return
-                    self._executeMutableIcons(iconToExecute)
                     self._execute(iconToExecute)
             self.buttonDownTime = None
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
@@ -1126,7 +1125,6 @@ class Window:
         if iconToExecute is None:
             print("Could not find top level icon to execute")
             return
-        self._executeMutableIcons(iconToExecute)
         self._execute(iconToExecute)
 
     def _execMutablesCb(self, evt):
@@ -1140,12 +1138,30 @@ class Window:
             iconToExecute = self.cursor.icon
         else:
             return  # Nothing to execute
-        # Find and execute the top level icon associated with the icon at the cursor
-        iconToExecute = iconToExecute.topLevelParent()
-        if iconToExecute is None:
+        # Find the top level icon associated with the icon at the cursor
+        topIcon = iconToExecute.topLevelParent()
+        if topIcon is None:
             print("Could not find top level icon to execute")
             return
-        self._executeMutableIcons(iconToExecute)
+        # Find the mutable icons below it in the hierarchy
+        all = set([ic for ic in topIcon.traverse() if ic in self.liveMutableIcons])
+        # Remove icons that will already be executed by executing others in the set
+        # (noting that executing a mutable will not execute its attribute).
+        dups = set()
+        for ic in all:
+            child = ic
+            for parent in ic.parentage(includeSelf=False):
+                if parent in all and parent.siteOf(child) != "attrIcon":
+                    dups.add(ic)
+                    break
+                child = parent
+        mutablesToExecute = all - dups
+        # Execute to update
+        for ic in mutablesToExecute:
+            self._executeMutable(ic)
+        # Update displayed mutable icons that might have been affected by execution
+        self.updateMutableIcons([topIcon])
+        self.undo.addBoundary()
 
     def _completeEntry(self, evt):
         """Attempt to finish any text entry in progress.  Returns True if successful,
@@ -1516,22 +1532,6 @@ class Window:
         self.refresh(redrawRegion.get(), clear=False)
         self.lastStmtHighlightRects = None
 
-    def _executeMutableIcons(self, topIcon):
-        """Execute only the icons under topLevelIcon within mutable data, update
-        them in place, and don't create icons for the results."""
-        # Find the icons to be executed, which are the mutable icons under topLevelIcon.
-        # and execute them bottom-up (ordering is mostly unimportant as execution
-        # of data icons stops when icon data matches, but special cases, such as user
-        # changing a dict to a set could remove mutability, which would go undetected
-        # in top-down execution.  self._execute itself redraws content by virtue of
-        # detecting changes to mutable icons.
-        for child in topIcon.children():
-            if not self._executeMutableIcons(child):
-                return False
-        if topIcon in self.liveMutableIcons:
-            return self._execute(topIcon, drawResults=False)
-        return True
-
     def recordCursorPositionInData(self, topIcon):
         if self.cursor.type != "icon":
             return None
@@ -1576,13 +1576,8 @@ class Window:
         # Move the cursor
         self.cursor.setToIconSite(cursorIc, cursorSite)
 
-    def _execute(self, iconToExecute, drawResults=True):
-        """Execute the requested top-level icon or sequence.  Note that if the expression
-        to execute might include mutable icons, call self._executeMutableIcons() before
-        calling this, since code generation stops at mutables, even if they are modified,
-        and instead generates a direct reference to the data object they represent.
-        (the ordering of the two calls is important because, in rare cases, executing a
-        mutable icon can cause it to lose its status as representing live data)."""
+    def _execute(self, iconToExecute):
+        """Execute the requested top-level icon or sequence."""
         # Begin by creating Python Abstract Syntax Tree (AST) for the icon or icons.
         # Icon AST creation methods will throw exception IconExecException which provides
         # the icon where things went bad so it can be shown in self._handleExecErr
@@ -1626,10 +1621,6 @@ class Window:
         self.globals['__windowExecContext__'] = {}
         # Update any displayed mutable icons that might have been affected by execution
         self.updateMutableIcons(seqIcons)
-        # If the caller does not want the results drawn, we're done
-        if not drawResults:
-            self.undo.addBoundary()
-            return True
         # If the last execution result of the same icon is still laying where it was
         # placed, remove it so that results don't pile up
         outSitePos = iconToExecute.posOfSite("output")
@@ -1680,6 +1671,24 @@ class Window:
             self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
         self.undo.addBoundary()
         return True
+
+    def _executeMutable(self, ic):
+        """Execute a mutable icon and all of the icons beneath it.  Attribute icons are
+        not executed, and no layout or drawing are done.  (Attributes are children from
+        an icon perspective, but parents from an AST perspective)"""
+        self.globals['__windowExecContext__'] = {}
+        try:
+            astToExecute = ast.Expression(ic.createAst(skipAttr=True))
+        except icon.IconExecException as excep:
+            self._handleExecErr(excep)
+            return False
+        code = compile(astToExecute, self.winName, 'eval')
+        try:
+            eval(code, self.globals, self.locals)
+        except Exception as excep:
+            self._handleExecErr(excep, ic)
+            return False
+        self.globals['__windowExecContext__'] = {}
 
     def objectToIcons(self, obj, updateMutable=None):
         """Create icons representing a data object.  Returns the top-level created icon.
