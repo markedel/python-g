@@ -798,7 +798,8 @@ class EntryIcon(icon.Icon):
         if not (attIconClass is assignicons.AssignIcon or
                 attIconClass is listicons.TupleIcon and attIcon.noParens or
                 self.attachedToAttribute() and attIconClass in (nameicons.IdentifierIcon,
-                 listicons.TupleIcon, listicons.ListIcon, nameicons.AttrIcon) or
+                 listicons.TupleIcon, listicons.ListIcon, listicons.DictIcon,
+                 nameicons.AttrIcon) or
                 isinstance(self.attachedIcon(), assignicons.AssignIcon)):
             return False
         if self.attachedToAttribute():

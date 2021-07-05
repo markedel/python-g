@@ -730,7 +730,10 @@ def determineCtx(ic):
             return ast.Load()
     parentClass = parent.__class__
     if parentClass in (listicons.ListIcon, listicons.TupleIcon):
-        # A list or tuple can be an assignment target: look above for assignment
+        # An element of a list or tuple can be an assignment target (provided the list is
+        # not a mutable): look above for assignment
+        if hasattr(parent, 'mutableModified'):
+            return ast.Load()
         return determineCtx(parent)
     # Return ast.Store() if parent site is an assignment target, ast.Del() if it is a
     # deletion target, or ast.Load() if neither.

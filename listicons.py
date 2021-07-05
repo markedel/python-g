@@ -610,6 +610,15 @@ class ListIcon(ListTypeIcon):
             raise icon.IconExecException(self, "Unclosed temporary icon")
         if self.isComprehension():
             return composeAttrAstIf(self, createComprehensionAst(self), skipAttr)
+        if self.object is not None and self.sites.attrIcon.att is None and \
+                isinstance(self.parent(), assignicons.AssignIcon) and \
+                self.parent().siteOf(self)[:6] == 'target':
+            # This is a mutable list icon as a direct assignment target, emit code for
+            # a target to replace the content of the list.  Normally we would execute
+            # content, but the assignment will blow it all away, so don't bother.
+            return ast.Subscript(value=icon.createAstDataRef(self),
+                    slice=ast.Slice(lower=None, upper=None, step=None),
+                    ctx=ast.Store(), lineno=self.id, col_offset=0)
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
             elts = []
         else:
@@ -622,6 +631,7 @@ class ListIcon(ListTypeIcon):
             elts = [site.att.createAst() for site in self.sites.argIcons]
         listContentAst = ast.List(elts=elts,
                 ctx=nameicons.determineCtx(self), lineno=self.id, col_offset=0)
+        # If this is not a mutable icon, we're done
         if self.object is None:
             return composeAttrAstIf(self, listContentAst, skipAttr)
         # The icon represents a list data object (mutable list).  The list may or may not
@@ -635,7 +645,7 @@ class ListIcon(ListTypeIcon):
             tgt[:] = src
             return tgt
         return composeAttrAstIf(self, ast.Call(func=icon.createAstDataRef(self, updateFn),
-                args=[listContentAst], keywords=[], lineno=1, col_offset=0), skipAttr)
+            args=[listContentAst], keywords=[], lineno=self.id, col_offset=0), skipAttr)
 
     def _stretchedLBracketImage(self, desiredHeight):
         if self.object is None:
