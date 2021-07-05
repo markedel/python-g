@@ -158,6 +158,8 @@ class Window:
                 accelerator="Ctrl+Enter")
         menu.add_command(label="Update Mutables", command=self._execMutablesCb,
                 accelerator="Ctrl+U")
+        menu.add_command(label="Discard Mutable Edit", command=self._resyncMutablesCb,
+                accelerator="Ctrl+M")
 
         self.top.config(menu=self.menubar)
         if size is None:
@@ -185,6 +187,7 @@ class Window:
         self.top.bind("<Return>", self._enterCb)
         self.top.bind("<Control-Return>", self._execCb)
         self.top.bind("<Control-u>", self._execMutablesCb)
+        self.top.bind("<Control-m>", self._resyncMutablesCb)
         self.top.bind("<Up>", self._arrowCb)
         self.top.bind("<Down>", self._arrowCb)
         self.top.bind("<Left>", self._arrowCb)
@@ -1110,7 +1113,7 @@ class Window:
         self.cursor.setToIconSite(topIcon, 'seqOut')
         self._insertEntryIconAtCursor("")
 
-    def _execCb(self, evt):
+    def _execCb(self, evt=None):
         """Execute the top level icon at the entry or icon cursor"""
         # Find the icon at the cursor.  If there's still an entry icon, try to process
         # its content before executing.
@@ -1127,7 +1130,7 @@ class Window:
             return
         self._execute(iconToExecute)
 
-    def _execMutablesCb(self, evt):
+    def _execMutablesCb(self, evt=None):
         """Execute and update the content of mutable icons below the top level icon
          currently holding the entry or icon cursor.  No results are displayed."""
         # Find the icon at the cursor.  If there's still an entry icon, try to process
@@ -1162,6 +1165,33 @@ class Window:
         # Update displayed mutable icons that might have been affected by execution
         self.updateMutableIcons([topIcon])
         self.undo.addBoundary()
+
+    def _resyncMutablesCb(self, evt=None):
+        """Abandon edits to all mutable icon parents to the current cursor position.
+        If there's still an entry icon, try to process its content before executing."""
+        if not self._completeEntry(evt):
+            return
+        if self.cursor.type == "icon":
+            cursorIcon = self.cursor.icon
+        else:
+            return  # No cursor
+        # Find the highest-level mutable icon above the cursor
+        parentage = cursorIcon.parentage(includeSelf=True)
+        iconToSync = None
+        for ic in parentage:
+            if ic in self.liveMutableIcons and not \
+                    ic.compareData(ic.object, compareContent=True):
+                iconToSync = ic
+        if iconToSync is None:
+            return  # No mutable icons
+        redrawRegion = comn.AccumRects(iconToSync.hierRect())
+        # Update the icon.  See comments in updateMutableIcons from which this is copied.
+        cursorPath = self.recordCursorPositionInData(iconToSync)
+        newIcon = self.objectToIcons(iconToSync.object, updateMutable=iconToSync)
+        self.restoreCursorPositionInData(newIcon, cursorPath)
+        # Redraw the areas affected by the updated layouts
+        redrawRegion.add(self.layoutDirtyIcons())
+        self.refresh(redrawRegion.get())
 
     def _completeEntry(self, evt):
         """Attempt to finish any text entry in progress.  Returns True if successful,
