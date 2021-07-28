@@ -42,10 +42,10 @@ def parseCodeBlock(bodyAst, window, location):
     seqStartIcon = None
     for stmt in bodyAst:
         if isinstance(stmt, ast.Expr):
-            stmtIcon = makeIcons(parseExpr(stmt.value), window, x, y)
+            stmtIcon = parseExpr(stmt.value, window)
             bodyIcons = None
         elif stmt.__class__ in (blockStmts):
-            stmtIcon = makeIcons(parseStmt(stmt), window, x, y)
+            stmtIcon = parseStmt(stmt, window)
             bodyIcons = parseCodeBlock(stmt.body, window, location)
             stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
             while stmt.__class__ is ast.If and len(stmt.orelse) == 1 and \
@@ -53,7 +53,7 @@ def parseCodeBlock(bodyAst, window, location):
                 # Process elif blocks.  The ast encodes these as a single if, nested
                 # in and else (nested as many levels deep as there are elif clauses).
                 elifIcon = blockicons.ElifIcon(window, location)
-                condIcon = makeIcons(parseExpr(stmt.orelse[0].test), window, x, y)
+                condIcon = parseExpr(stmt.orelse[0].test, window)
                 elifIcon.replaceChild(condIcon, 'condIcon')
                 elifBlockIcons = parseCodeBlock(stmt.orelse[0].body, window, location)
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elifIcon, 'seqIn')
@@ -77,7 +77,7 @@ def parseCodeBlock(bodyAst, window, location):
             bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
             bodyIcons.append(blockEnd)
         else:
-            stmtIcon = makeIcons(parseStmt(stmt), window, x, y)
+            stmtIcon = parseStmt(stmt, window)
             bodyIcons = None
         if seqStartIcon is None:
             seqStartIcon = stmtIcon
@@ -91,22 +91,53 @@ def parseCodeBlock(bodyAst, window, location):
             icons += bodyIcons
     return icons
 
-def parseStmt(stmt):
+def parseStmt(stmt, window):
     if stmt.__class__ == ast.Assign:
-        targets = [parseExpr(e) for e in stmt.targets]
-        return (assignicons.AssignIcon, targets,  parseExpr(stmt.value))
+        topIcon = assignicons.AssignIcon(len(stmt.targets), window)
+        for i, tgt in enumerate(stmt.targets):
+            if isinstance(tgt, ast.Tuple):
+                tgtIcons = [parseExpr(t, window) for t in tgt.elts]
+            else:
+                tgtIcons = [parseExpr(tgt, window)]
+            topIcon.insertChildren(tgtIcons, "targets%d" % i, 0)
+        if isinstance(stmt.value, ast.Tuple):
+            valueIcons = [parseExpr(v, window) for v in stmt.value.elts]
+            topIcon.insertChildren(valueIcons, "values", 0)
+        else:
+            topIcon.replaceChild(parseExpr(stmt.value, window), "values_0")
+        return topIcon
     if stmt.__class__ == ast.AugAssign:
-        target = parseExpr(stmt.target)
-        op = binOps[stmt.op.__class__]
-        value = parseExpr(stmt.value)
-        return (assignicons.AugmentedAssignIcon, target, op, value)
+        assignIcon = assignicons.AugmentedAssignIcon(binOps[stmt.op.__class__], window)
+        targetIcon = parseExpr(stmt.target, window)
+        assignIcon.replaceChild(targetIcon, "targetIcon")
+        if isinstance(stmt.value, ast.Tuple):
+            valueIcons = [parseExpr(v, window) for v in stmt.value.elts]
+            assignIcon.insertChildren(valueIcons, "values", 0)
+        else:
+            assignIcon.replaceChild(parseExpr(stmt.value, window), "values_0")
+        return assignIcon
     if stmt.__class__ == ast.While:
-        return (blockicons.WhileIcon, parseExpr(stmt.test))
+        topIcon = blockicons.WhileIcon(window=window)
+        topIcon.replaceChild(parseExpr(stmt.test, window), 'condIcon')
+        return topIcon
     if stmt.__class__ in (ast.For, ast.AsyncFor):
         isAsync = stmt.__class__ is ast.AsyncFor
-        return (blockicons.ForIcon, isAsync, parseExpr(stmt.target), parseExpr(stmt.iter))
+        topIcon = blockicons.ForIcon(isAsync, window=window)
+        if isinstance(stmt.target, ast.Tuple):
+            tgtIcons = [parseExpr(t, window) for t in stmt.target.elts]
+            topIcon.insertChildren(tgtIcons, "targets", 0)
+        else:
+            topIcon.replaceChild(parseExpr(stmt.target, window), "targets_0")
+        if isinstance(stmt.iter, ast.Tuple):
+            iterIcons = [parseExpr(i, window) for i in stmt.iter]
+            topIcon.insertChildren(iterIcons, "iterIcons", 0)
+        else:
+            topIcon.replaceChild(parseExpr(stmt.iter, window), "iterIcons_0")
+        return topIcon
     if stmt.__class__ == ast.If:
-        return (blockicons.IfIcon, parseExpr(stmt.test))
+        topIcon = blockicons.IfIcon(window=window)
+        topIcon.replaceChild(parseExpr(stmt.test, window), 'condIcon')
+        return topIcon
     if stmt.__class__ in (ast.FunctionDef, ast.AsyncFunctionDef):
         isAsync = stmt.__class__ is ast.AsyncFunctionDef
         if hasattr(stmt.args, 'posonlyargs'):
@@ -114,362 +145,15 @@ def parseStmt(stmt):
         else:
             args = []
         nPosOnly = len(args)
-        args += [arg.arg for arg in stmt.args.args]
-        defaults = [parseExpr(e) for e in stmt.args.defaults]
-        varArg = stmt.args.vararg.arg if stmt.args.vararg is not None else None
-        kwOnlyArgs = [arg.arg for arg in stmt.args.kwonlyargs]
-        kwDefaults = [parseExpr(e) for e in stmt.args.kw_defaults]
-        kwArg = stmt.args.kwarg.arg if stmt.args.kwarg is not None else None
-        return (blockicons.DefIcon, isAsync, stmt.name, args, nPosOnly, defaults, varArg,
-         kwOnlyArgs, kwDefaults, kwArg)
-    if stmt.__class__ is ast.ClassDef:
-        bases = [parseExpr(base) for base in stmt.bases]
-        keywords = [(kwd.arg, parseExpr(kwd.value)) for kwd in stmt.keywords]
-        return (blockicons.ClassDefIcon, stmt.name, bases, keywords)
-    if stmt.__class__ is ast.Return:
-        return (nameicons.ReturnIcon, None if stmt.value is None else parseExpr(stmt.value))
-    if stmt.__class__ in (ast.With, ast.AsyncWith):
-        withItems = []
-        for item in stmt.items:
-            contextExpr = parseExpr(item.context_expr)
-            optVars = None if item.optional_vars is None else \
-                    parseExpr(item.optional_vars)
-            withItems.append((contextExpr, optVars))
-        isAsync = isinstance(stmt, ast.AsyncWith)
-        return (blockicons.WithIcon, isAsync, withItems)
-    if stmt.__class__ is ast.Delete:
-        return (nameicons.DelIcon, [parseExpr(e) for e in stmt.targets])
-    if stmt.__class__ is ast.Pass:
-        return (nameicons.PassIcon,)
-    if stmt.__class__ is ast.Continue:
-        return (nameicons.ContinueIcon,)
-    if stmt.__class__ is ast.Break:
-        return (nameicons.BreakIcon,)
-    if stmt.__class__ is ast.Global:
-        return (nameicons.GlobalIcon, stmt.names)
-    if stmt.__class__ is ast.Nonlocal:
-        return (nameicons.NonlocalIcon, stmt.names)
-    return (nameicons.IdentifierIcon, "**Couldn't Parse**")
-
-def parseExpr(expr):
-    if expr.__class__ == ast.UnaryOp:
-        return (opicons.UnaryOpIcon, unaryOps[expr.op.__class__], parseExpr(expr.operand))
-    elif expr.__class__ == ast.BinOp:
-        if expr.op.__class__ is ast.Div:
-            return (opicons.DivideIcon, False, parseExpr(expr.left), parseExpr(expr.right))
-        elif expr.op.__class__ is ast.FloorDiv:
-            return (opicons.DivideIcon, True, parseExpr(expr.left), parseExpr(expr.right))
-        return (opicons.BinOpIcon, binOps[expr.op.__class__], parseExpr(expr.left),
-         parseExpr(expr.right))
-    elif expr.__class__ == ast.BoolOp:
-        return (opicons.BinOpIcon, boolOps[expr.op.__class__],
-         *(parseExpr(e) for e in expr.values))
-    elif expr.__class__ == ast.Compare:
-        # Note: this does not handle multi-comparison types
-        return (opicons.BinOpIcon, compareOps[expr.ops[0].__class__], parseExpr(expr.left),
-         parseExpr(expr.comparators[0]))
-    elif expr.__class__ == ast.Call:
-        args = [parseExpr(e) for e in expr.args]
-        keywords = {k.arg:parseExpr(k.value) for k in expr.keywords}
-        return (listicons.CallIcon, parseExpr(expr.func), args, keywords)
-    elif expr.__class__ == ast.Num:
-        return (nameicons.NumericIcon, expr.n)
-    elif expr.__class__ == ast.Str:
-        return (nameicons.StringIcon, expr.s)
-    elif expr.__class__ == ast.Constant:
-        if isinstance(expr.value, numbers.Number) or expr.value is None:
-            return (nameicons.NumericIcon, expr.value)  # Numbers includes True and False
-        if isinstance(expr.value, str) or isinstance(expr.value, bytes):
-            return (nameicons.StringIcon, expr.value)
-        if isinstance(expr.value, type(...)):
-            return (nameicons.NumericIcon, expr.value)
-        # Documentation threatens to return constant tuples and frozensets (which could
-        # get quite complex), but 3.8 seems to stick to strings and numbers
-        return (nameicons.IdentifierIcon, "**Couldn't Parse Non number/string const**")
-    # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
-    elif expr.__class__ == ast.Name:
-        return (nameicons.IdentifierIcon, expr.id)
-    elif expr.__class__ == ast.Starred:
-        return (listicons.StarIcon, parseExpr(expr.value))
-    elif expr.__class__ == ast.NameConstant:
-        return (nameicons.NumericIcon, expr.value)  # True and False as number is a bit weird
-    elif expr.__class__ == ast.List:
-        return (listicons.ListIcon, *(parseExpr(e) for e in expr.elts))
-    elif expr.__class__ == ast.Tuple:
-        return (listicons.TupleIcon, *(parseExpr(e) for e in expr.elts))
-    elif expr.__class__ == ast.Dict:
-        keys = [None if e is None else parseExpr(e) for e in expr.keys]
-        values = [parseExpr(e) for e in expr.values]
-        return (listicons.DictIcon, keys, values)
-    elif expr.__class__ == ast.Attribute:
-        return (nameicons.AttrIcon, expr.attr, parseExpr(expr.value))
-    elif expr.__class__ is ast.Yield:
-        return (nameicons.YieldIcon, None if expr.value is None else parseExpr(expr.value))
-    elif expr.__class__ is ast.YieldFrom:
-        return (nameicons.YieldFromIcon, parseExpr(expr.value))
-    elif expr.__class__ is ast.Await:
-        return (nameicons.AwaitIcon, parseExpr(expr.value))
-    elif expr.__class__ == ast.Subscript:
-        if expr.slice.__class__ == ast.Index:
-            slice = [expr.slice.value]
-        elif expr.slice.__class__ == ast.Slice:
-            slice = [expr.slice.lower, expr.slice.upper, expr.slice.step]
-        parsedSlice = [None if e is None else parseExpr(e) for e in slice]
-        if len(slice) == 3 and parsedSlice[2] is None:
-            parsedSlice = parsedSlice[:2]
-        return (subscripticon.SubscriptIcon, parsedSlice, parseExpr(expr.value))
-    elif expr.__class__ in (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp):
-        compType = {ast.ListComp:listicons.ListIcon, ast.SetComp:listicons.DictIcon,
-         ast.GeneratorExp:listicons.TupleIcon, ast.DictComp:listicons.DictIcon}[expr.__class__]
-        if expr.__class__ is ast.DictComp:
-            tgt = parseExpr(expr.value)
-            key = parseExpr(expr.key)
-        else:
-            tgt = parseExpr(expr.elt)
-            key = None
-        generators = []
-        for gen in expr.generators:
-            genTarget = parseExpr(gen.target)
-            genIter = parseExpr(gen.iter)
-            genIfs = [parseExpr(i) for i in gen.ifs]
-            generators.append((genTarget, genIter, genIfs, gen.is_async))
-        return ("comprehension", compType, tgt, key, generators)
-    elif expr.__class__ is ast.Set:
-        return ("set", [parseExpr(e) for e in expr.elts])
-    else:
-        return (nameicons.IdentifierIcon, "**Couldn't Parse**")
-
-def makeIcons(parsedExpr, window, x, y):
-    iconClass = parsedExpr[0]
-    if iconClass in (nameicons.PassIcon, nameicons.ContinueIcon, nameicons.BreakIcon):
-        return iconClass(window, (x, y))
-    if iconClass in (nameicons.IdentifierIcon, nameicons.NumericIcon, nameicons.StringIcon):
-        return iconClass(parsedExpr[1], window, (x, y))
-    if iconClass is listicons.CallIcon:
-        func, args, keywords = parsedExpr[1:]
-        callIcon = iconClass(window, (x, y))
-        argIcons = [makeIcons(pe, window, x, y) for pe in args]
-        for key, val in keywords.items():
-            valueIcon = makeIcons(val, window, x, y)
-            if key is None:
-                starStarIcon = listicons.StarStarIcon(window)
-                starStarIcon.replaceChild(valueIcon, 'argIcon')
-                argIcons.append(starStarIcon)
-            else:
-                kwIcon = listicons.ArgAssignIcon(window)
-                kwIcon.replaceChild(nameicons.IdentifierIcon(key, window), 'leftArg')
-                kwIcon.replaceChild(valueIcon, 'rightArg')
-                argIcons.append(kwIcon)
-        topIcon = makeIcons(func, window, x, y)
-        parentIcon = icon.findLastAttrIcon(topIcon)
-        parentIcon.replaceChild(callIcon, "attrIcon")
-        callIcon.insertChildren(argIcons, "argIcons", 0)
-        return topIcon
-    if iconClass is opicons.UnaryOpIcon:
-        topIcon = iconClass(parsedExpr[1], window, (x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "argIcon")
-        return topIcon
-    if iconClass in (listicons.StarIcon, listicons.StarStarIcon, nameicons.YieldFromIcon,
-     nameicons.AwaitIcon):
-        topIcon = iconClass(window, (x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), "argIcon")
-        return topIcon
-    if iconClass is opicons.BinOpIcon:
-        topIcon = iconClass(parsedExpr[1], window, (x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "leftArg")
-        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "rightArg")
-        return topIcon
-    if iconClass is opicons.DivideIcon:
-        topIcon = iconClass(parsedExpr[1], window, (x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "topArg")
-        topIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "bottomArg")
-        return topIcon
-    if iconClass in (listicons.ListIcon, listicons.TupleIcon):
-        topIcon = iconClass(window, location=(x, y))
-        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1:]]
-        topIcon.insertChildren(childIcons, "argIcons", 0)
-        return topIcon
-    if iconClass is listicons.DictIcon:
-        topIcon = iconClass(window, location=(x, y))
-        argIcons = []
-        values = parsedExpr[2]
-        for i, key in enumerate(parsedExpr[1]):
-            value = values[i]
-            if key is None:
-                starStar = listicons.StarStarIcon(window, location=(x,y))
-                starStar.replaceChild(makeIcons(value, window, x, y), "argIcon")
-                argIcons.append(starStar)
-            else:
-                dictElem = listicons.DictElemIcon(window, location=(x,y))
-                dictElem.replaceChild(makeIcons(key, window, x, y), "leftArg")
-                dictElem.replaceChild(makeIcons(value, window, x, y), "rightArg")
-                argIcons.append(dictElem)
-        topIcon.insertChildren(argIcons, "argIcons", 0)
-        return topIcon
-    if iconClass is assignicons.AssignIcon:
-        tgts = parsedExpr[1]
-        topIcon = iconClass(len(tgts), window, (x, y))
-        for i, tgt in enumerate(tgts):
-            if tgt[0] is listicons.TupleIcon:
-                tgtIcons = [makeIcons(t, window, x, y) for t in tgt[1:]]
-            else:
-                tgtIcons = [makeIcons(tgt, window, x, y)]
-            topIcon.insertChildren(tgtIcons, "targets%d" % i, 0)
-        if parsedExpr[2][0] is listicons.TupleIcon:
-            valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[2][1:]]
-            topIcon.insertChildren(valueIcons, "values", 0)
-        else:
-            topIcon.replaceChild(makeIcons(parsedExpr[2], window, x, y), "values_0")
-        return topIcon
-    if iconClass is assignicons.AugmentedAssignIcon:
-        assignIcon = iconClass(parsedExpr[2], window, (x, y))
-        targetIcon = makeIcons(parsedExpr[1], window, x, y)
-        assignIcon.replaceChild(targetIcon, "targetIcon")
-        if parsedExpr[3][0] is listicons.TupleIcon:
-            valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[3][1:]]
-            assignIcon.insertChildren(valueIcons, "values", 0)
-        else:
-            assignIcon.replaceChild(makeIcons(parsedExpr[3], window, x, y), "values_0")
-        return assignIcon
-    if iconClass in (nameicons.ReturnIcon, nameicons.YieldIcon):
-        topIcon = iconClass(window, (x, y))
-        if parsedExpr[1] is None:
-            return topIcon
-        if parsedExpr[1][0] is listicons.TupleIcon:
-            valueIcons = [makeIcons(v, window, x, y) for v in parsedExpr[1][1:]]
-            topIcon.insertChildren(valueIcons, "values", 0)
-        else:
-            topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), "values_0")
-        return topIcon
-    if iconClass is nameicons.DelIcon:
-        topIcon = iconClass(window, (x, y))
-        targets = [makeIcons(t, window, x, y) for t in parsedExpr[1]]
-        topIcon.insertChildren(targets, "values", 0)
-        return topIcon
-    if iconClass is blockicons.WithIcon:
-        isAsync, withItems = parsedExpr[1:]
-        topIcon = iconClass(isAsync, window=window, location=(x, y))
-        for idx, (contextExpr, optVars) in enumerate(withItems):
-            contextIcon = makeIcons(contextExpr, window, x, y)
-            if optVars is None:
-                topIcon.insertChild(contextIcon, "values", idx)
-            else:
-                asIcon = blockicons.WithAsIcon(window)
-                asIcon.replaceChild(contextIcon, "leftArg")
-                asIcon.replaceChild(makeIcons(optVars, window, x, y), "rightArg")
-                topIcon.insertChild(asIcon, "values", idx)
-        return topIcon
-    if iconClass in (nameicons.GlobalIcon, nameicons.NonlocalIcon):
-        topIcon = iconClass(window, (x, y))
-        nameIcons = [nameicons.IdentifierIcon(name, window, (x,y)) for name in parsedExpr[1]]
-        topIcon.insertChildren(nameIcons, "values", 0)
-        return topIcon
-    if iconClass is nameicons.AttrIcon:
-        attrIcon = iconClass(parsedExpr[1], window)
-        topIcon = makeIcons(parsedExpr[2], window, x, y)
-        parentIcon = icon.findLastAttrIcon(topIcon)
-        parentIcon.replaceChild(attrIcon, "attrIcon")
-        return topIcon
-    if iconClass is subscripticon.SubscriptIcon:
-        nSlices = len(parsedExpr[1])
-        subscriptIcon = iconClass(nSlices, window, (x, y))
-        if parsedExpr[1][0] is not None:
-            subscriptIcon.replaceChild(makeIcons(parsedExpr[1][0], window, x, y),
-                "indexIcon")
-        if nSlices >= 2 and parsedExpr[1][1] is not None:
-            subscriptIcon.replaceChild(makeIcons(parsedExpr[1][1], window, x, y),
-                "upperIcon")
-        if nSlices >= 3 and parsedExpr[1][2] is not None:
-            subscriptIcon.replaceChild(makeIcons(parsedExpr[1][2], window, x, y),
-                "stepIcon")
-        topIcon = makeIcons(parsedExpr[2], window, x, y)
-        parentIcon = icon.findLastAttrIcon(topIcon)
-        parentIcon.replaceChild(subscriptIcon, "attrIcon")
-        return topIcon
-    if iconClass == "comprehension":
-        cprhType, tgt, key, generators = parsedExpr[1:]
-        topIcon = cprhType(window=window, location=(x, y))
-        if key is None:
-            topIcon.replaceChild(makeIcons(tgt, window, x, y), 'argIcons_0')
-        else:
-            dictElem = listicons.DictElemIcon(window)
-            dictElem.replaceChild(makeIcons(key, window, x, y), "leftArg")
-            dictElem.replaceChild(makeIcons(tgt, window, x, y), "rightArg")
-            topIcon.replaceChild(dictElem, 'argIcons_0')
-        clauseIdx = 0
-        for tgt, iter, ifs, isAsync in generators:
-            forIcon = listicons.CprhForIcon(isAsync, window)
-            if tgt[0] is listicons.TupleIcon:
-                tgtIcons = [makeIcons(t, window, x, y) for t in tgt[1:]]
-                forIcon.insertChildren(tgtIcons, "targets", 0)
-            else:
-                forIcon.insertChild(makeIcons(tgt, window, x, y), "targets", 0)
-            forIcon.replaceChild(makeIcons(iter, window, x, y), 'iterIcon')
-            topIcon.insertChild(forIcon, "cprhIcons", clauseIdx)
-            clauseIdx += 1
-            for i in ifs:
-                ifIcon = listicons.CprhIfIcon(window)
-                testIcon = makeIcons(i, window, x, y)
-                ifIcon.replaceChild(testIcon, 'testIcon')
-                topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
-                clauseIdx += 1
-        return topIcon
-    if iconClass == "set":
-        topIcon = listicons.DictIcon(window, (x, y))
-        childIcons = [makeIcons(pe, window, x, y) for pe in parsedExpr[1]]
-        topIcon.insertChildren(childIcons, "argIcons", 0)
-        return topIcon
-    if iconClass is blockicons.WhileIcon:
-        topIcon = iconClass(window=window, location=(x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
-        return topIcon
-    if iconClass is blockicons.ForIcon:
-        isAsync, tgt, iters = parsedExpr[1:]
-        topIcon = iconClass(isAsync, window=window, location=(x, y))
-        if tgt[0] is listicons.TupleIcon:
-            tgtIcons = [makeIcons(t, window, x, y) for t in tgt[1:]]
-            topIcon.insertChildren(tgtIcons, "targets", 0)
-        else:
-            topIcon.replaceChild(makeIcons(tgt, window, x, y), "targets_0")
-        if iters[0] is listicons.TupleIcon:
-            iterIcons = [makeIcons(i, window, x, y) for i in iters[1:]]
-            topIcon.insertChildren(iterIcons, "iterIcons", 0)
-        else:
-            topIcon.replaceChild(makeIcons(iters, window, x, y), "iterIcons_0")
-        return topIcon
-    if iconClass is blockicons.IfIcon:
-        topIcon = iconClass(window=window, location=(x, y))
-        topIcon.replaceChild(makeIcons(parsedExpr[1], window, x, y), 'condIcon')
-        return topIcon
-    if iconClass is blockicons.ClassDefIcon:
-        name, bases, kwds = parsedExpr[1:]
-        hasArgs = len(bases) + len(kwds) > 0
-        topIcon = iconClass(hasArgs, window=window)
-        nameIcon = nameicons.IdentifierIcon(name, window)
-        topIcon.replaceChild(nameIcon, 'nameIcon')
-        baseIcons = [makeIcons(base, window, x, y) for base in bases]
-        topIcon.insertChildren(baseIcons, "argIcons", 0)
-        kwdIcons = []
-        for idx, (kwd, value) in enumerate(kwds):
-            argAssignIcon = listicons.ArgAssignIcon(window)
-            kwdIcon = nameicons.IdentifierIcon(kwd, window)
-            valueIcon = makeIcons(value, window, x, y)
-            argAssignIcon.replaceChild(kwdIcon, 'leftArg')
-            argAssignIcon.replaceChild(valueIcon, 'rightArg')
-            kwdIcons.append(argAssignIcon)
-        topIcon.insertChildren(kwdIcons, "argIcons", len(baseIcons))
-        return topIcon
-    if iconClass is blockicons.DefIcon:
-        isAsync, name, args, nPosOnly, defaults, varArg, kwOnlyArgs, kwDefaults, kwArg =\
-         parsedExpr[1:]
-        defIcon = iconClass(isAsync, window=window, location=(x, y))
-        nameIcon = nameicons.IdentifierIcon(name, window)
+        defIcon = blockicons.DefIcon(isAsync, window=window)
+        nameIcon = nameicons.IdentifierIcon(stmt.name, window)
         defIcon.replaceChild(nameIcon, 'nameIcon')
-        if len(defaults) < len(args):
+        defaults = [parseExpr(e, window) for e in stmt.args.defaults]
+        if len(defaults) < len(stmt.args.args):
             # Weird rule in defaults list for ast that defaults can be shorter than args
-            defaults = ([None] * (len(args) - len(defaults))) + defaults
+            defaults = ([None] * (len(stmt.args.args) - len(defaults))) + defaults
         numArgs = 0
-        for i, arg in enumerate(args):
+        for i, arg in enumerate(arg.arg for arg in stmt.args.args):
             default = defaults[i]
             argNameIcon = nameicons.IdentifierIcon(arg, window)
             if nPosOnly != 0 and numArgs == nPosOnly:
@@ -479,37 +163,293 @@ def makeIcons(parsedExpr, window, x, y):
             if default is None:
                 defIcon.insertChild(argNameIcon, 'argIcons', numArgs)
             else:
-                defaultIcon = makeIcons(default, window, x, y)
+                defaultIcon = default
                 argAssignIcon = listicons.ArgAssignIcon(window)
                 argAssignIcon.replaceChild(argNameIcon, 'leftArg')
                 argAssignIcon.replaceChild(defaultIcon, 'rightArg')
                 defIcon.insertChild(argAssignIcon, "argIcons", numArgs)
             numArgs += 1
+        varArg = stmt.args.vararg.arg if stmt.args.vararg is not None else None
         if varArg is not None:
             argNameIcon = nameicons.IdentifierIcon(varArg, window)
             starIcon = listicons.StarIcon(window)
             starIcon.replaceChild(argNameIcon, 'argIcon')
             defIcon.insertChild(starIcon, 'argIcons', numArgs)
             numArgs += 1
+        kwOnlyArgs = [arg.arg for arg in stmt.args.kwonlyargs]
+        kwDefaults = [parseExpr(e, window) for e in stmt.args.kw_defaults]
         if len(kwOnlyArgs) > 0 and varArg is None:
             defIcon.insertChild(listicons.StarIcon(window), 'argIcons', numArgs)
             numArgs += 1
         for i, arg in enumerate(kwOnlyArgs):
-            default = kwDefaults[i]
             argNameIcon = nameicons.IdentifierIcon(arg, window)
-            if default is None:
+            if kwDefaults[i] is None:
                 defIcon.insertChild(argNameIcon, 'argIcons', i)
             else:
-                defaultIcon = makeIcons(default, window, x, y)
+                defaultIcon = kwDefaults[i]
                 argAssignIcon = listicons.ArgAssignIcon(window)
                 argAssignIcon.replaceChild(argNameIcon, 'leftArg')
                 argAssignIcon.replaceChild(defaultIcon, 'rightArg')
                 defIcon.insertChild(argAssignIcon, "argIcons", numArgs + i)
         numArgs += len(kwOnlyArgs)
-        if kwArg is not None:
-            argNameIcon = nameicons.IdentifierIcon(kwArg, window)
+        if stmt.args.kwarg is not None:
+            argNameIcon = nameicons.IdentifierIcon(stmt.args.kwarg.arg, window)
             starStarIcon = listicons.StarStarIcon(window)
             starStarIcon.replaceChild(argNameIcon, 'argIcon')
             defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
         return defIcon
-    return nameicons.TextIcon("**Internal Parse Error**", window, (x,y))
+    if stmt.__class__ is ast.ClassDef:
+        hasArgs = len(stmt.bases) + len(stmt.keywords) > 0
+        topIcon = blockicons.ClassDefIcon(hasArgs, window=window)
+        nameIcon = nameicons.IdentifierIcon(stmt.name, window)
+        topIcon.replaceChild(nameIcon, 'nameIcon')
+        bases = [parseExpr(base, window) for base in stmt.bases]
+        topIcon.insertChildren(bases, "argIcons", 0)
+        kwdIcons = []
+        for idx, kwd in enumerate(stmt.keywords):
+            argAssignIcon = listicons.ArgAssignIcon(window)
+            kwdIcon = nameicons.IdentifierIcon(kwd, window)
+            valueIcon = parseExpr(kwd.value, window)
+            argAssignIcon.replaceChild(kwdIcon, 'leftArg')
+            argAssignIcon.replaceChild(valueIcon, 'rightArg')
+            kwdIcons.append(argAssignIcon)
+        topIcon.insertChildren(kwdIcons, "argIcons", len(bases))
+        return topIcon
+    if stmt.__class__ is ast.Return:
+        topIcon = nameicons.ReturnIcon(window)
+        if stmt.value is None:
+            return topIcon
+        if isinstance(stmt.value, ast.Tuple):
+            valueIcons = [parseExpr(v, window) for v in stmt.value.elts]
+            topIcon.insertChildren(valueIcons, "values", 0)
+        else:
+            topIcon.replaceChild(parseExpr(stmt.value, window), "values_0")
+        return topIcon
+    if stmt.__class__ in (ast.With, ast.AsyncWith):
+        isAsync = isinstance(stmt, ast.AsyncWith)
+        topIcon = blockicons.WithIcon(isAsync, window=window)
+        for idx, item in enumerate(stmt.items):
+            contextIcon = parseExpr(item.context_expr, window)
+            if item.optional_vars is None:
+                topIcon.insertChild(contextIcon, "values", idx)
+            else:
+                asIcon = blockicons.WithAsIcon(window)
+                asIcon.replaceChild(contextIcon, "leftArg")
+                asIcon.replaceChild(parseExpr(item.optional_vars, window), "rightArg")
+                topIcon.insertChild(asIcon, "values", idx)
+        return topIcon
+    if stmt.__class__ is ast.Delete:
+        topIcon = nameicons.DelIcon(window)
+        targets = [parseExpr(t, window) for t in stmt.targets]
+        topIcon.insertChildren(targets, "values", 0)
+        return topIcon
+    if stmt.__class__ is ast.Pass:
+        return nameicons.PassIcon(window)
+    if stmt.__class__ is ast.Continue:
+        return nameicons.ContinueIcon(window)
+    if stmt.__class__ is ast.Break:
+        return nameicons.BreakIcon(window)
+    if stmt.__class__ is ast.Global:
+        topIcon = nameicons.GlobalIcon(window)
+        nameIcons = [nameicons.IdentifierIcon(name, window) for name in stmt.names]
+        topIcon.insertChildren(nameIcons, "values", 0)
+        return topIcon
+    if stmt.__class__ is ast.Nonlocal:
+        topIcon = nameicons.NonlocalIcon(window)
+        nameIcons = [nameicons.IdentifierIcon(name, window) for name in stmt.names]
+        topIcon.insertChildren(nameIcons, "values", 0)
+        return topIcon
+    return (nameicons.IdentifierIcon, "**Couldn't Parse**")
+
+def parseExpr(expr, window):
+    if expr.__class__ == ast.UnaryOp:
+        topIcon = opicons.UnaryOpIcon(unaryOps[expr.op.__class__], window)
+        topIcon.replaceChild(parseExpr(expr.operand, window), "argIcon")
+        return topIcon
+    elif expr.__class__ == ast.BinOp:
+        if expr.op.__class__ in (ast.Div, ast.FloorDiv):
+            topIcon = opicons.DivideIcon(expr.op.__class__ is ast.FloorDiv, window)
+            topIcon.replaceChild(parseExpr(expr.left, window), "topArg")
+            topIcon.replaceChild(parseExpr(expr.right, window), "bottomArg")
+            return topIcon
+        topIcon = opicons.BinOpIcon(binOps[expr.op.__class__], window)
+        topIcon.replaceChild(parseExpr(expr.left, window), "leftArg")
+        topIcon.replaceChild(parseExpr(expr.right, window), "rightArg")
+        return topIcon
+    elif expr.__class__ == ast.BoolOp:
+        topIcon = opicons.BinOpIcon(boolOps[expr.op.__class__], window)
+        topIcon.replaceChild(parseExpr(expr.values[0], window), "leftArg")
+        topIcon.replaceChild(parseExpr(expr.values[1], window), "rightArg")
+        for value in expr.values[2:]:
+            newTopIcon = opicons.BinOpIcon(boolOps[expr.op.__class__], window)
+            newTopIcon.replaceChild(topIcon, "leftArg")
+            newTopIcon.replaceChild(parseExpr(value, window), "rightArg")
+            topIcon = newTopIcon
+        return topIcon
+    elif expr.__class__ == ast.Compare:
+        # Note: this does not yet handle multi-comparison types
+        topIcon = opicons.BinOpIcon(compareOps[expr.ops[0].__class__], window)
+        topIcon.replaceChild(parseExpr(expr.left, window), "leftArg")
+        topIcon.replaceChild(parseExpr(expr.comparators[0], window), "rightArg")
+        return topIcon
+    elif expr.__class__ == ast.Call:
+        callIcon = listicons.CallIcon(window)
+        argIcons = [parseExpr(e, window) for e in expr.args]
+        for key in expr.keywords:
+            valueIcon = parseExpr(key.value, window)
+            if key.arg is None:
+                starStarIcon = listicons.StarStarIcon(window)
+                starStarIcon.replaceChild(valueIcon, 'argIcon')
+                argIcons.append(starStarIcon)
+            else:
+                kwIcon = listicons.ArgAssignIcon(window)
+                kwIcon.replaceChild(nameicons.IdentifierIcon(key.arg, window), 'leftArg')
+                kwIcon.replaceChild(valueIcon, 'rightArg')
+                argIcons.append(kwIcon)
+        topIcon = parseExpr(expr.func, window)
+        parentIcon = icon.findLastAttrIcon(topIcon)
+        parentIcon.replaceChild(callIcon, "attrIcon")
+        callIcon.insertChildren(argIcons, "argIcons", 0)
+        return topIcon
+    elif expr.__class__ == ast.Num:
+        return nameicons.NumericIcon(expr.n, window)
+    elif expr.__class__ == ast.Str:
+        return (nameicons.StringIcon, expr.s)
+    elif expr.__class__ == ast.Constant:
+        if isinstance(expr.value, numbers.Number) or expr.value is None:
+            # Note that numbers.Number includes True and False
+            return nameicons.NumericIcon(expr.value, window)
+        elif isinstance(expr.value, str) or isinstance(expr.value, bytes):
+            return nameicons.StringIcon(expr.value, window)
+        if isinstance(expr.value, type(...)):
+            return nameicons.NumericIcon(expr.value, window)
+        # Documentation threatens to return constant tuples and frozensets (which could
+        # get quite complex), but 3.8 seems to stick to strings and numbers
+        return nameicons.IdentifierIcon("**Couldn't Parse Constant**", window)
+    # FormattedValue, JoinedStr, Bytes, List, Tuple, Set, Dict, Ellipsis, NamedConstant
+    elif expr.__class__ == ast.Name:
+        return nameicons.IdentifierIcon(expr.id, window)
+    elif expr.__class__ == ast.Starred:
+        topIcon = listicons.StarIcon(window)
+        topIcon.replaceChild(parseExpr(expr.value, window), "argIcon")
+        return topIcon
+    elif expr.__class__ == ast.NameConstant:
+        return nameicons.NumericIcon(expr.value, window)
+    elif expr.__class__ == ast.List:
+        topIcon = listicons.ListIcon(window)
+        childIcons = [parseExpr(e, window) for e in expr.elts]
+        topIcon.insertChildren(childIcons, "argIcons", 0)
+        return topIcon
+    elif expr.__class__ == ast.Tuple:
+        topIcon = listicons.TupleIcon(window)
+        childIcons = [parseExpr(e, window) for e in expr.elts]
+        topIcon.insertChildren(childIcons, "argIcons", 0)
+        return topIcon
+    elif expr.__class__ == ast.Dict:
+        topIcon = listicons.DictIcon(window)
+        argIcons = []
+        for i, key in enumerate(expr.keys):
+            value = parseExpr(expr.values[i], window)
+            if key is None:
+                starStar = listicons.StarStarIcon(window)
+                starStar.replaceChild(value, "argIcon")
+                argIcons.append(starStar)
+            else:
+                dictElem = listicons.DictElemIcon(window)
+                dictElem.replaceChild(parseExpr(key, window), "leftArg")
+                dictElem.replaceChild(value, "rightArg")
+                argIcons.append(dictElem)
+        topIcon.insertChildren(argIcons, "argIcons", 0)
+        return topIcon
+    elif expr.__class__ == ast.Attribute:
+        # Note that the icon hierarchy and the AST hierarchy differ with respect to
+        # attributes. ASTs put the attribute at the top, we put the root icon at the top.
+        attrIcon = nameicons.AttrIcon(expr.attr, window)
+        topIcon = parseExpr(expr.value, window)
+        parentIcon = icon.findLastAttrIcon(topIcon)
+        parentIcon.replaceChild(attrIcon, "attrIcon")
+        return topIcon
+    elif expr.__class__ is ast.Yield:
+        topIcon = nameicons.YieldIcon(window)
+        if expr.value is None:
+            return topIcon
+        if isinstance(expr.value, ast.Tuple):
+            valueIcons = [parseExpr(v, window) for v in expr.value.elts]
+            topIcon.insertChildren(valueIcons, "values", 0)
+        else:
+            topIcon.replaceChild(parseExpr(expr.value, window), "values_0")
+        return topIcon
+    elif expr.__class__ is ast.YieldFrom:
+        topIcon = nameicons.YieldFromIcon(window)
+        topIcon.replaceChild(parseExpr(expr.value, window), "argIcon")
+        return topIcon
+    elif expr.__class__ is ast.Await:
+        topIcon = nameicons.AwaitIcon(window)
+        topIcon.replaceChild(parseExpr(expr.value, window), "argIcon")
+        return topIcon
+    elif expr.__class__ == ast.Subscript:
+        if expr.slice.__class__ == ast.Index:
+            slice = [expr.slice.value]
+        elif expr.slice.__class__ == ast.Slice:
+            slice = [expr.slice.lower, expr.slice.upper, expr.slice.step]
+        elif expr.slice.__class__ == ast.ExtSlice:
+            return nameicons.TextIcon("**Extended slices not supported***")
+        else:
+            return nameicons.TextIcon("**Unexpected slice type not supported***")
+        nSlices = len(slice)
+        subscriptIcon = subscripticon.SubscriptIcon(nSlices, window)
+        if slice[0] is not None:
+            subscriptIcon.replaceChild(parseExpr(slice[0], window), "indexIcon")
+        if nSlices >= 2 and slice[1] is not None:
+            subscriptIcon.replaceChild(parseExpr(slice[1], window), "upperIcon")
+        if nSlices >= 3 and slice[2] is not None:
+            subscriptIcon.replaceChild(parseExpr(slice[2], window), "stepIcon")
+        topIcon = parseExpr(expr.value, window)
+        parentIcon = icon.findLastAttrIcon(topIcon)
+        parentIcon.replaceChild(subscriptIcon, "attrIcon")
+        return topIcon
+    elif expr.__class__ in (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp):
+        if expr.__class__ is ast.DictComp:
+            tgt = expr.value
+            key = expr.key
+        else:
+            tgt = expr.elt
+            key = None
+        return makeComprehension(window, expr.__class__, tgt, key, expr.generators)
+    elif expr.__class__ is ast.Set:
+        topIcon = listicons.DictIcon(window)
+        childIcons = [parseExpr(e, window) for e in expr.elts]
+        topIcon.insertChildren(childIcons, "argIcons", 0)
+        return topIcon
+    else:
+        return (nameicons.IdentifierIcon, "**Couldn't Parse**")
+
+def makeComprehension(window, astType, tgt, key, generators):
+    cprhType = {ast.ListComp: listicons.ListIcon, ast.SetComp: listicons.DictIcon,
+        ast.GeneratorExp: listicons.TupleIcon, ast.DictComp: listicons.DictIcon}[astType]
+    topIcon = cprhType(window=window)
+    if key is None:
+        topIcon.replaceChild(parseExpr(tgt, window), 'argIcons_0')
+    else:
+        dictElem = listicons.DictElemIcon(window)
+        dictElem.replaceChild(parseExpr(key, window), "leftArg")
+        dictElem.replaceChild(parseExpr(tgt, window), "rightArg")
+        topIcon.replaceChild(dictElem, 'argIcons_0')
+    clauseIdx = 0
+    for gen in generators:
+        forIcon = listicons.CprhForIcon(gen.is_async, window)
+        if isinstance(gen.target, ast.Tuple):
+            tgtIcons = [parseExpr(t, window) for t in gen.target.elts]
+            forIcon.insertChildren(tgtIcons, "targets", 0)
+        else:
+            forIcon.insertChild(parseExpr(gen.target, window), "targets", 0)
+        forIcon.replaceChild(parseExpr(gen.iter, window), 'iterIcon')
+        topIcon.insertChild(forIcon, "cprhIcons", clauseIdx)
+        clauseIdx += 1
+        for i in gen.ifs:
+            ifIcon = listicons.CprhIfIcon(window)
+            testIcon = parseExpr(i, window)
+            ifIcon.replaceChild(testIcon, 'testIcon')
+            topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
+            clauseIdx += 1
+    return topIcon
