@@ -2,214 +2,313 @@ import ast, astpretty
 import re
 import tkinter
 
-posPatternSrc = "\\$pos((\\+|\\-)\d*)((\\+|\\-)\\d*)\\$"
-posMacroPattern = re.compile(posPatternSrc)
-macroList = [(posPatternSrc, "pass", ast.Pass)]
-annotatedAstTypes = set((ast.Pass,))
-matchPattern = None
+posMacroPattern = re.compile("((\\+|\\-)\d*)((\\+|\\-)\\d*)")
 
-def addMacro(pattern, subs, astNode):
-    """Add a macro to substitute text and add annotation data to extend the save-file and
-    pasted-text format beyond the base Python syntax.  pattern is a regular expression
-    used to match the macro, including the macro-introducing and terminating characters.
-    subs is either a string containing fixed text to substitute, or a callable function
-    for generating that text from the matched macro during processing.  astNode is used
-    to help attach the matched content of the macro as annotation to the AST node (and
-    eventually, icon) created by the macro.  astNode should be the AST node that will
-    appear at the line number and column offset at which the macro substitution was done.
-    If passed as None, no annotation will be attached."""
-    global macroList, matchPattern, annotatedAstTypes
-    individualPattern = re.compile(pattern)
-    macroList.append((pattern, subs, astNode, individualPattern))
-    if astNode is not None:
-        annotatedAstTypes.add(astNode)
-    matchPattern = None
+class MacroParser:
+    macroPattern = re.compile("\\$[^\\$]+\\$")
+    leftArgOpRe = re.compile("\+|-|/|%|\\*|<|>|\\||\\^|&|is|in|and|or|if|=|!=|\\(|\\.|\\[")
 
-def expandMacros(text):
-    """Takes text in python_g clipboard/save-file text format, expands macros and returns
-    three items:
-        1) The macro-expanded text
-        2) A dictionary for looking up AST nodes that the macros have requested to
-           annotate.  The annotation dictionary is indexed by a tuple:
-                (AST-class, line-number, column-offset).
-        3) A list whose index is line numbers in the macro-expanded version of the text
-           and whose content is the corresponding line number in the original text
-           (before expansion)."""
-    annotations = {}
-    lineNumTranslate = []
-    if matchPattern is None:
-        _createMacroPattern()
-    origLineStarts = [0]
-    origLineNum = 1
-    modLineNum = 1
-    modColNum = 0
-    modTextFrags = []
-    modFragStart = 0
-    origIdx = 0
-    while origIdx < len(text):
-        origChar = text[origIdx]
-        if origChar == '\t':
-            macroFailDialog(text, origIdx, origLineNum, "Tab characters not allowed")
-            return None, {}, []
-        if origChar == '\n':
-            lineNumTranslate.append(origLineNum)
-            origLineNum += 1
-            modLineNum += 1
-            modColNum = 0
-            origLineStarts.append(origIdx+1)
-            origIdx += 1
-        elif origChar == '$':
-            # Macro found.  Decide which one and get replacement text
-            match = matchPattern.match(text, origIdx)
-            if match is None:
-                macroFailDialog(text, origIdx, origLineNum)
-                return None, {}, []
-            for i in range(len(macroList)):
-                macroText = match.group('g%d'%i)
-                if macroText is not None:
-                    macroIdx = i
-                    break
-            else:
-                macroFailDialog(text, origIdx, origLineNum)
-                return None, {}, []
-            pattern, subs, astNode, individualPattern = macroList[macroIdx]
-            if callable(subs):
-                replaceText = subs(macroText)
-            else:
-                replaceText = individualPattern.sub(subs, macroText)
-            # Copy the text between the last macro and this one in to the output list
-            textToCopy = text[modFragStart:origIdx]
-            modTextFrags.append(textToCopy)
-            # Copy the macro's replacement text in to the output list
-            modTextFrags.append(replaceText)
-            # If the macro wants to annotate an AST, add an entry to the annotations
-            # array by AST class, line, and column (see ... for explanation of special
-            # treatment of binary operators
-            if astNode is not None:
-                if astNode is ast.BinOp:
-                    annotations[(astNode, *_binOpAdjLineCol(modLineNum, modColNum,
-                        text, origIdx))] = macroText
-                else:
-                    annotations[(astNode, modLineNum, modColNum)] = macroText
-            # Adjust line counts for newlines in macro or replaced text
-            macroEndIdx = origIdx + len(macroText)
-            origLineNum += text[origIdx:macroEndIdx].count('\n')
-            modLines = replaceText.split('\n')
-            for i in range(len(modLines) - 1):
-                modLineNum += 1
+    def __init__(self):
+        self.macroList = {}
+
+    def addMacro(self, name, subs="", iconCreateFn=None):
+        """Add a macro to annotate and extend the save-file and pasted-text format beyond
+        the base Python syntax.  The save-file format extends Python with macros of the
+        form $name:argString$.  name is composed of the same set of characters as Python
+        identifiers. Macros that skip the name ($:args$) provide (mostly layout-ralated)
+        information to the built-in icon creation functions for Python itself.  The colon
+        separates the macro name from its arguments, and may be omitted if there are no
+        arguments to pass.  The format of the argument string (argString) is entirely up
+        to the implementer, but must not contain the "$" character.  The argument, subs,
+        provides text to replace the macro before parsing with the Python parser, and
+        may alternatively be passed as a function to generate the substitution string
+        from the macro argString.  Since the ultimate goal is to create icons, string
+        substitution is needed only in rare cases to temporarily support sub-structure
+        (such as statement blocks) and get it to pass initial parsing.  Most of the work
+        will be done in the icon creation function (iconCreateFn).  Since macros are
+        associated with AST nodes based on their location in the save-file, there is
+        a special case for nodes generated by text substitution by the macro, itself.
+        To reference a python construct inserted by the macro, the substitution text
+        should place a '$' character before the item to be marked.  The '$' will be
+        removed in the substitution process, and the macro data will be associated
+        with the python code that followed it in the inserted text.  iconCreateFn
+        should be a function with parameters for: macroName, macroArgs, astNode, window
+        (see ... for details)"""
+
+        self.macroList[name] = subs, iconCreateFn
+
+    def expandMacros(self, text):
+        """Takes text in python_g clipboard/save-file text format, expands macros and
+        returns three items:
+            1) The macro-expanded text
+            2) An object for looking up macro annotation (name, arguments, and icon
+               creation function) given an AST node resulting from parsing the text.
+            3) A list whose index is line numbers in the macro-expanded version of the
+               text and whose content is the corresponding line number in the original
+               text (before expansion)."""
+        annotations = AnnotationList()
+        lineNumTranslate = []
+        origLineStarts = [0]
+        origLineNum = 1
+        modLineNum = 1
+        modColNum = 0
+        modTextFrags = []
+        modFragStart = 0
+        origIdx = 0
+        while origIdx < len(text):
+            origChar = text[origIdx]
+            if origChar == '\t':
+                macroFailDialog(text, origIdx, origLineNum, "Tab characters not allowed")
+                return None, None, []
+            if origChar == '\n':
                 lineNumTranslate.append(origLineNum)
-            if len(modLines) > 1:
-                modColNum = len(modLines[-1])
+                origLineNum += 1
+                modLineNum += 1
+                modColNum = 0
+                origLineStarts.append(origIdx+1)
+                origIdx += 1
+            elif origChar == '$':
+                # Macro found.  Process it and get replacement text
+                match = self.macroPattern.match(text, origIdx)
+                if match is None:
+                    macroFailDialog(text, origIdx, origLineNum)
+                    return None, None, []
+                macroEndIdx = origIdx + len(match.group(0))
+                replaceText = self._processMacro(modLineNum, modColNum, text, origIdx,
+                    macroEndIdx, annotations)
+                if replaceText is None:
+                    macroFailDialog(text, origIdx, origLineNum)
+                    return None, None, []
+                # Copy the text between the last macro and this one in to the output list
+                textToCopy = text[modFragStart:origIdx]
+                modTextFrags.append(textToCopy)
+                # Copy the macro's replacement text in to the output list
+                modTextFrags.append(replaceText)
+                # Adjust line counts for newlines in macro or replaced text
+                origLineNum += text[origIdx:macroEndIdx].count('\n')
+                modLines = replaceText.split('\n')
+                for i in range(len(modLines) - 1):
+                    modLineNum += 1
+                    lineNumTranslate.append(origLineNum)
+                if len(modLines) > 1:
+                    modColNum = len(modLines[-1])
+                else:
+                    modColNum += len(replaceText)
+                origIdx = macroEndIdx
+                modFragStart = origIdx
             else:
-                modColNum += len(macroText)
-            origIdx += len(macroText)
-            modFragStart = origIdx
+                modColNum += 1
+                origIdx += 1
+        # Copy the text between the last macro and the end of the input text to the output
+        modTextFrags.append(text[modFragStart:])
+        # Consolidate the output fragments in to a single string, and return it and the
+        # annotation dictionary and line number translation list
+        return "".join(modTextFrags), annotations, lineNumTranslate
+
+    def _processMacro(self, modLineNum, modColNum, origText, macroStartIdx, macroEndIdx,
+            annotations):
+        """Process a macro in origText between macroStartIdx and macroEndIdx, adding
+        entries to annotations object for associating data from the named macro and the
+        argument string with appropriate AST node.  Returns text to substitute for the
+        macro before passing it on to the Python parser."""
+        macroText = origText[macroStartIdx+1:macroEndIdx-1]
+        macroName, macroArgs = self._parseMacro(macroText)
+        if macroName is None:
+            return None
+        if macroName == "":
+            replaceText = ""
+            iconFn = None
+        elif macroName == "@":
+            replaceText = "pass"
+            iconFn = None
         else:
-            modColNum += 1
-            origIdx += 1
-    # Copy the text between the last macro and the end of the input text to the output
-    modTextFrags.append(text[modFragStart:])
-    # Consolidate the output fragments in to a single string, and return it and the
-    # annotation dictionary and line number translation list
-    return "".join(modTextFrags), annotations, lineNumTranslate
-
-def _createMacroPattern():
-    global matchPattern
-    compositePattern = []
-    for i, macro in enumerate(macroList):
-        pattern = macro[0]
-        groupName = "g%d" % i
-        compositePattern.append("(?P<%s>%s)" % (groupName, pattern))
-    print('pattern:', "|".join(compositePattern))
-    matchPattern = re.compile("|".join(compositePattern))
-
-def _binOpAdjLineCol(modLineNum, modColNum, text, origIdx):
-    """BinOp ASTs, unfortunately, do not encode the line and column of the operator, but
-     of the entire expression.  The code here, marches backward from the operator
-     (actually the macro that will expand in to the operator) to find the first non-white
-     character, and returns a line and column number matching that text position.  The
-     annotation code for BinOps, likewise, does not use the line and column listed on
-     the BinOp AST, but the line and column of the right side of its left argument."""
-    for i in range(origIdx-1, -1, -1):
-        if text[i] == '\n':
-            modLineNum -= 1
-            for pl in range(i-1, -1, -1):
-                if text[pl] == '\n':
-                    prevLineStart = pl + 1
-                    break
+            macroData = self.macroList[macroName]
+            if macroData is None:
+                return None
+            subs, iconFn, = macroData
+            if callable(subs):
+                replaceText = subs(macroArgs)
             else:
-                prevLineStart = 0
-            modColNum = i - prevLineStart
-        elif text[i] in '\t ':
-            modColNum -= 1
+                replaceText = subs
+        # Translate the dollar sign marker in the replacement text to an offset
+        # and remove it from the text
+        astMarker = replaceText.find("$")
+        if astMarker == -1:
+            astMarker = 0
+        elif astMarker == len(replaceText) - 1:
+            replaceText = replaceText[:-1]
         else:
-            return modLineNum, modColNum
-    return 0, 0
+            replaceText = replaceText[:astMarker] + replaceText[astMarker + 1:]
+        # Associate the line and column of the text that will generate the AST with the
+        # macro data we want to attach to it
+        adjLine, adjCol = countLinesAndCols(replaceText, astMarker, modLineNum, modColNum)
+        annotations.indexByStartPos(adjLine, adjCol, (macroName, macroArgs, iconFn))
+        # AST nodes with arguments on the left report line and column of their leftmost
+        # argument (not of their own text), which is not useful for corresponding them
+        # with the text that generated them.  For binary operations and assignments
+        # (and text that looks like one of these, but we can't tell without parsing)
+        # record, also, the rightmost position of their left argument
+        if astMarker >= len(replaceText):
+            # Marked AST is after macro
+            isLeftArgOp = self.leftArgOpRe.match(text, macroEndIdx)
+        else:
+            # Marked AST is within macro
+            isLeftArgOp = self.leftArgOpRe.match(replaceText, astMarker)
+        if isLeftArgOp:
+            # Look backward from op through the expanded macro text to find the last
+            # non-whitespace character
+            adjLine, adjCol = self._leftArgLineCol(adjLine, adjCol, replaceText,
+                astMarker)
+            # If non-white text was not found within the macro replacement text, search
+            # before the macro
+            if adjLine == -1:
+                adjLine, adjCol = self._leftArgLineCol(modLineNum, modColNum, origText,
+                    macroStartIdx)
+            annotations.indexByLeftArgEnd(adjLine, adjCol, (macroName, macroArgs, iconFn))
+        return replaceText
 
-def parseText(text, fileName="Pasted Text"):
-    """Parse save-file format (from clipboard or file) and return tuples pairing a window
-    position with a list of AST nodes to form a sequence.  If the position is None,
-    the segment should be attached to the window module sequence point."""
-    # Expand macros
-    expandedText, annotations, lineNumTranslate = expandMacros(text)
-    if expandedText is None:
+    @staticmethod
+    def _leftArgLineCol(modLineNum, modColNum, text, idx):
+        """Binary operators and assignments, unfortunately, do not encode the line and
+        column of the operator, but of the entire expression.  The code here, marches
+        backward from the index where the operator starts (idx) to find the first
+        non-white, decrementing modLineNum and modColNum per corresponding newlines and
+        whitespace characters found in the string (text).  If no whitespace is found,
+        returns -1 for both line and column.  The calling code will index the macro data
+        by for the AST using the returned line and column, which will correspond to the
+        rightmost character of its left argument."""
+        for i in range(idx-1, -1, -1):
+            if text[i] == '\n':
+                modLineNum -= 1
+                for pl in range(i-1, -1, -1):
+                    if text[pl] == '\n':
+                        prevLineStart = pl + 1
+                        break
+                else:
+                    prevLineStart = 0
+                modColNum = i - prevLineStart
+            elif text[i] in '\t ':
+                modColNum -= 1
+            else:
+                return modLineNum, modColNum
+        return -1, -1
+
+    @staticmethod
+    def _parseMacro(macroText):
+        """Split a macro into name and argument components and check for legal name"""
+        if macroText[0] == '@':
+            # Segment position macro
+            return '@', macroText[1:]
+        if macroText[0] == ':':
+            # Annotation-only for built-in Python syntax
+            return "", macroText[1:]
+        # Split name from arguments at :
+        for i, c in enumerate(macroText):
+            if c == ":":
+                return macroText[:i], macroText[i+1:]
+            if not c.isalnum() and c!= '_':
+                return None, None
+        # No arguments found
+        return macroText, None
+
+class AnnotationList:
+    """Associate macros with the ast nodes they generated."""
+    def __init__(self):
+        self.byStartPos = {}
+        self.byLeftArgEnd = {}
+
+    def indexByStartPos(self, line, col, annotation):
+        self.byStartPos[(line << 16) + col] = annotation
+
+    def indexByLeftArgEnd(self, line, col, annotation):
+        self.byLeftArgEnd[(line << 16) + col] = annotation
+
+    def get(self, node):
+        leftNode = None
+        nodeClass = node.__class__
+        if nodeClass is ast.Expr:
+            return None  # Expr nodes have the same offset as their content
+        if nodeClass in (ast.BinOp, ast.Compare):
+            leftNode = node.left
+        elif nodeClass is ast.Assign:
+            leftNode = node.targets[-1]
+        elif nodeClass in (ast.AugAssign, ast.AnnAssign):
+            leftNode = node.target
+        elif nodeClass is ast.Call:
+            leftNode = node.func
+        elif nodeClass in (ast.Attribute, ast.Subscript):
+            leftNode = node.value
+        elif nodeClass is ast.IfExp:
+            leftNode = node.body
+        if leftNode:
+            if hasattr(leftNode, 'end_lineno') and hasattr(leftNode, 'end_col_offset'):
+                line = leftNode.end_lineno
+                col = leftNode.end_col_offset
+                return self.byLeftArgEnd.get((line << 16) + col)
+        else:
+            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
+                return self.byStartPos.get((node.lineno << 16) + node.col_offset)
         return None
+
+    def dump(self):
+        print("annotations byStartPos")
+        for key, val in self.byStartPos.items():
+            print("   ", key >> 16, key & 0xffff, repr(val))
+        print("annotations byLeftArgEnd")
+        for key, val in self.byLeftArgEnd.items():
+            print("   ", key >> 16, key & 0xffff, repr(val))
+
+def parseText(macroParser, text, fileName="Pasted Text"):
+    """Parse save-file format (from clipboard or file) and return
+        1) A list of tuples pairing a window position with a list of AST nodes to form a
+           sequence.  If the position is None, the segment should be attached to the
+           window module sequence point.
+        2) An object holding per-AST-node data from the macros that were processed during
+           parsing.  The object provides a .get call to return the associated data given
+           an an AST node."""
+    # Expand macros
+    expandedText, annotations, lineNumTranslate = macroParser.expandMacros(text)
+    if expandedText is None:
+        return None, None
     print('expanded Text:\n%s' % expandedText)
     print('lineNumTranslate', lineNumTranslate)
-    print('annotations', repr(annotations))
+    annotations.dump()
     # Parse expanded text
     try:
         modAst = ast.parse(expandedText, fileName)
     except SyntaxError as excep:
         syntaxErrDialog(excep, lineNumTranslate, text)
-        return None
+        return None, None
     except Exception as excep:
         parseFailDialog(excep)
-        return None
+        return None, None
     if not isinstance(modAst, ast.Module) or len(modAst.body) == 0:
         print("Unexpected AST returned from ast.parse")
-        return None
-    # Add annotations to AST nodes
-    notDone = set(annotations.keys())  # Temporary for testing
-    for node in ast.walk(modAst):
-        if node.__class__ in annotatedAstTypes:
-            if node.__class__ is ast.BinOp:
-                line = node.left.end_lineno
-                col = node.left.end_col_offset
-                key = (node.__class__, line, col)
-            else:
-                key = (node.__class__, node.lineno, node.col_offset)
-            macro = annotations.get(key)
-            if macro is not None:
-                node.annotation = macro
-                notDone.remove(key)
-                print('annotated node %s with %s' % (node.__class__.__name__, macro))
-    if len(notDone) != 0:
-        print('Failed to find annotations:', notDone)
+        return None, None
     # Split the parse results in to separately positioned segments
     currentSegment = []
     segments = [(None, currentSegment)]
     for node in modAst.body:
-        if node.__class__ is ast.Pass:
-            if hasattr(node, 'annotation') and node.annotation[:5] in ("$pos+", "$pos-"):
-                currentSegment = []
-                segments.append((_parsePosMacro(node.annotation), currentSegment))
+        ann = annotations.get(node)
+        if ann is not None and ann[0] == "@":
+            currentSegment = []
+            segments.append((_parsePosMacro(ann[1]), currentSegment))
         else:
             currentSegment.append(node)
-    return segments
+    return segments, annotations
 
-def _parsePosMacro(macroText):
-    match = posMacroPattern.match(macroText)
+def _parsePosMacro(macroArgs):
+    match = posMacroPattern.match(macroArgs)
     if match is None:
-        print("Internal error in macro parsing")
+        print("Bad format for @ (segment position) macro")
         return 0, 0
     x = int(match.group(1))
     y = int(match.group(3))
     return x,y
 
-def loadFile(fileName):
+def loadFile(macroParser, fileName):
     with open(fileName, "r") as f:
-        return parseText(f.read(), fileName)
+        return parseText(macroParser, f.read(), fileName)
 
 def syntaxErrDialog(excep, lineNumTranslate, originalText):
     caretLine = " " * (excep.offset-1) + "^"
@@ -264,23 +363,56 @@ def numberedLine(text, lineNum):
         return text[startIdx:]
     return text[startIdx:endIdx]
 
-addMacro("\\$\\[[hv]\\$", "[", ast.List)
-addMacro("\\$\\+[hv]\\$", "+", ast.BinOp)
-addMacro("\\$l1\\nl2\\$", "pass", ast.Pass)
-text="""$pos-1+34$
-$[v$a, b, c]
-$pos+2+34$
-for i in range(3):
-    print(i $+v$ 1)
-    $l1
+def countLinesAndCols(text, endPos, startLine, startCol):
+    line = startLine
+    col = startCol
+    for i, c in enumerate(text):
+        if i >= endPos:
+            return line, col
+        if c == '\n':
+            col = 0
+            line += 1
+        else:
+            col += 1
+    return line, col
+
+macroParser = MacroParser()
+macroParser.addMacro("l1", "", countLinesAndCols)
+macroParser.addMacro("testSubs", '"testing substitution"', None)
+macroParser.addMacro("testDollar", 'nert.asdf$.wang.thing(wang)')
+macroParser.addMacro("testDollarEnd", "3+$")
+macroParser.addMacro("if", "if a == $2:\n        pass")
+text="""$@-1+34$
+$:v$[a, b, c]
+$@+2+34$
+$:for$for i in range(3):
+    print(i $:v$+ 1 $:h$* $testDollarEnd$42)
+    $testSubs$
+    $if:macroifconst$
+    print(a$:subscript$[1], $:kwd$end=2)
+    a = $:gencomp$(x for x in range(3)), $:dict${a:1, b:2}
+    a $:augassign$+= i $:inline if$if i $:is$is 0 else $:unary$-i
+    $testDollar$
+    $:if$if i $:compare$== 1:
+        pass
+    $:elif$elif i==2:
+        pass
+    $:else$else:
+        pass
+    $l1:
 l2$
-x
 """
 print('original text:\n%s\n' % text)
-segments = parseText(text, 'nurdle.py')
+segments, annotations = parseText(macroParser, text, 'nurdle.py')
+
 if segments is not None:
     for segment in segments:
         pos, stmtList = segment
         print(repr(pos))
         for stmt in stmtList:
+            for node in ast.walk(stmt):
+                ann = annotations.get(node)
+                if ann is not None:
+                    print('annotated node %s with %s' % (node.__class__.__name__,
+                        repr(ann)))
             astpretty.pprint(stmt)
