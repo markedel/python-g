@@ -32,7 +32,8 @@ class MacroParser:
         should place a '$' character before the item to be marked.  The '$' will be
         removed in the substitution process, and the macro data will be associated
         with the python code that followed it in the inserted text.  iconCreateFn
-        should be a function with parameters for: macroName, macroArgs, astNode, window
+        should be a function with parameters for astNode and window.  Macro name and
+        macro arguments are attached to astNode as properties (macroName, macroArgs)
         (see ... for details)"""
 
         self.macroList[name] = subs, iconCreateFn
@@ -195,7 +196,8 @@ class MacroParser:
 
     @staticmethod
     def _parseMacro(macroText):
-        """Split a macro into name and argument components and check for legal name"""
+        """Split a macro into name and argument components and check for legal name.
+        macroName returns None on error, and an empty string for legal but unnamed."""
         if macroText[0] == '@':
             # Segment position macro
             return '@', macroText[1:]
@@ -206,7 +208,7 @@ class MacroParser:
         for i, c in enumerate(macroText):
             if c == ":":
                 return macroText[:i], macroText[i+1:]
-            if not c.isalnum() and c!= '_':
+            if not c.isalnum() and c != '_':
                 return None, None
         # No arguments found
         return macroText, None
@@ -228,6 +230,8 @@ class AnnotationList:
         nodeClass = node.__class__
         if nodeClass is ast.Expr:
             return None  # Expr nodes have the same offset as their content
+        if nodeClass is ast.GeneratorExp:
+            return None  # Comprehensions have the same offset as the list or tuple
         if nodeClass in (ast.BinOp, ast.Compare):
             leftNode = node.left
         elif nodeClass is ast.Assign:
@@ -259,17 +263,14 @@ class AnnotationList:
             print("   ", key >> 16, key & 0xffff, repr(val))
 
 def parseText(macroParser, text, fileName="Pasted Text"):
-    """Parse save-file format (from clipboard or file) and return
-        1) A list of tuples pairing a window position with a list of AST nodes to form a
-           sequence.  If the position is None, the segment should be attached to the
-           window module sequence point.
-        2) An object holding per-AST-node data from the macros that were processed during
-           parsing.  The object provides a .get call to return the associated data given
-           an an AST node."""
+    """Parse save-file format (from clipboard or file) and return a list of tuples
+    pairing a window position with a list of AST nodes to form a sequence.  If the
+    position is None, the segment should be attached to the window module sequence point.
+    On parse failure, posts up a dialog describing the failure and returns None."""
     # Expand macros
     expandedText, annotations, lineNumTranslate = macroParser.expandMacros(text)
     if expandedText is None:
-        return None, None
+        return None
     print('expanded Text:\n%s' % expandedText)
     print('lineNumTranslate', lineNumTranslate)
     annotations.dump()
@@ -278,13 +279,24 @@ def parseText(macroParser, text, fileName="Pasted Text"):
         modAst = ast.parse(expandedText, fileName)
     except SyntaxError as excep:
         syntaxErrDialog(excep, lineNumTranslate, text)
-        return None, None
+        return None
     except Exception as excep:
         parseFailDialog(excep)
-        return None, None
+        return None
     if not isinstance(modAst, ast.Module) or len(modAst.body) == 0:
         print("Unexpected AST returned from ast.parse")
-        return None, None
+        return None
+    # Annotate the nodes in the tree per the annotations list
+    for node in ast.walk(modAst):
+        ann = annotations.get(node)
+        if ann is not None:
+            macroName, macroArgs, iconCreateFn = ann
+            if macroName is not None and macroName != "":
+                node.macroName = macroName
+            if macroArgs is not None:
+                node.macroArgs = macroArgs
+            if iconCreateFn is not None:
+                node.iconCreationFunction = iconCreateFn
     # Split the parse results in to separately positioned segments
     currentSegment = []
     segments = [(None, currentSegment)]
@@ -295,7 +307,7 @@ def parseText(macroParser, text, fileName="Pasted Text"):
             segments.append((_parsePosMacro(ann[1]), currentSegment))
         else:
             currentSegment.append(node)
-    return segments, annotations
+    return segments
 
 def _parsePosMacro(macroArgs):
     match = posMacroPattern.match(macroArgs)
@@ -378,7 +390,7 @@ def countLinesAndCols(text, endPos, startLine, startCol):
 
 macroParser = MacroParser()
 macroParser.addMacro("l1", "", countLinesAndCols)
-macroParser.addMacro("testSubs", '"testing substitution"', None)
+macroParser.addMacro("testSubs", '"testing substitution"', numberedLine)
 macroParser.addMacro("testDollar", 'nert.asdf$.wang.thing(wang)')
 macroParser.addMacro("testDollarEnd", "3+$")
 macroParser.addMacro("if", "if a == $2:\n        pass")
@@ -400,10 +412,10 @@ $:for$for i in range(3):
     $:else$else:
         pass
     $l1:
-l2$
+l2$pass
 """
 print('original text:\n%s\n' % text)
-segments, annotations = parseText(macroParser, text, 'nurdle.py')
+segments = parseText(macroParser, text, 'nurdle.py')
 
 if segments is not None:
     for segment in segments:
@@ -411,8 +423,14 @@ if segments is not None:
         print(repr(pos))
         for stmt in stmtList:
             for node in ast.walk(stmt):
-                ann = annotations.get(node)
-                if ann is not None:
-                    print('annotated node %s with %s' % (node.__class__.__name__,
-                        repr(ann)))
+                macroName = macroArgs = iconCreateFn = None
+                if hasattr(node, 'macroName'):
+                    print('annotated node %s with macro name %s' %
+                        (node.__class__.__name__, node.macroName))
+                if hasattr(node, 'macroArgs'):
+                    print('annotated node %s with macro args %s' %
+                          (node.__class__.__name__, node.macroArgs))
+                if hasattr(node, 'iconCreationFunction'):
+                    print('annotated node %s with icon creation function %s' %
+                          (node.__class__.__name__, repr(node.iconCreationFunction)))
             astpretty.pprint(stmt)
