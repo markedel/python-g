@@ -205,6 +205,11 @@ emptyImage = Image.new('RGBA', (0, 0))
 
 renderCache = {}
 
+# Icon to insert when createIconFromAst fails (set by registerAstDecodeFallback())
+astDecodeFallback = None
+# Table mapping Python ASTs to functions registered to create icons from them.
+astCreationFunctions = {}
+
 def iconsFromClipboardString(clipString, window, offset):
     try:
         clipData = ast.literal_eval(clipString)
@@ -1311,3 +1316,25 @@ def createAstDataRef(ic, value=None):
         col_offset=0))
     return ast.Subscript(value=nameAst, slice=iconIdAst, ctx=ast.Load(), lineno=ic.id,
         col_offset=0)
+
+def registerAstDecodeFallback(fn):
+    """Register a function to create a placeholder icon when createFromAst fails"""
+    global astDecodeFallback
+    astDecodeFallback = fn
+
+def registerIconCreateFn(astNodeClass, createFn):
+    """Register a function for creating icons of a given AST node type"""
+    astCreationFunctions[astNodeClass] = createFn
+
+def createFromAst(astNode, window):
+    """Given an AST Node, create icons from it."""
+    # If the ast has property iconCreationFunction, a user-defined macro has attached
+    # its own function for creating an icon.  Pass the node to that function instead of
+    # the normal one for creating icons for the given AST type
+    if hasattr(astNode, 'iconCreationFunction'):
+        return astNode.iconCreationFunction(astNode, window)
+    # Look up the creation function for the given AST type, call it, and return the result
+    creationFn = astCreationFunctions.get(astNode.__class__)
+    if creationFn is None:
+        return astDecodeFallback(astNode, window)
+    return creationFn(astNode, window)

@@ -230,8 +230,6 @@ class AnnotationList:
         nodeClass = node.__class__
         if nodeClass is ast.Expr:
             return None  # Expr nodes have the same offset as their content
-        if nodeClass is ast.GeneratorExp:
-            return None  # Comprehensions have the same offset as the list or tuple
         if nodeClass in (ast.BinOp, ast.Compare):
             leftNode = node.left
         elif nodeClass is ast.Assign:

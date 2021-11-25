@@ -442,3 +442,26 @@ class SubscriptIcon(icon.Icon):
         else:
             win.cursor.setToEntryIcon()
             win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+
+def createSubscriptIconFromAst(astNode, window):
+    if astNode.slice.__class__ == ast.Index:
+        slice = [astNode.slice.value]
+    elif astNode.slice.__class__ == ast.Slice:
+        slice = [astNode.slice.lower, astNode.slice.upper, astNode.slice.step]
+    elif astNode.slice.__class__ == ast.ExtSlice:
+        return nameicons.TextIcon("**Extended slices not supported***")
+    else:
+        return nameicons.TextIcon("**Unexpected slice type not supported***")
+    nSlices = len(slice)
+    subscriptIcon = SubscriptIcon(nSlices, window)
+    if slice[0] is not None:
+        subscriptIcon.replaceChild(icon.createFromAst(slice[0], window), "indexIcon")
+    if nSlices >= 2 and slice[1] is not None:
+        subscriptIcon.replaceChild(icon.createFromAst(slice[1], window), "upperIcon")
+    if nSlices >= 3 and slice[2] is not None:
+        subscriptIcon.replaceChild(icon.createFromAst(slice[2], window), "stepIcon")
+    topIcon = icon.createFromAst(astNode.value, window)
+    parentIcon = icon.findLastAttrIcon(topIcon)
+    parentIcon.replaceChild(subscriptIcon, "attrIcon")
+    return topIcon
+icon.registerIconCreateFn(ast.Subscript, createSubscriptIconFromAst)

@@ -114,6 +114,17 @@ binOpAsts = {'+':ast.Add, '-':ast.Sub, '*':ast.Mult, '/':ast.Div, '//':ast.Floor
 compareAsts = {'is':ast.Is, 'is not':ast.IsNot, '<':ast.Lt, '<=':ast.LtE, '>':ast.Gt,
  '>=':ast.GtE, '==':ast.Eq, '!=':ast.NotEq}
 
+binOps = {ast.Add:'+', ast.Sub:'-', ast.Mult:'*', ast.Div:'/', ast.FloorDiv:'//',
+ ast.Mod:'%', ast.Pow:'**', ast.LShift:'<<', ast.RShift:'>>', ast.BitOr:'|',
+ ast.BitXor:'^', ast.BitAnd:'&', ast.MatMult:'@'}
+
+unaryOps = {ast.UAdd:'+', ast.USub:'-', ast.Not:'not', ast.Invert:'~'}
+
+boolOps = {ast.And:'and', ast.Or:'or'}
+
+compareOps = {ast.Eq:'==', ast.NotEq:'!=', ast.Lt:'<', ast.LtE:'<=', ast.Gt:'>',
+ ast.GtE:'>=', ast.Is:'is', ast.IsNot:'is not', ast.In:'in', ast.NotIn:'not in'}
+
 class UnaryOpIcon(icon.Icon):
     def __init__(self, op, window, location=None):
         icon.Icon.__init__(self, window)
@@ -857,3 +868,41 @@ def backspaceBinOpIcon(ic, site, evt):
         ic.replaceChild(None, 'rightArg')
     win.cursor.setToEntryIcon()
     win.redisplayChangedEntryIcon(evt, redrawRect)
+
+def createUnaryOpIconFromAst(astNode, window):
+    topIcon = UnaryOpIcon(unaryOps[astNode.op.__class__], window)
+    topIcon.replaceChild(icon.createFromAst(astNode.operand, window), "argIcon")
+    return topIcon
+icon.registerIconCreateFn(ast.UnaryOp, createUnaryOpIconFromAst)
+
+def createBinOpIconFromAst(astNode, window):
+    if astNode.op.__class__ in (ast.Div, ast.FloorDiv):
+        topIcon = DivideIcon(astNode.op.__class__ is ast.FloorDiv, window)
+        topIcon.replaceChild(icon.createFromAst(astNode.left, window), "topArg")
+        topIcon.replaceChild(icon.createFromAst(astNode.right, window), "bottomArg")
+        return topIcon
+    topIcon = BinOpIcon(binOps[astNode.op.__class__], window)
+    topIcon.replaceChild(icon.createFromAst(astNode.left, window), "leftArg")
+    topIcon.replaceChild(icon.createFromAst(astNode.right, window), "rightArg")
+    return topIcon
+icon.registerIconCreateFn(ast.BinOp, createBinOpIconFromAst)
+
+def createBoolOpIconFromAst(astNode, window):
+    topIcon = BinOpIcon(boolOps[astNode.op.__class__], window)
+    topIcon.replaceChild(icon.createFromAst(astNode.values[0], window), "leftArg")
+    topIcon.replaceChild(icon.createFromAst(astNode.values[1], window), "rightArg")
+    for value in astNode.values[2:]:
+        newTopIcon = BinOpIcon(boolOps[astNode.op.__class__], window)
+        newTopIcon.replaceChild(topIcon, "leftArg")
+        newTopIcon.replaceChild(icon.createFromAst(value, window), "rightArg")
+        topIcon = newTopIcon
+    return topIcon
+icon.registerIconCreateFn(ast.BoolOp, createBoolOpIconFromAst)
+
+def createCompareIconFromAst(astNode, window):
+    # Note: this does not yet handle multi-comparison types
+    topIcon = BinOpIcon(compareOps[astNode.ops[0].__class__], window)
+    topIcon.replaceChild(icon.createFromAst(astNode.left, window), "leftArg")
+    topIcon.replaceChild(icon.createFromAst(astNode.comparators[0], window), "rightArg")
+    return topIcon
+icon.registerIconCreateFn(ast.Compare, createCompareIconFromAst)

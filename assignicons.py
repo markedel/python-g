@@ -603,3 +603,31 @@ class AugmentedAssignIcon(icon.Icon):
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
             win.undo.addBoundary()
+
+def createAssignIconFromAst(astNode, window):
+    topIcon = AssignIcon(len(astNode.targets), window)
+    for i, tgt in enumerate(astNode.targets):
+        if isinstance(tgt, ast.Tuple):
+            tgtIcons = [icon.createFromAst(t, window) for t in tgt.elts]
+        else:
+            tgtIcons = [icon.createFromAst(tgt, window)]
+        topIcon.insertChildren(tgtIcons, "targets%d" % i, 0)
+    if isinstance(astNode.value, ast.Tuple):
+        valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
+        topIcon.insertChildren(valueIcons, "values", 0)
+    else:
+        topIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
+    return topIcon
+icon.registerIconCreateFn(ast.Assign, createAssignIconFromAst)
+
+def createAugmentedAssignIconFromAst(astNode, window):
+    assignIcon = AugmentedAssignIcon(opicons.binOps[astNode.op.__class__], window)
+    targetIcon = icon.createFromAst(astNode.target, window)
+    assignIcon.replaceChild(targetIcon, "targetIcon")
+    if isinstance(astNode.value, ast.Tuple):
+        valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
+        assignIcon.insertChildren(valueIcons, "values", 0)
+    else:
+        assignIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
+    return assignIcon
+icon.registerIconCreateFn(ast.AugAssign, createAssignIconFromAst)

@@ -17,7 +17,6 @@ import parenicon
 import undo
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
-import compile_eval
 import tkinter.messagebox
 
 WINDOW_BG_COLOR = (255, 255, 255)
@@ -899,7 +898,7 @@ class Window:
                 text = None
             # Try to parse the string as Python code
             if text is not None:
-                pastedIcons = compile_eval.parsePasted(text, self, (0, 0))
+                pastedIcons = parsePasted(text, self)
                 # Not usable python code, put in to single icon as string
                 if pastedIcons is None:
                     pastedIcons = [nameicons.TextIcon(repr(text), self, (0, 0))]
@@ -1764,7 +1763,7 @@ class Window:
         elif isinstance(obj, (int, float)):
             ic = nameicons.NumericIcon(obj, window=self)
         else:
-            ic = compile_eval.parsePasted(repr(obj), self, (0, 0))[0]
+            ic = parsePasted(repr(obj), self)[0]
         return ic
 
     def _handleExecErr(self, excep, executedIcon=None):
@@ -2921,6 +2920,20 @@ def restoreSeries(series):
         newTuple.select(icons[0].isSelected())
         newIcons.append(newTuple)
     return newIcons
+
+def parsePasted(text, window):
+    try:
+        modAst = ast.parse(text, "Pasted text")
+    except:
+        return None
+    if not isinstance(modAst, ast.Module):
+        return None
+    if len(modAst.body) == 0:
+        return None
+    icons = blockicons.createIconsFromBodyAst(modAst.body, window)
+    if len(icons) == 0:
+        return None
+    return icons
 
 if __name__ == '__main__':
     appData = App()

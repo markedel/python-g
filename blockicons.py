@@ -12,6 +12,9 @@ import infixicon
 # Number of pixels to the left of sequence site to start else and elif icons
 ELSE_DEDENT = 21
 
+blockStmts = {ast.If, ast.While, ast.For, ast.Try, ast.ExceptHandler, ast.With,
+ ast.FunctionDef, ast.ClassDef, ast.AsyncFor, ast.AsyncWith, ast.AsyncFunctionDef}
+
 defLParenImage = comn.asciiToImage((
  "oooooooo",
  "o      o",
@@ -1021,3 +1024,185 @@ def elseElifBlockIcons(ic):
             break
         seqIcons += list(seqIcon.traverse())
     return seqIcons
+
+def createWhileIconFromAst(astNode, window):
+    topIcon = WhileIcon(window=window)
+    topIcon.replaceChild(icon.createFromAst(stmt.test, window), 'condIcon')
+    return topIcon
+icon.registerIconCreateFn(ast.While, createWhileIconFromAst)
+
+def createForIconFromAst(astNode, window):
+    isAsync = astNode.__class__ is ast.AsyncFor
+    topIcon = ForIcon(isAsync, window=window)
+    if isinstance(astNode.target, ast.Tuple):
+        tgtIcons = [icon.createFromAst(t, window) for t in astNode.target.elts]
+        topIcon.insertChildren(tgtIcons, "targets", 0)
+    else:
+        topIcon.replaceChild(icon.createFromAst(astNode.target, window), "targets_0")
+    if isinstance(astNode.iter, ast.Tuple):
+        iterIcons = [icon.createFromAst(i, window) for i in astNode.iter]
+        topIcon.insertChildren(iterIcons, "iterIcons", 0)
+    else:
+        topIcon.replaceChild(icon.createFromAst(astNode.iter, window), "iterIcons_0")
+    return topIcon
+icon.registerIconCreateFn(ast.For, createForIconFromAst)
+icon.registerIconCreateFn(ast.AsyncFor, createForIconFromAst)
+
+def createIfIconFromAst(astNode, window):
+    topIcon = IfIcon(window=window)
+    topIcon.replaceChild(icon.createFromAst(astNode.test, window), 'condIcon')
+    return topIcon
+icon.registerIconCreateFn(ast.If, createIfIconFromAst)
+
+def createDefIconFromAst(astNode, window):
+    isAsync = astNode.__class__ is ast.AsyncFunctionDef
+    if hasattr(astNode.args, 'posonlyargs'):
+        args = [arg.arg for arg in astNode.args.posonlyargs]
+    else:
+        args = []
+    nPosOnly = len(args)
+    defIcon = DefIcon(isAsync, window=window)
+    nameIcon = nameicons.IdentifierIcon(astNode.name, window)
+    defIcon.replaceChild(nameIcon, 'nameIcon')
+    defaults = [icon.createFromAst(e, window) for e in astNode.args.defaults]
+    if len(defaults) < len(astNode.args.args):
+        # Weird rule in defaults list for ast that defaults can be shorter than args
+        defaults = ([None] * (len(astNode.args.args) - len(defaults))) + defaults
+    numArgs = 0
+    for i, arg in enumerate(arg.arg for arg in astNode.args.args):
+        default = defaults[i]
+        argNameIcon = nameicons.IdentifierIcon(arg, window)
+        if nPosOnly != 0 and numArgs == nPosOnly:
+            posOnlyMarker = PosOnlyMarkerIcon(window=window)
+            defIcon.insertChild(posOnlyMarker, 'argIcons', numArgs)
+            numArgs += 1
+        if default is None:
+            defIcon.insertChild(argNameIcon, 'argIcons', numArgs)
+        else:
+            defaultIcon = default
+            argAssignIcon = listicons.ArgAssignIcon(window)
+            argAssignIcon.replaceChild(argNameIcon, 'leftArg')
+            argAssignIcon.replaceChild(defaultIcon, 'rightArg')
+            defIcon.insertChild(argAssignIcon, "argIcons", numArgs)
+        numArgs += 1
+    varArg = astNode.args.vararg.arg if astNode.args.vararg is not None else None
+    if varArg is not None:
+        argNameIcon = nameicons.IdentifierIcon(varArg, window)
+        starIcon = listicons.StarIcon(window)
+        starIcon.replaceChild(argNameIcon, 'argIcon')
+        defIcon.insertChild(starIcon, 'argIcons', numArgs)
+        numArgs += 1
+    kwOnlyArgs = [arg.arg for arg in astNode.args.kwonlyargs]
+    kwDefaults = [icon.createFromAst(e, window) for e in astNode.args.kw_defaults]
+    if len(kwOnlyArgs) > 0 and varArg is None:
+        defIcon.insertChild(listicons.StarIcon(window), 'argIcons', numArgs)
+        numArgs += 1
+    for i, arg in enumerate(kwOnlyArgs):
+        argNameIcon = nameicons.IdentifierIcon(arg, window)
+        if kwDefaults[i] is None:
+            defIcon.insertChild(argNameIcon, 'argIcons', i)
+        else:
+            defaultIcon = kwDefaults[i]
+            argAssignIcon = listicons.ArgAssignIcon(window)
+            argAssignIcon.replaceChild(argNameIcon, 'leftArg')
+            argAssignIcon.replaceChild(defaultIcon, 'rightArg')
+            defIcon.insertChild(argAssignIcon, "argIcons", numArgs + i)
+    numArgs += len(kwOnlyArgs)
+    if astNode.args.kwarg is not None:
+        argNameIcon = nameicons.IdentifierIcon(astNode.args.kwarg.arg, window)
+        starStarIcon = listicons.StarStarIcon(window)
+        starStarIcon.replaceChild(argNameIcon, 'argIcon')
+        defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
+    return defIcon
+icon.registerIconCreateFn(ast.FunctionDef, createDefIconFromAst)
+icon.registerIconCreateFn(ast.AsyncFunctionDef, createDefIconFromAst)
+
+def createClassDefIconFromAst(astNode, window):
+    hasArgs = len(astNode.bases) + len(astNode.keywords) > 0
+    topIcon = ClassDefIcon(hasArgs, window=window)
+    nameIcon = nameicons.IdentifierIcon(astNode.name, window)
+    topIcon.replaceChild(nameIcon, 'nameIcon')
+    bases = [icon.createFromAst(base, window) for base in astNode.bases]
+    topIcon.insertChildren(bases, "argIcons", 0)
+    kwdIcons = []
+    for idx, kwd in enumerate(astNode.keywords):
+        argAssignIcon = listicons.ArgAssignIcon(window)
+        kwdIcon = nameicons.IdentifierIcon(kwd, window)
+        valueIcon = icon.createFromAst(kwd.value, window)
+        argAssignIcon.replaceChild(kwdIcon, 'leftArg')
+        argAssignIcon.replaceChild(valueIcon, 'rightArg')
+        kwdIcons.append(argAssignIcon)
+    topIcon.insertChildren(kwdIcons, "argIcons", len(bases))
+    return topIcon
+icon.registerIconCreateFn(ast.ClassDef, createClassDefIconFromAst)
+
+def createWithIconFromAst(astNode, window):
+    isAsync = isinstance(astNode, ast.AsyncWith)
+    topIcon = WithIcon(isAsync, window=window)
+    for idx, item in enumerate(astNode.items):
+        contextIcon = icon.createFromAst(item.context_expr, window)
+        if item.optional_vars is None:
+            topIcon.insertChild(contextIcon, "values", idx)
+        else:
+            asIcon = WithAsIcon(window)
+            asIcon.replaceChild(contextIcon, "leftArg")
+            asIcon.replaceChild(icon.createFromAst(item.optional_vars, window),
+                "rightArg")
+            topIcon.insertChild(asIcon, "values", idx)
+    return topIcon
+icon.registerIconCreateFn(ast.With, createWithIconFromAst)
+icon.registerIconCreateFn(ast.AsyncWith, createWithIconFromAst)
+
+def createIconsFromBodyAst(bodyAst, window):
+    icons = []
+    seqStartIcon = None
+    for stmt in bodyAst:
+        if isinstance(stmt, ast.Expr):
+            stmtIcon = icon.createFromAst(stmt.value, window)
+            bodyIcons = None
+        elif stmt.__class__ in blockStmts:
+            stmtIcon = icon.createFromAst(stmt, window)
+            bodyIcons = createIconsFromBodyAst(stmt.body, window)
+            stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
+            while stmt.__class__ is ast.If and len(stmt.orelse) == 1 and \
+                    stmt.orelse[0].__class__ is ast.If:
+                # Process elif blocks.  The ast encodes these as a single if, nested
+                # in and else (nested as many levels deep as there are elif clauses).
+                elifIcon = ElifIcon(window)
+                condIcon = icon.createFromAst(stmt.orelse[0].test, window)
+                elifIcon.replaceChild(condIcon, 'condIcon')
+                elifBlockIcons = createIconsFromBodyAst(stmt.orelse[0].body, window)
+                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elifIcon, 'seqIn')
+                bodyIcons.append(elifIcon)
+                elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
+                bodyIcons += elifBlockIcons
+                stmtIcon.addElse(elifIcon)
+                stmt = stmt.orelse[0]
+            if stmt.__class__ in (ast.If, ast.For, ast.AsyncFor, ast.While) and \
+                    len(stmt.orelse) != 0:
+                # Process else block (note that after elif processing above, stmt may in
+                # some cases point to a nested statement being flattened out)
+                elseIcon = ElseIcon(window)
+                elseBlockIcons = createIconsFromBodyAst(stmt.orelse, window)
+                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elseIcon, 'seqIn')
+                bodyIcons.append(elseIcon)
+                elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
+                bodyIcons += elseBlockIcons
+                stmtIcon.addElse(elseIcon)
+            blockEnd = stmtIcon.blockEnd
+            bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
+            bodyIcons.append(blockEnd)
+        else:
+            stmtIcon = icon.createFromAst(stmt, window)
+            bodyIcons = None
+        if seqStartIcon is None:
+            seqStartIcon = stmtIcon
+        elif icons[-1].hasSite('seqOut') and stmtIcon.hasSite('seqIn'):
+            # Link the statement to the previous statement
+            icons[-1].sites.seqOut.attach(icons[-1], stmtIcon, 'seqIn')
+        else:
+            print('Cannot link icons (no sequence sites)')  # Shouldn't happen
+        icons.append(stmtIcon)
+        if bodyIcons is not None:
+            icons += bodyIcons
+    return icons

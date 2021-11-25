@@ -1817,3 +1817,109 @@ def composeAttrAstIf(ic, icAst, skipAttr):
     if skipAttr:
         return icAst
     return icon.composeAttrAst(ic, icAst)
+
+def createListIconFromAst(astNode, window):
+    topIcon = ListIcon(window)
+    childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
+    topIcon.insertChildren(childIcons, "argIcons", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.List, createListIconFromAst)
+
+def createTupleIconFromAst(astNode, window):
+    topIcon = TupleIcon(window)
+    childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
+    topIcon.insertChildren(childIcons, "argIcons", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Tuple, createTupleIconFromAst)
+
+def createDictIconFromAst(astNode, window):
+    topIcon = DictIcon(window)
+    argIcons = []
+    for i, key in enumerate(astNode.keys):
+        value = icon.createFromAst(astNode.values[i], window)
+        if key is None:
+            starStar = StarStarIcon(window)
+            starStar.replaceChild(value, "argIcon")
+            argIcons.append(starStar)
+        else:
+            dictElem = DictElemIcon(window)
+            dictElem.replaceChild(icon.createFromAst(key, window), "leftArg")
+            dictElem.replaceChild(value, "rightArg")
+            argIcons.append(dictElem)
+    topIcon.insertChildren(argIcons, "argIcons", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Dict, createDictIconFromAst)
+
+def createSetIconFromAst(astNode, window):
+    topIcon = DictIcon(window)
+    childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
+    topIcon.insertChildren(childIcons, "argIcons", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Set, createSetIconFromAst)
+
+def createCallIconFromAst(astNode, window):
+    callIcon = CallIcon(window)
+    argIcons = [icon.createFromAst(e, window) for e in astNode.args]
+    for key in astNode.keywords:
+        valueIcon = icon.createFromAst(key.value, window)
+        if key.arg is None:
+            starStarIcon = StarStarIcon(window)
+            starStarIcon.replaceChild(valueIcon, 'argIcon')
+            argIcons.append(starStarIcon)
+        else:
+            kwIcon = ArgAssignIcon(window)
+            kwIcon.replaceChild(nameicons.IdentifierIcon(key.arg, window), 'leftArg')
+            kwIcon.replaceChild(valueIcon, 'rightArg')
+            argIcons.append(kwIcon)
+    topIcon = icon.createFromAst(astNode.func, window)
+    parentIcon = icon.findLastAttrIcon(topIcon)
+    parentIcon.replaceChild(callIcon, "attrIcon")
+    callIcon.insertChildren(argIcons, "argIcons", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Call, createCallIconFromAst)
+
+def createComprehensionIconFromAst(astNode, window):
+    if astNode.__class__ is ast.DictComp:
+        tgt = astNode.value
+        key = astNode.key
+    else:
+        tgt = astNode.elt
+        key = None
+    cprhType = {ast.ListComp: ListIcon, ast.SetComp: DictIcon,
+        ast.GeneratorExp: TupleIcon, ast.DictComp: DictIcon}[astNode.__class__]
+    topIcon = cprhType(window=window)
+    if key is None:
+        topIcon.replaceChild(icon.createFromAst(tgt, window), 'argIcons_0')
+    else:
+        dictElem = DictElemIcon(window)
+        dictElem.replaceChild(icon.createFromAst(key, window), "leftArg")
+        dictElem.replaceChild(icon.createFromAst(tgt, window), "rightArg")
+        topIcon.replaceChild(dictElem, 'argIcons_0')
+    clauseIdx = 0
+    for gen in astNode.generators:
+        forIcon = CprhForIcon(gen.is_async, window)
+        if isinstance(gen.target, ast.Tuple):
+            tgtIcons = [icon.createFromAst(t, window) for t in gen.target.elts]
+            forIcon.insertChildren(tgtIcons, "targets", 0)
+        else:
+            forIcon.insertChild(icon.createFromAst(gen.target, window), "targets", 0)
+        forIcon.replaceChild(icon.createFromAst(gen.iter, window), 'iterIcon')
+        topIcon.insertChild(forIcon, "cprhIcons", clauseIdx)
+        clauseIdx += 1
+        for i in gen.ifs:
+            ifIcon = CprhIfIcon(window)
+            testIcon = icon.createFromAst(i, window)
+            ifIcon.replaceChild(testIcon, 'testIcon')
+            topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
+            clauseIdx += 1
+    return topIcon
+icon.registerIconCreateFn(ast.ListComp, createComprehensionIconFromAst)
+icon.registerIconCreateFn(ast.DictComp, createComprehensionIconFromAst)
+icon.registerIconCreateFn(ast.SetComp, createComprehensionIconFromAst)
+icon.registerIconCreateFn(ast.GeneratorExp, createComprehensionIconFromAst)
+
+def createStarIconFromAst(astNode, window):
+    topIcon = StarIcon(window)
+    topIcon.replaceChild(icon.createFromAst(astNode.value, window), "argIcon")
+    return topIcon
+icon.registerIconCreateFn(ast.Starred, createStarIconFromAst)

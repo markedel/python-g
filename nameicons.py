@@ -1,6 +1,7 @@
 # Copyright Mark Edel  All rights reserved
 from PIL import Image
 import ast
+import numbers
 import comn
 import iconlayout
 import iconsites
@@ -751,3 +752,116 @@ def determineCtx(ic):
     elif parentClass is DelIcon:
         return ast.Del()
     return ast.Load()
+
+def createReturnIconFromAst(astNode, window):
+    topIcon = ReturnIcon(window)
+    if astNode.value is None:
+        return topIcon
+    if isinstance(astNode.value, ast.Tuple):
+        valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
+        topIcon.insertChildren(valueIcons, "values", 0)
+    else:
+        topIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
+    return topIcon
+icon.registerIconCreateFn(ast.Return, createReturnIconFromAst)
+
+def createDeleteIconFromAst(astNode, window):
+    topIcon = DelIcon(window)
+    targets = [icon.createFromAst(t, window) for t in astNode.targets]
+    topIcon.insertChildren(targets, "values", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Delete, createDeleteIconFromAst)
+
+def createPassIconFromAst(astNode, window):
+    return PassIcon(window)
+icon.registerIconCreateFn(ast.Pass, createPassIconFromAst)
+
+def createContinueIconFromAst(astNode, window):
+    return ContinueIcon(window)
+icon.registerIconCreateFn(ast.Continue, createContinueIconFromAst)
+
+def createBreakIconFromAst(astNode, window):
+    return BreakIcon(window)
+icon.registerIconCreateFn(ast.Break, createBreakIconFromAst)
+
+def createGlobalIconFromAst(astNode, window):
+    topIcon = GlobalIcon(window)
+    nameIcons = [IdentifierIcon(name, window) for name in astNode.names]
+    topIcon.insertChildren(nameIcons, "values", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Global, createGlobalIconFromAst)
+
+def createNonlocalIconFromAst(astNode, window):
+    topIcon = NonlocalIcon(window)
+    nameIcons = [IdentifierIcon(name, window) for name in astNode.names]
+    topIcon.insertChildren(nameIcons, "values", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Nonlocal, createNonlocalIconFromAst)
+
+def createNumericIconFromAst(astNode, window):
+    return NumericIcon(astNode.n, window)
+icon.registerIconCreateFn(ast.Num, createNumericIconFromAst)
+
+def createNameConstantFromAst(astNode, window):
+    return NumericIcon(astNode.value, window)
+icon.registerIconCreateFn(ast.NameConstant, createNameConstantFromAst)
+
+def createStringIconFromAst(astNode, window):
+    return StringIcon(astNode.s, window)
+icon.registerIconCreateFn(ast.Str, createStringIconFromAst)
+
+def createConstIconFromAst(astNode, window):
+    if isinstance(astNode.value, numbers.Number) or astNode.value is None:
+        # Note that numbers.Number includes True and False
+        return NumericIcon(astNode.value, window)
+    elif isinstance(astNode.value, str) or isinstance(astNode.value, bytes):
+        return StringIcon(astNode.value, window)
+    if isinstance(astNode.value, type(...)):
+        return NumericIcon(astNode.value, window)
+    # Documentation threatens to return constant tuples and frozensets (which could
+    # get quite complex), but 3.8 seems to stick to strings and numbers
+    return IdentifierIcon("**Couldn't Parse Constant**", window)
+icon.registerIconCreateFn(ast.Constant, createConstIconFromAst)
+
+def createIdentifierIconFromAst(astNode, window):
+    return IdentifierIcon(astNode.id, window)
+icon.registerIconCreateFn(ast.Name, createIdentifierIconFromAst)
+
+def createAttrIconFromAst(astNode, window):
+    # Note that the icon hierarchy and the AST hierarchy differ with respect to
+    # attributes. ASTs put the attribute at the top, we put the root icon at the top.
+    attrIcon = AttrIcon(astNode.attr, window)
+    topIcon = icon.createFromAst(astNode.value, window)
+    parentIcon = icon.findLastAttrIcon(topIcon)
+    parentIcon.replaceChild(attrIcon, "attrIcon")
+    return topIcon
+icon.registerIconCreateFn(ast.Attribute, createAttrIconFromAst)
+
+def createYieldIconFromAst(astNode, window):
+    topIcon = YieldIcon(window)
+    if astNode.value is None:
+        return topIcon
+    if isinstance(astNode.value, ast.Tuple):
+        valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
+        topIcon.insertChildren(valueIcons, "values", 0)
+    else:
+        topIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
+    return topIcon
+icon.registerIconCreateFn(ast.Yield, createYieldIconFromAst)
+
+def createYieldFromIconFromAst(astNode, window):
+    topIcon = YieldFromIcon(window)
+    topIcon.replaceChild(icon.createFromAst(astNode.value, window), "argIcon")
+    return topIcon
+icon.registerIconCreateFn(ast.YieldFrom, createYieldFromIconFromAst)
+
+def createAwaitIconFromAst(astNode, window):
+    topIcon = AwaitIcon(window)
+    topIcon.replaceChild(icon.createFromAst(astNode.value, window), "argIcon")
+    return topIcon
+icon.registerIconCreateFn(ast.Await, createAwaitIconFromAst)
+
+def createParseFailIcon(astNode, window):
+    return IdentifierIcon("**Couldn't Parse AST node: %s**" % astNode.__class__.__name__,
+        window)
+icon.registerAstDecodeFallback(createParseFailIcon)
