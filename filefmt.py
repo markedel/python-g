@@ -2,11 +2,12 @@ import ast, astpretty
 import re
 import tkinter
 
-posMacroPattern = re.compile("((\\+|\\-)\d*)((\\+|\\-)\\d*)")
+posMacroPattern = re.compile("(([-+])\\d*)(([-+])\\d*)")
 
 class MacroParser:
-    macroPattern = re.compile("\\$[^\\$]+\\$")
-    leftArgOpRe = re.compile("\+|-|/|%|\\*|<|>|\\||\\^|&|is|in|and|or|if|=|!=|\\(|\\.|\\[")
+    macroPattern = re.compile("\\$[^$]+\\$")
+    leftArgOpRe = re.compile(
+        "\\+|-|/|%|\\*|<|>|\\||\\^|&|is|in|and|or|if|=|!=|\\(|\\.|\\[")
 
     def __init__(self):
         self.macroList = {}
@@ -151,7 +152,7 @@ class MacroParser:
         # record, also, the rightmost position of their left argument
         if astMarker >= len(replaceText):
             # Marked AST is after macro
-            isLeftArgOp = self.leftArgOpRe.match(text, macroEndIdx)
+            isLeftArgOp = self.leftArgOpRe.match(origText, macroEndIdx)
         else:
             # Marked AST is within macro
             isLeftArgOp = self.leftArgOpRe.match(replaceText, astMarker)
@@ -386,13 +387,14 @@ def countLinesAndCols(text, endPos, startLine, startCol):
             col += 1
     return line, col
 
-macroParser = MacroParser()
-macroParser.addMacro("l1", "", countLinesAndCols)
-macroParser.addMacro("testSubs", '"testing substitution"', numberedLine)
-macroParser.addMacro("testDollar", 'nert.asdf$.wang.thing(wang)')
-macroParser.addMacro("testDollarEnd", "3+$")
-macroParser.addMacro("if", "if a == $2:\n        pass")
-text="""$@-1+34$
+def _moduleTest():
+    macroParser = MacroParser()
+    macroParser.addMacro("l1", "", countLinesAndCols)
+    macroParser.addMacro("testSubs", '"testing substitution"', numberedLine)
+    macroParser.addMacro("testDollar", 'nert.asdf$.wang.thing(wang)')
+    macroParser.addMacro("testDollarEnd", "3+$")
+    macroParser.addMacro("if", "if a == $2:\n        pass")
+    text="""$@-1+34$
 $:v$[a, b, c]
 $@+2+34$
 $:for$for i in range(3):
@@ -412,23 +414,24 @@ $:for$for i in range(3):
     $l1:
 l2$pass
 """
-print('original text:\n%s\n' % text)
-segments = parseText(macroParser, text, 'nurdle.py')
+    print('original text:\n%s\n' % text)
+    segments = parseText(macroParser, text, 'nurdle.py')
 
-if segments is not None:
-    for segment in segments:
-        pos, stmtList = segment
-        print(repr(pos))
-        for stmt in stmtList:
-            for node in ast.walk(stmt):
-                macroName = macroArgs = iconCreateFn = None
-                if hasattr(node, 'macroName'):
-                    print('annotated node %s with macro name %s' %
-                        (node.__class__.__name__, node.macroName))
-                if hasattr(node, 'macroArgs'):
-                    print('annotated node %s with macro args %s' %
-                          (node.__class__.__name__, node.macroArgs))
-                if hasattr(node, 'iconCreationFunction'):
-                    print('annotated node %s with icon creation function %s' %
-                          (node.__class__.__name__, repr(node.iconCreationFunction)))
-            astpretty.pprint(stmt)
+    if segments is not None:
+        for segment in segments:
+            pos, stmtList = segment
+            print(repr(pos))
+            for stmt in stmtList:
+                for node in ast.walk(stmt):
+                    macroName = macroArgs = iconCreateFn = None
+                    if hasattr(node, 'macroName'):
+                        print('annotated node %s with macro name %s' %
+                            (node.__class__.__name__, node.macroName))
+                    if hasattr(node, 'macroArgs'):
+                        print('annotated node %s with macro args %s' %
+                              (node.__class__.__name__, node.macroArgs))
+                    if hasattr(node, 'iconCreationFunction'):
+                        print('annotated node %s with icon creation function %s' %
+                              (node.__class__.__name__, repr(node.iconCreationFunction)))
+                astpretty.pprint(stmt)
+#_moduleTest()

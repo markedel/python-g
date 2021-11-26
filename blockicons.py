@@ -1027,7 +1027,7 @@ def elseElifBlockIcons(ic):
 
 def createWhileIconFromAst(astNode, window):
     topIcon = WhileIcon(window=window)
-    topIcon.replaceChild(icon.createFromAst(stmt.test, window), 'condIcon')
+    topIcon.replaceChild(icon.createFromAst(astNode.test, window), 'condIcon')
     return topIcon
 icon.registerIconCreateFn(ast.While, createWhileIconFromAst)
 
