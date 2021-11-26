@@ -630,4 +630,4 @@ def createAugmentedAssignIconFromAst(astNode, window):
     else:
         assignIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
     return assignIcon
-icon.registerIconCreateFn(ast.AugAssign, createAssignIconFromAst)
+icon.registerIconCreateFn(ast.AugAssign, createAugmentedAssignIconFromAst)
