@@ -270,9 +270,9 @@ def parseText(macroParser, text, fileName="Pasted Text"):
     expandedText, annotations, lineNumTranslate = macroParser.expandMacros(text)
     if expandedText is None:
         return None
-    print('expanded Text:\n%s' % expandedText)
-    print('lineNumTranslate', lineNumTranslate)
-    annotations.dump()
+    #print('expanded Text:\n%s' % expandedText)
+    #print('lineNumTranslate', lineNumTranslate)
+    #annotations.dump()
     # Parse expanded text
     try:
         modAst = ast.parse(expandedText, fileName)

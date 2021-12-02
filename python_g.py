@@ -1,8 +1,9 @@
 # Copyright Mark Edel  All rights reserved
 # Python-g main module
-import copy
 import tkinter as tk
+import tkinter.filedialog
 import ast
+import os.path
 import comn
 import cursors
 import iconsites
@@ -15,6 +16,7 @@ import assignicons
 import entryicon
 import parenicon
 import undo
+import filefmt
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import tkinter.messagebox
@@ -126,21 +128,30 @@ def exposedRegions(oldRect, newRect):
     return exposed
 
 class Window:
-    # Until we can open files, windows are just "Untitled n", name is needed to connect
-    # errors in executed code with icons to highlight
     untitledWinNum = 1
 
-    def __init__(self, master, size=None):
+    def __init__(self, master, filename=None, size=None):
+        print("start of new window")
         self.top = tk.Toplevel(master)
         self.top.bind("<Destroy>", self._destroyCb)
-        self.winName = 'Untitled %d' % Window.untitledWinNum
-        Window.untitledWinNum += 1
+        if filename is None:
+            self.winName = 'Untitled %d' % Window.untitledWinNum
+            Window.untitledWinNum += 1
+        else:
+            base, ext = os.path.splitext(filename)
+            if ext == ".py":
+                self.winName = base + ".pyg"
+            else:
+                self.winName = filename
         self.top.title("Python-G - " + self.winName)
         self.frame = tk.Frame(self.top)
         self.menubar = tk.Menu(self.frame)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="File", menu=menu)
-        menu.add_command(label="New", command=self._newCb)
+        menu.add_command(label="New File", accelerator="Ctrl+N", command=self._newCb)
+        menu.add_command(label="Open File...", accelerator="Ctrl+O", command=self._openCb)
+        menu.add_separator()
+        menu.add_command(label="Close", command=self.top.destroy)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu)
         menu.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
@@ -175,6 +186,8 @@ class Window:
         self.imgFrame.bind("<MouseWheel>", self._mouseWheelCb)
         self.top.bind("<FocusIn>", self._focusInCb)
         self.top.bind("<FocusOut>", self._focusOutCb)
+        self.top.bind("<Control-n>", self._newCb)
+        self.top.bind("<Control-o>", self._openCb)
         self.top.bind("<Control-z>", self._undoCb)
         self.top.bind("<Control-y>", self._redoCb)
         self.top.bind("<Control-x>", self._cutCb)
@@ -264,6 +277,7 @@ class Window:
         self.cursor = cursors.Cursor(self, None)
         self.execResultPositions = {}
         self.undo = undo.UndoRedoList(self)
+        self.macroParser = filefmt.MacroParser()
         # .iconIds holds a dictionary translating icon ID #s to icons.  Icon IDs have to
         # be in the range of positive 32-bit integers, as they are passed to the compiler
         # in the lineno field of generated asts so a stack trace can refer directly to
@@ -277,6 +291,25 @@ class Window:
         self.globals = {'__windowExecContext__': {}}
         # List of mutable icons displayed in the window
         self.liveMutableIcons = set()
+        # If a filename was specified, open it
+        print("before open file")
+        if filename is not None:
+            self.openFile(filename)
+
+    def openFile(self, filename):
+        print("reading file...", end="")
+        with open(filename) as f:
+            text = f.read()
+        print("done")
+        icons = parseText(text, self)
+        if len(icons) == 0:
+            return None
+        self.addTop(icons)
+        print('start layout', time.monotonic())
+        redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
+        print('finish layout', time.monotonic())
+        self.refresh(redrawRect, clear=False)
+        self.undo.addBoundary()
 
     def selectedIcons(self):
         """Return a list of the icons in the window that are currently selected."""
@@ -412,8 +445,24 @@ class Window:
         if newLastMenuEntry != lastMenuEntry:
             self.popup.delete(lastMenuEntry+1, newLastMenuEntry)
 
-    def _newCb(self):
+    def _newCb(self, evt=None):
         appData.newWindow()
+
+    def _openCb(self, evt=None):
+        filename = tkinter.filedialog.askopenfilename(defaultextension=".pyg", filetypes=[
+            ("Python-g file", ".pyg"), ("Python file", ".py"), ("Python file", ".pyw")],
+            parent=self.top, title="Open")
+        print("tkinter filedialog returns", repr(filename))
+        if filename is None or filename == '':
+            return
+        existingWindow = appData.findWindowWithFile(filename)
+        if existingWindow is not None:
+            reload = tkinter.messagebox.askokcancel(message="Reload %s" % filename)
+            if reload:
+                existingWindow.top.destroy()
+            else:
+                return
+        appData.newWindow(filename)
 
     def _configureCb(self, evt):
         """Called when window is initially displayed or resized"""
@@ -898,7 +947,7 @@ class Window:
                 text = None
             # Try to parse the string as Python code
             if text is not None:
-                pastedIcons = parsePasted(text, self)
+                pastedIcons = parseText(text, self)
                 # Not usable python code, put in to single icon as string
                 if pastedIcons is None:
                     pastedIcons = [nameicons.TextIcon(repr(text), self, (0, 0))]
@@ -1763,7 +1812,7 @@ class Window:
         elif isinstance(obj, (int, float)):
             ic = nameicons.NumericIcon(obj, window=self)
         else:
-            ic = parsePasted(repr(obj), self)[0]
+            ic = parseText(repr(obj), self)[0]
         return ic
 
     def _handleExecErr(self, excep, executedIcon=None):
@@ -2244,7 +2293,7 @@ class Window:
 
     def _orderIconsForAdd(self, icons):
         """Takes a list of top-level icons to be added to or removed from the window,
-        and returns them in an order in which they will can be added such that pages
+        and returns them in an order in which they can be added such that pages
         can be inferred from adjacent icons as they are added (or for removal, that
         when removal is undone, they will be added in the appropriate order).  The fact
         that this ordering is necessary is unfortunate"""
@@ -2332,7 +2381,7 @@ class Window:
             if nextIcon is None or newSeq:
                 page = Page()
                 page.startIcon = ic
-                pageRect = ic.hierRect()
+                pageRect = ic.rect
                 page.topY = pageRect[1]
                 page.bottomY = pageRect[3]
                 page.iconCount = 0
@@ -2809,8 +2858,8 @@ class App:
         if len(self.windows) == 0:
             exit(1)
 
-    def newWindow(self):
-        window = Window(self.root)
+    def newWindow(self, filename=None):
+        window = Window(self.root, filename)
         self.windows.append(window)
 
     def _blinkCursor(self):
@@ -2820,6 +2869,12 @@ class App:
                 window.cursor.blink()
                 break
         self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
+
+    def findWindowWithFile(self, filename):
+        for window in self.windows:
+            if window.winName == filename:
+                return window
+        return None
 
 def findTopIcons(icons, stmtLvlOnly=False):
     """ Find the top icon(s) within a list of icons.  If stmtLvlOnly is True, the only
@@ -2921,16 +2976,22 @@ def restoreSeries(series):
         newIcons.append(newTuple)
     return newIcons
 
-def parsePasted(text, window):
-    try:
-        modAst = ast.parse(text, "Pasted text")
-    except:
+def parseText(text, window, source="Pasted text"):
+    segments = filefmt.parseText(window.macroParser, text, source)
+    if segments is None:
         return None
-    if not isinstance(modAst, ast.Module):
-        return None
-    if len(modAst.body) == 0:
-        return None
-    icons = blockicons.createIconsFromBodyAst(modAst.body, window)
+    icons = []
+    if segments is not None:
+        for segment in segments:
+            pos, stmtList = segment
+            if len(stmtList) == 0:
+                continue
+            print(repr(pos))
+            segIcons = blockicons.createIconsFromBodyAst(stmtList, window)
+            if pos is not None:
+                segIcons[0].rect = icon.moveRect(segIcons[0].rect, pos)
+            icons += segIcons
+
     if len(icons) == 0:
         return None
     return icons
