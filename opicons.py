@@ -5,6 +5,7 @@ from PIL import Image, ImageDraw
 import iconlayout
 import iconsites
 import icon
+import filefmt
 import operator
 import comn
 import cursors
@@ -208,6 +209,13 @@ class UnaryOpIcon(icon.Icon):
         addSpace = " " if self.operator[-1].isalpha() else ""
         return self.operator + addSpace + icon.argTextRepr(self.sites.argIcon)
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        addSpace = " " if self.operator[-1].isalpha() else ""
+        text = filefmt.SegmentedText(self.operator + addSpace)
+        arg = icon.argSaveText(parentBreakLevel, self.sites.argIcon, contNeeded, export)
+        text.concat(None, arg, contNeeded)
+        return text
+
     def dumpName(self):
         return "unary " + self.operator
 
@@ -247,7 +255,6 @@ class UnaryOpIcon(icon.Icon):
             return False
         argIcon = self.sites.argIcon.att
         return argIcon is not None and argIcon.compareData(-data)
-
 
 class BinOpIcon(icon.Icon):
     def __init__(self, op, window, location=None):
@@ -445,6 +452,30 @@ class BinOpIcon(icon.Icon):
             return "(" + text + ")" + icon.attrTextRepr(self)
         return text
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        hasParens = needsParens(self, forText=True)
+        brkLvl = parentBreakLevel + 1
+        # If this operation is part of an associative grouping, don't add to level
+        if not hasParens:
+            parent = self.parent()
+            if parent is not None and parent.__class__ is BinOpIcon:
+                if parent.precedence == self.precedence:
+                    brkLvl = parentBreakLevel
+        if hasParens:
+            contNeeded = False
+        leftArgText = icon.argSaveText(brkLvl, self.sites.leftArg, contNeeded, export)
+        if hasParens:
+            text = filefmt.SegmentedText('(')
+            text.concat(brkLvl, leftArgText, contNeeded)
+        else:
+            text = leftArgText
+        text.add(None, " " + self.operator + " ", contNeeded)
+        rightArgText = icon.argSaveText(brkLvl, self.sites.rightArg, contNeeded, export)
+        text.concat(brkLvl, rightArgText, contNeeded)
+        if hasParens:
+            text.add(None, ")")
+        return text
+
     def dumpName(self):
         return ("(%s)" if self.hasParens else "%s") % self.operator
 
@@ -634,6 +665,31 @@ class DivideIcon(icon.Icon):
         text = topArgText + " " + op + " " + bottomArgText
         if needsParens(self, forText=True):
             return "(" + text + ")" + icon.attrTextRepr(self)
+        return text
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        hasParens = needsParens(self, forText=True)
+        op = '//' if self.floorDiv else '/'
+        brkLvl = parentBreakLevel + 1
+        # If this operation is part of an associative grouping, don't add to level
+        if not hasParens:
+            parent = self.parent()
+            if parent is not None and parent.__class__ is BinOpIcon:
+                if parent.precedence == self.precedence:
+                    brkLvl = parentBreakLevel
+        if hasParens:
+            contNeeded = False
+        leftArgText = icon.argSaveText(brkLvl, self.sites.topArg, contNeeded, export)
+        if hasParens:
+            text = filefmt.SegmentedText('(')
+            text.concat(brkLvl, leftArgText, contNeeded)
+        else:
+            text = leftArgText
+        text.add(None, " " + op + " ", contNeeded)
+        rightArgText = icon.argSaveText(brkLvl, self.sites.bottomArg, contNeeded, export)
+        text.concat(brkLvl, rightArgText, contNeeded)
+        if hasParens:
+            text.add(None, ")")
         return text
 
     def dumpName(self):

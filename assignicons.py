@@ -237,6 +237,18 @@ class AssignIcon(icon.Icon):
             tgtAsts.append(tgtAst)
         return ast.Assign(tgtAsts, valueAst, lineno=self.id, col_offset=0)
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = icon.seriesSaveText(brkLvl, getattr(self.sites,
+            self.tgtLists[0].siteSeriesName), contNeeded, export)
+        text.add(None, " = ")
+        for tgtList in self.tgtLists[1:]:
+            icon.addSeriesSaveText(text, brkLvl,
+                getattr(self.sites, tgtList.siteSeriesName), contNeeded, export)
+            text.add(None, " = ")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
+        return text
+
     def assignValues(self, tgtIcon, value):
         if isinstance(tgtIcon, nameicons.IdentifierIcon):
             try:
@@ -536,6 +548,13 @@ class AugmentedAssignIcon(icon.Icon):
              lineno=self.id, col_offset=0)
         opAst = opicons.binOpAsts[self.op]()
         return ast.AugAssign(tgtAst, opAst, valueAst, lineno=self.id, col_offset=0)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = icon.argSaveText(brkLvl, self.sites.targetIcon, contNeeded, export)
+        text.add(None, " " + self.op + "= ")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded,export)
+        return text
 
     def backspace(self, siteId, evt):
         siteName, index = iconsites.splitSeriesSiteId(siteId)

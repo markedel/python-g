@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageMath, ImageChops
 import comn
 import iconlayout
 import iconsites
+import filefmt
 import ast
 
 # Some general notes on drawing and layout:
@@ -789,7 +790,22 @@ class Icon:
         control-friendly Python-text-compatible save file format."""
         return None
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        """Create text-format representation of the icon and hierarchy below it.  Returns
+        an object of type filefmt.SegmentedText, which provides text annotated with
+        potential wrap points classified by level in the icon hierarchy.  Icon code
+        should increment parentBreakLevel (with some exceptions, like arithmetic
+        associativity binary operations) in calls to createSaveText for child icons.
+        Likewise, continuationNeeded should either be passed unchanged to child calls,
+        or set to False if the icon provides enclosing parens/brackets/braces that
+        remove the need for child text to get line continuation characters."""
+        return filefmt.SegmentedText("***No createSaveText method for icon %s" %
+                                     self.dumpName())
+
     def clipboardRepr(self, offset, iconsToCopy):
+        """Serialized binary representation of an icon tree currently used for copy/paste
+        within and between windows.  Given that the save file format will also be capable
+        of being used for copy/paste, this mechanism will eventually be removed."""
         return self._serialize(offset, iconsToCopy)
 
     def backspace(self, siteId, evt):
@@ -1233,6 +1249,52 @@ def _getIconClasses():
         _getIconClasses.cachedDict = {cls.__name__:cls for cls in _allSubclasses(Icon)}
     return _getIconClasses.cachedDict
 _getIconClasses.cachedDict = None
+
+def argSaveText(breakLevel, site, cont, export):
+    """Create a filefmt.SegmentedText string representing an argument icon (tree) at
+    a given site.  If the site is empty, place the $Empty$ macro, instead."""
+    if site.att is None:
+        return filefmt.SegmentedText("$Empty$")
+    return site.att.createSaveText(breakLevel, cont, export)
+
+def addArgSaveText(saveText, breakLevel, site, cont, export):
+    """Convenience function to append the result of argSaveText to saveText at the same
+    break-level as is being passed to argSaveText."""
+    saveText.concat(breakLevel, argSaveText(breakLevel, site, cont, export), cont)
+
+def seriesSaveText(breakLevel, seriesSite, cont, export):
+    """Create a filefmt.SegmentedText string representing a series of arguments.  If
+    any but the first argument of a single-entry list has no icon, place the $Empty$
+    macro at the site."""
+    if len(seriesSite) == 0 or len(seriesSite) == 1 and seriesSite[0].att is None:
+        return filefmt.SegmentedText(None)
+    args = [argSaveText(breakLevel, site, cont, export) for site in seriesSite]
+    combinedText = args[0]
+    for arg in args[1:]:
+        combinedText.add(None, ', ', cont)
+        combinedText.concat(breakLevel, arg, cont)
+    return combinedText
+
+def addSeriesSaveText(saveText, breakLevel, seriesSite, cont, export):
+    """Convenience function to append the result of seriesSaveText to saveText at the
+    same break-level as is being passed to seriesSaveText."""
+    saveText.concat(breakLevel, seriesSaveText(breakLevel, seriesSite, cont, export),
+        cont)
+
+def addAttrSaveText(saveText, ic, parentBreakLevel, cont, export):
+    """If the given icon has an attribute attached, compose and append the text from the
+     attribute icon to saveText."""
+    if ic.sites.attrIcon.att is None:
+        return saveText
+    # Note, below that the parent break level is passed to the attribute icon, so
+    # that a series of attributes (a.b.c.d) will all end up at the same level (as
+    # opposed to inappropriately nested in deeper and deeper levels)
+    attrText = ic.sites.attrIcon.att.createSaveText(parentBreakLevel, cont, export)
+    if attrText.firstChar() in ('[', '('):  # No break before subscripts or calls
+        saveText.concat(None, attrText)
+    else:
+        saveText.concat(parentBreakLevel + 1, attrText, cont)
+    return saveText
 
 def argTextRepr(site):
     if site.att is None:

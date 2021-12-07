@@ -308,6 +308,179 @@ def parseText(macroParser, text, fileName="Pasted Text"):
             currentSegment.append(node)
     return segments
 
+class SegmentedText:
+    """Holds save/clipboard .pyg text for an individual python statement, annotated with
+    potential line breaks and their associated "level" in the hierarchy of the statement.
+    Once collected, the wrapText method will produce an attractively (and compactly)
+    wrapped version of the text."""
+    __slots__ = ('segments',)
+
+    def __init__(self, initialString=None, multiStringBreakLevel=None):
+        """Create a SegmentedText object.  initialString may be set to None or an empty
+        string, to create an empty string, or to a normal text string.  It may also be
+        set to a list of strings, and multiStringBreakLevel specified to initialize it
+        to a series of strings punctuated with break-points of the specified level."""
+        if initialString is None or initialString == "":
+            self.segments = None
+        elif multiStringBreakLevel is not None:
+            self.segments = initialString[0]
+            for str in initialString[1:]:
+                self.segments.append(multiStringBreakLevel)
+                self.segments.append(str)
+        else:
+            self.segments = [initialString]
+
+    def add(self, breakLevel, text, needsContinue=False):
+        """Append a single string to the end of the accumulated text.  If breakLevel
+        is set to None, it will be appended directly to the last element of the text,
+        without adding a break-point.  If breakLevel is specified as a number, the new
+        text will be separated from the existing text by a break-point of that depth.
+        Levels (depth values) start at low numbers (which confusingly mean higher levels
+        in the hierarchy of the code) and increase with depth.  If needsContinue is
+        specified as True, if the break-point is used, a continuation character '\'
+        will be added at the end of the line, before the newline."""
+        if self.segments is None:
+            self.segments = [text]
+        elif breakLevel is None:
+            self.segments[-1] += text
+        else:
+            if needsContinue:
+                breakLevel *= -1
+            self.segments.append(breakLevel)
+            self.segments.append(text)
+
+    def concat(self, breakLevel, otherSegText, needsContinue=False):
+        """Append another SegmentedText object to the end of the accumulated text.  If
+        breakLevel is set to None, it will merge the first element of the appended
+        text with the last element of the text, without inserting a break-point between
+        them. If breakLevel is specified as a number, the new text will be separated from
+        the existing text by a break-point of that depth.  Levels (depth values) start at
+        low numbers (which confusingly mean higher levels in the hierarchy of the code)
+        and increase with depth.  If needsContinue is specified as True, if the break-
+        point is used, a continuation character '\' will be added at the end of the line,
+        before the newline."""
+        if otherSegText.segments is None:
+            return
+        if self.segments is None:
+            self.segments = otherSegText.segments[:]
+        elif breakLevel is None:
+            self.segments[-1] += otherSegText.segments[0]
+            self.segments += otherSegText.segments[1:]
+        else:
+            if needsContinue:
+                breakLevel *= -1
+            self.segments.append(breakLevel)
+            self.segments += otherSegText.segments
+
+    def copy(self):
+        """Segmented text is mutable, and it used in python-g with a less-than-rigorous
+        assumption that if code returns a SegmentedText object, it is fair game to
+        tack more on to it.  If you want to make sure one won't get extended, use this
+        to create a shallow copy to return."""
+        st = SegmentedText()
+        st.segments = self.segments[:]
+
+    def firstChar(self):
+        """Returns the first character of the text, or, if empty, an empty string."""
+        if self.segments is None or len(self.segments[0]) == 0:
+            return ""
+        return self.segments[0][0]
+
+    def wrapText(self, startIndent, continuationIndent, margin=100):
+        """Apply wrapping to the collected text.  Unlike a normal Python pretty-printer,
+        compactness is favored over prettiness, so if lines can be saved by doing ugly
+        wrapping, it will sometimes wrap in a less-ideal place."""
+        # The method of wrapping is to first wrap stupidly at whatever wrap points will
+        # pack the text the tightest.  This establishes a baseline for how few lines
+        # the text can fit.  Once that is known, attempt to improve the appearance by
+        # limiting wrapping to higher levels.  When the "tight" line count is exceeded,
+        # choose the highest level wrapping that fit in the same number of lines.
+        # While globally limiting the wrap-level works well for most Python statements,
+        # it can be "fooled" by statements with multiple deeply-nested parts whose depth
+        # is inconsistent, because the deep parts prevent good wraps to shallower ones
+        # from ever being explored.
+        maxDepth = 0
+        for i in self.segments:
+            if type(i) is int:
+                maxDepth = max(maxDepth, abs(i))
+        # Baseline with no level cutoff
+        breakPointList = self._findAllBreakPoints(maxDepth + 1, startIndent, margin)
+        minLines = len(breakPointList) + 1
+        # Improve by attempting to decrement level cutoff
+        if minLines > 1:
+            for levelCutoff in range(maxDepth, 0, -1):
+                levelBPs = self._findAllBreakPoints(levelCutoff, startIndent, margin)
+                nLines = len(levelBPs) + 1
+                if nLines > minLines:
+                    break
+                breakPointList = levelBPs
+        # Use the computed break point list to build the string
+        startIdx = 0
+        strings = [' ' * startIndent]
+        for bp in breakPointList:
+            breakLevel = self.segments[bp]
+            # Copy the strings before the breakpoint to strings
+            for i in range(startIdx, bp, 2):
+                strings.append(self.segments[i])
+            # If the last string ended in a space, delete it
+            if strings[-1][-1] == ' ':
+                strings[-1] = strings[-1][:-1]
+            # If continuation is required (break level is negative), add it
+            if breakLevel < 0:
+                strings.append(' \\')
+            # Append the newline and continuation indent
+            strings.append('\n')
+            strings.append(' ' * continuationIndent)
+            startIdx = bp + 1
+        # Copy the text after the last break point
+        for i in range(startIdx, len(self.segments), 2):
+            strings.append(self.segments[i])
+        # If the last string ended in a space (I'm not sure this happens) delete it
+        if strings[-1][-1] == ' ':
+            strings[-1] = strings[-1][:-1]
+        # Return the joined string
+        return "".join(strings)
+
+    def _findAllBreakPoints(self, levelCutoff, startIndent, margin):
+        startIdx = 0
+        continueIndentAdded = False
+        breakPoints = []
+        while True:
+            breakPoint = self._findBreakPoint(startIdx, levelCutoff, startIndent, margin)
+            if breakPoint is None:
+                break
+            breakPoints.append(breakPoint)
+            startIdx = breakPoint + 1
+            if not continueIndentAdded:
+                startIndent += 8
+                continueIndentAdded = True
+        return breakPoints
+
+    def _findBreakPoint(self, startIdx, levelCutoff, startIndent, margin):
+        lastAcceptableBreakPoint = startIdx + 1
+        if lastAcceptableBreakPoint >= len(self.segments):
+            return None
+        textWidth = startIndent
+        for i in range(startIdx, len(self.segments), 2):
+            str = self.segments[i]
+            lastCharIsSpace = str[-1] == ' '
+            stringRequiredWidth = len(str) - (1 if lastCharIsSpace else 0)
+            if i+1 >= len(self.segments):
+                # We reached the end of the statement and it either fits or does not
+                if textWidth + stringRequiredWidth <= margin:
+                    return None
+                else:
+                    return lastAcceptableBreakPoint
+            breakLevel = abs(self.segments[i + 1])
+            if breakLevel < levelCutoff:
+                requiresContinuation = self.segments[i + 1] < 0
+                stringRequiredWidth += 2 if requiresContinuation else 0
+                if textWidth + stringRequiredWidth > margin:
+                    return lastAcceptableBreakPoint
+                lastAcceptableBreakPoint = i + 1
+            textWidth += len(str)
+        return None  # Because of odd length of segList, this will not be reached
+
 def _parsePosMacro(macroArgs):
     match = posMacroPattern.match(macroArgs)
     if match is None:
@@ -434,4 +607,16 @@ l2$pass
                         print('annotated node %s with icon creation function %s' %
                               (node.__class__.__name__, repr(node.iconCreationFunction)))
                 astpretty.pprint(stmt)
+
+def outFormatTest():
+    segText = SegmentedText("asdf")
+    segText.add(None, "(")
+    fakeSegText = SegmentedText("deleteme")
+    fakeSegText.segments = ["asdf, ",2,"nert(",3, "wang, ",3, "blort), ",2,
+        "bbbbb + ", 3, "45 * ", 4, "3) + ", -1, "10 * ", -2, "2 ** ", -3, "4"]
+    segText.concat(2, fakeSegText)
+    for margin in range(12, 65):
+        print("-"*margin)
+        print(segText.wrapText(4, 8, margin))
+# outFormatTest()
 #_moduleTest()

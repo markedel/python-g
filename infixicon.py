@@ -95,6 +95,13 @@ class InfixIcon(icon.Icon):
         rightArgText = icon.argTextRepr(self.sites.rightArg)
         return leftArgText + " " + self.operator + " " + rightArgText
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = icon.argSaveText(brkLvl, self.sites.leftArg, contNeeded, export)
+        text.add(None, " " + self.operator + " ")
+        icon.addArgSaveText(text, brkLvl, self.sites.rightArg, contNeeded, export)
+        return text
+
     def dumpName(self):
         return self.operator
 

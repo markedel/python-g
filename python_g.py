@@ -76,6 +76,8 @@ MOUSE_WHEEL_SCALE = 0.42
 # but not objectionable.
 PAGE_SPLIT_THRESHOLD = 100
 
+WIN_TITLE_PREFIX = "Python-G - "
+
 startUpTime = time.monotonic()
 
 # Notes on window drawing:
@@ -137,19 +139,26 @@ class Window:
         if filename is None:
             self.winName = 'Untitled %d' % Window.untitledWinNum
             Window.untitledWinNum += 1
+            self.filename = None
         else:
             base, ext = os.path.splitext(filename)
             if ext == ".py":
                 self.winName = base + ".pyg"
+                self.filename = self.winName
             else:
                 self.winName = filename
-        self.top.title("Python-G - " + self.winName)
+                self.filename = filename
+        self.top.title(WIN_TITLE_PREFIX + self.winName)
         self.frame = tk.Frame(self.top)
         self.menubar = tk.Menu(self.frame)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="File", menu=menu)
         menu.add_command(label="New File", accelerator="Ctrl+N", command=self._newCb)
-        menu.add_command(label="Open File...", accelerator="Ctrl+O", command=self._openCb)
+        menu.add_command(label="Open...", accelerator="Ctrl+O", command=self._openCb)
+        menu.add_separator()
+        menu.add_command(label="Save", accelerator="Ctrl+S", command=self._saveCb)
+        menu.add_command(label="Save As...", accelerator="Ctrl+Shift+S",
+            command=self._saveAsCb)
         menu.add_separator()
         menu.add_command(label="Close", command=self.top.destroy)
         menu = tk.Menu(self.menubar, tearoff=0)
@@ -188,6 +197,8 @@ class Window:
         self.top.bind("<FocusOut>", self._focusOutCb)
         self.top.bind("<Control-n>", self._newCb)
         self.top.bind("<Control-o>", self._openCb)
+        self.top.bind("<Control-s>", self._saveCb)
+        self.top.bind("<Control-Shift-S>", self._saveAsCb)
         self.top.bind("<Control-z>", self._undoCb)
         self.top.bind("<Control-y>", self._redoCb)
         self.top.bind("<Control-x>", self._cutCb)
@@ -302,7 +313,7 @@ class Window:
             text = f.read()
         print("done")
         icons = parseText(text, self)
-        if len(icons) == 0:
+        if icons is None or len(icons) == 0:
             return None
         self.addTop(icons)
         print('start layout', time.monotonic())
@@ -463,6 +474,25 @@ class Window:
             else:
                 return
         appData.newWindow(filename)
+
+    def _saveCb(self, evt=None):
+        if self.filename is None:
+            self._saveAsCb(evt)
+        else:
+            self.saveFile(self.filename)
+
+    def _saveAsCb(self, evt=None):
+        filename = tkinter.filedialog.asksaveasfilename(defaultextension=".pyg",
+            filetypes=[("Python-g file", ".pyg"), ("Python file", ".py"),
+            ("Python file", ".pyw")], parent=self.top, title="Save As")
+        if filename is None or filename == '':
+            return
+        self.saveFile(filename)
+        _base, ext = os.path.splitext(filename)
+        if ext == ".pyg":
+            self.filename = filename
+            self.winName = filename
+            self.top.title(WIN_TITLE_PREFIX + self.winName)
 
     def _configureCb(self, evt):
         """Called when window is initially displayed or resized"""
@@ -2158,6 +2188,38 @@ class Window:
         if refresh:
             self.refresh(redrawRegion.get())
         return redrawRegion.get()
+
+    def saveFile(self, filename, exportPython=False):
+        tabSize = 4
+        print('Started save')
+        firstSeq = True
+        with open(filename, "w") as f:
+            for seqStartPage in self.sequences:
+                startIcon = seqStartPage.startIcon
+                left, top = startIcon.hierRect()[:2]
+                if not firstSeq:
+                    f.write('\n')
+                firstSeq = False
+                f.write("$@%+d%+d$\n" % (left, top))
+                branchDepth = 0
+                for ic in icon.traverseSeq(startIcon):
+                    if isinstance(ic, icon.BlockEnd):
+                        branchDepth -= 1
+                    else:
+                        if ic.__class__ in (blockicons.ElifIcon, blockicons.ElseIcon):
+                            indent = tabSize * max(0, branchDepth - 1)
+                        else:
+                            indent = tabSize * max(0, branchDepth)
+                        if hasattr(ic, 'blockEnd'):
+                            continueIndent = 8
+                            branchDepth += 1
+                        else:
+                            continueIndent = tabSize
+                        saveText = ic.createSaveText(export=exportPython)
+                        stmtText = saveText.wrapText(indent, indent + continueIndent, margin=40)
+                        f.write(stmtText)
+                        f.write('\n')
+        print('Finished save')
 
     def clearBgRect(self, rect=None):
         """Clear but don't refresh a rectangle of the window.  rect is in content

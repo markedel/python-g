@@ -5,6 +5,7 @@ import comn
 import iconlayout
 import iconsites
 import icon
+import filefmt
 import nameicons
 import listicons
 import infixicon
@@ -94,6 +95,13 @@ class WithIcon(nameicons.SeriesStmtIcon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("with ")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
+        text.add(None, ":")
+        return text
 
     def createAst(self):
         withItems = []
@@ -189,6 +197,13 @@ class WhileIcon(icon.Icon):
 
     def textRepr(self):
         return "while " + icon.argTextRepr(self.sites.condIcon) + ":"
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("while ")
+        icon.addArgSaveText(text, brkLvl, self.sites.condIcon, contNeeded, export)
+        text.add(None, ":")
+        return text
 
     def dumpName(self):
         return "while"
@@ -340,6 +355,17 @@ class ForIcon(icon.Icon):
         iterText = icon.seriesTextRepr(self.sites.iterIcons)
         return text + " " + tgtText + " in " + iterText + ":"
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("async for " if self.isAsync else "for ")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.targets, contNeeded,
+            export)
+        text.add(brkLvl, " in ", contNeeded)
+        icon.addSeriesSaveText(text, brkLvl, self.sites.iterIcons, contNeeded,
+            export)
+        text.add(None, ":")
+        return text
+
     def dumpName(self):
         return "for"
 
@@ -486,6 +512,13 @@ class IfIcon(icon.Icon):
     def textRepr(self):
         return "if " + icon.argTextRepr(self.sites.condIcon) + ":"
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("if ")
+        icon.addArgSaveText(text, brkLvl, self.sites.condIcon, contNeeded, export)
+        text.add(None, ":")
+        return text
+
     def dumpName(self):
         return "if"
 
@@ -570,6 +603,13 @@ class ElifIcon(icon.Icon):
     def textRepr(self):
         return "elif " + icon.argTextRepr(self.sites.condIcon) + ":"
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("elif ")
+        icon.addArgSaveText(text, brkLvl, self.sites.condIcon, contNeeded, export)
+        text.add(None, ":")
+        return text
+
     def dumpName(self):
         return "elif"
 
@@ -631,6 +671,9 @@ class ElseIcon(icon.Icon):
 
     def textRepr(self):
         return "else:"
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        return filefmt.SegmentedText("else:")
 
     def dumpName(self):
         return "else"
@@ -790,6 +833,18 @@ class DefOrClassIcon(icon.Icon):
         if self.argList is None:
             return text
         return text + "(" + icon.seriesTextRepr(self.sites.argIcons) + "):"
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText(self.text + " ")
+        icon.addArgSaveText(text, brkLvl, self.sites.nameIcon, contNeeded, export)
+        if self.argList is None:
+            text.add(None, ":")
+            return text
+        text.add(None, "(")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.argIcons, contNeeded, export)
+        text.add(None, "):")
+        return text
 
     def dumpName(self):
         return self.text

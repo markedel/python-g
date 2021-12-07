@@ -3,6 +3,7 @@ import ast
 import comn
 import iconlayout
 import icon
+import filefmt
 import nameicons
 import cursors
 import entryicon
@@ -253,6 +254,25 @@ class SubscriptIcon(icon.Icon):
 
     def dumpName(self):
         return "." + "[" + ("]" if self.closed else "")
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText('[')
+        if self.sites.indexIcon.att is not None:
+            text.concat(brkLvl, self.sites.indexIcon.att.createSaveText(brkLvl,
+                False, export), False)
+        if hasattr(self.sites, 'upperIcon'):
+            text.add(None, ":")
+            if self.sites.upperIcon.att is not None:
+                text.concat(brkLvl, self.sites.upperIcon.att.createSaveText(brkLvl, False,
+                    export), False)
+            if hasattr(self.sites, 'stepIcon') and self.sites.stepIcon.att is not None:
+                text.add(None, ":")
+                text.concat(brkLvl, self.sites.stepIcon.att.createSaveText(brkLvl,
+                    False, export), False)
+        text.add(None, ']')
+        icon.addAttrSaveText(text, self, brkLvl, contNeeded, export)
+        return text
 
     def clipboardRepr(self, offset, iconsToCopy):
         if not hasattr(self.sites, 'upperIcon'):

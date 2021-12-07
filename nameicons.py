@@ -6,6 +6,7 @@ import comn
 import iconlayout
 import iconsites
 import icon
+import filefmt
 import opicons
 import listicons
 import assignicons
@@ -86,6 +87,10 @@ class TextIcon(icon.Icon):
     def dumpName(self):
         """Give the icon a name to be used in text dumps."""
         return self.text
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        return icon.addAttrSaveText(filefmt.SegmentedText(self.text), self,
+            parentBreakLevel, contNeeded, export)
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, text=self.text)
@@ -229,6 +234,10 @@ class AttrIcon(icon.Icon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        return icon.addAttrSaveText(filefmt.SegmentedText("." + self.name), self,
+            parentBreakLevel, contNeeded, export)
+
     def createAst(self, attrOfAst):
         return icon.composeAttrAst(self, ast.Attribute(value=attrOfAst, attr=self.name,
          lineno=self.id, col_offset=0, ctx=determineCtx(self)))
@@ -295,6 +304,9 @@ class NoArgStmtIcon(icon.Icon):
 
     def textRepr(self):
         return self.stmt
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        return filefmt.SegmentedText(self.stmt)
 
     def dumpName(self):
         return self.stmt
@@ -422,6 +434,14 @@ class SeriesStmtIcon(icon.Icon):
 
     def textRepr(self):
         return self.stmt + " " + icon.seriesTextRepr(self.sites.values)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        if len(self.sites.values) == 0:
+            return filefmt.SegmentedText(self.stmt)
+        text = filefmt.SegmentedText(self.stmt + " ")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
+        return text
 
     def dumpName(self):
         return self.stmt
@@ -574,6 +594,12 @@ class YieldIcon(icon.Icon):
 
     def textRepr(self):
         return "yield " + icon.seriesTextRepr(self.sites.values)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("yield ")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
+        return text
 
     def dumpName(self):
         return "yield"
