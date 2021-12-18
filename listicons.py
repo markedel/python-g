@@ -982,6 +982,9 @@ class CallIcon(icon.Icon):
         width, height = self._size()
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
+        # Property to tell wrapping layout and save-text generators not to allow wrap
+        # at the attribute site (as most attributes normally can).
+        self.sticksToAttr = True
         if closed:
             self.close()
 

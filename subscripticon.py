@@ -94,6 +94,9 @@ class SubscriptIcon(icon.Icon):
             x, y = location
         self.rect = (x, y, x + totalWidth, y + totalHeight)
         self.changeNumSubscripts(numSubscripts)
+        # Property to tell wrapping layout and save-text generators not to allow wrap
+        # at the attribute site (as most attributes normally can).
+        self.sticksToAttr = True
         if closed:
             self.close()
 

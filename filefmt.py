@@ -314,19 +314,33 @@ class SegmentedText:
     Once collected, the wrapText method will produce an attractively (and compactly)
     wrapped version of the text."""
     __slots__ = ('segments',)
+    breakPrefix = {0:"", 1:' \\', 2:'"', 3:'" \\', 4:"'", 5:"' \\", 6: '"', 7:'" \\',
+        8:"'", 9:"f' \\"}
+    breakSuffix = {0:"", 1:"", 2:'"', 3:'"', 4:"'", 5:"'", 6: 'f"', 7:'f"', 8:"f'",
+        9:"f'"}
+    # Format for "segments" list is strings separated by numbers (break values).  break
+    # values encapsulate the break "level", as well as how the break needs to be made
+    # (with/without line continuation and string splitting).  Strings represent text to
+    # be added to the file/clipboard, but can also be an object of class QuotedString
+    # representing Python strings that can be internally wrapped if necessary.
+    #
+    # Break values are coded as: breakLevel * 10 + breakType.  The weird base-10 coding
+    # is simply to make the values more human-readable (last digit is type).  breakType
+    # is a value from 0 to 9 from the table below (needs-continue means that if the code
+    # is wrapped, the line must end with a backslash (\) character):
+    #   0: code                     1: code needs-continue
+    #   2: double-quote string      3: double-quote string needs-continue
+    #   4: single-quote string      5: single-quote string needs-continue
+    #   6: double-quote f-string    7: double-quote f-string needs-continue
+    #   8: single-quote f-string    9: single-quote f-string needs-continue
 
-    def __init__(self, initialString=None, multiStringBreakLevel=None):
+    def __init__(self, initialString=None):
         """Create a SegmentedText object.  initialString may be set to None or an empty
         string, to create an empty string, or to a normal text string.  It may also be
         set to a list of strings, and multiStringBreakLevel specified to initialize it
         to a series of strings punctuated with break-points of the specified level."""
         if initialString is None or initialString == "":
             self.segments = None
-        elif multiStringBreakLevel is not None:
-            self.segments = initialString[0]
-            for str in initialString[1:]:
-                self.segments.append(multiStringBreakLevel)
-                self.segments.append(str)
         else:
             self.segments = [initialString]
 
@@ -342,11 +356,14 @@ class SegmentedText:
         if self.segments is None:
             self.segments = [text]
         elif breakLevel is None:
-            self.segments[-1] += text
+            prevString = self.segments[-1]
+            if type(prevString) is QuotedString:
+                prevString.append(text)
+            else:
+                self.segments[-1] = prevString + text
         else:
-            if needsContinue:
-                breakLevel *= -1
-            self.segments.append(breakLevel)
+            breakValue = _encodeBreakValue(breakLevel, 1 if needsContinue else 0)
+            self.segments.append(breakValue)
             self.segments.append(text)
 
     def concat(self, breakLevel, otherSegText, needsContinue=False):
@@ -364,13 +381,50 @@ class SegmentedText:
         if self.segments is None:
             self.segments = otherSegText.segments[:]
         elif breakLevel is None:
-            self.segments[-1] += otherSegText.segments[0]
+            prevString = self.segments[-1]
+            firstSeg = otherSegText.segments[0]
+            if type(prevString) is QuotedString:
+                if type(firstSeg) is QuotedString:
+                    raise ValueError("Concatenating quoted strings not supported")
+                prevString.append(firstSeg)
+            elif type(firstSeg) is QuotedString:
+                firstSeg.prepend(prevString)
+            else:
+                self.segments[-1] = prevString + otherSegText.segments[0]
             self.segments += otherSegText.segments[1:]
         else:
-            if needsContinue:
-                breakLevel *= -1
-            self.segments.append(breakLevel)
+            breakValue = _encodeBreakValue(breakLevel, 1 if needsContinue else 0)
+            self.segments.append(breakValue)
             self.segments += otherSegText.segments
+
+    def addQuotedString(self, breakLevel, quotedString, needsContinue,
+            stringBreakLevel=None):
+        """Append a (single or double) quoted Python string or f-string to the accumulated
+        text.  Like the "add" and "concat" methods, breakLevel may be specified as None
+        to add without allowing a line break from the previous text segment.  However, if
+        breakLevel is specified as None, stringBreakLevel (which would otherwise default
+        to breakLevel + 1) must be specified.  Strings may not be concatenated to each
+        other without a wrap point in between."""
+        if stringBreakLevel is None:
+            if breakLevel is None:
+                raise ValueError("SegmentedText.addQuotedString with breakLevel = None "
+                    "requires stringBreakLevel argument specified")
+            stringBreakLevel = breakLevel + 1
+        qs = QuotedString(quotedString, stringBreakLevel, needsContinue)
+        if self.segments is None:
+            self.segments = [qs]
+            return
+        if breakLevel is None:
+            # Merge with last segment in list
+            if type(self.segments[-1]) is QuotedString:
+                raise ValueError("Concatenating quoted strings not supported")
+            else:
+                qs.prepend(self.segments[-1])
+                self.segments[-1] = qs
+        else:
+            # Compute and append break value, followed by QuotedString object
+            self.segments.append(_encodeBreakValue(breakLevel, 1 if needsContinue else 0))
+            self.segments.append(qs)
 
     def copy(self):
         """Segmented text is mutable, and it used in python-g with a less-than-rigorous
@@ -379,12 +433,6 @@ class SegmentedText:
         to create a shallow copy to return."""
         st = SegmentedText()
         st.segments = self.segments[:]
-
-    def firstChar(self):
-        """Returns the first character of the text, or, if empty, an empty string."""
-        if self.segments is None or len(self.segments[0]) == 0:
-            return ""
-        return self.segments[0][0]
 
     def wrapText(self, startIndent, continuationIndent, margin=100):
         """Apply wrapping to the collected text.  Unlike a normal Python pretty-printer,
@@ -400,16 +448,25 @@ class SegmentedText:
         # is inconsistent, because the deep parts prevent good wraps to shallower ones
         # from ever being explored.
         maxDepth = 0
-        for i in self.segments:
-            if type(i) is int:
-                maxDepth = max(maxDepth, abs(i))
+        brkLvl = 0
+        for s in self.segments:
+            if type(s) is int:
+                brkLvl, brkType = _decodeBreakValue(s)
+                maxDepth = max(maxDepth, brkLvl)
+            elif type(s) is QuotedString:
+                maxDepth = max(maxDepth, brkLvl + 1)  # A string can be further broken
+        # Remove QuotedString objects representing breakable strings, and (if necessary),
+        # break them down at word boundaries
+        self._breakStrings(margin - continuationIndent)
         # Baseline with no level cutoff
-        breakPointList = self._findAllBreakPoints(maxDepth + 1, startIndent, margin)
+        breakPointList = self._findAllBreakPoints(maxDepth + 1, startIndent,
+            continuationIndent, margin)
         minLines = len(breakPointList) + 1
         # Improve by attempting to decrement level cutoff
         if minLines > 1:
-            for levelCutoff in range(maxDepth, 0, -1):
-                levelBPs = self._findAllBreakPoints(levelCutoff, startIndent, margin)
+            for levelCutoff in range(maxDepth, 1, -1):
+                levelBPs = self._findAllBreakPoints(levelCutoff, startIndent,
+                    continuationIndent, margin)
                 nLines = len(levelBPs) + 1
                 if nLines > minLines:
                     break
@@ -418,19 +475,20 @@ class SegmentedText:
         startIdx = 0
         strings = [' ' * startIndent]
         for bp in breakPointList:
-            breakLevel = self.segments[bp]
+            breakLevel, breakType = _decodeBreakValue(self.segments[bp])
             # Copy the strings before the breakpoint to strings
             for i in range(startIdx, bp, 2):
                 strings.append(self.segments[i])
             # If the last string ended in a space, delete it
             if strings[-1][-1] == ' ':
                 strings[-1] = strings[-1][:-1]
-            # If continuation is required (break level is negative), add it
-            if breakLevel < 0:
-                strings.append(' \\')
+            # If continuation and/or string splitting is needed, add it
+            strings.append(self.breakPrefix[breakType])
             # Append the newline and continuation indent
             strings.append('\n')
             strings.append(' ' * continuationIndent)
+            # If string continuation was used, restart the string
+            strings.append(self.breakSuffix[breakType])
             startIdx = bp + 1
         # Copy the text after the last break point
         for i in range(startIdx, len(self.segments), 2):
@@ -441,7 +499,7 @@ class SegmentedText:
         # Return the joined string
         return "".join(strings)
 
-    def _findAllBreakPoints(self, levelCutoff, startIndent, margin):
+    def _findAllBreakPoints(self, levelCutoff, startIndent, continueIndent, margin):
         startIdx = 0
         continueIndentAdded = False
         breakPoints = []
@@ -452,34 +510,156 @@ class SegmentedText:
             breakPoints.append(breakPoint)
             startIdx = breakPoint + 1
             if not continueIndentAdded:
-                startIndent += 8
+                startIndent = continueIndent
+                _breakLvl, breakType = _decodeBreakValue(self.segments[breakPoint])
+                startIndent += len(self.breakSuffix[breakType])
                 continueIndentAdded = True
         return breakPoints
 
     def _findBreakPoint(self, startIdx, levelCutoff, startIndent, margin):
+        """ Find the last point where the string can be broken before the given margin"""
         lastAcceptableBreakPoint = startIdx + 1
         if lastAcceptableBreakPoint >= len(self.segments):
             return None
         textWidth = startIndent
         for i in range(startIdx, len(self.segments), 2):
-            str = self.segments[i]
-            lastCharIsSpace = str[-1] == ' '
-            stringRequiredWidth = len(str) - (1 if lastCharIsSpace else 0)
+            string = self.segments[i]
+            lastCharIsSpace = string[-1] == ' '
+            stringRequiredWidth = len(string) - (1 if lastCharIsSpace else 0)
             if i+1 >= len(self.segments):
                 # We reached the end of the statement and it either fits or does not
                 if textWidth + stringRequiredWidth <= margin:
                     return None
                 else:
                     return lastAcceptableBreakPoint
-            breakLevel = abs(self.segments[i + 1])
+            breakLevel, breakType = _decodeBreakValue(self.segments[i + 1])
             if breakLevel < levelCutoff:
-                requiresContinuation = self.segments[i + 1] < 0
-                stringRequiredWidth += 2 if requiresContinuation else 0
+                stringRequiredWidth += len(self.breakPrefix[breakType])
                 if textWidth + stringRequiredWidth > margin:
                     return lastAcceptableBreakPoint
                 lastAcceptableBreakPoint = i + 1
-            textWidth += len(str)
+            textWidth += len(string)
         return None  # Because of odd length of segList, this will not be reached
+
+    def _breakStrings(self, maxLength):
+        """Measure the length of the text, and if it exceeds maxLength, break quoted
+        string objects at word boundaries (and non-word boundaries based on maxLength."""
+        totalLength = 0
+        for entry in self.segments:
+            if type(entry) is not int:
+                totalLength += len(entry)
+        if totalLength < maxLength:
+            # Everything fits on one line, no breaks necessary: leave everything intact
+            # but replace QuotedString objects with the (un-broken) string they represent
+            for i, entry in enumerate(self.segments):
+                if isinstance(entry, QuotedString):
+                    self.segments[i] = entry.unbrokenString()
+        else:
+            # Break strings at word boundaries (or as necessary to fit within maxLength)
+            for i, entry in enumerate(self.segments):
+                if isinstance(entry, QuotedString):
+                    self.segments[i:i+1] = entry.breakString(maxLength)
+
+class QuotedString:
+    """Helper object for SegmentedText to hold Python quoted strings.  Strings are
+    distinct from other code objects in that they are internally wrappable.  They are
+    held in unwrapped form, until it is known whether the line will need wrapping at
+    all.  If the line needs no wrapping, the string can be returned returned as-is using
+    the unbrokenString method.  If the line will need wrapping, the breakString method
+    will split it at word boundaries (and based on maxLength, within word boundaries
+    if any of the remaining "words" exceed that limit).  breakString returns the split
+    string in SegmentedText's "segments" format, so the SegmentedText wrapText method
+    can wrap the string along with everything else it's wrapping."""
+    __slots__ = ('text', 'breakLevel', 'breakType', 'prependedText', 'appendedText')
+
+    def __init__(self, quotedString, brkLvl, needsContinue):
+        c0, c1 = quotedString[:2]
+        if c0 == '"':
+            self.breakType = 2
+            self.text = quotedString[1:-1]
+        elif c0 == "'":
+            self.breakType = 4
+            self.text = quotedString[1:-1]
+        elif c0 == 'f' and c1 == '"':
+            self.breakType = 6
+            self.text = quotedString[2:-1]
+        elif c0 == 'f' and c1 == "'":
+            self.breakType = 8
+            self.text = quotedString[2:-1]
+        else:
+            raise ValueError("Error adding string to SegmentedText: bad string format")
+        if needsContinue:
+            self.breakType += 1
+        self.breakLevel = brkLvl
+        self.prependedText = ""
+        self.appendedText = ""
+
+    def __len__(self):
+        """Return the length of the quoted string (including quotes) assuming no
+        line breaks are added."""
+        return len(SegmentedText.breakSuffix[self.breakType]) + len(self.text) + 1 + \
+            len(self.prependedText) + len(self.appendedText)
+
+    def breakString(self, maxLength):
+        """Split the string at the end of whitespace of word boundaries, and return a
+        SegmentedText.segments-style list that can be spliced-in in place of the
+        QuotedString object in the list."""
+        foundSpace = False
+        segmentStrings = []
+        startIdx = 0
+        stringStart = self.prependedText + SegmentedText.breakSuffix[self.breakType]
+        for i, c in enumerate(self.text):
+            if c in " \t\n":
+                foundSpace = True
+            elif foundSpace:
+                segmentStrings.append(stringStart + self.text[startIdx:i])
+                stringStart = ""
+                startIdx = i
+                foundSpace = False
+        segmentStrings.append(self.text[startIdx:] +
+            SegmentedText.breakSuffix[self.breakType][-1] + self.appendedText)
+        # Adjust maxLength for continuation characters needed, to a minimum of 5
+        # characters (at that point we give up and exceed the requested margin)
+        maxLength -= len(SegmentedText.breakPrefix[self.breakType]) + \
+                     len(SegmentedText.breakSuffix[self.breakType])
+        if maxLength < 5:
+            maxLength = 5
+        # add breakValue between segments, and if any segments are still longer than
+        # maxLength, break those, further
+        segments = []
+        brkValue = _encodeBreakValue(self.breakLevel, self.breakType)
+        for i, string in enumerate(segmentStrings):
+            if len(string) > maxLength:
+                startIdx = 0
+                while len(string) - startIdx > maxLength:
+                    segments.append(string[startIdx:startIdx + maxLength])
+                    segments.append(brkValue)
+                    startIdx += maxLength
+                segments.append(string[startIdx:])
+            else:
+                segments.append(string)
+            if i < len(segmentStrings) - 1:
+                segments.append(brkValue)
+        return segments
+
+    def unbrokenString(self):
+        stringStart = SegmentedText.breakSuffix[self.breakType]
+        stringEnd = stringStart[-1]
+        return stringStart + self.text + stringEnd
+
+    def append(self, text):
+        self.appendedText += text
+
+    def prepend(self, text):
+        self.prependedText = text + self.prependedText
+
+def _decodeBreakValue(breakValue):
+    brkLevel = breakValue // 10
+    brkType = breakValue - brkLevel * 10
+    return brkLevel, brkType
+
+def _encodeBreakValue(breakLevel, breakType):
+    return breakLevel * 10 + breakType
 
 def _parsePosMacro(macroArgs):
     match = posMacroPattern.match(macroArgs)
@@ -611,12 +791,22 @@ l2$pass
 def outFormatTest():
     segText = SegmentedText("asdf")
     segText.add(None, "(")
+    segText.add(2, "$:w$")
+    segText.addQuotedString(None,'f"this is a very long string with a lot of words in '
+        'it. I am going to keep typing and typing until I have oooooooooooooooooooooo '
+        'something really long and hard to fit within the margin.  Lets do lot\'s of'
+        'wrapping!  Here I go, lots more text coming.  Lots of love: xxxxxxxxxxxxxxxx'
+        'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"', False, 2)
+    segText.add(None, ", ")
     fakeSegText = SegmentedText("deleteme")
-    fakeSegText.segments = ["asdf, ",2,"nert(",3, "wang, ",3, "blort), ",2,
-        "bbbbb + ", 3, "45 * ", 4, "3) + ", -1, "10 * ", -2, "2 ** ", -3, "4"]
+    fakeSegText.segments = ["asdf, ",20,"nert(",30, "wang, ",30, "blort), ",21,
+        "bbbbb + ", 30, "45 * ", 40, "3) + ", 11, "10 * ", 21, "2 ** ", 31, "4"]
     segText.concat(2, fakeSegText)
-    for margin in range(12, 65):
-        print("-"*margin)
+    print(repr(segText.segments))
+    for margin in range(12, 100):
+        print("-"*margin, margin)
+        savedSegments = segText.segments[:]  # Wrapping can only be done once
         print(segText.wrapText(4, 8, margin))
+        segText.segments = savedSegments
 # outFormatTest()
 #_moduleTest()

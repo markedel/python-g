@@ -1290,7 +1290,7 @@ def addAttrSaveText(saveText, ic, parentBreakLevel, cont, export):
     # that a series of attributes (a.b.c.d) will all end up at the same level (as
     # opposed to inappropriately nested in deeper and deeper levels)
     attrText = ic.sites.attrIcon.att.createSaveText(parentBreakLevel, cont, export)
-    if attrText.firstChar() in ('[', '('):  # No break before subscripts or calls
+    if hasattr(ic.sites.attrIcon.att, 'sticksToAttr'): # No break before subscript or call
         saveText.concat(None, attrText)
     else:
         saveText.concat(parentBreakLevel + 1, attrText, cont)
