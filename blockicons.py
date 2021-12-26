@@ -1212,6 +1212,14 @@ def createIconsFromBodyAst(bodyAst, window):
     icons = []
     seqStartIcon = None
     for stmt in bodyAst:
+        if hasattr(stmt, 'linecomments'):
+            for comment in stmt.linecomments:
+                commentIcon = nameicons.CommentIcon(comment, window)
+                if seqStartIcon is None:
+                    seqStartIcon = commentIcon
+                else:
+                    icons[-1].sites.seqOut.attach(icons[-1], commentIcon, 'seqIn')
+                icons.append(commentIcon)
         if isinstance(stmt, ast.Expr):
             stmtIcon = icon.createFromAst(stmt.value, window)
             bodyIcons = None

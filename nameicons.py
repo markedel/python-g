@@ -156,6 +156,11 @@ class StringIcon(TextIcon):
             return self.sites.attrIcon.att.execute(self.string)
         return self.string
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        text = filefmt.SegmentedText()
+        text.addQuotedString(None, self.text, contNeeded, parentBreakLevel + 1)
+        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+
     def createAst(self):
         return icon.composeAttrAst(self, ast.Str(self.string, lineno=self.id,
             col_offset=0))
@@ -165,6 +170,20 @@ class StringIcon(TextIcon):
 
     def compareData(self, data):
         return data == self.string and self.sites.attrIcon.att is None
+
+class CommentIcon(TextIcon):
+    """Temporary class for displaying comments (move to commenticon.py)"""
+    def __init__(self, text, window=None, location=None):
+        TextIcon.__init__(self, '# ' + text, window, location)
+        self.string = text
+
+    def createAst(self):
+        print("Creating AST for comment.  ...Try to prevent this from happening")
+        return ast.Pass(lineno=self.id, col_offset=0)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        #... need specialized wrapping stuff for comments
+        return filefmt.SegmentedText(self.text)
 
 class AttrIcon(icon.Icon):
     def __init__(self, name, window=None, location=None):

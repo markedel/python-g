@@ -1,5 +1,7 @@
 import ast, astpretty
 import re
+import io
+import tokenize
 import tkinter
 
 posMacroPattern = re.compile("(([-+])\\d*)(([-+])\\d*)")
@@ -285,6 +287,8 @@ def parseText(macroParser, text, fileName="Pasted Text"):
     if not isinstance(modAst, ast.Module) or len(modAst.body) == 0:
         print("Unexpected AST returned from ast.parse")
         return None
+    # Ast parsing tosses comments, but we need them
+    _transferCommentsToAst(expandedText, modAst)
     # Annotate the nodes in the tree per the annotations list
     for node in ast.walk(modAst):
         ann = annotations.get(node)
@@ -307,6 +311,160 @@ def parseText(macroParser, text, fileName="Pasted Text"):
         else:
             currentSegment.append(node)
     return segments
+
+def _transferCommentsToAst(text, moduleAst):
+    """Parse comments out of text and annotate the appropriate AST nodes so we can find
+    them again when constructing the icon hierarchy from the AST."""
+    comments, elses = _extractTokens(text)
+    _annotateAstWithComments(comments, elses, moduleAst.body)
+
+def _extractTokens(text):
+    """ Return two dictionaries: 1 mapping line numbers to comments, and 2 mapping
+    line numbers to else statements (the dictionary holds start column number)."""
+    # While it seems wasteful to run a whole separate pass over the file to extract
+    # comments and detect the positioning of else statements, these are easier on
+    # tokenized code (which we can't do before macro substitution).  I suspect the
+    # tokenize module is C code, so folding this in with macro expansion might be less
+    # hackish, but not necessarily faster.
+    lineNumToComment = {}
+    lineNumToElse = {}
+    # The tokenize module won't just take a text string.  It needs a utf-8 coded
+    # readline function
+    with io.BytesIO(text.encode('utf-8')) as f:
+        tokens = tokenize.tokenize(f.readline)
+        prevCommentLine = -1
+        prevCommentCol = -1
+        prevKey = None
+        for token in tokens:
+            if token.type == tokenize.COMMENT:
+                startLine, startCol = token.start
+                isLineComment = token.line[:startCol].isspace()
+                commentText = token.string.lstrip(" \t#")
+                if startLine == prevCommentLine + 1 and startCol == prevCommentCol \
+                        and isLineComment:
+                    # Continuing previous comment, append to it
+                    lineNumToComment[prevKey] += '\n' + commentText
+                else:
+                    lineNumToComment[startLine] = commentText
+                    prevKey = startLine
+                prevCommentLine = startLine
+                prevCommentCol = startCol
+            elif token.type == tokenize.NAME and token.string == "else":
+                startLine, startCol = token.start
+                lineNumToElse[startLine] = startCol
+    print("Extracted Comments:")
+    for k, v in lineNumToComment.items():
+        print("-->", k, v)
+    print("Extracted elses")
+    for k, v in lineNumToElse.items():
+        print("-->", k, v)
+    return lineNumToComment, lineNumToElse
+
+def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
+    for stmt in bodyAsts:
+        commentLines = _commentLinesBetween(comments, startLine, stmt.lineno)
+        if commentLines is not None:
+            stmt.linecomments = [comments[line] for line in commentLines]
+            print("annotated (lines)", stmt, stmt.linecomments)
+        # Block statements' line number range covers the entire code block below the stmt
+        # so we guess based on the line number of the first statement of the body (a
+        # guess that will be wrong for the unlikely case of a multi-line statement with
+        # no newline between it an the body)
+        if hasattr(stmt, 'body'):
+            lastStmtLine = max(stmt.lineno, stmt.body[0].lineno - 1)
+        else:
+            lastStmtLine = stmt.end_lineno
+        commentLines = _commentLinesBetween(comments, stmt.lineno, lastStmtLine+1)
+        if commentLines is None:
+            pass
+        elif len(commentLines) == 1:
+            # There is only one comment associated with the entire statement, attach
+            # it to the statement
+            stmt.stmtcomment = comments[commentLines[0]]
+            print("annotated (stmt)", stmt, stmt.stmtcomment)
+        else:
+            # There are multiple comments associated with statement:  Associate each with
+            # the outermost AST node entirely confined to comment line.  If that fails,
+            # or if stmt is a block stmt (for which _outermostAstOnLine gives up), just
+            # assume it's one big statement comment.
+            commentAsts = []
+            for lineNum in commentLines:
+                outerAst = _outermostAstOnLine(lineNum, stmt)
+                if outerAst is None:
+                    break
+                commentAsts.append(outerAst)
+            if len(commentAsts) == len(commentLines):
+                for commentAst, line in zip(commentAsts, commentLines):
+                    commentAst.iconcomment = comments[line]
+                    print("annotated (icon)", commentAst, commentAst.iconcomment)
+            else:
+                commentList = [comments[line] for line in commentLines]
+                stmt.stmtcomment = '\n'.join(commentList)
+                print("annotated (stmt, fallback)", stmt,stmt.stmtcomment)
+        if hasattr(stmt, 'body'):
+            # Recursively process statements in code block(s)
+            _annotateAstWithComments(comments, elses, stmt.body, lastStmtLine + 1)
+            startLine = stmt.end_lineno + 1
+            if hasattr(stmt, 'orelse') and len(stmt.orelse) > 0:
+                # Process else clause after if or for.  Unfortunately, the relevant AST
+                # nodes don't record the location of the else statement.  That was dug
+                # out of the source code by _extractTokens and passed in as the "elses"
+                # dictionary.  Location of else statements is needed to properly place
+                # comments before vs. after vs. on the else.
+                bodyEnd = stmt.body[-1].end_lineno
+                orelseStart = stmt.orelse[0].lineno
+                elseLine, _elseCol = _findElseBetween(elses, bodyEnd + 1, orelseStart)
+                if elseLine is None:
+                    # The else is not on a separate line, attach following line comments
+                    # to the first statement in the orelse block
+                    afterElseLine = bodyEnd + 1
+                else:
+                    # An else statement was found, attach comment lines before to the
+                    # elselinecomment property and comments on it  to elsestmtcomment.
+                    commentLines = _commentLinesBetween(comments, bodyEnd+1, elseLine)
+                    if commentLines is not None:
+                        stmt.elselinecomments = [comments[l] for l in commentLines]
+                        print("annotated (lines before else)", stmt, stmt.elselinecomments)
+                    if elseLine in comments:
+                        stmt.elsestmtcomment = comments[elseLine]
+                        print("annotated (stmt else)", stmt, stmt.elsestmtcomment)
+                    afterElseLine = elseLine + 1
+                # Recursively process statements in the orelse code block (and line
+                # comments between the else and it.
+                _annotateAstWithComments(comments, elses, stmt.orelse, afterElseLine)
+        else:
+            startLine = lastStmtLine + 1
+    return startLine
+
+def _commentLinesBetween(lineToCommentMap, startLine, endLine):
+    commentList = None
+    for lineNum in range(startLine, endLine):
+        if lineNum not in lineToCommentMap:
+            continue
+        if commentList is None:
+            commentList = []
+        commentList.append(lineNum)
+    return commentList
+
+def _findElseBetween(elseMap, startLine, endLine):
+    for line in range(startLine, endLine):
+        if line in elseMap:
+            return line, elseMap[line]
+    return None, None
+
+def _outermostAstOnLine(lineNum, exprAst):
+    if hasattr(exprAst, 'body'):
+        # We can't iterate over children with ast.iter_child_nodes, so just give up
+        return None
+    if hasattr(exprAst, 'lineno') and hasattr(exprAst, 'end_lineno') and \
+            exprAst.lineno == lineNum and exprAst.end_lineno == lineNum:
+        return exprAst
+    else:
+        for a in ast.iter_child_nodes(exprAst):
+            outerAst = _outermostAstOnLine(lineNum, a)
+            if outerAst is not None:
+                return outerAst
+    return None
 
 class SegmentedText:
     """Holds save/clipboard .pyg text for an individual python statement, annotated with
@@ -609,7 +767,7 @@ class QuotedString:
         startIdx = 0
         stringStart = self.prependedText + SegmentedText.breakSuffix[self.breakType]
         for i, c in enumerate(self.text):
-            if c in " \t\n":
+            if c.isspace():
                 foundSpace = True
             elif foundSpace:
                 segmentStrings.append(stringStart + self.text[startIdx:i])
