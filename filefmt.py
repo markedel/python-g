@@ -2,6 +2,7 @@ import ast, astpretty
 import re
 import io
 import tokenize
+import textwrap
 import tkinter
 
 posMacroPattern = re.compile("(([-+])\\d*)(([-+])\\d*)")
@@ -255,6 +256,9 @@ class AnnotationList:
                 return self.byStartPos.get((node.lineno << 16) + node.col_offset)
         return None
 
+    def getByLineAndCol(self, line, col):
+        return self.byStartPos.get((line << 16) + col)
+
     def dump(self):
         print("annotations byStartPos")
         for key, val in self.byStartPos.items():
@@ -288,7 +292,7 @@ def parseText(macroParser, text, fileName="Pasted Text"):
         print("Unexpected AST returned from ast.parse")
         return None
     # Ast parsing tosses comments, but we need them
-    _transferCommentsToAst(expandedText, modAst)
+    _transferCommentsToAst(expandedText, modAst, annotations)
     # Annotate the nodes in the tree per the annotations list
     for node in ast.walk(modAst):
         ann = annotations.get(node)
@@ -312,15 +316,18 @@ def parseText(macroParser, text, fileName="Pasted Text"):
             currentSegment.append(node)
     return segments
 
-def _transferCommentsToAst(text, moduleAst):
+def _transferCommentsToAst(text, moduleAst, annotations):
     """Parse comments out of text and annotate the appropriate AST nodes so we can find
     them again when constructing the icon hierarchy from the AST."""
-    comments, elses = _extractTokens(text)
+    comments, elses = _extractTokens(text, annotations)
     _annotateAstWithComments(comments, elses, moduleAst.body)
 
-def _extractTokens(text):
+def _extractTokens(text, annotations):
     """ Return two dictionaries: 1 mapping line numbers to comments, and 2 mapping
-    line numbers to else statements (the dictionary holds start column number)."""
+    line numbers to else statements (the dictionary holds start column number).
+    annotations argument is used to attach comment macro annotations, and to know
+    how to interpret line breaks in the column (by interpreting the macro arguments
+    to detect "w" argument indicating that the comment should be wrapped)."""
     # While it seems wasteful to run a whole separate pass over the file to extract
     # comments and detect the positioning of else statements, these are easier on
     # tokenized code (which we can't do before macro substitution).  I suspect the
@@ -335,29 +342,44 @@ def _extractTokens(text):
         prevCommentLine = -1
         prevCommentCol = -1
         prevKey = None
+        wrap = False
         for token in tokens:
             if token.type == tokenize.COMMENT:
                 startLine, startCol = token.start
                 isLineComment = token.line[:startCol].isspace()
-                commentText = token.string.lstrip(" \t#")
+                if token.string[1] == " ":
+                    commentText = token.string[2:]
+                else:
+                    # Most comments start "# ".  If not, capture the second character.
+                    commentText = token.string[1:]
                 if startLine == prevCommentLine + 1 and startCol == prevCommentCol \
                         and isLineComment:
                     # Continuing previous comment, append to it
-                    lineNumToComment[prevKey] += '\n' + commentText
+                    ann, prevText = lineNumToComment[prevKey]
+                    if wrap:
+                        commentText = commentText.replace('\\n', '\n')
+                        lineSep = "" if prevText[-1] == '\n' else ' '
+                    else:
+                        lineSep = '\n'
+                    lineNumToComment[prevKey] = (ann, prevText + lineSep + commentText)
                 else:
-                    lineNumToComment[startLine] = commentText
+                    # Start of new comment, look for macro annotation to figure out if
+                    # it is supposed to be wrapped.  If so comment lines are joined with
+                    # ' ', and '\n' characters become newlines
+                    wrap = False
+                    ann = annotations.getByLineAndCol(startLine, startCol)
+                    if ann is not None:
+                        ann = ann[1]
+                        if "w" in ann:
+                            wrap = True
+                            commentText = commentText.replace('\\n', '\n')
+                    lineNumToComment[startLine] = (ann, commentText)
                     prevKey = startLine
                 prevCommentLine = startLine
                 prevCommentCol = startCol
             elif token.type == tokenize.NAME and token.string == "else":
                 startLine, startCol = token.start
                 lineNumToElse[startLine] = startCol
-    print("Extracted Comments:")
-    for k, v in lineNumToComment.items():
-        print("-->", k, v)
-    print("Extracted elses")
-    for k, v in lineNumToElse.items():
-        print("-->", k, v)
     return lineNumToComment, lineNumToElse
 
 def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
@@ -365,7 +387,6 @@ def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
         commentLines = _commentLinesBetween(comments, startLine, stmt.lineno)
         if commentLines is not None:
             stmt.linecomments = [comments[line] for line in commentLines]
-            print("annotated (lines)", stmt, stmt.linecomments)
         # Block statements' line number range covers the entire code block below the stmt
         # so we guess based on the line number of the first statement of the body (a
         # guess that will be wrong for the unlikely case of a multi-line statement with
@@ -381,7 +402,6 @@ def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
             # There is only one comment associated with the entire statement, attach
             # it to the statement
             stmt.stmtcomment = comments[commentLines[0]]
-            print("annotated (stmt)", stmt, stmt.stmtcomment)
         else:
             # There are multiple comments associated with statement:  Associate each with
             # the outermost AST node entirely confined to comment line.  If that fails,
@@ -396,11 +416,9 @@ def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
             if len(commentAsts) == len(commentLines):
                 for commentAst, line in zip(commentAsts, commentLines):
                     commentAst.iconcomment = comments[line]
-                    print("annotated (icon)", commentAst, commentAst.iconcomment)
             else:
                 commentList = [comments[line] for line in commentLines]
                 stmt.stmtcomment = '\n'.join(commentList)
-                print("annotated (stmt, fallback)", stmt,stmt.stmtcomment)
         if hasattr(stmt, 'body'):
             # Recursively process statements in code block(s)
             _annotateAstWithComments(comments, elses, stmt.body, lastStmtLine + 1)
@@ -424,10 +442,8 @@ def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
                     commentLines = _commentLinesBetween(comments, bodyEnd+1, elseLine)
                     if commentLines is not None:
                         stmt.elselinecomments = [comments[l] for l in commentLines]
-                        print("annotated (lines before else)", stmt, stmt.elselinecomments)
                     if elseLine in comments:
                         stmt.elsestmtcomment = comments[elseLine]
-                        print("annotated (stmt else)", stmt, stmt.elsestmtcomment)
                     afterElseLine = elseLine + 1
                 # Recursively process statements in the orelse code block (and line
                 # comments between the else and it.
@@ -584,6 +600,12 @@ class SegmentedText:
             self.segments.append(_encodeBreakValue(breakLevel, 1 if needsContinue else 0))
             self.segments.append(qs)
 
+    def addComment(self, comment, sepFromPrevComment):
+        """Add the content of a comment to the text"""
+        # Note that this is cheaty because we know comments are currently not allowed
+        # to be combined with other icons
+        self.segments = [SegTextComment(comment, sepFromPrevComment)]
+
     def copy(self):
         """Segmented text is mutable, and it used in python-g with a less-than-rigorous
         assumption that if code returns a SegmentedText object, it is fair game to
@@ -656,6 +678,40 @@ class SegmentedText:
             strings[-1] = strings[-1][:-1]
         # Return the joined string
         return "".join(strings)
+
+    def commentText(self, wrap, indent, margin):
+        """Assume that the entire string is one big comment.  Return wrapped, indented
+        text with leading '#'"""
+        if len(self.segments) != 1 or not isinstance(self.segments[0], SegTextComment):
+            print("Internal error, expected SegmentedText to contain comment")
+            return ""
+        origLines = self.segments[0].text.split("\n")
+        if wrap:
+            # Wrap the text of the comment at the margin, adding extra newlines where
+            # marked with hard newlines.  The textwrap module almost does what we want,
+            # except for its handling of embedded newlines, so we can only use it
+            # per-newline-terminated-line rather than on all of the lines together.
+            wrappedLines = []
+            indentSpaces = (indent * " ")
+            initialIndent = indentSpaces + "$:w$# "
+            subsequentIndent = indentSpaces + "# "
+            for i, line in enumerate(origLines):
+                wrappedLines += textwrap.wrap(line, margin,
+                    replace_whitespace=False, initial_indent=initialIndent,
+                    subsequent_indent=subsequentIndent)
+                initialIndent = subsequentIndent
+                if i < len(origLines) - 1:
+                    wrappedLines[-1] += '\\n'
+            outText = "\n".join(wrappedLines)
+        else:
+            indentString = (indent * " ") + "# "
+            origLines[0] = indentString + origLines[0]
+            joinString = "\n" + indentString
+            outText = joinString.join(origLines)
+        if self.segments[0].sepFromPrev:
+            # In unlikely event there was a preceding comment icon, add blank line before
+            return "\n" + outText
+        return outText
 
     def _findAllBreakPoints(self, levelCutoff, startIndent, continueIndent, margin):
         startIdx = 0
@@ -810,6 +866,13 @@ class QuotedString:
 
     def prepend(self, text):
         self.prependedText = text + self.prependedText
+
+class SegTextComment:
+    """Helper object for SegmentedText to hold comments and their related settings."""
+    __slots__ = ('text', 'sepFromPrev')
+    def __init__(self, text, sepFromPrev):
+        self.text = text
+        self.sepFromPrev = sepFromPrev
 
 def _decodeBreakValue(breakValue):
     brkLevel = breakValue // 10

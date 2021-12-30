@@ -1210,16 +1210,9 @@ icon.registerIconCreateFn(ast.AsyncWith, createWithIconFromAst)
 
 def createIconsFromBodyAst(bodyAst, window):
     icons = []
-    seqStartIcon = None
     for stmt in bodyAst:
         if hasattr(stmt, 'linecomments'):
-            for comment in stmt.linecomments:
-                commentIcon = nameicons.CommentIcon(comment, window)
-                if seqStartIcon is None:
-                    seqStartIcon = commentIcon
-                else:
-                    icons[-1].sites.seqOut.attach(icons[-1], commentIcon, 'seqIn')
-                icons.append(commentIcon)
+            _addCommentIcons(stmt.linecomments, window, icons)
         if isinstance(stmt, ast.Expr):
             stmtIcon = icon.createFromAst(stmt.value, window)
             bodyIcons = None
@@ -1245,6 +1238,8 @@ def createIconsFromBodyAst(bodyAst, window):
                     len(stmt.orelse) != 0:
                 # Process else block (note that after elif processing above, stmt may in
                 # some cases point to a nested statement being flattened out)
+                if hasattr(stmt, 'elselinecomments'):
+                    _addCommentIcons(stmt.elselinecomments, window, bodyIcons)
                 elseIcon = ElseIcon(window)
                 elseBlockIcons = createIconsFromBodyAst(stmt.orelse, window)
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elseIcon, 'seqIn')
@@ -1258,14 +1253,20 @@ def createIconsFromBodyAst(bodyAst, window):
         else:
             stmtIcon = icon.createFromAst(stmt, window)
             bodyIcons = None
-        if seqStartIcon is None:
-            seqStartIcon = stmtIcon
-        elif icons[-1].hasSite('seqOut') and stmtIcon.hasSite('seqIn'):
-            # Link the statement to the previous statement
-            icons[-1].sites.seqOut.attach(icons[-1], stmtIcon, 'seqIn')
-        else:
-            print('Cannot link icons (no sequence sites)')  # Shouldn't happen
+        if len(icons) > 0:
+            if icons[-1].hasSite('seqOut') and stmtIcon.hasSite('seqIn'):
+                # Link the statement to the previous statement
+                icons[-1].sites.seqOut.attach(icons[-1], stmtIcon, 'seqIn')
+            else:
+                print('Cannot link icons (no sequence sites)')  # Shouldn't happen
         icons.append(stmtIcon)
         if bodyIcons is not None:
             icons += bodyIcons
     return icons
+
+def _addCommentIcons(commentList, window, sequence):
+    for comment in commentList:
+        commentIcon = nameicons.CommentIcon(comment[1], window, args=comment[0])
+        if len(sequence) > 0:
+            sequence[-1].sites.seqOut.attach(sequence[-1], commentIcon, 'seqIn')
+        sequence.append(commentIcon)

@@ -1109,7 +1109,7 @@ class CallIcon(icon.Icon):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText('(')
         argText = icon.seriesSaveText(brkLvl, self.sites.argIcons, False, export)
-        text.concat(None, argText)
+        text.concat(brkLvl, argText)
         text.add(None, ')')
         return text
 
