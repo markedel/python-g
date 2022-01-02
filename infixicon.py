@@ -1,17 +1,21 @@
 from PIL import Image
 import comn
 import iconlayout
+import iconsites
 import icon
 import entryicon
 import opicons
 import cursors
 
 class InfixIcon(icon.Icon):
-    def __init__(self, op, opImg=None, window=None, location=None):
+    def __init__(self, op, opImg=None, isKwd=False, window=None, location=None):
         icon.Icon.__init__(self, window)
         self.operator = op
         if opImg is None:
-            opTxt = icon.iconBoxedText(op)
+            if isKwd:
+                opTxt = icon.iconBoxedText(op, icon.boldFont, icon.KEYWORD_COLOR)
+            else:
+                opTxt = icon.iconBoxedText(op)
             opImg = Image.new('RGBA', opTxt.size, color=(0, 0, 0, 0))
             opImg.paste(opTxt, (0, 0))
             rInSiteX = opTxt.width - icon.inSiteImage.width
@@ -161,3 +165,24 @@ class InfixIcon(icon.Icon):
         self.replaceChild(None, 'rightArg')
         win.cursor.setToEntryIcon()
         win.redisplayChangedEntryIcon(evt, redrawRect)
+
+class AsIcon(InfixIcon):
+    allowableSnaps = {"WithIcon": "values", "ImportIcon": "values",
+        "ImportFromIcon": "importsIcons"}
+
+    def __init__(self, window=None, location=None):
+        InfixIcon.__init__(self, "as", None, True, window, location)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on parent being a "with" or "import" statement
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def snapFn(ic, siteId):
+            siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
+            allowable = self.allowableSnaps.get(ic.__class__.__name__)
+            return allowable is not None and allowable == siteName
+        outSites = snapLists['output']
+        snapLists['output'] = []
+        snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
+        return snapLists

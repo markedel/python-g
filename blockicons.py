@@ -58,23 +58,6 @@ defRParenImage = comn.asciiToImage((
  "oooooooo"))
 defRParenExtendDupRows = 7,
 
-class WithAsIcon(infixicon.InfixIcon):
-    def __init__(self, window=None, location=None):
-        infixicon.InfixIcon.__init__(self, "as", None, window, location)
-
-    def snapLists(self, forCursor=False):
-        # Make snapping conditional on parent being a "with" statement
-        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
-        if forCursor:
-            return snapLists
-        def snapFn(ic, siteId):
-            siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
-            return isinstance(ic, WithIcon) and siteName == "argIcons"
-        outSites = snapLists['output']
-        snapLists['output'] = []
-        snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
-        return snapLists
-
 class PosOnlyMarkerIcon(nameicons.TextIcon):
     def __init__(self, window=None, location=None):
         nameicons.TextIcon.__init__(self, '/', window, location)
@@ -108,7 +91,7 @@ class WithIcon(nameicons.SeriesStmtIcon):
         for site in self.sites.values:
             if site.att is None:
                 raise icon.IconExecException(self, "Missing argument(s)")
-            if isinstance(site.att, WithAsIcon):
+            if isinstance(site.att, infixicon.AsIcon):
                 leftArg = site.att.leftArg()
                 rightArg = site.att.rightArg()
                 if leftArg is None:
@@ -1199,7 +1182,7 @@ def createWithIconFromAst(astNode, window):
         if item.optional_vars is None:
             topIcon.insertChild(contextIcon, "values", idx)
         else:
-            asIcon = WithAsIcon(window)
+            asIcon = infixicon.AsIcon(window)
             asIcon.replaceChild(contextIcon, "leftArg")
             asIcon.replaceChild(icon.createFromAst(item.optional_vars, window),
                 "rightArg")

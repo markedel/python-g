@@ -1393,7 +1393,7 @@ class CprhForIcon(icon.Icon):
 class DictElemIcon(infixicon.InfixIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
-        infixicon.InfixIcon.__init__(self, ":", icon.colonImage, window, location)
+        infixicon.InfixIcon.__init__(self, ":", icon.colonImage, False, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent being a dictionary constant
@@ -1421,7 +1421,7 @@ class DictElemIcon(infixicon.InfixIcon):
 class ArgAssignIcon(infixicon.InfixIcon):
     """Special assignment statement for use only in function argument lists"""
     def __init__(self, window=None, location=None):
-        infixicon.InfixIcon.__init__(self, "=", argAssignImage, window, location)
+        infixicon.InfixIcon.__init__(self, "=", argAssignImage, False, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on being part of an argument or parameter list

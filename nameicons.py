@@ -12,6 +12,7 @@ import listicons
 import assignicons
 import entryicon
 import cursors
+import infixicon
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
@@ -513,7 +514,7 @@ class GlobalIcon(SeriesStmtIcon):
             if site.att is None:
                 raise icon.IconExecException(self, "Missing argument(s)")
             if not isinstance(site.att, IdentifierIcon):
-                raise icon.IconExecException(site.att, "Argument be identifier")
+                raise icon.IconExecException(site.att, "Argument must be identifier")
         names = [site.att.name for site in self.sites.values]
         return ast.Global(names, lineno=self.id, col_offset=0)
 
@@ -526,9 +527,219 @@ class NonlocalIcon(SeriesStmtIcon):
             if site.att is None:
                 raise icon.IconExecException(self, "Missing argument(s)")
             if not isinstance(site.att, IdentifierIcon):
-                raise icon.IconExecException(site.att, "Argument be identifier")
+                raise icon.IconExecException(site.att, "Argument must be identifier")
         names = [site.att.name for site in self.sites.values]
         return ast.Nonlocal(names, lineno=self.id, col_offset=0)
+
+class ImportIcon(SeriesStmtIcon):
+    def __init__(self, window=None, location=None):
+        SeriesStmtIcon.__init__(self, "import", window, location=location)
+
+    def createAst(self):
+        for site in self.sites.values:
+            if site.att is None:
+                raise icon.IconExecException(self, "Missing argument(s)")
+        imports = []
+        for site in self.sites.values:
+            importIcon = site.att
+            if isinstance(importIcon, infixicon.AsIcon):
+                nameIcon = importIcon.sites.leftArg.att
+                if nameIcon is None:
+                    raise icon.IconExecException(importIcon, "Missing import name")
+                moduleName = _moduleNameFromAttrs(nameIcon)
+                if moduleName is None:
+                    raise icon.IconExecException(nameIcon,
+                        "Improper module name in import")
+                asNameIcon = importIcon.sites.rightArg.att
+                if asNameIcon is None:
+                    raise icon.IconExecException(importIcon, "Missing import as name")
+                if not isinstance(asNameIcon, IdentifierIcon):
+                    raise icon.IconExecException(asNameIcon,
+                            "Import as name must be identifier")
+                imports.append(ast.alias(moduleName, asNameIcon.name,
+                    lineno=importIcon.id, col_offset=0))
+            else:
+                if importIcon is None:
+                    raise icon.IconExecException(importIcon, "Missing import name")
+                moduleName = _moduleNameFromAttrs(importIcon)
+                if moduleName is None:
+                    raise icon.IconExecException(importIcon,
+                        "Improper module name in import")
+                imports.append(ast.alias(moduleName, None, lineno=importIcon.id,
+                    col_offset=0))
+        return ast.Import(imports, level=0, lineno=self.id, col_offset=0)
+
+class ImportFromIcon(icon.Icon):
+    def __init__(self, window=None, location=None):
+        icon.Icon.__init__(self, window)
+        bodyWidth = icon.getTextSize('from', icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        bodyHeight = icon.minTxtIconHgt
+        impWidth = icon.getTextSize("import", icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight, impWidth)
+        self.moduleNameWidth = icon.EMPTY_ARG_WIDTH
+        siteYOffset = bodyHeight // 2
+        moduleOffset = bodyWidth + icon.dragSeqImage.width-1 - icon.OUTPUT_SITE_DEPTH
+        self.sites.add('moduleIcon', 'input', moduleOffset, siteYOffset)
+        seqX = icon.dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        importsX = icon.dragSeqImage.width + bodyWidth-1 + icon.EMPTY_ARG_WIDTH-1 + \
+                   impWidth-1
+        self.importsList = iconlayout.ListLayoutMgr(self, 'importsIcons', importsX,
+            siteYOffset, simpleSpine=True)
+        totalWidth = importsX + self.importsList.width - 1
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            bodyWidth, bodyHeight, importWidth = self.bodySize
+            bodyOffset = icon.dragSeqImage.width - 1
+            # "from"
+            img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
+                color=(0, 0, 0, 0))
+            fromImg = icon.iconBoxedText("from", icon.boldFont, icon.KEYWORD_COLOR)
+            img.paste(fromImg, (bodyOffset, 0))
+            cntrSiteY = self.sites.seqInsert.yOffset
+            fromImgX = bodyOffset + bodyWidth - 1 - icon.inSiteImage.width
+            fromImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
+            img.paste(icon.inSiteImage, (fromImgX, fromImageY))
+            icon.drawSeqSites(img, bodyOffset, 0, fromImg.height, indent="right",
+             extendWidth=fromImg.width)
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
+            self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
+            # "import"
+            importImg = icon.iconBoxedText("import", icon.boldFont, icon.KEYWORD_COLOR)
+            img = Image.new('RGBA', (importImg.width, bodyHeight), color=(0, 0, 0, 0))
+            img.paste(importImg, (0, 0))
+            importImgX = importImg.width - icon.inSiteImage.width
+            img.paste(icon.inSiteImage, (importImgX, fromImageY))
+            importOffset = bodyOffset + bodyWidth - 1 + self.moduleNameWidth - 1
+            self.drawList.append(((importOffset, self.sites.seqIn.yOffset - 1), img))
+            # Commas and possible list simple-spines
+            listOffset = importOffset + importWidth - 1 - icon.OUTPUT_SITE_DEPTH
+            self.drawList += self.importsList.drawListCommas(listOffset, cntrSiteY)
+            self.drawList += self.importsList.drawSimpleSpine(listOffset, cntrSiteY)
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.importsList.makeInsertSnapList()
+        return siteSnapLists
+
+    def doLayout(self, left, top, layout):
+        self.moduleNameWidth = layout.moduleNameWidth
+        self.importsList.doLayout(layout)
+        bodyWidth, bodyHeight, importWidth = self.bodySize
+        width = icon.dragSeqImage.width-1 + bodyWidth-1 + self.moduleNameWidth-1 + \
+            importWidth-1 + self.importsList.width
+        heightAbove = max(bodyHeight // 2, self.importsList.spineTop)
+        heightBelow = max(bodyHeight - bodyHeight // 2,
+            self.importsList.spineHeight - self.importsList.spineTop)
+        height = heightAbove + heightBelow
+        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2 + 1
+        self.sites.seqOut.yOffset = heightAbove + bodyHeight // 2 - 1
+        self.sites.seqInsert.yOffset = heightAbove
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqInsert)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        bodyWidth, bodyHeight, importWidth = self.bodySize
+        cntrYOff = bodyHeight // 2
+        moduleIcon = self.sites.moduleIcon.att
+        moduleLayouts = [None] if moduleIcon is None else moduleIcon.calcLayouts()
+        moduleXOff = bodyWidth - 1
+        importsListLayouts = self.importsList.calcLayouts()
+        layouts = []
+        for moduleLayout, importListLayout in iconlayout.allCombinations(
+                (moduleLayouts, importsListLayouts)):
+            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, cntrYOff)
+            layout.addSubLayout(moduleLayout, 'moduleIcon', moduleXOff, 0)
+            moduleNameWidth = icon.EMPTY_ARG_WIDTH if moduleLayout is None \
+                else moduleLayout.width
+            layout.moduleNameWidth = moduleNameWidth
+            argXOff = bodyWidth - 1 + moduleNameWidth - 1 + importWidth
+            importListLayout.mergeInto(layout, argXOff - icon.OUTPUT_SITE_DEPTH, 0)
+            layout.width = argXOff + importListLayout.width + importWidth - 2
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
+
+    def textRepr(self):
+        moduleText = icon.argTextRepr(self.sites.moduleIcon)
+        importsText = icon.seriesTextRepr(self.sites.importsIcons)
+        return "from " + moduleText + " import " + importsText
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("from ")
+        icon.addArgSaveText(text, brkLvl, self.sites.moduleIcons, contNeeded, export)
+        text.add(brkLvl, " import ", contNeeded)
+        icon.addSeriesSaveText(text, brkLvl, self.sites.importsIcons, contNeeded,
+            export)
+        return text
+
+    def dumpName(self):
+        return "import from"
+
+    def createAst(self):
+        moduleIcon = self.sites.moduleIcon.att
+        if moduleIcon is None:
+            raise icon.IconExecException(self, "Import-from missing module name")
+        moduleName = _moduleNameFromAttrs(moduleIcon)
+        if moduleName is None:
+            raise icon.IconExecException(moduleIcon, "Improper module name in import")
+        imports = []
+        for site in self.sites.importsIcons:
+            importIcon = site.att
+            if isinstance(importIcon, infixicon.AsIcon):
+                nameIcon = importIcon.sites.leftArg.att
+                if nameIcon is None:
+                    raise icon.IconExecException(importIcon, "Missing import name")
+                if not isinstance(nameIcon, IdentifierIcon):
+                    raise icon.IconExecException(nameIcon,
+                            "Import name must be identifier")
+                asNameIcon = importIcon.sites.rightArg.att
+                if asNameIcon is None:
+                    raise icon.IconExecException(importIcon, "Missing import as name")
+                if not isinstance(asNameIcon, IdentifierIcon):
+                    raise icon.IconExecException(asNameIcon,
+                            "Import as name must be identifier")
+                imports.append(ast.alias(nameIcon.name, asNameIcon.name,
+                    lineno=importIcon.id, col_offset=0))
+            else:
+                if importIcon is None:
+                    raise icon.IconExecException(importIcon, "Missing import name")
+                if not isinstance(importIcon, IdentifierIcon):
+                    raise icon.IconExecException(importIcon,
+                        "Import name must be identifier")
+                imports.append(ast.alias(importIcon.name, None, lineno=importIcon.id,
+                    col_offset=0))
+        return ast.ImportFrom(moduleName, imports, level=0, lineno=self.id, col_offset=0)
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch icon body
+        if not icon.Icon.inRectSelect(self, rect):
+            return False
+        icLeft, icTop = self.rect[:2]
+        bodyLeft = icLeft + icon.dragSeqImage.width - 1
+        bodyWidth, bodyHeight, importWidth = self.bodySize
+        bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
+        return comn.rectsTouch(rect, bodyRect)
 
 class YieldIcon(icon.Icon):
     def __init__(self, window=None, location=None):
@@ -732,7 +943,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
 class ToDoIcon(TextIcon):
     def __init__(self, window=None, location=None):
         name = self.__class__.__name__
-        TextIcon.__init__(self, 'ToDo: ' + name + 'Not implemented', window, location)
+        TextIcon.__init__(self, 'ToDo: ' + name + ' Not implemented', window, location)
 
 class ExceptIcon(ToDoIcon):
     pass
@@ -740,17 +951,25 @@ class ExceptIcon(ToDoIcon):
 class FinallyIcon(ToDoIcon):
     pass
 
-class FromIcon(ToDoIcon):
-    pass
-
-class ImportIcon(ToDoIcon):
-    pass
-
 class RaiseIcon(ToDoIcon):
     pass
 
 class TryIcon(ToDoIcon):
     pass
+
+def _moduleNameFromAttrs(identOrAttrIcon):
+    isIdentifier = isinstance(identOrAttrIcon, IdentifierIcon)
+    isAttribute = isinstance(identOrAttrIcon, AttrIcon)
+    if not isIdentifier and not isAttribute:
+        return None
+    name = ("." + identOrAttrIcon.name) if isAttribute else identOrAttrIcon.name
+    attrIcon = identOrAttrIcon.sites.attrIcon.att
+    if attrIcon is None:
+        return name
+    attrString = _moduleNameFromAttrs(identOrAttrIcon.sites.attrIcon.att)
+    if attrString is None:
+        return None
+    return name + attrString
 
 # Getting resources (particularly icon class definitions) from other icon files requires
 # circular imports, unfortunately.  Here, the import is deferred far enough down the file
@@ -794,7 +1013,7 @@ def determineCtx(ic):
     elif parentClass in (blockicons.DefIcon, blockicons.ClassDefIcon):
         if parentSite == 'nameIcon':
             return ast.Store()
-    elif parentClass is blockicons.WithAsIcon:
+    elif parentClass is infixicon.AsIcon:
         if parentSite == 'rightArg':
             return ast.Store()
     elif parentClass is DelIcon:
@@ -812,6 +1031,39 @@ def createReturnIconFromAst(astNode, window):
         topIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
     return topIcon
 icon.registerIconCreateFn(ast.Return, createReturnIconFromAst)
+
+def createImportIconFromAst(astNode, window):
+    topIcon = ImportIcon(window)
+    aliases = []
+    for alias in astNode.names:
+        if alias.asname is None:
+            aliases.append(IdentifierIcon(alias.name, window))
+        else:
+            asIcon = infixicon.AsIcon(window)
+            asIcon.replaceChild(IdentifierIcon(alias.name, window), 'leftArg')
+            asIcon.replaceChild(IdentifierIcon(alias.asname, window), 'rightArg')
+            aliases.append(asIcon)
+    topIcon.insertChildren(aliases, "values", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.Import, createImportIconFromAst)
+
+def createImportFromIconFromAst(astNode, window):
+    if astNode.level != 0:
+        return IdentifierIcon("**relative imports not yet supported**", window)
+    topIcon = ImportFromIcon(window)
+    topIcon.replaceChild(IdentifierIcon(astNode.module, window), 'moduleIcon')
+    aliases = []
+    for alias in astNode.names:
+        if alias.asname is None:
+            aliases.append(IdentifierIcon(alias.name, window))
+        else:
+            asIcon = infixicon.AsIcon(window)
+            asIcon.replaceChild(IdentifierIcon(alias.name, window), 'leftArg')
+            asIcon.replaceChild(IdentifierIcon(alias.asname, window), 'rightArg')
+            aliases.append(asIcon)
+    topIcon.insertChildren(aliases, "importsIcons", 0)
+    return topIcon
+icon.registerIconCreateFn(ast.ImportFrom, createImportFromIconFromAst)
 
 def createDeleteIconFromAst(astNode, window):
     topIcon = DelIcon(window)
