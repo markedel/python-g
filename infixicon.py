@@ -3,6 +3,7 @@ import comn
 import iconlayout
 import iconsites
 import icon
+import filefmt
 import entryicon
 import opicons
 import cursors
@@ -186,3 +187,10 @@ class AsIcon(InfixIcon):
         snapLists['output'] = []
         snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
         return snapLists
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = icon.argSaveText(brkLvl, self.sites.leftArg, contNeeded, export)
+        text.add(None, " as ")
+        icon.addArgSaveText(text, brkLvl, self.sites.rightArg, contNeeded, export)
+        return text

@@ -687,7 +687,7 @@ class ImportFromIcon(icon.Icon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText("from ")
-        icon.addArgSaveText(text, brkLvl, self.sites.moduleIcons, contNeeded, export)
+        icon.addArgSaveText(text, brkLvl, self.sites.moduleIcon, contNeeded, export)
         text.add(brkLvl, " import ", contNeeded)
         icon.addSeriesSaveText(text, brkLvl, self.sites.importsIcons, contNeeded,
             export)
@@ -740,6 +740,26 @@ class ImportFromIcon(icon.Icon):
         bodyWidth, bodyHeight, importWidth = self.bodySize
         bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
         return comn.rectsTouch(rect, bodyRect)
+
+class ModuleNameIcon(TextIcon):
+    def __init__(self, name, window=None, location=None):
+        TextIcon.__init__(self, name, window, location)
+        self.name = name
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on parent site belonging to an ImportFrom icon
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def snapFn(ic, siteId):
+            return isinstance(ic, ImportFromIcon) and siteId == "moduleIcon"
+        snapData = snapLists['output'][0]
+        snapLists['output'] = []
+        snapLists['conditional'] = [(*snapData, 'output', snapFn)]
+        return snapLists
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, name=self.name)
 
 class YieldIcon(icon.Icon):
     def __init__(self, window=None, location=None):
@@ -958,7 +978,7 @@ class TryIcon(ToDoIcon):
     pass
 
 def _moduleNameFromAttrs(identOrAttrIcon):
-    isIdentifier = isinstance(identOrAttrIcon, IdentifierIcon)
+    isIdentifier = identOrAttrIcon.__class__ in (IdentifierIcon, ModuleNameIcon)
     isAttribute = isinstance(identOrAttrIcon, AttrIcon)
     if not isIdentifier and not isAttribute:
         return None
@@ -1048,10 +1068,13 @@ def createImportIconFromAst(astNode, window):
 icon.registerIconCreateFn(ast.Import, createImportIconFromAst)
 
 def createImportFromIconFromAst(astNode, window):
-    if astNode.level != 0:
-        return IdentifierIcon("**relative imports not yet supported**", window)
     topIcon = ImportFromIcon(window)
-    topIcon.replaceChild(IdentifierIcon(astNode.module, window), 'moduleIcon')
+    if astNode.level != 0:
+        moduleName = "" if astNode.module is None else astNode.module
+        moduleNameIcon = ModuleNameIcon((astNode.level * '.') + moduleName, window)
+    else:
+        moduleNameIcon = IdentifierIcon(astNode.module, window)
+    topIcon.replaceChild(moduleNameIcon, 'moduleIcon')
     aliases = []
     for alias in astNode.names:
         if alias.asname is None:
