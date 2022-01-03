@@ -898,8 +898,7 @@ def backspaceBinOpIcon(ic, site, evt):
         # Ignore auto parens because we are removing the supporting operator
         entryAttachedIcon, entryAttachedSite = cursors.rightmostSite(
             icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
-    win.entryIcon = entryicon.EntryIcon(entryAttachedIcon, entryAttachedSite,
-        initialString=op, window=win)
+    win.entryIcon = entryicon.EntryIcon(initialString=op, window=win)
     if leftArg is not None:
         leftArg.replaceChild(None, 'output')
     if rightArg is not None:

@@ -859,7 +859,8 @@ class QuotedString:
     def unbrokenString(self):
         stringStart = SegmentedText.breakSuffix[self.breakType]
         stringEnd = stringStart[-1]
-        return stringStart + self.text + stringEnd
+        return self.prependedText + stringStart + self.text + stringEnd + \
+               self.appendedText
 
     def append(self, text):
         self.appendedText += text
