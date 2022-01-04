@@ -532,7 +532,7 @@ class ElifIcon(icon.Icon):
         seqX = icon.dragSeqImage.width + ELSE_DEDENT
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
-        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        self.sites.add('seqInsert', 'seqInsert', seqX, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
@@ -583,6 +583,30 @@ class ElifIcon(icon.Icon):
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
+    @staticmethod
+    def _snapFn(ic, siteId):
+        """Return True if sideId of ic is a sequence site within an if block (a suitable
+        site for snapping an elif icon)"""
+        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
+            return False
+        if isinstance(ic, IfIcon):
+            return True
+        seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
+        blockOwnerIcon = seqStartIc.childAt('seqIn')
+        return isinstance(blockOwnerIcon, IfIcon)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional being within the block of an if statement
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        seqInsertSites = snapLists.get('seqInsert')
+        if seqInsertSites is None:
+            return snapLists
+        snapLists['seqInsert'] = []
+        snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', self._snapFn)]
+        return snapLists
+
     def textRepr(self):
         return "elif " + icon.argTextRepr(self.sites.condIcon) + ":"
 
@@ -610,7 +634,7 @@ class ElseIcon(icon.Icon):
         seqX = icon.dragSeqImage.width + ELSE_DEDENT
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
-        self.sites.add('seqInsert', 'seqInsert', 0, bodyHeight // 2)
+        self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
@@ -651,6 +675,30 @@ class ElseIcon(icon.Icon):
         width, height = self.bodySize
         layout = iconlayout.Layout(self, width, height, height // 2)
         return [layout]
+
+    @staticmethod
+    def _snapFn(ic, siteId):
+        """Return True if sideId of ic is a sequence site within an if, for, or try block
+        (a site suitible for snapping an else icon"""
+        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
+            return False
+        if ic.__class__ in (IfIcon, ForIcon):
+            return True
+        seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
+        blockOwnerIcon = seqStartIc.childAt('seqIn')
+        return blockOwnerIcon.__class__ in (IfIcon, ForIcon)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on being within the block of an if, for, or try stmt
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        seqInsertSites = snapLists.get('seqInsert')
+        if seqInsertSites is None:
+            return snapLists
+        snapLists['seqInsert'] = []
+        snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', self._snapFn)]
+        return snapLists
 
     def textRepr(self):
         return "else:"
@@ -1055,10 +1103,15 @@ def elseElifBlockIcons(ic):
     """Returns a list of all icons (hierarchy) in an else or elif clause, including
     the else or elif icon itself."""
     seqIcons = list(ic.traverse())
+    nestLevel = 0
     for seqIcon in icon.traverseSeq(ic, includeStartingIcon=False):
         if isinstance(seqIcon, icon.BlockEnd):
-            break
-        if seqIcon.__class__ in (ElifIcon, ElseIcon):
+            if nestLevel <= 0:
+                break
+            nestLevel -= 1
+        elif hasattr(seqIcon, 'blockEnd'):
+            nestLevel += 1
+        elif seqIcon.__class__ in (ElifIcon, ElseIcon) and nestLevel == 0:
             break
         seqIcons += list(seqIcon.traverse())
     return seqIcons
