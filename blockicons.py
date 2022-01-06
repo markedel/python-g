@@ -102,7 +102,7 @@ class WithIcon(nameicons.SeriesStmtIcon):
             else:
                 withItems.append(ast.withitem(site.att.createAst(), None))
         bodyAsts = createBlockAsts(self)
-        return ast.With(withItems, body=bodyAsts, lineno=self.id, col_offset=0)
+        return ast.With(withItems, **bodyAsts, lineno=self.id, col_offset=0)
 
 class WhileIcon(icon.Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
@@ -201,8 +201,8 @@ class WhileIcon(icon.Icon):
         if self.sites.condIcon.att is None:
             raise icon.IconExecException(self, "Missing condition in while statement")
         testAst = self.sites.condIcon.att.createAst()
-        bodyAsts, orElseAsts = createBlockAsts(self, allowsElse=True)
-        return ast.While(testAst, bodyAsts, orElseAsts, lineno=self.id, col_offset=0)
+        bodyAsts = createBlockAsts(self)
+        return ast.While(testAst, **bodyAsts, lineno=self.id, col_offset=0)
 
 class ForIcon(icon.Icon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
@@ -227,8 +227,6 @@ class ForIcon(icon.Icon):
         totalWidth = iterX + self.iterList.width - 1
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
-        self.elseIcon = None
-        self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
             self.sites.seqOut.attach(self, self.blockEnd)
@@ -277,14 +275,6 @@ class ForIcon(icon.Icon):
         self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
-
-    def addElse(self, ic):
-        self.elseIcon = ic
-        ic.parentIf = self
-
-    def removeElse(self, ic):
-        self.elseIcon = None
-        ic.parentIf = None
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -384,8 +374,8 @@ class ForIcon(icon.Icon):
         else:
             valueAst = ast.Tuple([v.createAst() for v in iterValues], ctx=ast.Load(),
              lineno=self.id, col_offset=0)
-        bodyAsts, orElseAsts = createBlockAsts(self, allowsElse=True)
-        return ast.For(tgtAst, valueAst, bodyAsts, orElseAsts, lineno=self.id,
+        bodyAsts = createBlockAsts(self, allowsElse=True)
+        return ast.For(tgtAst, valueAst, **bodyAsts, lineno=self.id,
          col_offset=0)
 
     def inRectSelect(self, rect):
@@ -420,8 +410,6 @@ class IfIcon(icon.Icon):
         if createBlockEnd:
             self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
             self.sites.seqOut.attach(self, self.blockEnd)
-        self.elifIcons = []
-        self.elseIcon = None
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
         if toDragImage is None:
@@ -450,28 +438,9 @@ class IfIcon(icon.Icon):
         if temporaryDragSite:
             self.drawList = None
 
-    def select(self, select=True, includeElses=False):
+    def select(self, select=True):
         icon.Icon.select(self, select)
         icon.Icon.select(self.blockEnd, select)
-        if includeElses:
-            if self.elseIcon is not None:
-                icon.Icon.select(self.elseIcon, select)
-            for elifIc in self.elifIcons:
-                icon.Icon.select(elifIc, select)
-
-    def addElse(self, ic):
-        if isinstance(ic, ElifIcon):
-            self.elifIcons.append(self)
-        else:
-            self.elseIcon = ic
-        ic.parentIf = self
-
-    def removeElse(self, ic):
-        if isinstance(ic, ElifIcon):
-            self.elifIcons.remove(self)
-        else:
-            self.elseIcon = None
-        ic.parentIf = None
 
     def doLayout(self, left, top, layout):
         layout.updateSiteOffsets(self.sites.seqInsert)
@@ -515,8 +484,8 @@ class IfIcon(icon.Icon):
         if self.sites.condIcon.att is None:
             raise icon.IconExecException(self, "Missing condition in if statement")
         testAst = self.sites.condIcon.att.createAst()
-        bodyAsts, orElseAsts = createBlockAsts(self, allowsElifElse=True)
-        return ast.If(testAst, bodyAsts, orElseAsts, lineno=self.id, col_offset=0)
+        bodyAsts = createBlockAsts(self)
+        return ast.If(testAst, **bodyAsts, lineno=self.id, col_offset=0)
 
 class ElifIcon(icon.Icon):
     def __init__(self, window, location=None):
@@ -568,8 +537,9 @@ class ElifIcon(icon.Icon):
         width, height = self.bodySize
         width += icon.dragSeqImage.width - 1
         self.rect = (left, top, left + width, top + height)
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
+        dedentAdj = icon.dragSeqImage.width + ELSE_DEDENT
+        layout.updateSiteOffsets(self.sites.seqInsert, parentSiteDepthAdj=-dedentAdj)
+        layout.doSubLayouts(self.sites.seqInsert, left + dedentAdj, top + height // 2)
         self.layoutDirty = False
 
     def calcLayouts(self):
@@ -686,7 +656,7 @@ class ElseIcon(icon.Icon):
             return True
         seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
         blockOwnerIcon = seqStartIc.childAt('seqIn')
-        return blockOwnerIcon.__class__ in (IfIcon, ForIcon)
+        return blockOwnerIcon.__class__ in (IfIcon, ForIcon, WhileIcon, TryIcon)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on being within the block of an if, for, or try stmt
@@ -711,6 +681,257 @@ class ElseIcon(icon.Icon):
 
     def execute(self):
         return None  # ... no idea what to do here, yet.
+
+class TryIcon(icon.Icon):
+    def __init__(self, createBlockEnd=True, window=None, location=None):
+        icon.Icon.__init__(self, window)
+        bodyWidth, bodyHeight = icon.getTextSize("try", icon.boldFont)
+        bodyHeight = max(icon.minTxtHgt, bodyHeight)
+        bodyWidth += 2 * icon.TEXT_MARGIN + 1
+        bodyHeight += 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        seqX = icon.dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX + comn.BLOCK_INDENT, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        width = max(seqX + comn.BLOCK_INDENT + 2, bodyWidth + icon.dragSeqImage.width-1)
+        self.rect = (x, y, x + width, y + bodyHeight)
+        self.blockEnd = None
+        if createBlockEnd:
+            self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
+            self.sites.seqOut.attach(self, self.blockEnd)
+        self.exceptIcons = []
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (comn.rectWidth(self.rect),
+                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
+            boxLeft = icon.dragSeqImage.width - 1
+            txtImg = icon.iconBoxedText("try", icon.boldFont, icon.KEYWORD_COLOR)
+            img.paste(txtImg, (boxLeft, 0))
+            cntrSiteY = self.sites.seqInsert.yOffset
+            icon.drawSeqSites(img, boxLeft, 0, txtImg.height, indent="right",
+                extendWidth=txtImg.width)
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage,
+                        (0, cntrSiteY - icon.dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, left, top, layout):
+        bodyWidth, height = self.bodySize
+        width = icon.dragSeqImage.width + max(comn.BLOCK_INDENT + 2, bodyWidth - 1)
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqInsert)
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        bodyWidth, height = self.bodySize
+        width = icon.dragSeqImage.width + max(comn.BLOCK_INDENT + 2, bodyWidth - 1)
+        layout = iconlayout.Layout(self, width, height, height // 2)
+        return [layout]
+
+    def select(self, select=True):
+        icon.Icon.select(self, select)
+        icon.Icon.select(self.blockEnd, select)
+
+    def textRepr(self):
+        return "try:"
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        return filefmt.SegmentedText("try:")
+
+    def dumpName(self):
+        return "try"
+
+    def clipboardRepr(self, offset, iconsToCopy):
+        return self._serialize(offset, iconsToCopy, createBlockEnd=False)
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+    def createAst(self):
+        bodyAsts = createBlockAsts(self)
+        return ast.Try(**bodyAsts, lineno=self.id, col_offset=0)
+
+class ExceptIcon(icon.Icon):
+    def __init__(self, window, location=None):
+        icon.Icon.__init__(self, window)
+        bodyWidth, bodyHeight = icon.getTextSize("except", icon.boldFont)
+        bodyHeight = max(icon.minTxtHgt, bodyHeight)
+        bodyWidth += 2 * icon.TEXT_MARGIN + 1
+        bodyHeight += 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        condXOffset = bodyWidth + icon.dragSeqImage.width - 1 - icon.OUTPUT_SITE_DEPTH
+        self.sites.add('typeIcon', 'input', condXOffset, siteYOffset)
+        seqX = icon.dragSeqImage.width + ELSE_DEDENT
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
+        self.sites.add('seqInsert', 'seqInsert', seqX, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
+        self.parentIf = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (comn.rectWidth(self.rect),
+                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = icon.iconBoxedText("except", icon.boldFont, icon.KEYWORD_COLOR)
+            boxLeft = icon.dragSeqImage.width - 1
+            img.paste(txtImg, (boxLeft, 0))
+            cntrSiteY = self.sites.typeIcon.yOffset
+            inImageY = cntrSiteY - icon.inSiteImage.height // 2
+            img.paste(icon.inSiteImage, (self.sites.typeIcon.xOffset, inImageY))
+            seqSiteX = self.sites.seqIn.xOffset-1
+            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqIn.yOffset-1))
+            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqOut.yOffset-1))
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, left, top, layout):
+        width, height = self.bodySize
+        width += icon.dragSeqImage.width - 1
+        self.rect = (left, top, left + width, top + height)
+        dedentAdj = icon.dragSeqImage.width + ELSE_DEDENT
+        layout.updateSiteOffsets(self.sites.seqInsert, parentSiteDepthAdj=-dedentAdj)
+        layout.doSubLayouts(self.sites.seqInsert, left + dedentAdj, top + height // 2)
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        width, height = self.bodySize
+        typeIcon = self.sites.typeIcon.att
+        condLayouts = [None] if typeIcon is None else typeIcon.calcLayouts()
+        layouts = []
+        for condLayout in condLayouts:
+            layout = iconlayout.Layout(self, width, height, height // 2)
+            layout.addSubLayout(condLayout, 'typeIcon', width - 1, 0)
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
+
+    @staticmethod
+    def _snapFn(ic, siteId):
+        """Return True if sideId of ic is a sequence site within an if block (a suitable
+        site for snapping an elif icon)"""
+        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
+            return False
+        if isinstance(ic, TryIcon):
+            return True
+        seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
+        blockOwnerIcon = seqStartIc.childAt('seqIn')
+        return isinstance(blockOwnerIcon, TryIcon)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional being within the block of an if statement
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        seqInsertSites = snapLists.get('seqInsert')
+        if seqInsertSites is None:
+            return snapLists
+        snapLists['seqInsert'] = []
+        snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', self._snapFn)]
+        return snapLists
+
+    def textRepr(self):
+        return "except " + icon.argTextRepr(self.sites.typeIcon) + ":"
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("except ")
+        icon.addArgSaveText(text, brkLvl, self.sites.typeIcon, contNeeded, export)
+        text.add(None, ":")
+        return text
+
+    def dumpName(self):
+        return "except"
+
+    def execute(self):
+        return None  # ... no idea what to do here, yet.
+
+class FinallyIcon(icon.Icon):
+    def __init__(self, window, location=None):
+        icon.Icon.__init__(self, window)
+        bodyWidth, bodyHeight = icon.getTextSize("finally", icon.boldFont)
+        bodyHeight = max(icon.minTxtHgt, bodyHeight)
+        bodyWidth += 2 * icon.TEXT_MARGIN + 1
+        bodyHeight += 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        seqX = icon.dragSeqImage.width + ELSE_DEDENT
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
+        self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
+        self.parentIf = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (comn.rectWidth(self.rect),
+                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = icon.iconBoxedText("finally", icon.boldFont, icon.KEYWORD_COLOR)
+            boxLeft = icon.dragSeqImage.width - 1
+            img.paste(txtImg, (boxLeft, 0))
+            seqSiteX = self.sites.seqIn.xOffset-1
+            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqIn.yOffset-1))
+            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqOut.yOffset-1))
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage,
+                        (0, txtImg.height//2 - icon.dragSeqImage.height//2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, left, top, layout):
+        width, height = self.bodySize
+        width += icon.dragSeqImage.width - 1
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqInsert)
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        width, height = self.bodySize
+        layout = iconlayout.Layout(self, width, height, height // 2)
+        return [layout]
+
+    def textRepr(self):
+        return "finally:"
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        return filefmt.SegmentedText("finally:")
+
+    def dumpName(self):
+        return "finally"
 
 class DefOrClassIcon(icon.Icon):
     def __init__(self, text, hasArgs, createBlockEnd=True, window=None, location=None):
@@ -943,7 +1164,7 @@ class ClassDefIcon(DefOrClassIcon):
                 else:
                     bases.append(base.createAst())
         bodyAsts = createBlockAsts(self)
-        return ast.ClassDef(nameIcon.name, bases, keywords=kwds, body=bodyAsts,
+        return ast.ClassDef(nameIcon.name, bases, keywords=kwds, **bodyAsts,
          decorator_list=[], lineno=self.id, col_offset=0)
 
 class DefIcon(DefOrClassIcon):
@@ -1020,86 +1241,99 @@ class DefIcon(DefOrClassIcon):
          kwdOnlyAsts, kwOnlyDefaults, starStarArgAst, normalArgDefaults)
         bodyAsts = createBlockAsts(self)
         if self.isAsync:
-            return ast.AsyncFunctionDef(nameIcon.name, argumentAsts, bodyAsts,
+            return ast.AsyncFunctionDef(nameIcon.name, argumentAsts, **bodyAsts,
              decorator_list=[], returns=None, lineno=self.id, col_offset=0)
-        return ast.FunctionDef(nameIcon.name, argumentAsts, bodyAsts,
+        return ast.FunctionDef(nameIcon.name, argumentAsts, **bodyAsts,
          decorator_list=[], returns=None, lineno=self.id, col_offset=0)
 
-def createBlockAsts(ic, allowsElse=False, allowsElifElse=False):
-    """Create ASTs for icons in the block belonging to ic, suitable for the "body"
-    parameter to ASTs for statements that own an indented block.  If allowsElse is
-    True, the block can contain an else clause.  If allowsElifElse is True, the block
-    may also contain elif statements and the function returns two items: 1) a list of
-    the statement ASTs, and 2) a list of the else-clause ASTs (there is no elif AST,
-    elifs are converted to an else clause containing chained "if" ASTs).  Without
-    either allowsElse or allowsElifElse, the function returns just the list of statement
-    ASTs"""
+def createBlockAsts(ic):
+    """Create ASTs for icons in the block belonging to ic.  Returns a dictionary mapping
+    ast parameter (body, orelse, handlers, finalbody) to body asts.  Normally, the
+    dictionary simply contains {'body':[body-asts...]}, but if the icon has clauses
+    (elif, else, except, finally), then the ast parameters associated with them are also
+    filled in."""
+    paramDict = {}
+    blockType = 'body'
     stmtAsts = []
-    endBlock = ic.blockEnd
+    handlerIcs = []
     stmt = ic.nextInSeq()
-    while stmt is not endBlock:
+    while not isinstance(stmt, icon.BlockEnd):
         if stmt is None:
             raise icon.IconExecException(ic, "Error processing code block")
         if isinstance(stmt, ElifIcon):
-            if not allowsElifElse:
+            if ic.__class__ not in (IfIcon, ElifIcon):
                 raise icon.IconExecException(stmt, "Elif statement should not be here")
-            return stmtAsts, [createElifAst(stmt, endBlock)]
+            # Python does not have an elif ast, instead, it creates an if embedded in
+            # an orelse block.  Make recursive callback to collect body and orelse for
+            # the embedded if (which may, themselves embed deeper elifs and elses), and
+            # then return immediately as the recursive call will finish the block
+            subsequentBlockAsts = createBlockAsts(stmt)
+            ifAst = ast.If(stmt.sites.condIcon.att.createAst(), **subsequentBlockAsts,
+                lineno=stmt.id, col_offset=0)
+            return {'body':stmtAsts, 'orelse':[ifAst]}
         elif isinstance(stmt, ElseIcon):
-            if not (allowsElse or allowsElifElse):
+            if ic.__class__ not in (IfIcon, ElifIcon, ForIcon, WhileIcon, TryIcon):
                 raise icon.IconExecException(stmt, "Else statement should not be here")
-            return stmtAsts, createElseAsts(stmt, endBlock)
+            paramDict[blockType] = stmtAsts
+            blockType = 'orelse'
+            stmtAsts = []
+        elif isinstance(stmt, FinallyIcon):
+            if not isinstance(ic, TryIcon):
+                raise icon.IconExecException(stmt, "finally statement should not be here")
+            paramDict[blockType] = stmtAsts
+            blockType = 'finalbody'
+            stmtAsts = []
+        elif isinstance(stmt, ExceptIcon):
+            if not isinstance(ic, TryIcon):
+                raise icon.IconExecException(stmt, "except statement should not be here")
+            paramDict[blockType] = stmtAsts
+            blockType = 'handler%d' % len(handlerIcs)
+            handlerIcs.append(stmt)
+            stmtAsts = []
         else:
             stmtAsts.append(icon.createStmtAst(stmt))
         if hasattr(stmt, 'blockEnd'):
             stmt = stmt.blockEnd.nextInSeq()
         else:
             stmt = stmt.nextInSeq()
-    if allowsElse or allowsElifElse:
-        return stmtAsts, []
-    return stmtAsts
+    paramDict[blockType] = stmtAsts
+    if isinstance(ic, TryIcon):
+        _consolidateHandlerBlocks(paramDict, handlerIcs)
+    return paramDict
 
-def createElseAsts(ic, endBlock):
-    """Return a list of statement ASTs from the else clause starting at"""
-    stmtAsts = []
-    stmt = ic.nextInSeq()
-    while stmt is not endBlock:
-        if stmt is None:
-            raise icon.IconExecException(ic, "Error processing code block")
-        if isinstance(stmt, ElifIcon):
-            raise icon.IconExecException(stmt, "Elif statement found after else")
-        if isinstance(stmt, ElseIcon):
-            raise icon.IconExecException(stmt, "Multiple else statements")
-        stmtAsts.append(icon.createStmtAst(stmt))
-        if hasattr(stmt, 'blockEnd'):
-            stmt = stmt.blockEnd.nextInSeq()
+def _consolidateHandlerBlocks(paramDict, handlerIcs):
+    """createBlockAsts puts each except clause block of a try statement in a separate
+    entry (indexed as "handler0", "handler1", ...) in paramDict.  To create the handler
+    list for the try statement AST, this function combines each of these blocks with an
+    ast generated from the corresponding except statement (from handlerIcs), in to a
+    single list of ast.ExceptHandlers indexed as "handlers"."""
+    handlers = []
+    for i, ic in enumerate(handlerIcs):
+        typeIcon = ic.sites.typeIcon.att
+        name = None
+        if typeIcon is None:
+            typeAst = None
         else:
-            stmt = stmt.nextInSeq()
-    return stmtAsts
+            name = None
+            if isinstance(typeIcon, infixicon.AsIcon):
+                nameIcon = typeIcon.rightArg()
+                if nameIcon is None:
+                    raise icon.IconExecException(ic, "except as missing name")
+                if not isinstance(nameIcon, nameicons.IdentifierIcon):
+                    raise icon.IconExecException(ic, "except name is not identifier")
+                name = nameIcon.name
+                typeIcon = typeIcon.leftArg()
+                if typeIcon is None:
+                    raise icon.IconExecException(ic, "except statement missing type")
+            typeAst = typeIcon.createAst()
+        paramDictKey = 'handler%d' % i
+        body = paramDict[paramDictKey]
+        del paramDict[paramDictKey]
+        handlerAst = ast.ExceptHandler(type=typeAst, name=name, body=body)
+        handlers.append(handlerAst)
+    paramDict['handlers'] = handlers
 
-def createElifAst(ic, endBlock):
-    """Returns a single "if" AST representing the remaining elif and else clauses starting
-    at elif icon, ic."""
-    if ic.sites.condIcon.att is None:
-        raise icon.IconExecException(ic, "Missing condition in elif")
-    stmtAsts = []
-    stmt = ic.nextInSeq()
-    while stmt is not endBlock:
-        if stmt is None:
-            raise icon.IconExecException(ic, "Error processing code block")
-        if isinstance(stmt, ElifIcon):
-            return ast.If(ic.sites.condIcon.att.createAst(), stmtAsts,
-             [createElifAst(stmt, endBlock)], lineno=ic.id, col_offset=0)
-        if isinstance(stmt, ElseIcon):
-            return ast.If(ic.sites.condIcon.att.createAst(), stmtAsts,
-             createElseAsts(stmt, endBlock), lineno=ic.id, col_offset=0)
-        stmtAsts.append(icon.createStmtAst(stmt))
-        if hasattr(stmt, 'blockEnd'):
-            stmt = stmt.blockEnd.nextInSeq()
-        else:
-            stmt = stmt.nextInSeq()
-    return stmtAsts
-
-def elseElifBlockIcons(ic):
+def clauseBlockIcons(ic):
     """Returns a list of all icons (hierarchy) in an else or elif clause, including
     the else or elif icon itself."""
     seqIcons = list(ic.traverse())
@@ -1111,7 +1345,8 @@ def elseElifBlockIcons(ic):
             nestLevel -= 1
         elif hasattr(seqIcon, 'blockEnd'):
             nestLevel += 1
-        elif seqIcon.__class__ in (ElifIcon, ElseIcon) and nestLevel == 0:
+        elif seqIcon.__class__ in (ElifIcon, ElseIcon, ExceptIcon, FinallyIcon) and \
+                nestLevel == 0:
             break
         seqIcons += list(seqIcon.traverse())
     return seqIcons
@@ -1144,6 +1379,10 @@ def createIfIconFromAst(astNode, window):
     topIcon.replaceChild(icon.createFromAst(astNode.test, window), 'condIcon')
     return topIcon
 icon.registerIconCreateFn(ast.If, createIfIconFromAst)
+
+def createTryIconFromAst(astNode, window):
+    return TryIcon(window=window)
+icon.registerIconCreateFn(ast.Try, createTryIconFromAst)
 
 def createDefIconFromAst(astNode, window):
     isAsync = astNode.__class__ is ast.AsyncFunctionDef
@@ -1256,6 +1495,25 @@ def createIconsFromBodyAst(bodyAst, window):
             stmtIcon = icon.createFromAst(stmt, window)
             bodyIcons = createIconsFromBodyAst(stmt.body, window)
             stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
+            if isinstance(stmt, ast.Try):
+                # Process except blocks
+                for handler in stmt.handlers:
+                    exceptIcon = ExceptIcon(window)
+                    if handler.type is not None:
+                        typeIcon = icon.createFromAst(handler.type, window)
+                        if handler.name is not None:
+                            asIcon = infixicon.AsIcon(window)
+                            nameIcon = nameicons.IdentifierIcon(handler.name, window)
+                            asIcon.replaceChild(typeIcon, 'leftArg')
+                            asIcon.replaceChild(nameIcon, 'rightArg')
+                            exceptIcon.replaceChild(asIcon, 'typeIcon')
+                        else:
+                            exceptIcon.replaceChild(typeIcon, 'typeIcon')
+                    bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], exceptIcon, 'seqIn')
+                    bodyIcons.append(exceptIcon)
+                    exceptBlockIcons = createIconsFromBodyAst(handler.body, window)
+                    exceptIcon.sites.seqOut.attach(exceptIcon, exceptBlockIcons[0], 'seqIn')
+                    bodyIcons += exceptBlockIcons
             while stmt.__class__ is ast.If and len(stmt.orelse) == 1 and \
                     stmt.orelse[0].__class__ is ast.If:
                 # Process elif blocks.  The ast encodes these as a single if, nested
@@ -1268,9 +1526,8 @@ def createIconsFromBodyAst(bodyAst, window):
                 bodyIcons.append(elifIcon)
                 elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
                 bodyIcons += elifBlockIcons
-                stmtIcon.addElse(elifIcon)
                 stmt = stmt.orelse[0]
-            if stmt.__class__ in (ast.If, ast.For, ast.AsyncFor, ast.While) and \
+            if stmt.__class__ in (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try) and \
                     len(stmt.orelse) != 0:
                 # Process else block (note that after elif processing above, stmt may in
                 # some cases point to a nested statement being flattened out)
@@ -1282,7 +1539,13 @@ def createIconsFromBodyAst(bodyAst, window):
                 bodyIcons.append(elseIcon)
                 elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
                 bodyIcons += elseBlockIcons
-                stmtIcon.addElse(elseIcon)
+            if isinstance(stmt, ast.Try) and len(stmt.finalbody) != 0:
+                finallyIcon = FinallyIcon(window)
+                finallyBlockIcons = createIconsFromBodyAst(stmt.finalbody, window)
+                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], finallyIcon, 'seqIn')
+                bodyIcons.append(finallyIcon)
+                finallyIcon.sites.seqOut.attach(finallyIcon, finallyBlockIcons[0], 'seqIn')
+                bodyIcons += finallyBlockIcons
             blockEnd = stmtIcon.blockEnd
             bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
             bodyIcons.append(blockEnd)

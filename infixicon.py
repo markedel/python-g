@@ -169,7 +169,7 @@ class InfixIcon(icon.Icon):
 
 class AsIcon(InfixIcon):
     allowableSnaps = {"WithIcon": "values", "ImportIcon": "values",
-        "ImportFromIcon": "importsIcons"}
+        "ImportFromIcon": "importsIcons", "ExceptIcon": "typeIcon"}
 
     def __init__(self, window=None, location=None):
         InfixIcon.__init__(self, "as", None, True, window, location)
@@ -180,7 +180,10 @@ class AsIcon(InfixIcon):
         if forCursor:
             return snapLists
         def snapFn(ic, siteId):
-            siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
+            if iconsites.isSeriesSiteId(siteId):
+                siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
+            else:
+                siteName = siteId
             allowable = self.allowableSnaps.get(ic.__class__.__name__)
             return allowable is not None and allowable == siteName
         outSites = snapLists['output']

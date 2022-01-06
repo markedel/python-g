@@ -762,8 +762,9 @@ class Window:
                 self._startDrag(evt, list(ic.traverseBlock(hier=True)))
             elif isinstance(ic, icon.BlockEnd):
                 self._startDrag(evt, list(ic.primary.traverseBlock(hier=True)))
-            elif ic.__class__ in (blockicons.ElseIcon, blockicons.ElifIcon):
-                self._startDrag(evt, blockicons.elseElifBlockIcons(ic))
+            elif ic.__class__ in (blockicons.ElseIcon, blockicons.ElifIcon,
+                    blockicons.ExceptIcon, blockicons.FinallyIcon):
+                self._startDrag(evt, blockicons.clauseBlockIcons(ic))
             else:
                 self._startDrag(evt, list(findLeftOuterIcon(self.assocGrouping(ic),
                         self.buttonDownLoc).traverse()))
@@ -2206,7 +2207,8 @@ class Window:
                     if isinstance(ic, icon.BlockEnd):
                         branchDepth -= 1
                     else:
-                        if ic.__class__ in (blockicons.ElifIcon, blockicons.ElseIcon):
+                        if ic.__class__ in (blockicons.ElifIcon, blockicons.ElseIcon,
+                                blockicons.ExceptIcon, blockicons.FinallyIcon):
                             indent = tabSize * max(0, branchDepth - 1)
                         else:
                             indent = tabSize * max(0, branchDepth)

@@ -44,14 +44,15 @@ class Layout:
         self.width = max(self.width, xSiteOffset + subLayout.width)
         self.subLayoutCount += 1 + subLayout.subLayoutCount
 
-    def updateSiteOffsets(self, parentSite):
+    def updateSiteOffsets(self, parentSite, parentSiteDepthAdj=0):
         """Icon site positions are relative to the icon rectangle.  Set them from the
         layout site positions, which are relative to the implied site of the layout
         (on the left edge of the layout rectangle, parentSiteOffset from the top, and
         idealized to zero site depth).  The parentSite argument should provide the site
         object (which has presumably already been positioned relative to the icon
-        rectangle)."""
-        parentSiteDepth = icon.siteDepths[parentSite.type]
+        rectangle).  parentSiteDepthAdj can be specified if the parent site is not
+        positioned at the standard depth (else, elif, except, finally)"""
+        parentSiteDepth = icon.siteDepths[parentSite.type] + parentSiteDepthAdj
         for name, layout in self.subLayouts.items():
             site = self.icon.sites.lookup(name)
             siteDepth = icon.siteDepths[site.type]

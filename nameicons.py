@@ -965,16 +965,7 @@ class ToDoIcon(TextIcon):
         name = self.__class__.__name__
         TextIcon.__init__(self, 'ToDo: ' + name + ' Not implemented', window, location)
 
-class ExceptIcon(ToDoIcon):
-    pass
-
-class FinallyIcon(ToDoIcon):
-    pass
-
 class RaiseIcon(ToDoIcon):
-    pass
-
-class TryIcon(ToDoIcon):
     pass
 
 def _moduleNameFromAttrs(identOrAttrIcon):
