@@ -374,7 +374,7 @@ class ForIcon(icon.Icon):
         else:
             valueAst = ast.Tuple([v.createAst() for v in iterValues], ctx=ast.Load(),
              lineno=self.id, col_offset=0)
-        bodyAsts = createBlockAsts(self, allowsElse=True)
+        bodyAsts = createBlockAsts(self)
         return ast.For(tgtAst, valueAst, **bodyAsts, lineno=self.id,
          col_offset=0)
 
@@ -1487,7 +1487,7 @@ def createIconsFromBodyAst(bodyAst, window):
     icons = []
     for stmt in bodyAst:
         if hasattr(stmt, 'linecomments'):
-            _addCommentIcons(stmt.linecomments, window, icons)
+            _addLineCommentIcons(stmt.linecomments, window, icons)
         if isinstance(stmt, ast.Expr):
             stmtIcon = icon.createFromAst(stmt.value, window)
             bodyIcons = None
@@ -1497,8 +1497,15 @@ def createIconsFromBodyAst(bodyAst, window):
             stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
             if isinstance(stmt, ast.Try):
                 # Process except blocks
-                for handler in stmt.handlers:
+                for handlerIdx, handler in enumerate(stmt.handlers):
+                    lineCommentProp = 'exceptlinecomments' + str(handlerIdx)
+                    if hasattr(stmt, lineCommentProp):
+                        _addLineCommentIcons(getattr(stmt, lineCommentProp), window,
+                            bodyIcons)
                     exceptIcon = ExceptIcon(window)
+                    stmtCommentProp = 'exceptstmtcomment' + str(handlerIdx)
+                    if hasattr(stmt, stmtCommentProp):
+                        _addStmtComment(exceptIcon, getattr(stmt, stmtCommentProp))
                     if handler.type is not None:
                         typeIcon = icon.createFromAst(handler.type, window)
                         if handler.name is not None:
@@ -1518,7 +1525,11 @@ def createIconsFromBodyAst(bodyAst, window):
                     stmt.orelse[0].__class__ is ast.If:
                 # Process elif blocks.  The ast encodes these as a single if, nested
                 # in and else (nested as many levels deep as there are elif clauses).
+                if hasattr(stmt, 'elselinecomments'):
+                    _addLineCommentIcons(stmt.elselinecomments, window, bodyIcons)
                 elifIcon = ElifIcon(window)
+                if hasattr(stmt, 'elsestmtcomment'):
+                    _addStmtComment(elifIcon, stmt.elsestmtcomment)
                 condIcon = icon.createFromAst(stmt.orelse[0].test, window)
                 elifIcon.replaceChild(condIcon, 'condIcon')
                 elifBlockIcons = createIconsFromBodyAst(stmt.orelse[0].body, window)
@@ -1526,21 +1537,29 @@ def createIconsFromBodyAst(bodyAst, window):
                 bodyIcons.append(elifIcon)
                 elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
                 bodyIcons += elifBlockIcons
+                if hasattr(stmt, 'stmtcomment'):
+                    _addStmtComment(stmtIcon, stmt.stmtcomment)
                 stmt = stmt.orelse[0]
             if stmt.__class__ in (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try) and \
                     len(stmt.orelse) != 0:
                 # Process else block (note that after elif processing above, stmt may in
                 # some cases point to a nested statement being flattened out)
                 if hasattr(stmt, 'elselinecomments'):
-                    _addCommentIcons(stmt.elselinecomments, window, bodyIcons)
+                    _addLineCommentIcons(stmt.elselinecomments, window, bodyIcons)
                 elseIcon = ElseIcon(window)
+                if hasattr(stmt, 'elsestmtcomment'):
+                    _addStmtComment(elseIcon, stmt.elsestmtcomment)
                 elseBlockIcons = createIconsFromBodyAst(stmt.orelse, window)
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elseIcon, 'seqIn')
                 bodyIcons.append(elseIcon)
                 elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
                 bodyIcons += elseBlockIcons
             if isinstance(stmt, ast.Try) and len(stmt.finalbody) != 0:
+                if hasattr(stmt, 'finallylinecomments'):
+                    _addLineCommentIcons(stmt.finallylinecomments, window, bodyIcons)
                 finallyIcon = FinallyIcon(window)
+                if hasattr(stmt, 'finallystmtcomment'):
+                    _addStmtComment(finallyIcon, stmt.finallystmtcomment)
                 finallyBlockIcons = createIconsFromBodyAst(stmt.finalbody, window)
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], finallyIcon, 'seqIn')
                 bodyIcons.append(finallyIcon)
@@ -1552,6 +1571,8 @@ def createIconsFromBodyAst(bodyAst, window):
         else:
             stmtIcon = icon.createFromAst(stmt, window)
             bodyIcons = None
+        if hasattr(stmt, 'stmtcomment'):
+            _addStmtComment(stmtIcon, stmt.stmtcomment)
         if len(icons) > 0:
             if icons[-1].hasSite('seqOut') and stmtIcon.hasSite('seqIn'):
                 # Link the statement to the previous statement
@@ -1563,9 +1584,13 @@ def createIconsFromBodyAst(bodyAst, window):
             icons += bodyIcons
     return icons
 
-def _addCommentIcons(commentList, window, sequence):
+def _addLineCommentIcons(commentList, window, sequence):
     for comment in commentList:
         commentIcon = nameicons.CommentIcon(comment[1], window, args=comment[0])
         if len(sequence) > 0:
             sequence[-1].sites.seqOut.attach(sequence[-1], commentIcon, 'seqIn')
         sequence.append(commentIcon)
+
+def _addStmtComment(ic, comment):
+    print('Statement/icon comments not implemented yet -- %s (args %s): %s' %
+          (ic.dumpName(), comment[0], comment[1]))

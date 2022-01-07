@@ -324,17 +324,17 @@ def _transferCommentsToAst(text, moduleAst, annotations):
 
 def _extractTokens(text, annotations):
     """ Return two dictionaries: 1 mapping line numbers to comments, and 2 mapping
-    line numbers to else statements (the dictionary holds start column number).
-    annotations argument is used to attach comment macro annotations, and to know
-    how to interpret line breaks in the column (by interpreting the macro arguments
-    to detect "w" argument indicating that the comment should be wrapped)."""
+    line numbers to else/elif/except/finally statements (the dictionary holds start
+    column number).  annotations argument is used to attach comment macro annotations,
+    and to know  how to interpret line breaks in the column (by interpreting the macro
+    arguments to detect "w" argument indicating that the comment should be wrapped)."""
     # While it seems wasteful to run a whole separate pass over the file to extract
     # comments and detect the positioning of else statements, these are easier on
     # tokenized code (which we can't do before macro substitution).  I suspect the
     # tokenize module is C code, so folding this in with macro expansion might be less
     # hackish, but not necessarily faster.
     lineNumToComment = {}
-    lineNumToElse = {}
+    lineNumToClause = {}
     # The tokenize module won't just take a text string.  It needs a utf-8 coded
     # readline function
     with io.BytesIO(text.encode('utf-8')) as f:
@@ -377,12 +377,16 @@ def _extractTokens(text, annotations):
                     prevKey = startLine
                 prevCommentLine = startLine
                 prevCommentCol = startCol
-            elif token.type == tokenize.NAME and token.string == "else":
+            elif token.type == tokenize.NAME and token.string in ('elif', 'else',
+                    'except', 'finally'):
                 startLine, startCol = token.start
-                lineNumToElse[startLine] = startCol
-    return lineNumToComment, lineNumToElse
+                lineNumToClause[startLine] = startCol
+    return lineNumToComment, lineNumToClause
 
-def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
+def _annotateAstWithComments(comments, clauses, bodyAsts, startLine=0):
+    elseCommentProperties = ('elselinecomments', 'elsestmtcomment')
+    exceptCommentProperties = ('exceptlinecomments', 'exceptstmtcomment')
+    finallyCommentProperties = ('finallylinecomments', 'finallystmtcomment')
     for stmt in bodyAsts:
         commentLines = _commentLinesBetween(comments, startLine, stmt.lineno)
         if commentLines is not None:
@@ -421,33 +425,53 @@ def _annotateAstWithComments(comments, elses, bodyAsts, startLine=0):
                 stmt.stmtcomment = '\n'.join(commentList)
         if hasattr(stmt, 'body'):
             # Recursively process statements in code block(s)
-            _annotateAstWithComments(comments, elses, stmt.body, lastStmtLine + 1)
+            _annotateAstWithComments(comments, clauses, stmt.body, lastStmtLine + 1)
             startLine = stmt.end_lineno + 1
+            # Process else/elif/except/finally clauses after if, for, while, and try.
+            # Unfortunately, the relevant AST nodes don't record the location of these,
+            # so we dig them out of the source code in _extractTokens and pass the
+            # recorded location here via the "clauses" dictionary.  Location of these
+            # statements is needed to properly place comments before vs. after vs. on
+            # the else/elif/except/finally statement.
+            clauseBodies = []
+            if hasattr(stmt, 'handlers') and len(stmt.handlers) > 0:
+                for i, handler in enumerate(stmt.handlers):
+                    lp, sp = exceptCommentProperties
+                    clauseBodies.append((stmt, lp + str(i), sp + str(i), handler.body))
             if hasattr(stmt, 'orelse') and len(stmt.orelse) > 0:
-                # Process else clause after if or for.  Unfortunately, the relevant AST
-                # nodes don't record the location of the else statement.  That was dug
-                # out of the source code by _extractTokens and passed in as the "elses"
-                # dictionary.  Location of else statements is needed to properly place
-                # comments before vs. after vs. on the else.
-                bodyEnd = stmt.body[-1].end_lineno
-                orelseStart = stmt.orelse[0].lineno
-                elseLine, _elseCol = _findElseBetween(elses, bodyEnd + 1, orelseStart)
-                if elseLine is None:
-                    # The else is not on a separate line, attach following line comments
-                    # to the first statement in the orelse block
-                    afterElseLine = bodyEnd + 1
+                s = stmt
+                if isinstance(stmt, ast.If):
+                    # For elif, the only thing in the orelse code block is the generated
+                    # if AST.  Disassemble these back into elif blocks
+                    while len(s.orelse) == 1 and isinstance(s.orelse[0], ast.If):
+                        clauseBodies.append((s, *elseCommentProperties, s.orelse[0].body))
+                        s = s.orelse[0]
+                if len(s.orelse) > 0:
+                    clauseBodies.append((s, *elseCommentProperties, s.orelse))
+            if hasattr(stmt, 'finalbody') and len(stmt.finalbody) > 0:
+                clauseBodies.append((stmt, *finallyCommentProperties, stmt.finalbody))
+            bodyEnd = stmt.body[-1].end_lineno
+            for clauseStmt, clauseLineProp,clauseStmtProp, clauseBody in clauseBodies:
+                clauseStart = clauseBody[0].lineno
+                clauseLine, _col = _findClauseBetween(clauses, bodyEnd + 1, clauseStart)
+                if clauseLine is None:
+                    # The clause statement is not on a separate line, attach following
+                    # line comments to the first statement in its associated block
+                    afterClauseLine = bodyEnd + 1
                 else:
-                    # An else statement was found, attach comment lines before to the
-                    # elselinecomment property and comments on it  to elsestmtcomment.
-                    commentLines = _commentLinesBetween(comments, bodyEnd+1, elseLine)
+                    # A clause statement was found, attach comment lines before to the
+                    # clauselinecomment property and comments on it to clausestmtcomment.
+                    commentLines = _commentLinesBetween(comments, bodyEnd+1, clauseLine)
                     if commentLines is not None:
-                        stmt.elselinecomments = [comments[l] for l in commentLines]
-                    if elseLine in comments:
-                        stmt.elsestmtcomment = comments[elseLine]
-                    afterElseLine = elseLine + 1
-                # Recursively process statements in the orelse code block (and line
-                # comments between the else and it.
-                _annotateAstWithComments(comments, elses, stmt.orelse, afterElseLine)
+                        commentList = [comments[l] for l in commentLines]
+                        setattr(clauseStmt, clauseLineProp, commentList)
+                    if clauseLine in comments:
+                        setattr(clauseStmt, clauseStmtProp, comments[clauseLine])
+                    afterClauseLine = clauseLine + 1
+                # Recursively process statements in the clause's code block (and line
+                # comments between the clause statement and it.
+                _annotateAstWithComments(comments, clauses, clauseBody, afterClauseLine)
+                bodyEnd = clauseBody[-1].end_lineno
         else:
             startLine = lastStmtLine + 1
     return startLine
@@ -462,10 +486,10 @@ def _commentLinesBetween(lineToCommentMap, startLine, endLine):
         commentList.append(lineNum)
     return commentList
 
-def _findElseBetween(elseMap, startLine, endLine):
+def _findClauseBetween(clauseMap, startLine, endLine):
     for line in range(startLine, endLine):
-        if line in elseMap:
-            return line, elseMap[line]
+        if line in clauseMap:
+            return line, clauseMap[line]
     return None, None
 
 def _outermostAstOnLine(lineNum, exprAst):
