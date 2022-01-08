@@ -672,7 +672,7 @@ class ImportFromIcon(icon.Icon):
             moduleNameWidth = icon.EMPTY_ARG_WIDTH if moduleLayout is None \
                 else moduleLayout.width
             layout.moduleNameWidth = moduleNameWidth
-            argXOff = bodyWidth - 1 + moduleNameWidth - 1 + importWidth
+            argXOff = bodyWidth - 1 + moduleNameWidth - 1 + importWidth + 1
             importListLayout.mergeInto(layout, argXOff - icon.OUTPUT_SITE_DEPTH, 0)
             layout.width = argXOff + importListLayout.width + importWidth - 2
             layouts.append(layout)
