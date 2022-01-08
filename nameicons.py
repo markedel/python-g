@@ -612,8 +612,7 @@ class ImportFromIcon(icon.Icon):
             fromImgX = bodyOffset + bodyWidth - 1 - icon.inSiteImage.width
             fromImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (fromImgX, fromImageY))
-            icon.drawSeqSites(img, bodyOffset, 0, fromImg.height, indent="right",
-             extendWidth=fromImg.width)
+            icon.drawSeqSites(img, bodyOffset, 0, fromImg.height)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
@@ -901,6 +900,166 @@ class AwaitIcon(opicons.UnaryOpIcon):
             raise icon.IconExecException(self, "Missing argument to await")
         return ast.Await(self.arg().createAst(), lineno=self.id, col_offset=0)
 
+class RaiseIcon(icon.Icon):
+    def __init__(self, hasFrom=False, window=None, location=None):
+        icon.Icon.__init__(self, window)
+        self.hasFrom = hasFrom
+        bodyWidth = icon.getTextSize('raise', icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        bodyHeight = icon.minTxtIconHgt
+        fromWidth = icon.getTextSize("from", icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = bodyWidth, bodyHeight, fromWidth
+        self.exceptWidth = icon.EMPTY_ARG_WIDTH
+        siteYOffset = bodyHeight // 2
+        exceptOffset = bodyWidth + icon.dragSeqImage.width-1 - icon.OUTPUT_SITE_DEPTH
+        self.sites.add('exceptIcon', 'input', exceptOffset, siteYOffset)
+        seqX = icon.dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        if hasFrom:
+            totalWidth = icon.dragSeqImage.width + bodyWidth-1 + \
+                icon.EMPTY_ARG_WIDTH-1 + fromWidth-1
+            fromX = totalWidth - icon.OUTPUT_SITE_DEPTH
+            self.sites.add('causeIcon', 'input', fromX, siteYOffset)
+        else:
+            totalWidth = exceptOffset + icon.OUTPUT_SITE_DEPTH
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            bodyWidth, bodyHeight, fromWidth = self.bodySize
+            bodyOffset = icon.dragSeqImage.width - 1
+            # "raise"
+            img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
+                color=(0, 0, 0, 0))
+            raiseImg = icon.iconBoxedText("raise", icon.boldFont, icon.KEYWORD_COLOR)
+            img.paste(raiseImg, (bodyOffset, 0))
+            cntrSiteY = self.sites.seqInsert.yOffset
+            inImgX = bodyOffset + bodyWidth - icon.inSiteImage.width
+            inImgY = bodyHeight // 2 - icon.inSiteImage.height // 2
+            img.paste(icon.inSiteImage, (inImgX, inImgY))
+            icon.drawSeqSites(img, bodyOffset, 0, raiseImg.height)
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage, (0, cntrSiteY-icon.dragSeqImage.height // 2))
+            self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
+            # "from"
+            if self.hasFrom:
+                fromImg = icon.iconBoxedText("from", icon.boldFont, icon.KEYWORD_COLOR)
+                img = Image.new('RGBA', (fromImg.width, bodyHeight), color=(0, 0, 0, 0))
+                img.paste(fromImg, (0, 0))
+                inImgX = fromImg.width - icon.inSiteImage.width
+                img.paste(icon.inSiteImage, (inImgX, inImgY))
+                importOffset = bodyOffset + bodyWidth - 1 + self.exceptWidth - 1
+                self.drawList.append(((importOffset, self.sites.seqIn.yOffset - 1), img))
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def addFrom(self):
+        if self.hasFrom:
+            return
+        bodyWidth, bodyHeight, fromWidth = self.bodySize
+        fromX = icon.dragSeqImage.width + bodyWidth-1 + \
+            icon.EMPTY_ARG_WIDTH-1 + fromWidth-1 - icon.OUTPUT_SITE_DEPTH
+        self.sites.add('causeIcon', 'input', fromX, bodyHeight // 2)
+        self.markLayoutDirty()
+        self.window.undo.registerCallback(self.removeFrom)
+
+    def removeFrom(self):
+        if not self.hasFrom:
+            return
+        if self.sites.causeIcon.att is not None:
+            print("trying to remove non-empty cause site from raise icon")
+            return
+        self.sites.remove('causeIcon')
+        self.markLayoutDirty()
+        self.window.undo.registerCallback(self.addFrom)
+
+    def doLayout(self, left, top, layout):
+        self.exceptWidth = layout.exceptWidth
+        bodyWidth, bodyHeight, fromWidth = self.bodySize
+        width = icon.dragSeqImage.width - 1 + bodyWidth
+        if self.hasFrom:
+            width += -1 + self.exceptWidth-1 + fromWidth
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.updateSiteOffsets(self.sites.seqInsert)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + bodyHeight // 2)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        bodyWidth, bodyHeight, fromWidth = self.bodySize
+        cntrYOff = bodyHeight // 2
+        exceptIcon = self.sites.exceptIcon.att
+        exceptLayouts = [None] if exceptIcon is None else exceptIcon.calcLayouts()
+        exceptXOff = bodyWidth - 1
+        layouts = []
+        causeLayouts = [None]
+        if self.hasFrom:
+            causeIcon = self.sites.causeIcon.att
+            if causeIcon is not None:
+                causeLayouts = causeIcon.calcLayouts()
+        for exceptLayout, causeLayout in iconlayout.allCombinations((exceptLayouts,
+                causeLayouts)):
+            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, cntrYOff)
+            layout.addSubLayout(exceptLayout, 'exceptIcon', exceptXOff, 0)
+            exceptWidth = icon.EMPTY_ARG_WIDTH if exceptLayout is None \
+                else exceptLayout.width
+            layout.exceptWidth = exceptWidth
+            layout.width = bodyWidth - 1 + exceptWidth - 1 + fromWidth
+            if self.hasFrom:
+                layout.addSubLayout(causeLayout, 'causeIcon', layout.width - 1, 0)
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        if self.sites.exceptIcon.att is None and not self.hasFrom:
+            # Empty raise is legal.  Don't place $Empty$ macro if there's no exception
+            # and no from keyword
+            return filefmt.SegmentedText("raise")
+        text = filefmt.SegmentedText("raise ")
+        icon.addArgSaveText(text, brkLvl, self.sites.exceptIcon, contNeeded, export)
+        if self.hasFrom:
+            text.add(brkLvl, " from ", contNeeded)
+            icon.addArgSaveText(text, brkLvl, self.sites.causeIcon, contNeeded, export)
+        return text
+
+    def dumpName(self):
+        return "raise"
+
+    def createAst(self):
+        exceptIcon = self.sites.exceptIcon.att
+        if exceptIcon is None:
+            exc = None
+        else:
+            exc = exceptIcon.createAst()
+        cause = None
+        if self.hasFrom:
+            causeIcon = self.sites.causeIcon.att
+            if causeIcon is None:
+                raise icon.IconExecException(self, "raise missing cause after from")
+            cause = causeIcon.createAst()
+        return ast.Raise(exc, cause, lineno=self.id, col_offset=0)
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch icon body
+        if not icon.Icon.inRectSelect(self, rect):
+            return False
+        icLeft, icTop = self.rect[:2]
+        bodyLeft = icLeft + icon.dragSeqImage.width - 1
+        bodyWidth, bodyHeight, fromWidth = self.bodySize
+        bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
+        return comn.rectsTouch(rect, bodyRect)
+
 def backspaceSeriesStmt(ic, site, evt, text):
     siteName, index = iconsites.splitSeriesSiteId(site)
     win = ic.window
@@ -958,15 +1117,6 @@ def backspaceSeriesStmt(ic, site, evt, text):
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
         win.refresh(redrawRegion.get())
         win.undo.addBoundary()
-
-# Unfinished
-class ToDoIcon(TextIcon):
-    def __init__(self, window=None, location=None):
-        name = self.__class__.__name__
-        TextIcon.__init__(self, 'ToDo: ' + name + ' Not implemented', window, location)
-
-class RaiseIcon(ToDoIcon):
-    pass
 
 def _moduleNameFromAttrs(identOrAttrIcon):
     isIdentifier = identOrAttrIcon.__class__ in (IdentifierIcon, ModuleNameIcon)
@@ -1174,6 +1324,16 @@ def createAwaitIconFromAst(astNode, window):
     topIcon.replaceChild(icon.createFromAst(astNode.value, window), "argIcon")
     return topIcon
 icon.registerIconCreateFn(ast.Await, createAwaitIconFromAst)
+
+def createRaiseIconFromAst(astNode, window):
+    hasFrom = astNode.cause is not None
+    topIcon = RaiseIcon(hasFrom, window)
+    if astNode.exc is not None:
+        topIcon.replaceChild(icon.createFromAst(astNode.exc, window), "exceptIcon")
+    if hasFrom:
+        topIcon.replaceChild(icon.createFromAst(astNode.cause, window), "causeIcon")
+    return topIcon
+icon.registerIconCreateFn(ast.Raise, createRaiseIconFromAst)
 
 def createParseFailIcon(astNode, window):
     return IdentifierIcon("**Couldn't Parse AST node: %s**" % astNode.__class__.__name__,

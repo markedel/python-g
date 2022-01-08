@@ -39,7 +39,7 @@ boldFont = ImageFont.truetype('c:/Windows/fonts/arialbd.ttf', 12)
 stmtAstClasses = {ast.Assign, ast.AugAssign, ast.While, ast.For, ast.AsyncFor, ast.If,
  ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Return, ast.With,
  ast.AsyncWith, ast.Delete, ast.Pass, ast.Continue, ast.Break, ast.Global, ast.Nonlocal,
- ast.Import, ast.ImportFrom}
+ ast.Import, ast.ImportFrom, ast.Raise}
 
 ATTR_SITE_DEPTH = 1
 OUTPUT_SITE_DEPTH = 2
