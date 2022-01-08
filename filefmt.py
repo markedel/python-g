@@ -13,7 +13,7 @@ class MacroParser:
         "\\+|-|/|%|\\*|<|>|\\||\\^|&|is|in|and|or|if|=|!=|\\(|\\.|\\[")
 
     def __init__(self):
-        self.macroList = {}
+        self.macroList = {'Empty': ('xxx_empty_arg_xxx', lambda n, w: None)}
 
     def addMacro(self, name, subs="", iconCreateFn=None):
         """Add a macro to annotate and extend the save-file and pasted-text format beyond
