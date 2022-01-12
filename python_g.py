@@ -1309,7 +1309,7 @@ class Window:
         self.dragging += restoreSeries(sequences)
         topDraggingIcons = findTopIcons(self.dragging)
         for ic in topDraggingIcons:
-            if isinstance(ic, opicons.BinOpIcon) and ic.hasParens:
+            if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and ic.hasParens:
                 ic.markLayoutDirty()  # BinOp icons need to check check auto-parens
         self.layoutDirtyIcons(topDraggingIcons, filterRedundantParens=False)
         # For top performance, make a separate image containing the moving icons against
@@ -2240,11 +2240,11 @@ class Window:
         """Find the root binary operation associated with a group of equal precedence
         operations"""
         child = ic
-        if ic.__class__ is not opicons.BinOpIcon:
+        if ic.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon):
             return ic
         for parent in ic.parentage():
-            if parent.__class__ is not opicons.BinOpIcon or parent.precedence != \
-             ic.precedence:
+            if parent.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon) \
+                    or parent.precedence != ic.precedence:
                 return child
             child = parent
         return child
@@ -2690,8 +2690,8 @@ class Window:
         argIcon = ic.sites.argIcon.att
         if argIcon is None:
             return
-        if not (argIcon.__class__ is opicons.BinOpIcon and not argIcon.hasParens and
-         opicons.needsParens(argIcon, parentIcon)):
+        if not (argIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and
+                not argIcon.hasParens and opicons.needsParens(argIcon, parentIcon)):
             self.filterRedundantParens(argIcon, ic, "argIcon")
             return
         # Redundant parens found: remove them
@@ -2837,7 +2837,8 @@ def findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon=None):
     # right paren does not count.
     if fromIcon is None:
         fromIcon = clickedIcon.topLevelParent()
-    if clickedIcon.__class__ is opicons.BinOpIcon and clickedIcon.hasParens:
+    if clickedIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+            clickedIcon.hasParens:
         if not clickedIcon.locIsOnLeftParen(btnPressLoc):
             return clickedIcon
     if clickedIcon is fromIcon:
@@ -2862,16 +2863,18 @@ def findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon=None):
             left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
             if left is leftSiteIcon:
                 return fromIcon  # Claim outermost status for this icon
-    if fromIcon.__class__ is opicons.BinOpIcon and fromIcon.leftArg() is not None:
+    if fromIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+            fromIcon.leftArg() is not None:
         left = findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon.leftArg())
         if left is fromIcon.leftArg():
-            targetIsBinOpIcon = clickedIcon.__class__ is opicons.BinOpIcon
+            targetIsBinOpIcon = \
+                clickedIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon)
             if not targetIsBinOpIcon or targetIsBinOpIcon and clickedIcon.hasParens:
                 # Again, we have to check before claiming outermost status for fromIcon,
                 # if its left argument has parens, whether its status as outermost icon
                 # was earned by promotion or by a direct click on its parens.
-                if left.__class__ is not opicons.BinOpIcon or not left.hasParens or \
-                 left.locIsOnLeftParen(btnPressLoc):
+                if left.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon) or \
+                        not left.hasParens or left.locIsOnLeftParen(btnPressLoc):
                     return fromIcon  # Claim outermost status for this icon
     # Pass on any results from below fromIcon in the hierarchy
     children = fromIcon.children()

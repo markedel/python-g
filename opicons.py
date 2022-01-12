@@ -735,12 +735,432 @@ class DivideIcon(icon.Icon):
     def backspace(self, siteId, evt):
         backspaceBinOpIcon(self, siteId, evt)
 
+class IfExpIcon(icon.Icon):
+    """Ternary if-else expression"""
+    def __init__(self, window, location=None):
+        icon.Icon.__init__(self, window)
+        self.precedence = 0
+        self.hasParens = False  # Filled in by layout methods
+        self.trueExprWidth = icon.EMPTY_ARG_WIDTH
+        self.falseExprWidth = icon.EMPTY_ARG_WIDTH
+        self.testExprWidth = icon.EMPTY_ARG_WIDTH
+        ifWidth = icon.getTextSize('if', icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        elseWidth = icon.getTextSize('else', icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = (ifWidth, elseWidth, icon.minTxtIconHgt)
+        self.depthWidth = 0
+        x, y = (0, 0) if location is None else location
+        width, height = self._size()
+        self.rect = (x, y, x + width, y + height)
+        siteYOffset = height // 2
+        self.sites.add('output', 'output', 0, siteYOffset)
+        self.sites.add('trueExpr', 'input', 0, siteYOffset)
+        testExprXOffset = self.testExprWidth-1 + ifWidth - icon.OUTPUT_SITE_DEPTH
+        self.sites.add('testExpr', 'input', testExprXOffset, siteYOffset)
+        falseExprXOffset = testExprXOffset-1 + self.testExprWidth-1 + elseWidth
+        self.sites.add('falseExpr', 'input', falseExprXOffset, siteYOffset)
+        # Note that the attrIcon site is only usable when parens are displayed
+        self.sites.add("attrIcon", "attrIn",
+         self.trueExprWidth + ifWidth - icon.ATTR_SITE_DEPTH, siteYOffset)
+        self.sites.add('seqIn', 'seqIn', - icon.SEQ_SITE_DEPTH, 1)
+        self.sites.add('seqOut', 'seqOut', - icon.SEQ_SITE_DEPTH, height-2)
+        # Indicates that input site falls directly on top of output site
+        self.coincidentSite = 'trueExpr'
+
+    def _size(self):
+        ifWidth, elseWidth, height = self.bodySize
+        ifWidth += self.depthWidth
+        if self.hasParens:
+            parenWidth = lParenImage.width - 1 + rParenImage.width - 1
+        else:
+            parenWidth = 0
+        width = parenWidth + self.trueExprWidth-1 + self.testExprWidth-1 + \
+                self.falseExprWidth-1 + ifWidth-1 + elseWidth
+        return width, height
+
+    def leftArg(self):
+        # Provided for BinOp compatibility
+        return self.sites.trueExpr.att
+
+    def rightArg(self):
+        return self.sites.falseExpr.att
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        atTop = self.parent() is None
+        suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
+        temporaryOutputSite = suppressSeqSites and atTop and self.leftArg() is None
+        if temporaryOutputSite or suppressSeqSites:
+            # When toDragImage is specified the icon is being dragged, and it must display
+            # something indicating where its output site is where it would otherwise
+            # not normally draw anything, but don't keep this in self.drawList because
+            # it's not for normal use and won't be used again for picking or drawing.
+            self.drawList = None
+        if self.drawList is None:
+            self.drawList = []
+            # Output part (connector or paren)
+            outSiteX = self.sites.output.xOffset
+            siteY = self.sites.output.yOffset
+            trueExprX = outSiteX + icon.outSiteImage.width - 1
+            if self.hasParens:
+                outSiteY = siteY - lParenImage.height // 2
+                self.drawList.append(((outSiteX, outSiteY), lParenImage))
+                trueExprX = outSiteX + lParenImage.width - 1
+            elif temporaryOutputSite:
+                outSiteY = siteY - binOutImage.height // 2
+                self.drawList.append(((outSiteX, outSiteY), binOutImage))
+            elif atTop and not suppressSeqSites:
+                outSiteY = siteY - binInSeqImage.height // 2
+                self.drawList.append(((outSiteX, outSiteY), binInSeqImage))
+            # if body
+            ifImg = icon.iconBoxedText("if", icon.boldFont, icon.KEYWORD_COLOR)
+            ifWidth, elseWidth, height = self.bodySize
+            ifWidth = ifImg.width + self.depthWidth // 2  # if gets half, else gets half
+            img = Image.new('RGBA', (ifWidth, height), color=(0, 0, 0, 0))
+            if self.depthWidth > 0:
+                draw = ImageDraw.Draw(img)
+                draw.rectangle((0, 0, ifWidth - 1, ifImg.height - 1),
+                 outline=comn.OUTLINE_COLOR, fill=comn.ICON_BG_COLOR)
+                ifSubImg = ifImg.crop((1, 0, ifImg.width - 1, ifImg.height))
+                img.paste(ifSubImg, (self.depthWidth // 2 + 1, 0))
+            else:
+                img.paste(ifImg, (0, 0))
+            ifInSiteX = ifWidth - icon.inSiteImage.width
+            ifInSiteY = siteY - icon.inSiteImage.height // 2
+            img.paste(icon.inSiteImage, (ifInSiteX, ifInSiteY))
+            ifX = trueExprX + self.trueExprWidth - 1
+            ifY = siteY - lParenImage.height // 2
+            self.drawList.append(((ifX, ifY), img))
+            # else body
+            elseImg = icon.iconBoxedText("else", icon.boldFont, icon.KEYWORD_COLOR)
+            elseWidth = elseImg.width + self.depthWidth // 2
+            img = Image.new('RGBA', (elseWidth, height), color=(0, 0, 0, 0))
+            if self.depthWidth > 0:
+                draw = ImageDraw.Draw(img)
+                draw.rectangle((0, 0, elseWidth - 1, elseImg.height - 1),
+                    outline=comn.OUTLINE_COLOR, fill=comn.ICON_BG_COLOR)
+                elseSubImg = elseImg.crop((1, 0, elseImg.width - 1, elseImg.height))
+                img.paste(elseSubImg, (0, 0))
+            else:
+                img.paste(elseImg, (0, 0))
+            elseInSiteX = elseWidth - icon.inSiteImage.width
+            img.paste(icon.inSiteImage, (elseInSiteX, ifInSiteY))
+            elseX = ifX + ifWidth - 1 + self.testExprWidth - 1
+            self.drawList.append(((elseX, ifY), img))
+            # End paren
+            if self.hasParens:
+                rParenX = elseX + elseWidth-1 + self.falseExprWidth-1
+                self.drawList.append(((rParenX, 0), rParenImage))
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryOutputSite or suppressSeqSites:
+            self.drawList = None  # Don't keep after drawing (see above)
+
+    def depth(self, lDepth=None, rDepth=None):
+        """Calculate factor which decides how much to pad the operator to help indicate
+        its level in the icon hierarchy.  The function does not expand the operator icon
+        when it and a child or parent form an associative group (so chains of operations,
+        like: 1 + 2 + 3 + 4, don't get out of control).  While this looks much nicer, it
+        has great potential confuse users who need to understand the hierarchy to edit
+        effectively.  Parameters lDepth and rDepth allow a recursive call to calculate
+        parent depth, which would otherwise recurse infinitely."""
+        if lDepth is None:
+            lChild = self.leftArg()
+            if lChild is None or lChild.__class__ is not BinOpIcon:
+                lDepth = 0
+            else:
+                lDepth = lChild.depth()
+                if not (lChild.leftAssoc() and lChild.precedence == self.precedence):
+                    lDepth += 1
+        if rDepth is None:
+            rChild = self.rightArg()
+            if rChild is None or rChild.__class__ is not BinOpIcon:
+                rDepth = 0
+            else:
+                rDepth = rChild.depth()
+                if not (rChild.rightAssoc() and rChild.precedence == self.precedence):
+                    rDepth += 1
+        myDepth = max(lDepth, rDepth)
+        # Also expand the operator to match the parent end of the associative group
+        parent = self.parent()
+        if parent.__class__ in (BinOpIcon, IfExpIcon) and \
+                parent.precedence == self.precedence:
+            if parent.siteOf(self) == "trueExpr" and parent.leftAssoc():
+                myDepth = max(myDepth, parent.depth(lDepth=myDepth))
+            elif parent.siteOf(self) == "falseExpr" and parent.rightAssoc():
+                myDepth = max(myDepth, parent.depth(rDepth=myDepth))
+        return myDepth
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        self.hasParens = layout.hasParens
+        self.coincidentSite = None if self.hasParens else "trueExpr"
+        self.trueExprWidth = layout.lArgWidth
+        self.falseExprWidth = layout.rArgWidth
+        self.testExprWidth = layout.testArgWidth
+        self.depthWidth = layout.depthWidth
+        layout.updateSiteOffsets(self.sites.output)
+        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+        width, height = self._size()
+        x = outSiteX - self.sites.output.xOffset
+        y = outSiteY - self.sites.output.yOffset
+        self.rect = (x, y, x + width, y + height)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        hasParens = needsParens(self)
+        if hasParens:
+            lParenWidth = lParenImage.width - icon.OUTPUT_SITE_DEPTH - 1
+            rParenWidth = rParenImage.width - 1
+        else:
+            lParenWidth = rParenWidth = 0
+        ifWidth, elseWidth, height = self.bodySize
+        lArg = self.sites.trueExpr.att
+        lArgLayouts = [None] if lArg is None else lArg.calcLayouts()
+        testExpr = self.sites.testExpr.att
+        testArgLayouts = [None] if testExpr is None else testExpr.calcLayouts()
+        rArg = self.sites.falseExpr.att
+        rArgLayouts = [None] if rArg is None else rArg.calcLayouts()
+        attrIcon = self.sites.attrIcon.att
+        attrLayouts = [None] if attrIcon is None else attrIcon.calcLayouts()
+        layouts = []
+        for lArgLayout, testArgLayout, rArgLayout, attrLayout in iconlayout. \
+                allCombinations((lArgLayouts, testArgLayouts, rArgLayouts, attrLayouts)):
+            layout = iconlayout.Layout(self, ifWidth, height, height // 2)
+            layout.hasParens = hasParens
+            layout.addSubLayout(lArgLayout, "trueExpr", lParenWidth, 0)
+            lArgWidth = icon.EMPTY_ARG_WIDTH if lArgLayout is None else lArgLayout.width
+            layout.lArgWidth = lArgWidth
+            depthWidth = self.depth() * DEPTH_EXPAND
+            layout.depthWidth = depthWidth
+            testArgSiteX = lParenWidth + lArgWidth - 1 + ifWidth - 1 + depthWidth // 2
+            layout.addSubLayout(testArgLayout, "testExpr", testArgSiteX, 0)
+            testArgWidth = icon.EMPTY_ARG_WIDTH if testArgLayout is None else \
+                testArgLayout.width
+            layout.testArgWidth = testArgWidth
+            rArgSiteX = testArgSiteX + testArgWidth-1 + elseWidth-1 + depthWidth // 2
+            layout.addSubLayout(rArgLayout, "falseExpr", rArgSiteX, 0)
+            rArgWidth = icon.EMPTY_ARG_WIDTH if rArgLayout is None else rArgLayout.width
+            layout.rArgWidth = rArgWidth
+            layout.width = rArgSiteX + rArgWidth + rParenWidth
+            layout.addSubLayout(attrLayout, 'attrIcon',
+                    layout.width - icon.ATTR_SITE_DEPTH, icon.ATTR_SITE_OFFSET)
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
+
+    def snapLists(self, forCursor=False):
+        # Make attribute site unavailable unless the icon has parens to hold it
+        siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if not self.hasParens:
+            del siteSnapLists['attrIn']
+        return siteSnapLists
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        hasParens = needsParens(self, forText=True)
+        brkLvl = parentBreakLevel + 1
+        # If this operation is part of an associative grouping, don't add to level
+        if not hasParens:
+            parent = self.parent()
+            if parent is not None and parent.__class__ in (BinOpIcon, IfExpIcon):
+                if parent.precedence == self.precedence:
+                    brkLvl = parentBreakLevel
+        if hasParens:
+            contNeeded = False
+        trueExprText = icon.argSaveText(brkLvl, self.sites.trueExpr, contNeeded, export)
+        if hasParens:
+            text = filefmt.SegmentedText('(')
+            text.concat(brkLvl, trueExprText, contNeeded)
+        else:
+            text = trueExprText
+        text.add(None, " if ", contNeeded)
+        testExprText = icon.argSaveText(brkLvl, self.sites.testExpr, contNeeded, export)
+        text.concat(brkLvl, testExprText, contNeeded)
+        text.add(None, " else ", contNeeded)
+        falseExprText = icon.argSaveText(brkLvl, self.sites.falseExpr, contNeeded, export)
+        text.concat(brkLvl, falseExprText, contNeeded)
+        if hasParens:
+            text.add(None, ")")
+        return text
+
+    def dumpName(self):
+        return "(if-expr)" if self.hasParens else "if-expr"
+
+    def locIsOnLeftParen(self, btnPressLoc):
+        iconLeft = self.rect[0]
+        return iconLeft < btnPressLoc[0] < iconLeft + lParenImage.width
+
+    def leftAssoc(self):
+        return True
+
+    def rightAssoc(self):
+        return False
+
+    def createAst(self):
+        if self.sites.trueExpr.att is None:
+            raise icon.IconExecException(self, "Missing if-true operand")
+        if self.sites.testExpr.att is None:
+            raise icon.IconExecException(self, "Missing test expression")
+        if self.sites.falseExpr.att is None:
+            raise icon.IconExecException(self, "Missing if-false operand")
+        return ast.IfExp(test=self.sites.testExpr.att.createAst(),
+            body=self.sites.trueExpr.att.createAst(),
+            orelse=self.sites.falseExpr.att.createAst(), lineno=self.id, col_offset=0)
+
+    def selectionRect(self):
+        # Limit selection rectangle for extending selection to the if
+        ifWidth, elseWidth, height = self.bodySize
+        ifWidth += self.depthWidth // 2
+        x, top = self.rect[:2]
+        left = x + self.trueExprWidth
+        return left, top, left + ifWidth, top + height
+
+    def inRectSelect(self, rect):
+        if not comn.rectsTouch(rect, self.rect):
+            return False
+        return comn.rectsTouch(rect, self.selectionRect())
+
+    def backspace(self, siteId, evt):
+        win = self.window
+        if siteId == 'attrIcon':
+            # Cursor is on attribute site of right paren.  Convert to open
+            # (unclosed) cursor paren
+            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            attrIcon = self.childAt('attrIcon')
+            if attrIcon:
+                # If an attribute is attached to the parens, just select
+                win.unselectAll()
+                for i in attrIcon.traverse():
+                    win.select(i)
+                win.refresh(redrawRegion.get())
+                return
+            parent = self.parent()
+            cursorParen = parenicon.CursorParenIcon(window=win)
+            if parent is None:
+                # Insert cursor paren at top level with ic as its child
+                cursorParen.replaceChild(self, 'argIcon')
+                win.replaceTop(self, cursorParen)
+            else:
+                # Insert cursor paren between parent and ic
+                parentSite = parent.siteOf(self)
+                cursorParen.replaceChild(self, 'argIcon')
+                parent.replaceChild(cursorParen, parentSite)
+            # Manually change status of icon to no-parens so it will be treated
+            # as not parenthesised as icons are rearranged
+            self.hasParens = False
+            cursIc, cursSite = cursors.rightmostSite(icon.findLastAttrIcon(self))
+            # Expand the scope of the paren to its max, by rearranging the icon
+            # hierarchy around it
+            reorderexpr.reorderArithExpr(cursorParen)
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
+            win.cursor.setToIconSite(cursIc, cursSite)
+            return
+        if siteId == 'trueExpr' and self.hasParens:
+            # Cursor is on left paren: User wants to remove parens
+            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            attrIcon = self.childAt('attrIcon')
+            if attrIcon:
+                # If an attribute is attached to the parens, don't delete, just select
+                win.unselectAll()
+                for i in attrIcon.traverse():
+                    win.select(i)
+                win.refresh(redrawRegion.get())
+                return
+            # Finding the correct position for the cursor after reorderArithExpr is
+            # surprisingly difficult.  It is done by temporarily setting the cursor
+            # to the output site of the icon at the lowest coincident site and then
+            # restoring it to the parent site after reordering.  If the site is empty,
+            # use the further hack of creating a temporary icon to track the empty
+            # site.  The reason for setting the cursor position as opposed to just
+            # recording the lowest icon, is that reorderArithExpr can remove parens,
+            # but will relocate the cursor it does.
+            cursorIc, cursorSite = iconsites.lowestCoincidentSite(self, siteId)
+            cursorChild = cursorIc.childAt(cursorSite)
+            if cursorChild is None:
+                cursorChild = UnaryOpIcon('***Internal Temporary***', window=win)
+                cursorIc.replaceChild(cursorChild, cursorSite)
+                removeTempCursorIcon = True
+            else:
+                removeTempCursorIcon = False
+            win.cursor.setToIconSite(cursorChild, 'output')
+            # To remove the parens we run reorderArithExpr, hiding the parens from it
+            # by setting the icon's hasParens flag to false (which is what it uses to
+            # determine if parens are displayed).
+            self.hasParens = False
+            self.markLayoutDirty()
+            reorderexpr.reorderArithExpr(self)
+            # Restore the cursor that was temporarily set to the output site to the
+            # parent icon and site (see above)
+            updatedCursorIc = win.cursor.icon.parent()
+            updatedCursorSite = updatedCursorIc.siteOf(win.cursor.icon)
+            if removeTempCursorIcon:
+                updatedCursorIc.replaceChild(None, updatedCursorSite)
+            win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
+            return
+        if siteId == 'falseExpr':
+            # Cursor was on else, just move the cursor to the test
+            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            if self.sites.trueExpr.att is None:
+                updatedCursorIc = self
+                updatedCursorSite = 'testExpr'
+            else:
+                updatedCursorIc, updatedCursorSite = cursors.rightmostSite(
+                    icon.findLastAttrIcon(self.sites.testExpr.att), ignoreAutoParens=True)
+            win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
+            return
+        # Cursor was on the if itself
+        redrawRect = self.topLevelParent().hierRect()
+        if self.hasParens:
+            # If the operation had parens, place temporary parens for continuity
+            cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
+            cpParent = self.parent()
+            if cpParent is None:
+                win.replaceTop(self, cursorParen)
+            else:
+                cpParent.replaceChild(cursorParen, cpParent.siteOf(ic))
+                cursorParen.replaceChild(self, 'argIcon')
+        parent = self.parent()
+        leftArg = self.leftArg()
+        rightArg = self.rightArg()
+        if parent is None and leftArg is None:
+            entryAttachedIcon, entryAttachedSite = None, None
+        elif parent is not None and leftArg is None:
+            entryAttachedIcon = parent
+            entryAttachedSite = parent.siteOf(self)
+        else:  # leftArg is not None, attach to that
+            # Ignore auto parens because we are removing the supporting operator
+            entryAttachedIcon, entryAttachedSite = cursors.rightmostSite(
+                icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
+        win.entryIcon = entryicon.EntryIcon(initialString="if", window=win)
+        if leftArg is not None:
+            leftArg.replaceChild(None, 'output')
+        if rightArg is not None:
+            rightArg.replaceChild(None, 'output')
+            win.entryIcon.setPendingArg(rightArg)
+        if parent is None:
+            if leftArg is None:
+                win.replaceTop(self, win.entryIcon)
+            else:
+                win.replaceTop(self, leftArg)
+                entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+        else:
+            parentSite = parent.siteOf(self)
+            if leftArg is not None:
+                parent.replaceChild(leftArg, parentSite)
+            entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+        self.replaceChild(None, 'trueExpr')
+        self.replaceChild(None, 'testExpr')
+        self.replaceChild(None, 'falseExpr')
+        win.cursor.setToEntryIcon()
+        win.redisplayChangedEntryIcon(evt, redrawRect)
+
 def needsParens(ic, parent=None, forText=False, parentSite=None):
-    """Returns True if the BinOpIcon, ic, should have parenthesis.  Specify "parent" to
-    compute for a parent which is not the actual icon parent.  If forText is True, ic
-    can also be a DivideIcon, and the calculation is appropriate to text rather than
-    icons, where division is just another binary operator and not laid out numerator /
-    denominator."""
+    """Returns True if the BinOpIcon or IfExpr icon, ic, should have parenthesis.
+    Specify "parent" to compute for a parent which is not the actual icon parent.  If
+    forText is True, ic can also be a DivideIcon, and the calculation is appropriate to
+    text rather than icons, where division is just another binary operator and not laid
+    out numerator / denominator."""
     if ic.childAt('attrIcon'):
         return True  # BinOps can have attributes, and need parens to support the site
     if parent is None:
@@ -750,11 +1170,11 @@ def needsParens(ic, parent=None, forText=False, parentSite=None):
     # Unclosed cursor-parens count as a left-paren, but not a right-paren
     if parent.__class__.__name__ == "CursorParenIcon" and not parent.closed:
         parenParent = parent.parent()
-        if parenParent is None or parenParent.__class__ is not BinOpIcon or \
-         parenParent.siteOf(parent) != "leftArg":
+        if parenParent is None or parenParent.__class__ not in (BinOpIcon, IfExpIcon) or \
+                parenParent.siteOf(parent) != leftSiteOf(parenParent):
             return False
         parent = parenParent
-    arithmeticOpClasses = (BinOpIcon, UnaryOpIcon)
+    arithmeticOpClasses = (BinOpIcon, UnaryOpIcon, IfExpIcon)
     if forText:
         arithmeticOpClasses += (DivideIcon,)
     if parent.__class__ not in arithmeticOpClasses:
@@ -766,11 +1186,17 @@ def needsParens(ic, parent=None, forText=False, parentSite=None):
     # Precedence is equal to parent.  Look at associativity
     if parentSite is None:
         parentSite = parent.siteOf(ic, recursive=True)
-    if parentSite == "leftArg" and ic.rightAssoc():
+    if parentSite == leftSiteOf(parent) and ic.rightAssoc():
         return True
-    if parentSite == "rightArg" and ic.leftAssoc():
+    if parentSite == rightSiteOf(parent) and ic.leftAssoc():
         return True
     return False
+
+def leftSiteOf(ic):
+    return 'trueExpr' if ic.__class__ == IfExpIcon else 'leftArg'
+
+def rightSiteOf(ic):
+    return 'falseExpr' if ic.__class__ == IfExpIcon else 'rightArg'
 
 # The ugly hack of not putting these at the top of the file allows the backspace code
 # to be in the same module as the icon definitions, and but not mess up initialization
@@ -825,7 +1251,7 @@ def backspaceBinOpIcon(ic, site, evt):
             win.refresh(redrawRegion.get())
             win.cursor.setToIconSite(cursIc, cursSite)
         return
-    if site == 'leftArg' and ic.hasParens:
+    if site == leftSiteOf(ic) and ic.hasParens:
         # Cursor is on left paren: User wants to remove parens
         redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
         attrIcon = ic.childAt('attrIcon')
@@ -961,3 +1387,11 @@ def createCompareIconFromAst(astNode, window):
     topIcon.replaceChild(icon.createFromAst(astNode.comparators[0], window), "rightArg")
     return topIcon
 icon.registerIconCreateFn(ast.Compare, createCompareIconFromAst)
+
+def createIfExpIconFromAst(astNode, window):
+    topIcon = IfExpIcon(window)
+    topIcon.replaceChild(icon.createFromAst(astNode.test, window), "testExpr")
+    topIcon.replaceChild(icon.createFromAst(astNode.body, window), "trueExpr")
+    topIcon.replaceChild(icon.createFromAst(astNode.orelse, window), "falseExpr")
+    return topIcon
+icon.registerIconCreateFn(ast.IfExp, createIfExpIconFromAst)

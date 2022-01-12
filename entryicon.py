@@ -457,7 +457,8 @@ class EntryIcon(icon.Icon):
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingArg(), cursor.site)
                 self.setPendingArg(None)
-                if cursor.icon.__class__ in (opicons.BinOpIcon, opicons.UnaryOpIcon):
+                if cursor.icon.__class__ in (opicons.BinOpIcon, opicons.UnaryOpIcon,
+                        opicons.IfExpIcon):
                     # Changing an operand of an arithmetic operator may require reorder
                     reorderexpr.reorderArithExpr(cursor.icon)
         if self.pendingAttr() is not None and remainingText == "":
@@ -526,7 +527,8 @@ class EntryIcon(icon.Icon):
         if onIcon.__class__ in (opicons.UnaryOpIcon, opicons.DivideIcon) and \
          siteType == "input":
             return False
-        elif onIcon.__class__ is opicons.BinOpIcon and onIcon.hasParens:
+        elif onIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+                onIcon.hasParens:
             return False
         elif onIcon.__class__ is parenicon.CursorParenIcon:  # Open-paren
             tupleIcon = listicons.TupleIcon(window=self.window, closed=True)
@@ -544,22 +546,22 @@ class EntryIcon(icon.Icon):
             onIcon.replaceChild(None, 'attrIcon')
             tupleIcon.replaceChild(attrIcon, 'attrIcon')
             return True
-        if (isinstance(onIcon, opicons.BinOpIcon) or
-                isinstance(onIcon, infixicon.InfixIcon)) and site == "leftArg":
+        if onIcon.__class__ in (opicons.BinOpIcon, infixicon.InfixIcon,
+                opicons.IfExpIcon) and site == binOpLeftArgSite(onIcon):
             leftArg = None
             rightArg = onIcon
             if onIcon.leftArg() is self:
-                onIcon.replaceChild(self.pendingArg(),"leftArg")
+                onIcon.replaceChild(self.pendingArg(), binOpLeftArgSite(onIcon))
                 self.setPendingArg(None)
-        elif (isinstance(onIcon, opicons.BinOpIcon) or
-              isinstance(onIcon, infixicon.InfixIcon)) and site == "rightArg":
+        elif onIcon.__class__ in (opicons.BinOpIcon, infixicon.InfixIcon,
+                opicons.IfExpIcon) and site == binOpRightArgSite(onIcon):
             leftArg = onIcon
             rightArg = onIcon.rightArg()
             if rightArg is self:
                 rightArg = self.pendingArg()
                 self.setPendingArg(None)
-            onIcon.replaceChild(None,"rightArg")
-            self.window.cursor.setToIconSite(onIcon, "rightArg")
+            onIcon.replaceChild(None, binOpRightArgSite(onIcon))
+            self.window.cursor.setToIconSite(onIcon,  binOpRightArgSite(onIcon))
             cursorPlaced = True
         else:
             onIcon = icon.findAttrOutputSite(onIcon)
@@ -599,20 +601,20 @@ class EntryIcon(icon.Icon):
                 return True
             if isinstance(parent, opicons.UnaryOpIcon):
                 leftArg = parent
-            elif isinstance(parent, opicons.BinOpIcon) and not parent.hasParens or \
-             isinstance(parent, infixicon.InfixIcon):
+            elif parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+                    not parent.hasParens or isinstance(parent, infixicon.InfixIcon):
                 # Parent is a binary op icon without parens, and site is one of the two
                 # input sites
                 if parent.leftArg() is child:  # Insertion was on left side of operator
-                    parent.replaceChild(rightArg, "leftArg")
+                    parent.replaceChild(rightArg, binOpLeftArgSite(parent))
                     if parent.leftArg() is None:
-                        self.window.cursor.setToIconSite(parent, "leftArg")
+                        self.window.cursor.setToIconSite(parent, binOpLeftArgSite(parent))
                         cursorPlaced = True
                     rightArg = parent
                 elif parent.rightArg() is child:   # Insertion on right side of operator
-                    parent.replaceChild(leftArg, "rightArg")
+                    parent.replaceChild(leftArg, binOpRightArgSite(parent))
                     if parent.rightArg() is None:
-                        self.window.cursor.setToIconSite(parent, "rightArg")
+                        self.window.cursor.setToIconSite(parent, binOpRightArgSite(parent))
                         cursorPlaced = True
                     leftArg = parent
                 else:
@@ -745,7 +747,7 @@ class EntryIcon(icon.Icon):
         # operation has equal precedence, and the associativity of the operation matches
         # the side of the operation on which the insertion is being made.
         for op in argIcon.parentage():
-            if stopAtParens or op.__class__ not in (opicons.BinOpIcon,
+            if stopAtParens or op.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon,
                     opicons.UnaryOpIcon) or newOpIcon.precedence > op.precedence or \
                     newOpIcon.precedence == op.precedence and (
                      op.leftAssoc() and op.leftArg() is childOp or
@@ -757,12 +759,12 @@ class EntryIcon(icon.Icon):
                 leftArg = op
             else:  # BinaryOp
                 if op.leftArg() is childOp:  # Insertion was on left side of operation
-                    op.replaceChild(rightArg, "leftArg")
+                    op.replaceChild(rightArg, binOpLeftArgSite(op))
                     if op.leftArg() is None:
-                        self.window.cursor.setToIconSite(op, "leftArg")
+                        self.window.cursor.setToIconSite(op, binOpLeftArgSite(op))
                     rightArg = op
                 else:                      # Insertion was on right side of operation
-                    op.replaceChild(leftArg, "rightArg")
+                    op.replaceChild(leftArg, binOpRightArgSite(op))
                     leftArg = op
                 if op.hasParens:
                     # If the op has parens and the new op has been inserted within them,
@@ -771,10 +773,13 @@ class EntryIcon(icon.Icon):
             childOp = op
         else:  # Reached the top level without finding a parent for newOpIcon
             self.window.replaceTop(childOp, newOpIcon)
-        leftSite = "topArg" if newOpIcon.__class__ is opicons.DivideIcon else "leftArg"
+        leftSite = "topArg" if newOpIcon.__class__ is opicons.DivideIcon else \
+            binOpLeftArgSite(newOpIcon)
         rightSite = "bottomArg" if newOpIcon.__class__ is opicons.DivideIcon else \
-                "rightArg"
-        if rightArg is None:
+            binOpRightArgSite(newOpIcon)
+        if isinstance(newOpIcon, opicons.IfExpIcon):
+            self.window.cursor.setToIconSite(newOpIcon, 'testExpr')
+        elif rightArg is None:
             self.window.cursor.setToIconSite(newOpIcon, rightSite)
         newOpIcon.markLayoutDirty()
         newOpIcon.replaceChild(leftArg, leftSite)
@@ -1067,6 +1072,8 @@ def parseAttrText(text, window):
         return "accept"  # Legal attribute pattern
     if text in ("i", "a", "o", "an"):
         return "accept"  # Legal precursor characters to binary keyword operation
+    if text == "if":
+        return opicons.IfExpIcon(window), None # In-line if
     if text in ("and", "is", "in", "or"):
         return opicons.BinOpIcon(text, window), None # Binary keyword operation
     if text in ("*", "/", "@", "<", ">", "=", "!"):
@@ -1218,6 +1225,12 @@ def findTextOffset(text, pixelOffset):
         else:
             return guessedPos
 
+def binOpLeftArgSite(ic):
+    return 'trueExpr' if ic.__class__ == opicons.IfExpIcon else 'leftArg'
+
+def binOpRightArgSite(ic):
+    return 'falseExpr' if ic.__class__ == opicons.IfExpIcon else 'rightArg'
+
 def searchForOpenParen(token, ic, site):
     """Find an open paren/bracket/brace to match an end paren/bracket/brace placed at a
     given cursor position (ic, site).  token indicates what type of paren-like-object is
@@ -1246,11 +1259,11 @@ def searchForOpenParen(token, ic, site):
             if token == "endBrace" and isinstance(ic, listicons.DictIcon) and \
                     not ic.closed:
                 return ic
-            if isinstance(ic, opicons.BinOpIcon) and ic.hasParens:
+            if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and ic.hasParens:
                 # Don't allow search to escape enclosing arithmetic parens
                 return None
-            if ic.__class__ not in (opicons.BinOpIcon, opicons.UnaryOpIcon,
-                    listicons.DictElemIcon):
+            if ic.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon,
+                    opicons.UnaryOpIcon, listicons.DictElemIcon):
                 # For anything but an arithmetic op, inputs are enclosed in something
                 # and search should not extend beyond (calls, tuples, subscripts, etc.)
                 return None

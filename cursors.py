@@ -488,9 +488,9 @@ class Cursor:
                 siteType = parent.typeOf(parent.siteOf(child))
             if siteType == "input" and (
              (token == "endParen" and (
-              parent.__class__ is opicons.BinOpIcon and opicons.needsParens(parent) or
-              parent.__class__ in (listicons.CallIcon, listicons.TupleIcon,
-               blockicons.DefIcon) or
+              parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+              opicons.needsParens(parent) or parent.__class__ in (listicons.CallIcon,
+               listicons.TupleIcon, blockicons.DefIcon) or
               parent.__class__ is parenicon.CursorParenIcon and parent.closed)) or
              (token == "endBrace" and isinstance(parent, listicons.DictIcon)) or
              (token == "endBracket" and
@@ -536,8 +536,8 @@ def rightmostSite(ic, ignoreAutoParens=False):
         if len(children) == 0:
             return ic, 'values_0'
         return rightmostSite(icon.findLastAttrIcon(children[-1]))
-    elif isinstance(ic, opicons.BinOpIcon) and (not ic.hasParens or ignoreAutoParens) \
-            or isinstance(ic, infixicon.InfixIcon):
+    elif ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+            (not ic.hasParens or ignoreAutoParens) or isinstance(ic, infixicon.InfixIcon):
         if ic.rightArg() is None:
             return ic, 'rightArg'
         return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))

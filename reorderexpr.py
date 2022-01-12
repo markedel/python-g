@@ -123,7 +123,7 @@ def highestAffectedExpr(changedIcon):
         site = parent.siteOf(ic)
         siteType = parent.typeOf(site)
         if siteType == "input" and parent.__class__ not in (opicons.BinOpIcon,
-         opicons.UnaryOpIcon, parenicon.CursorParenIcon):
+                opicons.IfExpIcon, opicons.UnaryOpIcon, parenicon.CursorParenIcon):
             return ic  # Everything other than arithmetic expressions encloses args
 
 def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None):
@@ -137,7 +137,7 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
     representedIcons = (topNode, )
     if topNode is None:
         yield MissingArgToken()
-    elif isinstance(topNode, opicons.BinOpIcon):
+    elif topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon):
         if topNode.hasParens:
             yield OpenParenToken(topNode)
         yield from traverseExprLeftToRight(topNode.leftArg(), allowedNonParen,
@@ -196,7 +196,7 @@ class OpenParenToken:
             attrIcon = parenIcon.childAt('attrIcon')
             if attrIcon is not None:
                 self.representedIcons += list(attrIcon.traverse())
-        if isinstance(parenIcon, opicons.BinOpIcon):
+        if parenIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon):
             self.contentSite = None
         elif parenIcon.hasSite('argIcons_0'):
             self.contentSite = 'argIcons_0'
@@ -204,8 +204,8 @@ class OpenParenToken:
             self.contentSite = 'indexIcon'
         else:
             self.contentSite = 'argIcon'
-        self.closed = isinstance(self.parenIcon, opicons.BinOpIcon) or \
-                self.parenIcon.closed
+        self.closed = self.parenIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) \
+            or self.parenIcon.closed
         self.arg = None
         self.endParenAttr = None
         self.endParenIc = None
@@ -222,6 +222,12 @@ class BinaryOpToken:
         self.ic = ic
         self.leftArg = None
         self.rightArg = None
+        if isinstance(ic, opicons.IfExpIcon):
+            self.leftArgSite = 'trueExpr'
+            self.rightArgSite = 'falseExpr'
+        else:
+            self.leftArgSite = 'leftArg'
+            self.rightArgSite = 'rightArg'
 
 class UnaryOpToken:
     def __init__(self, ic):
@@ -259,12 +265,12 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
             token.ic.replaceChild(arg, 'argIcon')
         return token.ic
     elif isinstance(token, BinaryOpToken):
-        leftArg = relinkExprFromTokens(token.leftArg, token.ic, 'leftArg')
-        rightArg = relinkExprFromTokens(token.rightArg, token.ic, 'rightArg')
+        leftArg = relinkExprFromTokens(token.leftArg, token.ic, token.leftArgSite)
+        rightArg = relinkExprFromTokens(token.rightArg, token.ic, token.rightArgSite)
         if token.ic.leftArg() is not leftArg:
-            token.ic.replaceChild(leftArg, 'leftArg')
+            token.ic.replaceChild(leftArg, token.leftArgSite)
         if token.ic.rightArg() is not rightArg:
-            token.ic.replaceChild(rightArg, 'rightArg')
+            token.ic.replaceChild(rightArg, token.rightArgSite)
         return token.ic
     elif isinstance(token, OpenParenToken):
         if token.closed and isinstance(token.arg, BinaryOpToken) and \
@@ -280,12 +286,13 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
                     parenIc.replaceChild(deletedIconAttr, 'attrIcon')
                 cursor = parenIc.window.cursor
                 if cursor.type == 'icon' and cursor.icon is token.parenIcon:
-                    cursorSite = 'leftArg' if cursor.site == 'argIcon' else 'attrIcon'
+                    cursorSite = token.arg.leftArgSite if cursor.site == 'argIcon' else \
+                        'attrIcon'
                     cursor.setToIconSite(parenIc, cursorSite)
         else:
             # Add parens around argument using existing icon if possible.  If not
             # (because parens were bin op auto-parens), create a new cursor paren
-            if isinstance(token.ic, opicons.BinOpIcon):
+            if token.ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon):
                 parenIc = parenicon.CursorParenIcon(window=token.ic.window,
                         closed=token.closed)
                 contentSite = 'argIcon'
@@ -330,7 +337,8 @@ def dumpTok(token, indent=0):
         dumpTok(token.leftArg, indent+1)
         dumpTok(token.rightArg, indent+1)
     elif isinstance(token, OpenParenToken):
-        parenType = "BinOp" if isinstance(token.parenIcon, opicons.BinOpIcon) else ""
+        parenType = "BinOp" if token.parenIcon in (opicons.BinOpIcon, opicons.IfExpIcon) \
+            else ""
         attr = ""
         if token.endParenAttr is not None:
             attr = token.endParenAttr.dumpName() + " <- " + \
