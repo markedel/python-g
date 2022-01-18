@@ -11,12 +11,15 @@ matingSiteType = {'output':'input', 'input':'output', 'attrOut':'attrIn',
 isSeriesRe = re.compile(".*_\\d*$")
 
 class IconSite:
-    def __init__(self, siteName, siteType, xOffset=0, yOffset=0, cursorOnly=False):
+    def __init__(self, siteName, siteType, xOffset=0, yOffset=0, cursorTravOrder=None,
+            cursorOnly=False):
         self.name = siteName
         self.type = siteType
         self.xOffset = xOffset
         self.yOffset = yOffset
         self.att = None
+        if cursorTravOrder is not None:
+            self.order = cursorTravOrder
         if cursorOnly:
             self.cursorOnly = True
 
@@ -57,9 +60,10 @@ class IconSite:
         fromSite.att = ownerIcon
 
 class IconSiteSeries:
-    def __init__(self, name, siteType, initCount=0, initOffsets=None):
+    def __init__(self, name, siteType, initCount=0, initOffsets=None, curTravOrder=None):
         self.type = siteType
         self.name = name
+        self.order = curTravOrder  # Cursor traversal order in parent site list
         self.sites = [None] * initCount
         for idx in range(initCount):
             if initOffsets is not None and idx < len(initOffsets):
@@ -91,6 +95,7 @@ class IconSiteList:
     """
     def __init__(self):
         self._typeDict = {}
+        self.nextCursorTraverseOrder = 0
 
     def lookup(self, siteId):
         """External to the icon, sites are usually identified by name, but older code
@@ -173,19 +178,38 @@ class IconSiteList:
                         parentList.append(site)
         return parentList
 
-    def add(self, name, siteType, xOffset=0, yOffset=0, cursorOnly=False):
+    def add(self, name, siteType, xOffset=0, yOffset=0, cursorTraverseOrder=None,
+            cursorOnly=False):
         """Add a new icon site to the site list given name and type.  Optionally add
         offset from the icon origin (sometimes these are not known until the icon has
-        been through layout).  The ordering of calls to add determines the order in which
-        sites will be traversed."""
+        been through layout).  The IconSiteList also determines the text-flow through
+        the icon (how cursor traversal moves from icon to icon for left and right arrow
+        keys).  If cursorTraverseOrder is not specified, this is determined from the
+        order in which sites are added and the site type."""
+        if cursorTraverseOrder is None and siteType in childSiteTypes:
+            cursorTraverseOrder = self.nextCursorTraverseOrder
+            self.nextCursorTraverseOrder += 1
         setattr(self, name, IconSite(name, siteType, xOffset, yOffset,
-                cursorOnly=cursorOnly))
+            cursorTravOrder=cursorTraverseOrder, cursorOnly=cursorOnly))
         if siteType not in self._typeDict:
             self._typeDict[siteType] = []
         self._typeDict[siteType].append(name)
 
-    def addSeries(self, name, siteType, initCount=0, initOffsets=None):
-        setattr(self, name, IconSiteSeries(name, siteType, initCount, initOffsets))
+    def addSeries(self, name, siteType, initCount=0, initOffsets=None, curTravOrder=None):
+        """Add a new icon site series to the site list given series name and type.
+         Optionally add offset of the first element from the icon origin (sometimes these
+         are not known until the icon has been through layout).  The IconSiteList also
+         determines the text-flow through the icon (how cursor traversal moves from icon
+         to icon for left and right arrow keys). Traversal within the series is automatic
+         and keyed to the site index (which is part of the name of the series site).
+         If curTravOrder is not specified, the positioning of the series within the
+         traversal order of the site list is determined from the order in which sites and
+         site series are added and the site type."""
+        if curTravOrder is None and siteType in childSiteTypes:
+            curTravOrder = self.nextCursorTraverseOrder
+            self.nextCursorTraverseOrder += 1
+        series = IconSiteSeries(name, siteType, initCount, initOffsets, curTravOrder)
+        setattr(self, name, series)
         if siteType not in self._typeDict:
             self._typeDict[siteType] = []
         self._typeDict[siteType].append(name)
@@ -259,6 +283,96 @@ class IconSiteList:
         series = getattr(self, seriesName)
         if isinstance(series, IconSiteSeries):
             series.insertSite(insertIdx)
+
+    def nextCursorSite(self, siteId):
+        """Return the siteId of the site to the right in the text sequence, None if
+        siteId is already the rightmost site in the site list."""
+        if self.isSeries(siteId):
+            name, idx = splitSeriesSiteId(siteId)
+            series = getattr(self, name, None)
+            if series is None:
+                print("nextCursorSite called with non-existent series name")
+                return None
+            if idx + 1 < len(series):
+                return makeSeriesSiteId(name, idx + 1)
+            order = series.order
+        else:
+            site = getattr(self, siteId, None)
+            if site is None:
+                print("nextCursorSite called with non-existent site")
+                return None
+            order = site.order
+        nextSite = self.nthCursorSite(order + 1)
+        if nextSite is None:
+            return None
+        if isinstance(nextSite, IconSiteSeries):
+            return makeSeriesSiteId(nextSite.name, 0)
+        return nextSite.name
+
+    def prevCursorSite(self, siteId):
+        """Return the siteId of the site to the left in the text sequence, None if
+        siteId is already the leftmost site in the site list."""
+        if self.isSeries(siteId):
+            name, idx = splitSeriesSiteId(siteId)
+            series = getattr(self, name, None)
+            if series is None:
+                print("prevCursorSite called with non-existent series name")
+                return None
+            if idx > 0:
+                return makeSeriesSiteId(name, idx-1)
+            order = series.order
+        else:
+            site = getattr(self, siteId, None)
+            if site is None:
+                print("prevCursorSite called with non-existent site")
+                return None
+            order = site.order
+        if order <= 0:
+            return None
+        prevSite = self.nthCursorSite(order - 1)
+        if prevSite is None:
+            print("prevCursorSite: no site with order %d in site list" % order-1)
+            return None
+        if isinstance(prevSite, IconSiteSeries):
+            return makeSeriesSiteId(prevSite.name, len(prevSite)-1)
+        return prevSite.name
+
+    def lastCursorSite(self):
+        """Return siteId for the rightmost site (in cursor traversal) of the site list"""
+        lastSite = self.nthCursorSite(-1)
+        if lastSite is None:
+            return None
+        if isinstance(lastSite, IconSiteSeries):
+            return makeSeriesSiteId(lastSite.name, len(lastSite) - 1)
+        return lastSite.name
+
+    def firstCursorSite(self):
+        firstSite = self.nthCursorSite(0)
+        if firstSite is None:
+            return None
+        if isinstance(firstSite, IconSiteSeries):
+            return makeSeriesSiteId(firstSite.name, 0)
+        return firstSite.name
+
+    def nthCursorSite(self, n):
+        """Return the site or series object whose cursor traversal order matches n
+        (a series has a single index).  Returns None if no site or series claims that
+        index.  An n of -1 returns the last site or series in the site list."""
+        lastSiteOrder = -1
+        lastSite = None
+        for siteNames in self._typeDict.values():
+            for name in siteNames:
+                site = getattr(self, name)
+                if hasattr(site, 'order'):
+                    if n == -1:
+                        if lastSiteOrder < site.order:
+                            lastSiteOrder = site.order
+                            lastSite = site
+                    elif  site.order == n:
+                        return site
+        if n == -1:
+            return lastSite
+        return None
 
     def makeSnapLists(self, ic, x, y, forCursor=False):
         snapSites = {}

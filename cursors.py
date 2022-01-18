@@ -397,13 +397,99 @@ class Cursor:
 
     def _processIconArrowKey(self, evt):
         """For cursor on icon site, set new site based on arrow direction"""
+        if self.type == "icon" and evt.keysym in ('Left', 'Right') and \
+                not (evt.state & python_g.CTRL_MASK):
+            ic, site = self._lexicalTraverse(self.icon, self.site, evt.keysym)
+            while ic.typeOf(site) == 'cprhIn':
+                # lexical traversal returns comprehension sites which are usually
+                # coincident with an attribute site and shouldn't get cursor
+                ic, site = self._lexicalTraverse(ic, site, evt.keysym)
+        else:
+            ic, site = self._geometricTraverse(self.icon, self.site, evt.keysym)
+        self.moveToIconSite(ic, site, evt)
+
+    def _lexicalTraverse(self, fromIcon, fromSite, direction):
+        """Return the cursor position (icon and siteId) to the left or right according
+        to the "text-flow"."""
+        fromSiteType = fromIcon.typeOf(fromSite)
+        if direction == 'Left':
+            if fromSiteType in iconsites.parentSiteTypes:
+                # Cursor is on an output site.  There's probably nowhere to go (return
+                # the same cursor position).  In the unlikely case that it is attached to
+                # something, make a recursive call with the proper cursor site (input)
+                attachedIc = fromIcon.childAt(fromSite)
+                if attachedIc is None:
+                    return fromIcon, fromSite
+                attachedSite = attachedIc.siteOf(fromIcon)
+                return self._lexicalTraverse(attachedIc, attachedSite, direction)
+            elif fromSite == 'seqOut':
+                if isinstance(fromIcon, icon.BlockEnd):
+                    return fromIcon, "seqIn"
+                return rightmostSite(fromIcon)
+            elif fromSite == 'seqIn':
+                prevStmt = fromIcon.prevInSeq()
+                if prevStmt is None:
+                    return fromIcon, fromSite
+                if isinstance(prevStmt, icon.BlockEnd):
+                    return prevStmt, "seqIn"
+                return rightmostSite(prevStmt)
+            # Cursor is on an input site of some sort (input, attrIn, cprhIn)
+            prevSite = fromIcon.sites.prevCursorSite(fromSite)
+            if prevSite is None:
+                highestIc = iconsites.highestCoincidentIcon(fromIcon)
+                parent = highestIc.parent()
+                if parent is None:
+                    return highestIc, self._topSite(highestIc, seqDown=False)
+                return parent, parent.siteOf(highestIc)
+            iconAtPrevSite = fromIcon.childAt(prevSite)
+            if iconAtPrevSite is None:
+                return fromIcon, prevSite
+            return rightmostSite(iconAtPrevSite)
+        else:  # 'Right'
+            if fromSiteType in iconsites.parentSiteTypes or fromSiteType == 'seqIn':
+                nextSite = fromIcon.sites.firstCursorSite()
+                if nextSite is None:
+                    return fromIcon, self._topSite(fromIcon, seqDown=True)
+                return fromIcon, nextSite
+            if fromSite == 'seqOut':
+                nextStmt = fromIcon.nextInSeq()
+                if nextStmt is None:
+                    return fromIcon, fromSite
+                nextSite = nextStmt.sites.firstCursorSite()
+                if nextSite is None:
+                    return nextStmt, 'seqOut'
+                return nextStmt, nextSite
+            # Start from the lowest coincident site at the cursor
+            ic, site = iconsites.lowestCoincidentSite(fromIcon, fromSite)
+            childIc = ic.childAt(site)
+            if childIc is not None:
+                # There is an icon attached to it that can accept a cursor, go there
+                firstChildSite = childIc.sites.firstCursorSite()
+                if firstChildSite is not None:
+                    return childIc, firstChildSite
+            # There is no icon attached to the site that can accept a cursor.  Iterate up
+            # the hierarchy to find an icon with a site to take one.  If none is found,
+            # attach to the seqOut or output site of the top icon
+            nextSite = fromIcon.sites.nextCursorSite(site)
+            nextIcon = ic
+            while nextSite is None:
+                parent = nextIcon.parent()
+                if parent is None:
+                    return nextIcon, self._topSite(nextIcon, seqDown=True)
+                parentSite = parent.siteOf(nextIcon)
+                nextSite = parent.sites.nextCursorSite(parentSite)
+                nextIcon = parent
+            return nextIcon, nextSite
+
+    def _geometricTraverse(self, fromIcon, fromSite, direction):
+        """Return the next cursor position (icon and siteId) in a given direction
+        (physically, not lexically) from the given position (fromIcon, fromSite)."""
         # Build a list of possible destination cursor positions, normalizing attribute
         # site positions to the center of the cursor (in/out site position).
-        direction = evt.keysym
-        cursorX, cursorY = self.icon.posOfSite(self.site)
+        cursorX, cursorY = fromIcon.posOfSite(fromSite)
         searchRect = (cursorX-HORIZ_ARROW_MAX_DIST, cursorY-VERT_ARROW_MAX_DIST,
          cursorX+HORIZ_ARROW_MAX_DIST, cursorY+VERT_ARROW_MAX_DIST)
-        cursorTopIcon = self.icon.topLevelParent()
+        cursorTopIcon = fromIcon.topLevelParent()
         cursorPrevIcon = cursorTopIcon.prevInSeq()
         cursorNextIcon = cursorTopIcon.nextInSeq()
         cursorSites = []
@@ -429,7 +515,7 @@ class Cursor:
                     cursorSites.append((*outSites[0][1], winIcon, "output"))
         # Rank the destination positions by nearness to the current cursor position
         # in the cursor movement direction, and cull those in the wrong direction
-        if self.siteType == "attrIn":
+        if fromIcon.typeOf(fromSite) == "attrIn":
             cursorY -= icon.ATTR_SITE_OFFSET  # Normalize to input/output site y
         choices = []
         for x, y, ic, site in cursorSites:
@@ -444,7 +530,7 @@ class Cursor:
             if dist > 0:
                 choices.append((dist, x, y, ic, site))
         if len(choices) == 0:
-            return
+            return fromIcon, fromSite
         choices.sort(key=itemgetter(0))
         if direction in ("Left", "Right"):
             # For horizontal movement, just use a simple vertical threshold to decide
@@ -452,8 +538,7 @@ class Cursor:
             for xDist, x, y, ic, site in choices:
                 if xDist > VERT_ARROW_X_JUMP_MIN:
                     if abs(y - cursorY) < HORIZ_ARROW_Y_JUMP_MAX:
-                        self.moveToIconSite(ic, site, evt)
-                        return
+                        return ic, site
         else:  # Up, Down
             # For vertical movement, do a second round of ranking.  This time add y
             # distance to weighted X distance (ranking x jumps as further away)
@@ -464,7 +549,7 @@ class Cursor:
                     if bestRank is None or rank < bestRank[0]:
                         bestRank = (rank, ic, site)
             if bestRank is None:
-                return
+                return fromIcon, fromSite
             rank, ic, site = bestRank
             if site == 'seqIn' and direction == "Up":
                 # Typing at a seqIn site is the same as typing at the connected seqOut
@@ -473,7 +558,8 @@ class Cursor:
                 if prevIcon:
                     ic = prevIcon
                     site = 'seqOut'
-            self.moveToIconSite(ic, site, evt)
+            return ic, site
+        return fromIcon, fromSite
 
     def movePastEndParen(self, token):
         """Move the cursor past the next end paren/bracket/brace (token is one of
@@ -509,6 +595,19 @@ class Cursor:
         """Returns True if the cursor is already at a given icon site"""
         return self.type == "icon" and self.icon == ic and self.site == site
 
+    def _topSite(self, ic, seqDown=True):
+        """Return the attachment site (and therefore leftmost cursor site) for an icon at
+        the top of the hierarchy."""
+        if seqDown and ic.hasSite('seqOut'):
+            return 'seqOut'
+        elif not seqDown and ic.hasSite('seqIn'):
+            return 'seqIn'
+        else:
+            for site in ic.sites:
+                if site.type in iconsites.parentSiteTypes:
+                    return site.name
+        return None
+
 def tkCharFromEvt(evt):
     if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 192 or 219 <= evt.keycode <= 222:
         return chr(evt.keysym_num)
@@ -526,29 +625,19 @@ def rightmostSite(ic, ignoreAutoParens=False):
     input site.  While binary op icons may have a fake invisible attribute site, it should
     be used carefully (if ever).  ignoreAutoParens prevents choosing auto-paren attribute
     site of BinOpIcon, even if it the rightmost."""
-    if isinstance(ic, opicons.UnaryOpIcon):
-        if ic.arg() is None:
-            return ic, 'argIcon'
-        return rightmostSite(icon.findLastAttrIcon(ic.arg()))
-    elif ic.__class__ in (assignicons.AssignIcon, nameicons.YieldIcon,
-            nameicons.YieldFromIcon):
-        children = [site.att for site in ic.sites.values if site.att is not None]
-        if len(children) == 0:
-            return ic, 'values_0'
-        return rightmostSite(icon.findLastAttrIcon(children[-1]))
-    elif ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
-            (not ic.hasParens or ignoreAutoParens) or isinstance(ic, infixicon.InfixIcon):
+    if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+            (not ic.hasParens or ignoreAutoParens):
         if ic.rightArg() is None:
-            return ic, 'rightArg'
-        return rightmostSite(icon.findLastAttrIcon(ic.rightArg()))
-    elif isinstance(ic, blockicons.DefIcon):
-        children = [site.att for site in ic.sites.argIcons if site.att is not None]
-        if len(children) == 0:
-            return ic, 'argIcons_0'
-        return rightmostSite(icon.findLastAttrIcon(children[-1]))
-    elif ic.childAt('attrIcon'):
-        return rightmostSite(ic.childAt('attrIcon'))
-    return ic, 'attrIcon'
+            return ic, 'falseExpr' if isinstance(opicons.IfExpIcon) else 'rightArg'
+        return rightmostSite(ic.rightArg(), ignoreAutoParens)
+    lastCursorSite = ic.sites.lastCursorSite()
+    if lastCursorSite is None:
+        print("rightmostSite passed icon with no acceptable cursor site", ic.dumpName())
+        return ic, list(ic.sites.allSites())[-1].name
+    child = ic.childAt(lastCursorSite)
+    if child is None:
+        return ic, lastCursorSite
+    return rightmostSite(child, ignoreAutoParens)
 
 topLevelStmts = {'async def': blockicons.DefIcon, 'def': blockicons.DefIcon,
     'class': blockicons.ClassDefIcon, 'break': nameicons.BreakIcon,

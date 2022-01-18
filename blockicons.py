@@ -605,6 +605,8 @@ class ElseIcon(icon.Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
         self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
+        self.sites.add('attrIcon', 'attrIn', bodyWidth,
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
@@ -695,6 +697,8 @@ class TryIcon(icon.Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX + comn.BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        self.sites.add('attrIcon', 'attrIn', bodyWidth,
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
         x, y = (0, 0) if location is None else location
         width = max(seqX + comn.BLOCK_INDENT + 2, bodyWidth + icon.dragSeqImage.width-1)
         self.rect = (x, y, x + width, y + bodyHeight)
@@ -883,6 +887,8 @@ class FinallyIcon(icon.Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
         self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
+        self.sites.add('attrIcon', 'attrIn', bodyWidth,
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
@@ -1046,6 +1052,8 @@ class DefOrClassIcon(icon.Icon):
                     defRParenImage.width
             height = self.argList.spineHeight
             centerY = self.argList.spineTop
+            self.sites.attrIcon.xOffset = width - icon.ATTR_SITE_DEPTH
+            self.sites.attrIcon.yOffset = centerY + icon.ATTR_SITE_OFFSET
         self.sites.seqInsert.yOffset = centerY
         seqInY = centerY - bodyHeight // 2 + 1
         self.sites.seqIn.yOffset = seqInY
@@ -1117,6 +1125,7 @@ class DefOrClassIcon(icon.Icon):
         argX = comn.rectWidth(self.rect)
         argY = self.sites.nameIcon.yOffset
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, argY)
+        self.sites.add('attrIcon', 'attrIn', cursorOnly=True, cursorTraverseOrder=2)
         self.window.undo.registerCallback(self.removeArgs)
 
     def removeArgs(self):
@@ -1126,6 +1135,7 @@ class DefOrClassIcon(icon.Icon):
             print("trying to remove non-empty argument list")
             return
         self.argList = None
+        self.sites.remove('attrIcon')
         self.window.undo.registerCallback(self.addArgs)
 
 class ClassDefIcon(DefOrClassIcon):

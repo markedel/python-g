@@ -390,6 +390,7 @@ class BinOpIcon(icon.Icon):
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.hasParens = layout.hasParens
+        self.sites.attrIcon.order = 2 if self.hasParens else None
         self.coincidentSite = None if self.hasParens else "leftArg"
         self.leftArgWidth = layout.lArgWidth
         self.rightArgWidth = layout.rArgWidth
@@ -890,6 +891,7 @@ class IfExpIcon(icon.Icon):
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.hasParens = layout.hasParens
+        self.sites.attrIcon.order = 2 if self.hasParens else None
         self.coincidentSite = None if self.hasParens else "trueExpr"
         self.trueExprWidth = layout.lArgWidth
         self.falseExprWidth = layout.rArgWidth
@@ -1070,7 +1072,7 @@ class IfExpIcon(icon.Icon):
             # use the further hack of creating a temporary icon to track the empty
             # site.  The reason for setting the cursor position as opposed to just
             # recording the lowest icon, is that reorderArithExpr can remove parens,
-            # but will relocate the cursor it does.
+            # but will relocate the cursor if it does.
             cursorIc, cursorSite = iconsites.lowestCoincidentSite(self, siteId)
             cursorChild = cursorIc.childAt(cursorSite)
             if cursorChild is None:
@@ -1269,7 +1271,7 @@ def backspaceBinOpIcon(ic, site, evt):
         # use the further hack of creating a temporary icon to track the empty
         # site.  The reason for setting the cursor position as opposed to just
         # recording the lowest icon, is that reorderArithExpr can remove parens,
-        # but will relocate the cursor it does.
+        # but will relocate the cursor if it does.
         cursorIc, cursorSite = iconsites.lowestCoincidentSite(ic, site)
         cursorChild = cursorIc.childAt(cursorSite)
         if cursorChild is None:
