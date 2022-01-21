@@ -1987,16 +1987,15 @@ class Window:
         """Draw an arbitrary image anywhere in the window, ignoring the window image.
         Note that location and subImage are in image (not window content) coordinates."""
         if subImage:
+            # image.crop will create an image the size of the crop area, even if the
+            # original is smaller. Pre-crop the crop-rectangle to the window size.
+            winWidth, winHeight = self.image.size
             x1, y1, x2, y2 = subImage
-            width = x2 - x1
-            height = y2 - y1
+            subImage = max(0, x1), max(0, y1), min(winWidth, x2), min(winHeight, y2)
             image = image.crop(subImage)
-        else:
-            width = image.width
-            height = image.height
-        if width == 0 or height == 0:
+        if image.width == 0 or image.height == 0:
             return
-        dib = ImageWin.Dib('RGB', (width, height))
+        dib = ImageWin.Dib('RGB', (image.width, image.height))
         dib.paste(image)
         x, y = location
         # While the documentation says that Dib.draw can take a window handle,
@@ -2007,7 +2006,7 @@ class Window:
         # context from the window ID
         if self.dc is None:
             self.dc = dib.image.getdc(self.imgFrame.winfo_id())
-        dib.draw(self.dc, (x, y, x + width, y + height))
+        dib.draw(self.dc, (x, y, x + image.width, y + image.height))
 
     def findIconsInRegion(self, rect=None, inclSeqRules=False, order='draw'):
         """Find the icons that touch a (content coordinate) rectangle of the window.  If

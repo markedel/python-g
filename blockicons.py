@@ -1376,7 +1376,7 @@ def createForIconFromAst(astNode, window):
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.target, window), "targets_0")
     if isinstance(astNode.iter, ast.Tuple):
-        iterIcons = [icon.createFromAst(i, window) for i in astNode.iter]
+        iterIcons = [icon.createFromAst(i, window) for i in astNode.iter.elts]
         topIcon.insertChildren(iterIcons, "iterIcons", 0)
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.iter, window), "iterIcons_0")

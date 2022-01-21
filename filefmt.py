@@ -5,6 +5,11 @@ import tokenize
 import textwrap
 import tkinter
 
+SINGLE_QUOTE_STRING = 1
+DOUBLE_QUOTE_STRING = 2
+TRIPLE_SINGLE_QUOTE_STRING = 3
+TRIPLE_DOUBLE_QUOTE_STRING = 4
+
 posMacroPattern = re.compile("(([-+])\\d*)(([-+])\\d*)")
 
 class MacroParser:
@@ -60,19 +65,22 @@ class MacroParser:
         modTextFrags = []
         modFragStart = 0
         origIdx = 0
+        inString = None
+        inComment = False
         while origIdx < len(text):
             origChar = text[origIdx]
-            if origChar == '\t':
+            if origChar == '\t' and not inComment and inString is None:
                 macroFailDialog(text, origIdx, origLineNum, "Tab characters not allowed")
                 return None, None, []
             if origChar == '\n':
+                inComment = False
                 lineNumTranslate.append(origLineNum)
                 origLineNum += 1
                 modLineNum += 1
                 modColNum = 0
                 origLineStarts.append(origIdx+1)
                 origIdx += 1
-            elif origChar == '$':
+            elif origChar == '$' and not inComment and inString is None:
                 # Macro found.  Process it and get replacement text
                 match = self.macroPattern.match(text, origIdx)
                 if match is None:
@@ -102,6 +110,49 @@ class MacroParser:
                 origIdx = macroEndIdx
                 modFragStart = origIdx
             else:
+                # While some macro languages require full ownership of the macro-
+                # introducing character(s), we allow $ characters to appear in strings
+                # and comments (the alternative being transforming them to $$ or similar
+                # on output).  Therefore, even though we're only looking for macros, we
+                # still need to do enough parsing to recognize strings and comments.
+                if origChar == '#' and inString is None:
+                    inComment = True
+                elif origChar == '"' and not inComment:
+                    if inString is None:
+                        if strAt(text, origIdx-2, '"""'):
+                            inString = TRIPLE_DOUBLE_QUOTE_STRING
+                        elif inString != SINGLE_QUOTE_STRING:
+                            inString = DOUBLE_QUOTE_STRING
+                    elif inString == DOUBLE_QUOTE_STRING:
+                        if not strAt(text, origIdx-1, '\\"') or \
+                                strAt(text, origIdx-2, '\\'):
+                            print('"')
+                            inString = None
+                    elif inString == TRIPLE_DOUBLE_QUOTE_STRING:
+                        if strAt(text, origIdx-2, '"""'):
+                            if not strAt(text, origIdx-3, '"') or \
+                                    strAt(text, origIdx-5, '""""""'):
+                                print('"')
+                                inString = None
+                elif origChar == "'" and not inComment:
+                    if inString is None:
+                        if strAt(text, origIdx-2, "'''"):
+                            inString = TRIPLE_SINGLE_QUOTE_STRING
+                        elif inString != DOUBLE_QUOTE_STRING:
+                            inString = SINGLE_QUOTE_STRING
+                    elif inString == SINGLE_QUOTE_STRING:
+                        if not strAt(text, origIdx-1, "\\'") or \
+                                strAt(text, origIdx-2, '\\'):
+                            print("'")
+                            inString = None
+                    elif inString == TRIPLE_SINGLE_QUOTE_STRING:
+                        if strAt(text, origIdx-2, "'''"):
+                            if not strAt(text, origIdx-3,  "'") or \
+                                    strAt(text, origIdx-5, "''''''"):
+                                print("'")
+                                inString = None
+                # Advance to the next character and increment column count
+                if inString is not None: print(origChar, end="")
                 modColNum += 1
                 origIdx += 1
         # Copy the text between the last macro and the end of the input text to the output
@@ -347,7 +398,7 @@ def _extractTokens(text, annotations):
             if token.type == tokenize.COMMENT:
                 startLine, startCol = token.start
                 isLineComment = token.line[:startCol].isspace()
-                if token.string[1] == " ":
+                if len(token.string) > 1 and token.string[1] == " ":
                     commentText = token.string[2:]
                 else:
                     # Most comments start "# ".  If not, capture the second character.
@@ -985,6 +1036,13 @@ def countLinesAndCols(text, endPos, startLine, startCol):
         else:
             col += 1
     return line, col
+
+def strAt(text, start, str):
+    """Safely execute: text[start:start+len(str)] == str when start might be before start
+    of text. """
+    if start < 0:
+        return False
+    return text[start:start+len(str)] == str
 
 def _moduleTest():
     macroParser = MacroParser()
