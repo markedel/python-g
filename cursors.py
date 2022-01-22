@@ -628,7 +628,7 @@ def rightmostSite(ic, ignoreAutoParens=False):
     if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
             (not ic.hasParens or ignoreAutoParens):
         if ic.rightArg() is None:
-            return ic, 'falseExpr' if isinstance(opicons.IfExpIcon) else 'rightArg'
+            return ic, 'falseExpr' if isinstance(ic, opicons.IfExpIcon) else 'rightArg'
         return rightmostSite(ic.rightArg(), ignoreAutoParens)
     lastCursorSite = ic.sites.lastCursorSite()
     if lastCursorSite is None:

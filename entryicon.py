@@ -894,7 +894,7 @@ class EntryIcon(icon.Icon):
         return False
 
     def insertColon(self):
-        # Look for an icon that supports colons (currently, only subscript)
+        # Look for a parent icon that supports colons (subscript or dictionary)
         for parent in self.attachedIcon().parentage(includeSelf=True):
             if isinstance(parent, subscripticon.SubscriptIcon):
                 if parent.hasSite('stepIcon'):
@@ -955,7 +955,12 @@ class EntryIcon(icon.Icon):
                     parent.replaceChild(dictElem, site)
                     dictElem.replaceChild(dictElemArg, 'leftArg')
                 elif child is self:
-                    # There's nothing at the site, yet
+                    # There's nothing at the site except entry icon and whatever we are
+                    # holding, move entry icon to right arg, unless we're *holding* a
+                    # dictElem, in which case, don't insert the new dictElem
+                    if isinstance(self.pendingArg(), listicons.DictElemIcon):
+                        colonInserted = False
+                        break
                     dictIc.replaceChild(dictElem, site)
                     dictElem.replaceChild(self, 'rightArg')
                 else:
