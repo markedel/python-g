@@ -380,7 +380,7 @@ class AssignIcon(icon.Icon):
                 if cursorIc is None:
                     cursorIc = self
                 else:
-                    cursorIc, cursorSite = cursors.rightmostSite(
+                    cursorIc, cursorSite = icon.rightmostSite(
                         icon.findLastAttrIcon(cursorIc))
                 win.cursor.setToIconSite(cursorIc, cursorSite)
         else:
@@ -397,7 +397,7 @@ class AssignIcon(icon.Icon):
                 win.cursor.setToIconSite(self, prevSite)
             else:
                 rightmostIcon = icon.findLastAttrIcon(self.childAt(prevSite))
-                rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
+                rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
                 self.removeEmptySeriesSite(siteId)
                 win.cursor.setToIconSite(rightmostIcon, rightmostSite)
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -616,7 +616,7 @@ class AugmentedAssignIcon(icon.Icon):
                 win.cursor.setToIconSite(self, prevSite)
             else:
                 rightmostIcon = icon.findLastAttrIcon(self.childAt(prevSite))
-                rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
+                rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
                 self.removeEmptySeriesSite(siteId)
                 win.cursor.setToIconSite(rightmostIcon, rightmostSite)
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))

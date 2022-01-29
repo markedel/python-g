@@ -302,6 +302,9 @@ class Window:
         self.globals = {'__windowExecContext__': {}}
         # List of mutable icons displayed in the window
         self.liveMutableIcons = set()
+        # list of icons with dimmed text to receive (unnecessary) user typing when we've
+        # already filled in to the right of the cursor.
+        self.activeTypeovers = set()
         # If a filename was specified, open it
         print("before open file")
         if filename is not None:
@@ -639,6 +642,18 @@ class Window:
             self.entryIcon.addText(char)
             self.redisplayChangedEntryIcon()
             return
+        elif self.cursor.type == "typeover":
+            # Any key is accepted for typeover
+            self.cursor.erase()
+            idx = self.cursor.icon.typeoverIdx
+            ic = self.cursor.icon
+            if not ic.setTypeover(idx + 1):
+                # Reached the end of the typeover text, move to site after
+                cursorSite = ic.sites.lastCursorSite()
+                self.cursor.setToIconSite(self.cursor.icon, cursorSite)
+            ic.draw()
+            self.refresh(ic.rect, redraw=False, clear=False)
+            return
         # If there's an appropriate selection, use that
         selectedIcons = findTopIcons(self.selectedIcons())
         if len(selectedIcons) == 1:
@@ -707,6 +722,71 @@ class Window:
             if self.entryIcon is not None:
                 self.entryIcon.draw()
         self.undo.addBoundary()
+
+    def watchTypeover(self, ic):
+        """Register an icon with active typeover for cancellation when it's no longer
+        directly ahead of the cursor or entry icon in the text-traversal path."""
+        self.activeTypeovers.add(ic)
+
+    def updateTypeoverStates(self):
+        """Typeover is only allowed directly in front of the cursor, and goes away if
+        the user would need to navigate somehow to reach it (in which case they can
+        just as well navigate over it as type over it)"""
+        keepAlive = set()
+        if self.cursor.type == "text":
+            cursorIcon = self.entryIcon
+            cursorIcon, cursorSite = icon.rightmostSite(cursorIcon)
+        elif self.cursor.type  == "icon":
+            cursorIcon = self.cursor.icon
+            cursorSite = self.cursor.site
+        elif self.cursor.type == "typeover":
+            cursorIcon = self.cursor.icon
+            cursorSite = icon.rightmostSite(cursorIcon)
+            keepAlive.add(cursorIcon)
+        else: # cursor type is window, cancel all typeovers
+            self._removeTypeovers(list(self.activeTypeovers))
+            return
+        # March up the hierarchy from the cursor or entry icon, finding entries in
+        # self.activeTypeovers that are either directly to the right of it, or have only
+        # typeover-dimmed parts between it and the entry.  This also serves to purge the
+        # list of deleted entries, and anything that is not directly next to the cursor.
+        for ic in cursorIcon.parentage(includeSelf=True):
+            rightmostIcon, rightmostSite = icon.rightmostSite(ic)
+            if rightmostIcon != cursorIcon or rightmostSite != cursorSite:
+                if isinstance(rightmostIcon, opicons.DivideIcon):
+                    # Divide icon has *two* sites considered next-to adjacent typeover
+                    # (due to how it's typed): attribute (handled above) and bottomArg
+                    bottomArg = rightmostIcon.childAt('bottomArg')
+                    if bottomArg is None:
+                        altIcon, altSite = rightmostIcon, 'bottomArg'
+                    else:
+                        altIcon, altSite = icon.rightmostSite(bottomArg)
+                    if altIcon == cursorIcon and altSite == cursorSite:
+                        cursorIcon, cursorSite = rightmostIcon, rightmostSite
+                        continue
+                if ic not in self.activeTypeovers:
+                    break
+                activeSite = ic.typeoverActiveSite()
+                activeSiteIcon = ic.childAt(activeSite)
+                if activeSiteIcon is None:
+                    rightmostIcon, rightmostSite = ic, activeSite
+                else:
+                    rightmostIcon, rightmostSite = icon.rightmostSite(activeSiteIcon)
+                if rightmostIcon == cursorIcon and rightmostSite == cursorSite:
+                    keepAlive.add(ic)
+                    cursorIcon, cursorSite = icon.rightmostSite(ic)
+                else:
+                    break
+        self._removeTypeovers(self.activeTypeovers - keepAlive)
+
+    def _removeTypeovers(self, toRemove):
+        for ic in toRemove:
+            topParent = ic.topLevelParent()
+            if topParent is not None and topParent in self.topIcons:
+                ic.setTypeover(None)
+                ic.draw()
+                self.refresh(ic.rect, redraw=False, clear=False)
+            self.activeTypeovers.remove(ic)
 
     def _motionCb(self, evt):
         if self.buttonDownTime is None or not (evt.state & LEFT_MOUSE_MASK):
@@ -953,6 +1033,9 @@ class Window:
 
     def _pasteCb(self, evt=None):
         print('start icon creation', time.monotonic())
+        if self.cursor.type == "typeover":
+            cursors.beep()
+            return
         if self.cursor.type == "text":
             # If the user is pasting in to the entry icon use clipboard text, only
             try:
@@ -1069,13 +1152,26 @@ class Window:
                 self.removeIcons(selectedIcons)
             elif self.cursor.type == "icon":
                 if self.cursor.siteType == 'seqIn' and self.cursor.icon.prevInSeq():
-                    ic, site = cursors.rightmostSite(self.cursor.icon.prevInSeq())
+                    ic, site = icon.rightmostSite(self.cursor.icon.prevInSeq())
                     self.cursor.setToIconSite(ic, site)
                 if self.cursor.siteType == 'seqOut':
-                    ic, site = cursors.rightmostSite(self.cursor.icon)
+                    ic, site = icon.rightmostSite(self.cursor.icon)
                     self.cursor.setToIconSite(ic, site)
                 else:
                     self._backspaceIcon(evt)
+            elif self.cursor.type == "typeover":
+                ic = self.cursor.icon
+                self.cursor.setToTypeover(ic, ic.typeoverIdx - 1)
+                ic.draw()
+                self.refresh(ic.rect, redraw=False, clear=False)
+                if ic.typeoverIdx == 0:
+                    site = ic.typeoverActiveSite()
+                    arg = ic.childAt(site)
+                    if arg:
+                        cursorIc, cursorSite = icon.rightmostSite(arg)
+                    else:
+                        cursorIc, cursorSite = ic, site
+                    self.cursor.setToIconSite(cursorIc, cursorSite)
         else:
             topIcon = self.entryIcon.topLevelParent()
             redrawRect = topIcon.hierRect()
@@ -1177,7 +1273,7 @@ class Window:
         """Move Entry icon after the top-level icon where the cursor is found."""
         if not self._completeEntry(evt):
             return
-        if self.cursor.type != "icon":
+        if self.cursor.type not in ("icon", "typeover"):
             return  # Not on an icon
         # Find the top level icon associated with the icon at the cursor
         topIcon = self.cursor.icon.topLevelParent()
@@ -1198,7 +1294,7 @@ class Window:
         # its content before executing.
         if not self._completeEntry(evt):
             return
-        if self.cursor.type == "icon":
+        if self.cursor.type in ("icon", "typeover"):
             iconToExecute = self.cursor.icon
         else:
             return  # Nothing to execute
@@ -1216,7 +1312,7 @@ class Window:
         # its content before executing.
         if not self._completeEntry(evt):
             return
-        if self.cursor.type == "icon":
+        if self.cursor.type in ("icon", "typeover"):
             iconToExecute = self.cursor.icon
         else:
             return  # Nothing to execute
@@ -1250,7 +1346,7 @@ class Window:
         If there's still an entry icon, try to process its content before executing."""
         if not self._completeEntry(evt):
             return
-        if self.cursor.type == "icon":
+        if self.cursor.type in ("icon", "typeover"):
             cursorIcon = self.cursor.icon
         else:
             return  # No cursor
@@ -1668,11 +1764,11 @@ class Window:
         ic = topIcon
         for cls, site in recordedPos[:-1]:
             if not isinstance(ic, cls):
-                cursorIc, cursorSite = cursors.rightmostSite(ic)
+                cursorIc, cursorSite = icon.rightmostSite(ic)
                 break
             child = ic.childAt(site)
             if child is None:
-                cursorIc, cursorSite = cursors.rightmostSite(ic)
+                cursorIc, cursorSite = icon.rightmostSite(ic)
                 break
             ic = child
         else:
@@ -1681,7 +1777,7 @@ class Window:
             if isinstance(ic, cursorIcCls):
                 cursorIc = ic
             else:
-                cursorIc, cursorSite = cursors.rightmostSite(ic)
+                cursorIc, cursorSite = icon.rightmostSite(ic)
         # Move the cursor
         self.cursor.setToIconSite(cursorIc, cursorSite)
 

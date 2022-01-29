@@ -143,7 +143,7 @@ class InfixIcon(icon.Icon):
             entryAttachedIcon = parent
             entryAttachedSite = parent.siteOf(self)
         else:  # leftArg is not None, attach to that
-            entryAttachedIcon, entryAttachedSite = cursors.rightmostSite(
+            entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
         win.entryIcon = entryicon.EntryIcon(initialString=op, window=win)
         if leftArg is not None:

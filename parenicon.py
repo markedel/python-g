@@ -4,10 +4,12 @@ import comn
 import iconlayout
 import icon
 import reorderexpr
-#import cursors
 
 class CursorParenIcon(icon.Icon):
-    def __init__(self, closed=False, window=None, location=None):
+    def __init__(self, closed=False, window=None, typeoverIdx=None, location=None):
+        # Note that while the constructor can accept a typeover index, the icon does not
+        # support typeover, because there are currently no cases where initial entry via
+        # typing is in closed state.
         icon.Icon.__init__(self, window)
         self.closed = False
         bodyWidth, bodyHeight = icon.globalFont.getsize("(")
@@ -169,7 +171,7 @@ class CursorParenIcon(icon.Icon):
                 cursIc = self
                 cursSite = 'argIcon'
             else:
-                cursIc, cursSite = cursors.rightmostSite(icon.findLastAttrIcon(arg))
+                cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(arg))
             # Expand the scope of the paren to its max, rearrange hierarchy around it
             self.reopen()
             reorderexpr.reorderArithExpr(self)

@@ -393,7 +393,7 @@ class SubscriptIcon(icon.Icon):
                 siteIcon = self.childAt(siteId)
                 if siteIcon:
                     rightIcon = icon.findLastAttrIcon(siteIcon)
-                    rightIcon, rightSite = cursors.rightmostSite(rightIcon)
+                    rightIcon, rightSite = icon.rightmostSite(rightIcon)
                     win.cursor.setToIconSite(rightIcon, rightSite)
                 else:
                     win.cursor.setToIconSite(self, siteId)
@@ -405,7 +405,7 @@ class SubscriptIcon(icon.Icon):
                     cursIc = self
                     cursSite = 'indexIcon'
                 else:
-                    cursIc, cursSite = cursors.rightmostSite(
+                    cursIc, cursSite = icon.rightmostSite(
                         icon.findLastAttrIcon(arg))
                 # Expand scope of bracket to its max, rearrange hierarchy around it
                 reorderexpr.reorderArithExpr(self)

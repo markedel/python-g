@@ -254,19 +254,27 @@ def clipboardDataToIcons(clipData, window, offset):
             pastedIcons.append(Icon.fromClipboard(iconData, window, offset))
     return pastedIcons
 
-def iconBoxedText(text, font=globalFont, color=BLACK):
-    if (text, font, color) in renderCache:
-        return renderCache[(text, font, color)]
-    width, height = font.getsize(text)
-    if height < minTxtHgt:
-        height = minTxtHgt
-    width += 2 * TEXT_MARGIN + 1
-    height += 2 * TEXT_MARGIN + 1
-    txtImg = Image.new('RGBA', (width, height), color=comn.ICON_BG_COLOR)
-    draw = ImageDraw.Draw(txtImg)
-    draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=font, fill=color)
-    draw.rectangle((0, 0, width-1, height-1), fill=None, outline=comn.OUTLINE_COLOR)
-    renderCache[(text, font, color)] = txtImg
+def iconBoxedText(text, font=globalFont, color=BLACK, typeover=None):
+    if typeover is None and (text, font, color) in renderCache:
+        txtImg = renderCache[(text, font, color)]
+    else:
+        width, height = font.getsize(text)
+        if height < minTxtHgt:
+            height = minTxtHgt
+        width += 2 * TEXT_MARGIN + 1
+        height += 2 * TEXT_MARGIN + 1
+        txtImg = Image.new('RGBA', (width, height), color=comn.ICON_BG_COLOR)
+        draw = ImageDraw.Draw(txtImg)
+        if typeover is None:
+            draw.text((TEXT_MARGIN, TEXT_MARGIN), text, font=font, fill=color)
+        else:
+            typeoverOffset = getTextSize(text[:typeover], font)[0]
+            draw.text((TEXT_MARGIN, TEXT_MARGIN), text[:typeover], font=font, fill=color)
+            draw.text((TEXT_MARGIN + typeoverOffset, TEXT_MARGIN), text=text[typeover:],
+                font=font, fill=(220, 220, 220, 255))
+        draw.rectangle((0, 0, width-1, height-1), fill=None, outline=comn.OUTLINE_COLOR)
+        if typeover is None:
+            renderCache[(text, font, color)] = txtImg
     return txtImg
 
 textSizeCache = {}
@@ -1198,6 +1206,27 @@ def findLastAttrIcon(ic):
     for i in traverseAttrs(ic):
         pass
     return i
+
+def rightmostSite(ic, ignoreAutoParens=False):
+    """Return the site that is rightmost on an icon and its children.  For most icons,
+    that is an attribute site, but for unary or binary operations with the right operand
+    missing, it can be an input site.  While binary op icons may have a fake invisible
+    attribute site, it should be used carefully (if ever).  ignoreAutoParens prevents
+    choosing auto-paren attribute site of BinOpIcon, even if it the rightmost."""
+    if hasattr(ic, 'hasParens') and (not ic.hasParens or ignoreAutoParens):
+        if ic.rightArg() is None:
+            if ic.__class__.__name__ == "IfExpIcon":
+                return ic, "falseExpr"
+            return ic, 'rightArg'
+        return rightmostSite(ic.rightArg(), ignoreAutoParens)
+    lastCursorSite = ic.sites.lastCursorSite()
+    if lastCursorSite is None:
+        print("rightmostSite passed icon with no acceptable cursor site", ic.dumpName())
+        return ic, list(ic.sites.allSites())[-1].name
+    child = ic.childAt(lastCursorSite)
+    if child is None:
+        return ic, lastCursorSite
+    return rightmostSite(child, ignoreAutoParens)
 
 def findAttrOutputSite(ic):
     if ic.hasSite('output'):

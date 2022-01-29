@@ -112,6 +112,10 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     # the icons themselves get marked dirty, they won't be found unless the page is
     # marked as well.  Now that everything is back in place, mark the top icon again.
     newTopNode.markLayoutDirty()
+    # We've left the .hasParens fields of binary operators in incorrect states.  This
+    # would normally be corrected during layout, but cursor calculations pre-layout
+    # (related to typeover) need this, so fix them up.
+    opicons.recalculateParens(topNode)
     return newTopNode
 
 def highestAffectedExpr(changedIcon):

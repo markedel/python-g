@@ -110,13 +110,16 @@ class ListLayoutMgr:
         xOff = leftSiteX + icon.inSiteImage.width - icon.commaImage.width
         yOff = leftSiteY - icon.commaImageSiteYOffset
         if self.commaSitePositions is None:
-            print("ListLayoutMgr doLayout draw before layout")
+            print("ListLayoutMgr draw before layout")
             return []
         return [((x+xOff, y+yOff), icon.commaImage) for x, y in self.commaSitePositions]
 
     def drawBodySites(self, bodyImg):
         xOff = bodyImg.width - icon.inSiteImage.width
         yOff = self.spineTop - icon.inSiteImage.height // 2
+        if self.bodySitePositions is None:
+            print("ListLayoutMgr drawing before layout")
+            return
         for x, y in self.bodySitePositions:
             bodyImg.paste(icon.inSiteImage, (x + xOff, y + yOff), mask=icon.inSiteMask)
 

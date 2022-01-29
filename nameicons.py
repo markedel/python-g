@@ -570,13 +570,18 @@ class ImportIcon(SeriesStmtIcon):
         return ast.Import(imports, level=0, lineno=self.id, col_offset=0)
 
 class ImportFromIcon(icon.Icon):
-    def __init__(self, window=None, location=None):
+    hasTypeover = True
+
+    def __init__(self, window=None, typeoverIdx=None, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth = icon.getTextSize('from', icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = icon.minTxtIconHgt
         impWidth = icon.getTextSize("import", icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight, impWidth)
         self.moduleNameWidth = icon.EMPTY_ARG_WIDTH
+        self.typeoverIdx = typeoverIdx
+        if typeoverIdx is not None:
+            self.window.watchTypeover(self)
         siteYOffset = bodyHeight // 2
         moduleOffset = bodyWidth + icon.dragSeqImage.width-1 - icon.OUTPUT_SITE_DEPTH
         self.sites.add('moduleIcon', 'input', moduleOffset, siteYOffset)
@@ -617,7 +622,8 @@ class ImportFromIcon(icon.Icon):
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
             # "import"
-            importImg = icon.iconBoxedText("import", icon.boldFont, icon.KEYWORD_COLOR)
+            importImg = icon.iconBoxedText("import", icon.boldFont, icon.KEYWORD_COLOR,
+                typeover=self.typeoverIdx)
             img = Image.new('RGBA', (importImg.width, bodyHeight), color=(0, 0, 0, 0))
             img.paste(importImg, (0, 0))
             importImgX = importImg.width - icon.inSiteImage.width
@@ -739,6 +745,70 @@ class ImportFromIcon(icon.Icon):
         bodyWidth, bodyHeight, importWidth = self.bodySize
         bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
         return comn.rectsTouch(rect, bodyRect)
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId == 'moduleIcon':
+            name = text.lstrip('.')
+            level = len(text) - len(name)
+            name = name.rstrip(' ')
+            if not name.isidentifier() and level < 1:
+                # The only valid text for the module site is an identifier with optional
+                # preceding dots
+                return "reject"
+            iconOnModuleSite = self.sites.moduleIcon.att
+            if iconOnModuleSite is entryIc:
+                # Nothing but the entry icon is at the site, allow for typing leading
+                # dots by explicitly accepting
+                if text[-1] == ' ':
+                    if level > 0:
+                        return ModuleNameIcon(level * '.' + name, self.window), ' '
+                    return IdentifierIcon(name, self.window), ' '
+                return "accept"
+            rightmostIc, rightmostSite = icon.rightmostSite(iconOnModuleSite)
+            if rightmostIc is entryIc and text == "i":
+                return "typeover", self
+            if onAttr:
+                # No attributes or operators of any kind are allowed on module names
+                return "reject"
+            return None
+        elif siteId[:12] == 'importsIcons':
+            parent = entryIc.parent()
+            if parent is self or isinstance(parent, infixicon.AsIcon):
+                name = text.rstrip(' ')
+                if name == ',':
+                    return "comma"
+                name = name.rstrip(',')
+                if not name.isidentifier():
+                    return "reject"
+                if text[-1] in (' ', ','):
+                    return IdentifierIcon(name, self.window), text[-1]
+                return "accept"
+            elif text == ',':
+                return "comma"
+            else:
+                if text == 'a':
+                    return "accept"
+                elif text in ('as', 'as '):
+                    return infixicon.AsIcon(self.window), None
+                return "reject"
+
+    def setTypeover(self, idx):
+        self.drawList = None  # Force redraw
+        if idx is None or idx > 5:
+            self.typeoverIdx = None
+            return False
+        self.typeoverIdx = idx
+        return True
+
+    def typeoverCursorPos(self):
+        importSite = self.sites.importsIcons[0]
+        xOffset = importSite.xOffset + icon.OUTPUT_SITE_DEPTH - icon.TEXT_MARGIN - \
+            icon.getTextSize("import"[self.typeoverIdx:], icon.boldFont)[0]
+        return xOffset, importSite.yOffset
+
+    def typeoverActiveSite(self):
+        return 'moduleIcon'
 
 class ModuleNameIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
@@ -1111,7 +1181,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
             win.cursor.setToIconSite(ic, prevSite)
         else:
             rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
-            rightmostIcon, rightmostSite = cursors.rightmostSite(rightmostIcon)
+            rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
             ic.removeEmptySeriesSite(site)
             win.cursor.setToIconSite(rightmostIcon, rightmostSite)
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))

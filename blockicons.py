@@ -205,9 +205,15 @@ class WhileIcon(icon.Icon):
         return ast.While(testAst, **bodyAsts, lineno=self.id, col_offset=0)
 
 class ForIcon(icon.Icon):
-    def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
+    hasTypeover = True
+
+    def __init__(self, isAsync=False, createBlockEnd=True, typeoverIdx=None,
+            window=None, location=None):
         icon.Icon.__init__(self, window)
         self.isAsync = isAsync
+        self.typeoverIdx = typeoverIdx
+        if typeoverIdx is not None:
+            self.window.watchTypeover(self)
         text = "async for" if isAsync else "for"
         bodyWidth = icon.getTextSize(text, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
@@ -261,7 +267,8 @@ class ForIcon(icon.Icon):
             self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
             self.drawList += self.tgtList.drawSimpleSpine(tgtListOffset, cntrSiteY)
             # "in"
-            txtImg = icon.iconBoxedText("in", icon.boldFont, icon.KEYWORD_COLOR)
+            txtImg = icon.iconBoxedText("in", icon.boldFont, icon.KEYWORD_COLOR,
+                typeover=self.typeoverIdx)
             img = Image.new('RGBA', (txtImg.width, bodyHeight), color=(0, 0, 0, 0))
             img.paste(txtImg, (0, 0))
             inImgX = txtImg.width - icon.inSiteImage.width
@@ -387,6 +394,47 @@ class ForIcon(icon.Icon):
         bodyWidth, bodyHeight, inWidth = self.bodySize
         bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
         return comn.rectsTouch(rect, bodyRect)
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId is None or not iconsites.isSeriesSiteId(siteId):
+            return None
+        name, idx = iconsites.splitSeriesSiteId(siteId)
+        if name != 'targets' or idx != len(self.sites.targets)-1:
+            return None
+        if not (text.isidentifier() or text in "()[], " or text[:-1].isidentifier and \
+                text[-1] in ")], "):
+            # The only valid targets are identifiers or tuples of identifiers
+            return "reject"
+        iconOnTgtSite = self.sites.targets[idx].att
+        if iconOnTgtSite is entryIc:
+            # If nothing but the entry icon is at the site, don't interfere with typing
+            # the target (which could start with "in")
+            return None
+        rightmostIc, rightmostSite = icon.rightmostSite(iconOnTgtSite)
+        if rightmostIc is entryIc and text == "i":
+            return "typeover", self
+        if onAttr and text in ('(', '['):
+            # parens an brackets are legal on input sites, but not as calls or subscripts
+            return "reject"
+        return None
+
+    def setTypeover(self, idx):
+        self.drawList = None  # Force redraw
+        if idx is None or idx > 1:
+            self.typeoverIdx = None
+            return False
+        self.typeoverIdx = idx
+        return True
+
+    def typeoverCursorPos(self):
+        iterSite = self.sites.iterIcons[0]
+        xOffset = iterSite.xOffset + icon.OUTPUT_SITE_DEPTH - icon.TEXT_MARGIN - \
+            icon.getTextSize("in"[self.typeoverIdx:], icon.boldFont)[0]
+        return xOffset, iterSite.yOffset
+
+    def typeoverActiveSite(self):
+        return iconsites.makeSeriesSiteId('targets', len(self.sites.targets) - 1)
 
 class IfIcon(icon.Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):

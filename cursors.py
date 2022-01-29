@@ -114,6 +114,7 @@ class Cursor:
             self.erase()
         self.type = "window"
         self.pos = pos
+        self.window.updateTypeoverStates()
         self.blinkState = True
         self.draw()
 
@@ -127,6 +128,7 @@ class Cursor:
         else:
             self.site = iconsites.makeSeriesSiteId(siteIdOrSeriesName, seriesIndex)
         self.siteType = ic.typeOf(self.site)
+        self.window.updateTypeoverStates()
         self.blinkState = True
         self.draw()
 
@@ -134,6 +136,19 @@ class Cursor:
         if self.type is not None:
             self.erase()
         self.type = "text"
+        self.window.updateTypeoverStates()
+        self.blinkState = True
+        self.draw()
+
+    def setToTypeover(self, ic, idx):
+        """Note that while this updates the typeover index of ic, it's still the caller's
+        responsibility to redraw the icon"""
+        if self.type is not None:
+            self.erase()
+        self.type = "typeover"
+        self.icon = ic
+        ic.setTypeover(idx)
+        self.window.updateTypeoverStates()
         self.blinkState = True
         self.draw()
 
@@ -314,6 +329,14 @@ class Cursor:
             x, y = eIcon.rect[:2]
             x += eIcon.textOffset + icon.globalFont.getsize(eIcon.text[:cursorPos])[0]
             y += eIcon.sites.output.yOffset - cursorImg.height // 2
+        elif self.type == "typeover":
+            if self.icon is None:
+                return
+            cursorImg = textCursorImage
+            x, y = self.icon.rect[:2]
+            xOffset, yOffset = self.icon.typeoverCursorPos()
+            x += xOffset
+            y += yOffset - cursorImg.height // 2
         cursorRegion = (x, y, x + cursorImg.width, y + cursorImg.height)
         self.lastDrawRect = cursorRegion
         cursorRegion = self.window.contentToImageRect(cursorRegion)
@@ -327,6 +350,26 @@ class Cursor:
             return
         elif self.type == "text":
             self.window.entryIcon.arrowAction(direction)
+            return
+        elif self.type == "typeover":
+            self.erase()
+            if direction in ("Up", "Down"):
+                fromIcon = self.icon
+                fromSite = fromIcon.sites.lastCursorSite()
+                toIcon, toSite = self._geometricTraverse(fromIcon, fromSite, direction)
+                self.moveToIconSite(toIcon, toSite, evt)
+            if direction == 'Right':
+                # Move to site after (typeover will be automatically cancelled)
+                cursorSite = self.icon.sites.lastCursorSite()
+                self.setToIconSite(self.icon, cursorSite)
+            if direction == 'Left':
+                # reset typeover and move to previous site
+                self.icon.setTypeover(0)
+                self.icon.draw()
+                self.window.refresh(self.icon.rect, redraw=False, clear=False)
+                fromSite = self.icon.sites.lastCursorSite()
+                toIcon, toSite = self._lexicalTraverse(self.icon, fromSite, 'Left')
+                self.moveToIconSite(toIcon, toSite, evt)
             return
         if self.type == "window":
             x, y = self.pos
@@ -425,14 +468,14 @@ class Cursor:
             elif fromSite == 'seqOut':
                 if isinstance(fromIcon, icon.BlockEnd):
                     return fromIcon, "seqIn"
-                return rightmostSite(fromIcon)
+                return icon.rightmostSite(fromIcon)
             elif fromSite == 'seqIn':
                 prevStmt = fromIcon.prevInSeq()
                 if prevStmt is None:
                     return fromIcon, fromSite
                 if isinstance(prevStmt, icon.BlockEnd):
                     return prevStmt, "seqIn"
-                return rightmostSite(prevStmt)
+                return icon.rightmostSite(prevStmt)
             # Cursor is on an input site of some sort (input, attrIn, cprhIn)
             prevSite = fromIcon.sites.prevCursorSite(fromSite)
             if prevSite is None:
@@ -444,7 +487,7 @@ class Cursor:
             iconAtPrevSite = fromIcon.childAt(prevSite)
             if iconAtPrevSite is None:
                 return fromIcon, prevSite
-            return rightmostSite(iconAtPrevSite)
+            return icon.rightmostSite(iconAtPrevSite)
         else:  # 'Right'
             if fromSiteType in iconsites.parentSiteTypes or fromSiteType == 'seqIn':
                 nextSite = fromIcon.sites.firstCursorSite()
@@ -618,26 +661,6 @@ def beep():
     # an elaborate sound that's supposed to alert the user of a dialog popping up, which
     # is not appropriate for the tiny nudge for your keystroke being rejected.
     winsound.Beep(1500, 120)
-
-def rightmostSite(ic, ignoreAutoParens=False):
-    """Return the site that is rightmost on an icon.  For most icons, that is an attribute
-    site, but for unary or binary operations with the right operand missing, it can be an
-    input site.  While binary op icons may have a fake invisible attribute site, it should
-    be used carefully (if ever).  ignoreAutoParens prevents choosing auto-paren attribute
-    site of BinOpIcon, even if it the rightmost."""
-    if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
-            (not ic.hasParens or ignoreAutoParens):
-        if ic.rightArg() is None:
-            return ic, 'falseExpr' if isinstance(ic, opicons.IfExpIcon) else 'rightArg'
-        return rightmostSite(ic.rightArg(), ignoreAutoParens)
-    lastCursorSite = ic.sites.lastCursorSite()
-    if lastCursorSite is None:
-        print("rightmostSite passed icon with no acceptable cursor site", ic.dumpName())
-        return ic, list(ic.sites.allSites())[-1].name
-    child = ic.childAt(lastCursorSite)
-    if child is None:
-        return ic, lastCursorSite
-    return rightmostSite(child, ignoreAutoParens)
 
 topLevelStmts = {'async def': blockicons.DefIcon, 'def': blockicons.DefIcon,
     'class': blockicons.ClassDefIcon, 'break': nameicons.BreakIcon,

@@ -276,11 +276,15 @@ class EntryIcon(icon.Icon):
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
         if self.attachedToAttribute():
-            parseResult = parseAttrText(newText, self.window)
+            parseResult = runIconTextEntryHandlers(self, newText, onAttr=True)
+            if parseResult is None:
+                parseResult = parseAttrText(newText, self.window)
         elif self.attachedIcon() is None or self.attachedSite() in ('seqIn', 'seqOut'):
             parseResult = parseTopLevelText(newText, self.window)
         else:  # Currently no other cursor places, must be expr
-            parseResult = parseExprText(newText, self.window)
+            parseResult = runIconTextEntryHandlers(self, newText, onAttr=True)
+            if parseResult is None:
+                parseResult = parseExprText(newText, self.window)
         # print('parse result', parseResult)
         if parseResult == "reject":
             cursors.beep()
@@ -294,6 +298,19 @@ class EntryIcon(icon.Icon):
             if self._width() != oldWidth:
                 self.markLayoutDirty()
             return
+        elif isinstance(parseResult, tuple) and parseResult[0] == "typeover":
+            if self.pendingArg() is None and self.pendingAttr() is None:
+                self.remove(forceDelete=True)
+                ic = parseResult[1]
+                if not ic.setTypeover(1):
+                    # Single character typeover, set cursor to site after typeover
+                    cursor.setToIconSite(ic, ic.sites.lastCursorSite())
+                else:
+                    cursor.setToTypeover(ic, 1)
+                return
+            else:
+                cursors.beep()
+                return
         elif parseResult == "comma":
             if self.commaEntered(self.attachedIcon(), self.attachedSite()):
                 if self.attachedIcon() is not None:
@@ -445,7 +462,7 @@ class EntryIcon(icon.Icon):
             self.attachedIcon().replaceChild(ic, self.attachedSite())
             if "input" in snapLists:
                 cursor.setToIconSite(ic, snapLists["input"][0][2])  # First input site
-            elif "attrIn in snapLists":
+            elif "attrIn" in snapLists:
                 cursor.setToIconSite(ic, snapLists["attrIn"][0][2])
             else:
                 cursor.removeCursor()
@@ -528,23 +545,26 @@ class EntryIcon(icon.Icon):
          siteType == "input":
             return False
         elif onIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
-                onIcon.hasParens:
+                siteType == "input" and onIcon.hasParens:
             return False
-        elif onIcon.__class__ is parenicon.CursorParenIcon:  # Open-paren
-            tupleIcon = listicons.TupleIcon(window=self.window, closed=True)
+        elif onIcon.__class__ is parenicon.CursorParenIcon and siteType != 'attrIn':
+            # Cursor paren needs to be converted to a tuple
+            tupleIcon = listicons.TupleIcon(window=self.window, closed=True,
+                typeoverIdx=0)
             args = [None]
             if onIcon.sites.argIcon.att and onIcon.sites.argIcon.att is not self:
                 args += [onIcon.sites.argIcon.att]
             tupleIcon.insertChildren(args, "argIcons", 0)
-            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
             parent = onIcon.parent()
             if parent is None:
                 self.window.replaceTop(onIcon, tupleIcon)
             else:
                 parent.replaceChild(tupleIcon, parent.siteOf(onIcon))
-            attrIcon = onIcon.sites.attrIcon.att
-            onIcon.replaceChild(None, 'attrIcon')
-            tupleIcon.replaceChild(attrIcon, 'attrIcon')
+            if onIcon.closed:
+                attrIcon = onIcon.sites.attrIcon.att
+                onIcon.replaceChild(None, 'attrIcon')
+                tupleIcon.replaceChild(attrIcon, 'attrIcon')
+            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
             return True
         if onIcon.__class__ in (opicons.BinOpIcon, infixicon.InfixIcon,
                 opicons.IfExpIcon) and site == binOpLeftArgSite(onIcon):
@@ -584,11 +604,8 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToIconSite(parent, seriesName, cursorIdx)
                 return True
             if parent.__class__ is parenicon.CursorParenIcon:
-                tupleIcon = listicons.TupleIcon(window=self.window)
+                tupleIcon = listicons.TupleIcon(window=self.window, typeoverIdx=0)
                 tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
-                if not cursorPlaced:
-                    idx = 0 if leftArg is None else 1
-                    self.window.cursor.setToIconSite(tupleIcon, "argIcons", idx)
                 parentParent = parent.parent()
                 if parentParent is None:
                     self.window.replaceTop(parent, tupleIcon)
@@ -598,6 +615,9 @@ class EntryIcon(icon.Icon):
                     attrIcon = parent.sites.attrIcon.att
                     parent.replaceChild(None, 'attrIcon')
                     tupleIcon.replaceChild(attrIcon, 'attrIcon')
+                if not cursorPlaced:
+                    idx = 0 if leftArg is None else 1
+                    self.window.cursor.setToIconSite(tupleIcon, "argIcons", idx)
                 return True
             if isinstance(parent, opicons.UnaryOpIcon):
                 leftArg = parent
@@ -648,7 +668,8 @@ class EntryIcon(icon.Icon):
         else:
             closed = self.pendingArg() is None
             inputSite = 'argIcons_0'
-        newParenIcon = iconClass(window=self.window, closed=closed)
+        typeover = 0 if closed else None
+        newParenIcon = iconClass(window=self.window, closed=closed, typeoverIdx=typeover)
         attachedIc = self.attachedIcon()
         attachedSite = self.attachedSite()
         if attachedIc is None:
@@ -704,8 +725,9 @@ class EntryIcon(icon.Icon):
         return matchingParen
 
     def makeFunction(self, ic):
+        closed = self.pendingArg() is None
         callIcon = listicons.CallIcon(window=self.window,
-            closed=self.pendingArg() is None)
+            closed=closed, typeoverIdx=0 if closed else None)
         ic.replaceChild(callIcon, 'attrIcon')
         if self.pendingAttr():
             callIcon.replaceChild(self, 'argIcons_0')
@@ -1078,7 +1100,7 @@ def parseAttrText(text, window):
     if text in ("i", "a", "o", "an"):
         return "accept"  # Legal precursor characters to binary keyword operation
     if text == "if":
-        return opicons.IfExpIcon(window), None # In-line if
+        return opicons.IfExpIcon(window, typeover=0), None # In-line if
     if text in ("and", "is", "in", "or"):
         return opicons.BinOpIcon(text, window), None # Binary keyword operation
     if text in ("*", "/", "@", "<", ">", "=", "!"):
@@ -1101,7 +1123,7 @@ def parseAttrText(text, window):
         return "endBrace"
     if text == ',':
         return "comma"
-    if text == ':':
+    if text == ':':  #... see if this can be removed once handlers are in place
         return "colon"
     op = text[:-1]
     delim = text[-1]
@@ -1189,8 +1211,22 @@ def parseTopLevelText(text, window):
             kwds = {}
             if stmt[:5] == "async":
                 kwds['isAsync'] = True
+            if hasattr(icClass, 'hasTypeover') and icClass.hasTypeover:
+                kwds['typeoverIdx'] = 0
             return icClass(window=window, **kwds), delim
     return parseExprText(text, window)
+
+def runIconTextEntryHandlers(entryIc, text, onAttr):
+    """Look for icon text entry handlers above the entry icon and execute in order,
+    until one returns a result or we hit the top"""
+    if text == "":
+        return None
+    for ic in entryIc.parentage(includeSelf=False):
+        if hasattr(ic, 'textEntryHandler'):
+            result = ic.textEntryHandler(entryIc, text, onAttr)
+            if result is not None:
+                return result
+    return None
 
 def findTextOffset(text, pixelOffset):
     # We use a proportionally-spaced font, but don't have full access to the font

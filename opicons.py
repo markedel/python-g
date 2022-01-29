@@ -538,6 +538,15 @@ class BinOpIcon(icon.Icon):
     def backspace(self, siteId, evt):
         backspaceBinOpIcon(self, siteId, evt)
 
+    def updateParens(self):
+        needs = needsParens(self)
+        if needs and not self.hasParens:
+            self.hasParens = True
+            self.sites.attrIcon.order = 2
+        elif self.hasParens and not needs:
+            self.hasParens = False
+            self.sites.attrIcon.order = None
+
 class DivideIcon(icon.Icon):
     def __init__(self, floorDiv=False, window=None, location=None):
         icon.Icon.__init__(self, window)
@@ -1046,7 +1055,7 @@ class IfExpIcon(icon.Icon):
             # Manually change status of icon to no-parens so it will be treated
             # as not parenthesised as icons are rearranged
             self.hasParens = False
-            cursIc, cursSite = cursors.rightmostSite(icon.findLastAttrIcon(self))
+            cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(self))
             # Expand the scope of the paren to its max, by rearranging the icon
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
@@ -1105,7 +1114,7 @@ class IfExpIcon(icon.Icon):
                 updatedCursorIc = self
                 updatedCursorSite = 'testExpr'
             else:
-                updatedCursorIc, updatedCursorSite = cursors.rightmostSite(
+                updatedCursorIc, updatedCursorSite = icon.rightmostSite(
                     icon.findLastAttrIcon(self.sites.testExpr.att), ignoreAutoParens=True)
             win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -1132,7 +1141,7 @@ class IfExpIcon(icon.Icon):
             entryAttachedSite = parent.siteOf(self)
         else:  # leftArg is not None, attach to that
             # Ignore auto parens because we are removing the supporting operator
-            entryAttachedIcon, entryAttachedSite = cursors.rightmostSite(
+            entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
         win.entryIcon = entryicon.EntryIcon(initialString="if", window=win)
         if leftArg is not None:
@@ -1156,6 +1165,15 @@ class IfExpIcon(icon.Icon):
         self.replaceChild(None, 'falseExpr')
         win.cursor.setToEntryIcon()
         win.redisplayChangedEntryIcon(evt, redrawRect)
+
+    def updateParens(self):
+        needs = needsParens(self)
+        if needs and not self.hasParens:
+            self.hasParens = True
+            self.sites.attrIcon.order = 2
+        elif self.hasParens and not needs:
+            self.hasParens = False
+            self.sites.attrIcon.order = None
 
 def needsParens(ic, parent=None, forText=False, parentSite=None):
     """Returns True if the BinOpIcon or IfExpr icon, ic, should have parenthesis.
@@ -1194,6 +1212,14 @@ def needsParens(ic, parent=None, forText=False, parentSite=None):
         return True
     return False
 
+def recalculateParens(topNode):
+    """While layout is where the hasParens field is normally filled in, There are special
+    cases (typeover), where it is needed before layout.  This call will update both the
+    state of hasParens, and restore attribute sites on icons whose parens are optional"""
+    for ic in topNode.traverse(includeSelf=True):
+        if hasattr(ic, 'hasParens'):
+            ic.updateParens()
+
 def leftSiteOf(ic):
     return 'trueExpr' if ic.__class__ == IfExpIcon else 'leftArg'
 
@@ -1216,7 +1242,7 @@ def backspaceBinOpIcon(ic, site, evt):
                 cursorIc = ic
                 cursorSite = 'bottomArg'
             else:
-                cursorIc, cursorSite = cursors.rightmostSite(
+                cursorIc, cursorSite = icon.rightmostSite(
                     icon.findLastAttrIcon(bottomArg))
             win.cursor.setToIconSite(cursorIc, cursorSite)
         else:
@@ -1245,7 +1271,7 @@ def backspaceBinOpIcon(ic, site, evt):
             # Manually change status of icon to no-parens so it will be treated
             # as not parenthesised as icons are rearranged
             ic.hasParens = False
-            cursIc, cursSite = cursors.rightmostSite(icon.findLastAttrIcon(ic))
+            cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(ic))
             # Expand the scope of the paren to its max, by rearranging the icon
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
@@ -1324,7 +1350,7 @@ def backspaceBinOpIcon(ic, site, evt):
         entryAttachedSite = parent.siteOf(ic)
     else:  # leftArg is not None, attach to that
         # Ignore auto parens because we are removing the supporting operator
-        entryAttachedIcon, entryAttachedSite = cursors.rightmostSite(
+        entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
             icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
     win.entryIcon = entryicon.EntryIcon(initialString=op, window=win)
     if leftArg is not None:
