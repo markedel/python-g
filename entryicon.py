@@ -282,7 +282,7 @@ class EntryIcon(icon.Icon):
         elif self.attachedIcon() is None or self.attachedSite() in ('seqIn', 'seqOut'):
             parseResult = parseTopLevelText(newText, self.window)
         else:  # Currently no other cursor places, must be expr
-            parseResult = runIconTextEntryHandlers(self, newText, onAttr=True)
+            parseResult = runIconTextEntryHandlers(self, newText, onAttr=False)
             if parseResult is None:
                 parseResult = parseExprText(newText, self.window)
         # print('parse result', parseResult)
@@ -1303,10 +1303,11 @@ def searchForOpenParen(token, ic, site):
             if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and ic.hasParens:
                 # Don't allow search to escape enclosing arithmetic parens
                 return None
-            if ic.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon,
-                    opicons.UnaryOpIcon, listicons.DictElemIcon):
-                # For anything but an arithmetic op, inputs are enclosed in something
-                # and search should not extend beyond (calls, tuples, subscripts, etc.)
+            rightmostSite = ic.sites.lastCursorSite()
+            if ic.typeOf(rightmostSite) != 'input':
+                # Anything that doesn't have an input on the right (calls, tuples,
+                # subscripts, etc.) can be assumed to be enclosing its children and
+                # search should not extend beyond.
                 return None
         parent = ic.parent()
         if parent is None:

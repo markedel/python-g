@@ -90,7 +90,6 @@ class CursorParenIcon(icon.Icon):
 
     def calcLayouts(self):
         singleParenWidth, height = self.bodySize
-        width = singleParenWidth
         argIcon = self.sites.argIcon.att
         argLayouts = [None] if argIcon is None else argIcon.calcLayouts()
         if self.closed and self.sites.attrIcon.att is not None:
@@ -100,6 +99,7 @@ class CursorParenIcon(icon.Icon):
         layouts = []
         for argLayout, attrLayout in iconlayout.allCombinations(
                 (argLayouts, attrLayouts)):
+            width = singleParenWidth
             layout = iconlayout.Layout(self, width, height, height//2)
             layout.addSubLayout(argLayout, 'argIcon', singleParenWidth - 1, 0)
             width += icon.EMPTY_ARG_WIDTH if argLayout is None else argLayout.width - 1

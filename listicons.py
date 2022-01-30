@@ -1295,7 +1295,7 @@ class CallIcon(icon.Icon):
 
     def textEntryHandler(self, entryIc, text, onAttr):
         # Typeover for lists, tuples, and dicts is handled by hard-coded parsing because
-        # we closing of matching open parens/brackets/braces needs to take precedence
+        # closing of matching open parens/brackets/braces needs to take precedence
         return None
 
     def setTypeover(self, idx):

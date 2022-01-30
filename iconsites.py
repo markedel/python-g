@@ -189,13 +189,17 @@ class IconSiteList:
         if cursorTraverseOrder is None and siteType in childSiteTypes:
             cursorTraverseOrder = self.nextCursorTraverseOrder
             self.nextCursorTraverseOrder += 1
+        elif cursorTraverseOrder is not None:
+            self.nextCursorTraverseOrder = max(cursorTraverseOrder+1,
+                self.nextCursorTraverseOrder)
         setattr(self, name, IconSite(name, siteType, xOffset, yOffset,
             cursorTravOrder=cursorTraverseOrder, cursorOnly=cursorOnly))
         if siteType not in self._typeDict:
             self._typeDict[siteType] = []
         self._typeDict[siteType].append(name)
 
-    def addSeries(self, name, siteType, initCount=0, initOffsets=None, curTravOrder=None):
+    def addSeries(self, name, siteType, initCount=0, initOffsets=None,
+            cursorTraverseOrder=None):
         """Add a new icon site series to the site list given series name and type.
          Optionally add offset of the first element from the icon origin (sometimes these
          are not known until the icon has been through layout).  The IconSiteList also
@@ -205,10 +209,14 @@ class IconSiteList:
          If curTravOrder is not specified, the positioning of the series within the
          traversal order of the site list is determined from the order in which sites and
          site series are added and the site type."""
-        if curTravOrder is None and siteType in childSiteTypes:
-            curTravOrder = self.nextCursorTraverseOrder
+        if cursorTraverseOrder is None and siteType in childSiteTypes:
+            cursorTraverseOrder = self.nextCursorTraverseOrder
             self.nextCursorTraverseOrder += 1
-        series = IconSiteSeries(name, siteType, initCount, initOffsets, curTravOrder)
+        elif cursorTraverseOrder is not None:
+            self.nextCursorTraverseOrder = max(cursorTraverseOrder+1,
+                self.nextCursorTravOrder)
+        series = IconSiteSeries(name, siteType, initCount, initOffsets,
+            cursorTraverseOrder)
         setattr(self, name, series)
         if siteType not in self._typeDict:
             self._typeDict[siteType] = []
@@ -302,12 +310,13 @@ class IconSiteList:
                 print("nextCursorSite called with non-existent site")
                 return None
             order = site.order
-        nextSite = self.nthCursorSite(order + 1)
-        if nextSite is None:
-            return None
-        if isinstance(nextSite, IconSiteSeries):
-            return makeSeriesSiteId(nextSite.name, 0)
-        return nextSite.name
+        for i in range(order+1, self.nextCursorTraverseOrder):
+            nextSite = self.nthCursorSite(i)
+            if nextSite is not None:
+                if isinstance(nextSite, IconSiteSeries):
+                    return makeSeriesSiteId(nextSite.name, 0)
+                return nextSite.name
+        return None
 
     def prevCursorSite(self, siteId):
         """Return the siteId of the site to the left in the text sequence, None if
@@ -327,15 +336,13 @@ class IconSiteList:
                 print("prevCursorSite called with non-existent site")
                 return None
             order = site.order
-        if order <= 0:
-            return None
-        prevSite = self.nthCursorSite(order - 1)
-        if prevSite is None:
-            print("prevCursorSite: no site with order %d in site list" % order-1)
-            return None
-        if isinstance(prevSite, IconSiteSeries):
-            return makeSeriesSiteId(prevSite.name, len(prevSite)-1)
-        return prevSite.name
+        for i in range(order-1, -1, -1):
+            prevSite = self.nthCursorSite(i)
+            if prevSite is not None:
+                if isinstance(prevSite, IconSiteSeries):
+                    return makeSeriesSiteId(prevSite.name, len(prevSite)-1)
+                return prevSite.name
+        return None
 
     def lastCursorSite(self):
         """Return siteId for the rightmost site (in cursor traversal) of the site list"""

@@ -402,9 +402,11 @@ class ForIcon(icon.Icon):
         name, idx = iconsites.splitSeriesSiteId(siteId)
         if name != 'targets' or idx != len(self.sites.targets)-1:
             return None
+        if text == '*' and not onAttr:
+            return listicons.StarIcon(self.window), None
         if not (text.isidentifier() or text in "()[], " or text[:-1].isidentifier and \
                 text[-1] in ")], "):
-            # The only valid targets are identifiers or tuples of identifiers
+            # The only valid targets are identifiers, lists/tuples of identifiers, or *
             return "reject"
         iconOnTgtSite = self.sites.targets[idx].att
         if iconOnTgtSite is entryIc:
