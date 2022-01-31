@@ -2,6 +2,7 @@ from PIL import Image
 import ast
 import comn
 import iconlayout
+import iconsites
 import icon
 import filefmt
 import nameicons
@@ -77,15 +78,41 @@ subscriptRBktPixmap = (
 )
 subscriptRBktImage = comn.asciiToImage(subscriptRBktPixmap)
 
+subscriptRBktTypeoverPixmap = (
+ "oooooo",
+ "o    o",
+ "o    o",
+ "o    o",
+ "o88  o",
+ "o88  o",
+ "o 8  o",
+ "o 8  o",
+ "o 8  o",
+ "o 8  o",
+ "o 8  o",
+ "o 8  o",
+ "o 8  o",
+ "o88  o",
+ "o88  o",
+ "o    o",
+ "o    o",
+ "oooooo",
+)
+subscriptRBktTypeoverImage = comn.asciiToImage(subscriptRBktTypeoverPixmap)
+
 class SubscriptIcon(icon.Icon):
-    def __init__(self, numSubscripts=1, window=None, closed=True, location=None):
+    def __init__(self, numSubscripts=1, window=None, closed=True, typeoverIdx=None,
+            location=None):
         icon.Icon.__init__(self, window)
         self.closed = False
+        self.typeoverIdx = typeoverIdx
+        if typeoverIdx is not None:
+            self.window.watchTypeover(self)
         leftWidth, leftHeight = subscriptLBktImage.size
         attrY = leftHeight // 2 + icon.ATTR_SITE_OFFSET
-        self.sites.add('attrOut', 'attrOut', 0, attrY)
         self.sites.add('indexIcon', 'input',
          leftWidth + icon.ATTR_SITE_DEPTH - icon.outSiteImage.width + 1, leftHeight//2)
+        self.sites.add('attrOut', 'attrOut', 0, attrY)
         self.argWidths = [icon.LIST_EMPTY_ARG_WIDTH, 0, 0]
         totalWidth, totalHeight = self._size()
         if location is None:
@@ -133,7 +160,11 @@ class SubscriptIcon(icon.Icon):
                 x += self.argWidths[2]
             # Right bracket
             if self.closed:
-                self.drawList.append(((x, 0), subscriptRBktImage))
+                if self.typeoverIdx is None:
+                    rBrktImg = subscriptRBktImage
+                else:
+                    rBrktImg = subscriptRBktTypeoverImage
+                self.drawList.append(((x, 0), rBrktImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
@@ -214,9 +245,9 @@ class SubscriptIcon(icon.Icon):
         if n < 2 and oldN >= 2:
             self.sites.remove('upperIcon')
         if n >= 2 and oldN < 2:
-            self.sites.add('upperIcon', 'input')
+            self.sites.add('upperIcon', 'input', cursorTraverseOrder=2)
         if n == 3 and oldN < 3:
-            self.sites.add('stepIcon', 'input')
+            self.sites.add('stepIcon', 'input', cursorTraverseOrder=3)
         self.window.undo.registerCallback(self.changeNumSubscripts, oldN)
         self.markLayoutDirty()
 
@@ -228,7 +259,8 @@ class SubscriptIcon(icon.Icon):
         # Add back the attribute site on the end paren.  Done here to allow the site to
         # be used for cursor or new attachments before layout knows where it goes
         self.sites.add('attrIcon', 'attrIn', comn.rectWidth(self.rect) -
-         icon.ATTR_SITE_DEPTH, comn.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET)
+         icon.ATTR_SITE_DEPTH, comn.rectHeight(self.rect) // 2 + icon.ATTR_SITE_OFFSET,
+         cursorTraverseOrder=4)
         self.window.undo.registerCallback(self.reopen)
 
     def reopen(self):
@@ -338,6 +370,26 @@ class SubscriptIcon(icon.Icon):
             slice = ast.Index(value=indexAst)
         return icon.composeAttrAst(self, ast.Subscript(value=attrOfAst, slice=slice,
          lineno=self.id, col_offset=0, ctx=nameicons.determineCtx(self)))
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        # Typeover for end-brackets is handled by hard-coded parsing because
+        # closing of matching open brackets needs to take precedence
+        return None
+
+    def setTypeover(self, idx):
+        self.drawList = None
+        if idx is None or idx > 0:
+            self.typeoverIdx = None
+            return False
+        self.typeoverIdx = idx
+        return True
+
+    def typeoverActiveSite(self):
+        if self.hasSite('stepIcon'):
+            return 'stepIcon'
+        if self.hasSite('upperIcon'):
+            return 'upperIcon'
+        return 'indexIcon'
 
     def backspace(self, siteId, evt):
         win = self.window

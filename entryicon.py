@@ -740,7 +740,8 @@ class EntryIcon(icon.Icon):
 
     def makeSubscript(self, ic):
         closed = self.pendingArg() is None
-        subscriptIcon = subscripticon.SubscriptIcon(window=self.window, closed=closed)
+        subscriptIcon = subscripticon.SubscriptIcon(window=self.window, closed=closed,
+            typeoverIdx=0)
         ic.replaceChild(subscriptIcon, 'attrIcon')
         if self.pendingAttr():
             subscriptIcon.replaceChild(self, 'indexIcon')
