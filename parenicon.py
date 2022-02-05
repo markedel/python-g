@@ -6,10 +6,10 @@ import icon
 import reorderexpr
 
 class CursorParenIcon(icon.Icon):
-    def __init__(self, closed=False, window=None, typeoverIdx=None, location=None):
-        # Note that while the constructor can accept a typeover index, the icon does not
-        # support typeover, because there are currently no cases where initial entry via
-        # typing is in closed state.
+    def __init__(self, closed=False, window=None, typeover=False, location=None):
+        # Note that while the constructor can accept a typeover indicator, the icon does
+        # not currently support typeover, because there are no cases (yet) where initial
+        # entry via typing is in closed state.
         icon.Icon.__init__(self, window)
         self.closed = False
         bodyWidth, bodyHeight = icon.globalFont.getsize("(")

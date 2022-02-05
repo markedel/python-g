@@ -129,6 +129,8 @@ def highestAffectedExpr(changedIcon):
         if siteType == "input" and parent.__class__ not in (opicons.BinOpIcon,
                 opicons.IfExpIcon, opicons.UnaryOpIcon, parenicon.CursorParenIcon):
             return ic  # Everything other than arithmetic expressions encloses args
+        if parent.__class__ is opicons.IfExpIcon and site == 'testExpr':
+            return ic  # Inline-if encloses test expression
 
 def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None):
     """Traverse an expression from left to right returning "token" objects containing.

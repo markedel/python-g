@@ -137,6 +137,7 @@ class Boundary:
 
     def restoreCursorAndEntryIcon(self, window):
         cursor = window.cursor
+        window.entryIcon = self.entryIcon
         if self.cursorType is None:
             cursor.removeCursor()
         elif self.cursorType == "window":
@@ -145,10 +146,7 @@ class Boundary:
             cursor.setToIconSite(self.cursorIcon, self.cursorSite)
         elif self.cursorType == "text":
             cursor.setToEntryIcon()
-        if self.entryIcon is None:
-            window.entryIcon = None
-        else:
-            window.entryIcon = self.entryIcon
+        if self.entryIcon is not None:
             window.entryIcon.restoreForUndo(self.entryText)
             cursor.setToEntryIcon()
 

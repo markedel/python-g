@@ -37,6 +37,26 @@ defLParenImage = comn.asciiToImage((
  "oooooooo"))
 defLParenExtendDupRows = 11,
 
+defLParenTypeoverImage = comn.asciiToImage((
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o    8 o",
+ "o   8  o",
+ "o  8   o",
+ "o  8   o",
+ "o 99   o",
+ "o 8    o",
+ "o 8    o",
+ "o 8    o",
+ "o 8    o",
+ "o 8    o",
+ "o 9    o",
+ "o      o",
+ "o      o",
+ "oooooooo"))
+
 defRParenImage = comn.asciiToImage((
  "oooooooo",
  "o      o",
@@ -57,6 +77,26 @@ defRParenImage = comn.asciiToImage((
  "o      o",
  "oooooooo"))
 defRParenExtendDupRows = 7,
+
+defRParenTypeoverImage = comn.asciiToImage( (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o   8  o",
+ "o   8  o",
+ "o   8  o",
+ "o   99 o",
+ "o   99 o",
+ "o   99 o",
+ "o   8  o",
+ "o  99  o",
+ "o  99  o",
+ "o 99   o",
+ "o99    o",
+ "o      o",
+ "o      o",
+ "oooooooo"))
 
 class PosOnlyMarkerIcon(nameicons.TextIcon):
     def __init__(self, window=None, location=None):
@@ -207,13 +247,15 @@ class WhileIcon(icon.Icon):
 class ForIcon(icon.Icon):
     hasTypeover = True
 
-    def __init__(self, isAsync=False, createBlockEnd=True, typeoverIdx=None,
+    def __init__(self, isAsync=False, createBlockEnd=True, typeover=False,
             window=None, location=None):
         icon.Icon.__init__(self, window)
         self.isAsync = isAsync
-        self.typeoverIdx = typeoverIdx
-        if typeoverIdx is not None:
+        if typeover:
+            self.typeoverIdx = 0
             self.window.watchTypeover(self)
+        else:
+            self.typeoverIdx = None
         text = "async for" if isAsync else "for"
         bodyWidth = icon.getTextSize(text, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
@@ -400,7 +442,7 @@ class ForIcon(icon.Icon):
         if siteId is None or not iconsites.isSeriesSiteId(siteId):
             return None
         name, idx = iconsites.splitSeriesSiteId(siteId)
-        if name != 'targets' or idx != len(self.sites.targets)-1:
+        if name != 'targets':
             return None
         if text == '*' and not onAttr:
             return listicons.StarIcon(self.window), None
@@ -408,6 +450,8 @@ class ForIcon(icon.Icon):
                 text[-1] in ")], "):
             # The only valid targets are identifiers, lists/tuples of identifiers, or *
             return "reject"
+        if idx != len(self.sites.targets)-1:
+            return None
         iconOnTgtSite = self.sites.targets[idx].att
         if iconOnTgtSite is entryIc:
             # If nothing but the entry icon is at the site, don't interfere with typing
@@ -415,13 +459,13 @@ class ForIcon(icon.Icon):
             return None
         rightmostIc, rightmostSite = icon.rightmostSite(iconOnTgtSite)
         if rightmostIc is entryIc and text == "i":
-            return "typeover", self
+            return "typeover"
         if onAttr and text in ('(', '['):
             # parens an brackets are legal on input sites, but not as calls or subscripts
             return "reject"
         return None
 
-    def setTypeover(self, idx):
+    def setTypeover(self, idx, site):
         self.drawList = None  # Force redraw
         if idx is None or idx > 1:
             self.typeoverIdx = None
@@ -435,8 +479,12 @@ class ForIcon(icon.Icon):
             icon.getTextSize("in"[self.typeoverIdx:], icon.boldFont)[0]
         return xOffset, iterSite.yOffset
 
-    def typeoverActiveSite(self):
-        return iconsites.makeSeriesSiteId('targets', len(self.sites.targets) - 1)
+    def typeoverSites(self, allRegions=False):
+        if self.typeoverIdx is None:
+            return [] if allRegions else (None, None, None, None)
+        before = iconsites.makeSeriesSiteId('targets', len(self.sites.targets) - 1)
+        retVal = before, 'iterIcons_0', 'in', self.typeoverIdx
+        return [retVal] if allRegions else retVal
 
 class IfIcon(icon.Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
@@ -990,9 +1038,20 @@ class FinallyIcon(icon.Icon):
         return "finally"
 
 class DefOrClassIcon(icon.Icon):
-    def __init__(self, text, hasArgs, createBlockEnd=True, window=None, location=None):
+    hasTypeover = True
+
+    def __init__(self, text, hasArgs, createBlockEnd=True, window=None, typeover=False,
+            location=None):
         icon.Icon.__init__(self, window)
         self.text = text
+        self.hasArgs = hasArgs
+        if typeover and hasArgs:
+            self.lParenTypeover = True
+            self.rParenTypeover = True
+            self.window.watchTypeover(self)
+        else:
+            self.lParenTypeover = False
+            self.rParenTypeover = False
         bodyWidth = icon.getTextSize(self.text, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = defLParenImage.height
         self.bodySize = (bodyWidth, bodyHeight)
@@ -1045,10 +1104,12 @@ class DefOrClassIcon(icon.Icon):
                 img.paste(icon.dragSeqImage,
                         (0, bodyHeight // 2 - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
-            if self.argList is not None:
+            if self.hasArgs:
                 # Open Paren
                 lParenOffset = bodyOffset + bodyWidth - 1 + self.nameWidth - 1
-                lParenImg = icon.yStretchImage(defLParenImage,
+                lParenImg = defLParenTypeoverImage if self.lParenTypeover else \
+                    defLParenImage
+                lParenImg = icon.yStretchImage(lParenImg,
                         defLParenExtendDupRows, self.argList.spineHeight)
                 # Open paren body sites
                 self.argList.drawBodySites(lParenImg)
@@ -1059,15 +1120,18 @@ class DefOrClassIcon(icon.Icon):
                         argsOffset - icon.OUTPUT_SITE_DEPTH, self.argList.spineTop)
                 # End Paren
                 rParenOffset = argsOffset + self.argList.width - 1
-                rParenImg = icon.yStretchImage(defRParenImage, defRParenExtendDupRows,
-                        self.argList.spineHeight)
+                rParenImg = defRParenTypeoverImage if self.rParenTypeover else \
+                    defRParenImage
+                print(f'deforclass drawing with {self.lParenTypeover} {self.rParenTypeover}')
+                rParenImg = icon.yStretchImage(rParenImg, defRParenExtendDupRows,
+                    self.argList.spineHeight)
                 self.drawList.append(((rParenOffset, 0), rParenImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
     def argIcons(self):
-        if self.argList is None:
+        if not self.hasArgs:
             return []
         return [site.att for site in self.sites.argIcons]
 
@@ -1093,7 +1157,7 @@ class DefOrClassIcon(icon.Icon):
         self.nameWidth = layout.nameWidth
         bodyWidth, bodyHeight = self.bodySize
         width = icon.dragSeqImage.width - 1 + bodyWidth - 1 + self.nameWidth
-        if self.argList is None:
+        if not self.hasArgs:
             height = bodyHeight
             centerY = bodyHeight // 2 + 1
         else:
@@ -1118,7 +1182,7 @@ class DefOrClassIcon(icon.Icon):
 
     def calcLayouts(self):
         bodyWidth, bodyHeight = self.bodySize
-        argListLayouts = [None] if self.argList is None else self.argList.calcLayouts()
+        argListLayouts = self.argList.calcLayouts() if self.hasArgs else [None]
         nameIcon = self.sites.nameIcon.att
         nameLayouts = [None] if nameIcon is None else nameIcon.calcLayouts()
         nameXOff = bodyWidth - 1
@@ -1140,7 +1204,7 @@ class DefOrClassIcon(icon.Icon):
     def textRepr(self):
         nameIcon = self.sites.nameIcon.att
         text = self.text + " " + ("" if nameIcon is None else nameIcon.textRepr())
-        if self.argList is None:
+        if not self.hasArgs:
             return text
         return text + "(" + icon.seriesTextRepr(self.sites.argIcons) + "):"
 
@@ -1148,7 +1212,7 @@ class DefOrClassIcon(icon.Icon):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText(self.text + " ")
         icon.addArgSaveText(text, brkLvl, self.sites.nameIcon, contNeeded, export)
-        if self.argList is None:
+        if not self.hasArgs:
             text.add(None, ":")
             return text
         text.add(None, "(")
@@ -1170,27 +1234,104 @@ class DefOrClassIcon(icon.Icon):
         return comn.rectsTouch(rect, bodyRect)
 
     def addArgs(self):
-        if self.argList is not None:
+        if self.hasArgs:
             return
+        self.hasArgs = True
         argX = comn.rectWidth(self.rect)
         argY = self.sites.nameIcon.yOffset
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, argY)
         self.sites.add('attrIcon', 'attrIn', cursorOnly=True, cursorTraverseOrder=2)
+        self.markLayoutDirty()
         self.window.undo.registerCallback(self.removeArgs)
 
     def removeArgs(self):
-        if self.argList is None:
+        if not self.hasArgs:
             return
+        self.hasArgs = False
         if len(self.argIcons()) > 0:
             print("trying to remove non-empty argument list")
             return
         self.argList = None
         self.sites.remove('attrIcon')
+        self.markLayoutDirty()
         self.window.undo.registerCallback(self.addArgs)
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId == 'nameIcon':
+            if text == '(':
+                return "typeover"
+            name = text.rstrip(' (')
+            if not name.isidentifier():
+                # The only valid text for a function or class name is an identifier
+                return "reject"
+            iconOnNameSite = self.sites.nameIcon.att
+            if iconOnNameSite is entryIc:
+                # Nothing but the entry icon is at the site, allow for typing leading
+                # dots by explicitly accepting
+                if text[-1] in (' ', '('):
+                    return nameicons.IdentifierIcon(name, self.window), text[-1]
+                return "accept"
+            if onAttr:
+                # No attributes or operators of any kind are allowed on argument names
+                return "reject"
+            return None
+        elif siteId[:8] == 'argIcons':
+            if text == '*' and not onAttr:
+                return "accept"
+            if text[0] == '*' and len(text) == 2 and (text[1].isalnum() or text[1] == ' '):
+                return listicons.StarIcon(self.window), text[1]
+            if text[:2] == '**':
+                return listicons.StarStarIcon(self.window), None
+            if text == '=' and onAttr:
+                return listicons.ArgAssignIcon(self.window), None
+            if not (text.isidentifier() or text in "), =" or \
+                    text[:-1].isidentifier() and text[-1] in "), ="):
+                # The only valid arguments are identifiers, *, **, =, and comma, *unless*
+                # they are on the right side of argument assignment
+                argAtSite = self.childAt(siteId)
+                if argAtSite is None or not isinstance(argAtSite,
+                        listicons.ArgAssignIcon):
+                    return "reject"
+            # Typeover for end-paren is handled by the general code
+            return None
+        else:
+            return None
+
+    def setTypeover(self, idx, site=None):
+        self.drawList = None
+        if site is None or site == 'argIcons_0':
+            self.lParenTypeover = idx is not None and idx == 0
+        if site is None or site == 'attrIcon':
+            self.rParenTypeover = idx is not None and idx == 0
+        if site is None:
+            return self.lParenTypeover or self.rParenTypeover
+        if site == 'argIcons_0':
+            return self.lParenTypeover
+        if site == 'attrIcon':
+            return self.rParenTypeover
+        return False
+
+    def typeoverSites(self, allRegions=False):
+        lParenTo = rParenTo = None
+        if self.lParenTypeover:
+            lParenTo = 'nameIcon', 'argIcons_0', '(', 0
+        if self.rParenTypeover:
+            rParenTo = iconsites.makeSeriesSiteId('argIcons',
+                len(self.sites.argIcons) - 1), 'attrIcon', ')', 0
+        if allRegions:
+            return [s for s in (lParenTo, rParenTo) if s is not None]
+        if lParenTo:
+            return lParenTo
+        if rParenTo:
+            return rParenTo
+        return None, None, None, None
+
 class ClassDefIcon(DefOrClassIcon):
-    def __init__(self, hasArgs=False, createBlockEnd=True, window=None, location=None):
-        DefOrClassIcon.__init__(self, "class", hasArgs, createBlockEnd, window, location)
+    def __init__(self, hasArgs=False, createBlockEnd=True, window=None, typeover=False,
+            location=None):
+        DefOrClassIcon.__init__(self, "class", hasArgs, createBlockEnd, window, typeover,
+            location)
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, hasArgs=self.argList is not None,
@@ -1227,11 +1368,35 @@ class ClassDefIcon(DefOrClassIcon):
         return ast.ClassDef(nameIcon.name, bases, keywords=kwds, **bodyAsts,
          decorator_list=[], lineno=self.id, col_offset=0)
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId == 'nameIcon':
+            # The class def is drawn initially without parent-class parens.  When the
+            # user types a paren in the appropriate place, have to turn those on
+            if text == '(':
+                print("turning on parens")
+                self.addArgs()
+                self.setTypeover(0, None)
+                return "typeover"
+            # Let the parent handler enforce name
+            return DefOrClassIcon.textEntryHandler(self, entryIc, text, onAttr)
+        elif siteId[:8] == 'argIcons':
+            # Enforce names only
+            if not (text.isidentifier() or text in "), " or text[:-1].isidentifier() and \
+                    text[-1] in "), "):
+                # The only valid arguments are identifier and comma
+                return "reject"
+            # Typeover for end-paren is handled by the general code
+            return None
+        return None
+
 class DefIcon(DefOrClassIcon):
-    def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
+    def __init__(self, isAsync=False, createBlockEnd=True, window=None, typeover=False,
+            location=None):
         self.isAsync = isAsync
         text = "async def" if isAsync else "def"
-        DefOrClassIcon.__init__(self, text, True, createBlockEnd, window, location)
+        DefOrClassIcon.__init__(self, text, True, createBlockEnd, window, typeover,
+            location)
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,

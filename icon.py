@@ -735,6 +735,58 @@ class Icon:
     def calcLayouts(self):
         pass
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        """Called when an icon or one of its children holds a text-entry box (entryIc),
+        and a new character is typed in the box.  text provides the full text currently
+        held in entryIc, onAttr will be true if the entry icon is attached to an
+        attribute site.  The function can return None to do nothing and allow normal
+        parsing to take place.  It can create and return an icon, along with whatever
+        delimiter character was left in text.  Or, it can return one of a set of keywords
+        accepted by the entry-processing code:
+
+            reject:             Prevent the user from entering the character and beep
+            accept:             Allow the user to enter the character
+            typeover:           Initiate typeover of dimmed characters
+
+        Additional keywords are supported as part of general parsing, but would probably
+        not be used by text entry handlers:
+
+            comma, colon, openBracket, endBracket, openBrace, endBrace, openParen,
+            endParen
+        """
+        return None
+
+    def setTypeover(self, idx, site=None):
+        """For an icon that supports typeover (hasTypeover==True), change the typeover
+        state.  Typeover allows icons to put text in front of the cursor that the user
+        can optionally type, but that will become fixed once the user navigates away from
+        it.  idx specifies the index in to the typeover string at which dimmed typeover
+        characters are drawn in place of fully drawn text.  None or an invalid index
+        value turn typeover off.  For a single character typeover, such as a paren or
+        brace, 0 is the only value that will enable typeover.  site can be specified to
+        disambiguate typeover regions for icons that have more than one  (currently only
+        function definitions).  site should be either the site that *follows* the
+        typeover region, or none to set it for all sites. Returns True if typeover is
+        enabled after the call"""
+        pass
+
+    def typeoverSites(self, allRegions=False):
+        """By default (allRegions==False), returns the site before, site after, text,
+        and index of the first (leftmost) active typeover region of the icon.  Setting
+        allRegions=True will return a list of the data for all still-active typeover
+        regions (function definitions, DefIcon, is the only icon that currently has more
+        than one region)."""
+        pass
+
+    def typeoverCursorPos(self):
+        """Icons with multi-character typeovers support a cursor type of "typeover",
+        where a blinking text cursor is displayed on the icon (icons with single-character
+        typeover don't need this, as there are icon cursor positions on either side).
+        To provide the position to the cursor-drawing code, the icon must implement this
+        method, which should return two values: x and y offsets relative to the icon's
+        rectangle that specify the origin (y center) for the text cursor."""
+        pass
+
     def _drawFromDrawList(self, toDragImage, location, clip, style):
         if location is None:
             location = self.rect[:2]

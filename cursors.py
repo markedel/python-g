@@ -140,14 +140,14 @@ class Cursor:
         self.blinkState = True
         self.draw()
 
-    def setToTypeover(self, ic, idx):
-        """Note that while this updates the typeover index of ic, it's still the caller's
-        responsibility to redraw the icon"""
+    def setToTypeover(self, ic):
+        """Place the cursor into a typeover-icon.  Note that you must also call the
+        icon's setTypeover() function to actually set the typeover index (this function
+        directs keyboard focus and controls cursor drawing)"""
         if self.type is not None:
             self.erase()
         self.type = "typeover"
         self.icon = ic
-        ic.setTypeover(idx)
         self.window.updateTypeoverStates()
         self.blinkState = True
         self.draw()
@@ -358,17 +358,20 @@ class Cursor:
                 fromSite = fromIcon.sites.lastCursorSite()
                 toIcon, toSite = self._geometricTraverse(fromIcon, fromSite, direction)
                 self.moveToIconSite(toIcon, toSite, evt)
+            siteBefore, siteAfter, text, idx = self.icon.typeoverSites()
             if direction == 'Right':
                 # Move to site after (typeover will be automatically cancelled)
-                cursorSite = self.icon.sites.lastCursorSite()
-                self.setToIconSite(self.icon, cursorSite)
+                self.setToIconSite(self.icon, siteAfter)
             if direction == 'Left':
                 # reset typeover and move to previous site
-                self.icon.setTypeover(0)
+                self.icon.setTypeover(0, siteAfter)
                 self.icon.draw()
                 self.window.refresh(self.icon.rect, redraw=False, clear=False)
-                fromSite = self.icon.sites.lastCursorSite()
-                toIcon, toSite = self._lexicalTraverse(self.icon, fromSite, 'Left')
+                siteBeforeIcon = self.icon.childAt(siteBefore)
+                if siteBeforeIcon is None:
+                    toIcon, toSite = self.icon, siteBefore
+                else:
+                    toIcon, toSite = icon.rightmostSite(siteBeforeIcon)
                 self.moveToIconSite(toIcon, toSite, evt)
             return
         if self.type == "window":
@@ -620,6 +623,7 @@ class Cursor:
               parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
               opicons.needsParens(parent) or parent.__class__ in (listicons.CallIcon,
                listicons.TupleIcon, blockicons.DefIcon) or
+              parent.__class__ is blockicons.ClassDefIcon and parent.hasArgs or
               parent.__class__ is parenicon.CursorParenIcon and parent.closed)) or
              (token == "endBrace" and isinstance(parent, listicons.DictIcon)) or
              (token == "endBracket" and

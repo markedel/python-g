@@ -370,7 +370,7 @@ class IconSiteList:
         for siteNames in self._typeDict.values():
             for name in siteNames:
                 site = getattr(self, name)
-                if hasattr(site, 'order'):
+                if hasattr(site, 'order') and site.order is not None:
                     if n == -1:
                         if lastSiteOrder < site.order:
                             lastSiteOrder = site.order

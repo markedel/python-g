@@ -276,13 +276,13 @@ class EntryIcon(icon.Icon):
     def _setText(self, newText, newCursorPos):
         oldWidth = self._width()
         if self.attachedToAttribute():
-            parseResult = runIconTextEntryHandlers(self, newText, onAttr=True)
+            parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=True)
             if parseResult is None:
                 parseResult = parseAttrText(newText, self.window)
         elif self.attachedIcon() is None or self.attachedSite() in ('seqIn', 'seqOut'):
             parseResult = parseTopLevelText(newText, self.window)
         else:  # Currently no other cursor places, must be expr
-            parseResult = runIconTextEntryHandlers(self, newText, onAttr=False)
+            parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=False)
             if parseResult is None:
                 parseResult = parseExprText(newText, self.window)
         # print('parse result', parseResult)
@@ -298,15 +298,15 @@ class EntryIcon(icon.Icon):
             if self._width() != oldWidth:
                 self.markLayoutDirty()
             return
-        elif isinstance(parseResult, tuple) and parseResult[0] == "typeover":
+        elif parseResult == "typeover":
             if self.pendingArg() is None and self.pendingAttr() is None:
                 self.remove(forceDelete=True)
-                ic = parseResult[1]
-                if not ic.setTypeover(1):
+                siteBefore, siteAfter, text, idx = handlerIc.typeoverSites()
+                if not handlerIc.setTypeover(1, siteAfter):
                     # Single character typeover, set cursor to site after typeover
-                    cursor.setToIconSite(ic, ic.sites.lastCursorSite())
+                    cursor.setToIconSite(handlerIc, siteAfter)
                 else:
-                    cursor.setToTypeover(ic, 1)
+                    cursor.setToTypeover(handlerIc)
                 return
             else:
                 cursors.beep()
@@ -604,7 +604,7 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToIconSite(parent, seriesName, cursorIdx)
                 return True
             if parent.__class__ is parenicon.CursorParenIcon:
-                tupleIcon = listicons.TupleIcon(window=self.window, typeoverIdx=0)
+                tupleIcon = listicons.TupleIcon(window=self.window, typeover=True)
                 tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
                 parentParent = parent.parent()
                 if parentParent is None:
@@ -668,8 +668,7 @@ class EntryIcon(icon.Icon):
         else:
             closed = self.pendingArg() is None
             inputSite = 'argIcons_0'
-        typeover = 0 if closed else None
-        newParenIcon = iconClass(window=self.window, closed=closed, typeoverIdx=typeover)
+        newParenIcon = iconClass(window=self.window, closed=closed, typeover=closed)
         attachedIc = self.attachedIcon()
         attachedSite = self.attachedSite()
         if attachedIc is None:
@@ -727,7 +726,7 @@ class EntryIcon(icon.Icon):
     def makeFunction(self, ic):
         closed = self.pendingArg() is None
         callIcon = listicons.CallIcon(window=self.window,
-            closed=closed, typeoverIdx=0 if closed else None)
+            closed=closed, typeover=closed)
         ic.replaceChild(callIcon, 'attrIcon')
         if self.pendingAttr():
             callIcon.replaceChild(self, 'argIcons_0')
@@ -741,7 +740,7 @@ class EntryIcon(icon.Icon):
     def makeSubscript(self, ic):
         closed = self.pendingArg() is None
         subscriptIcon = subscripticon.SubscriptIcon(window=self.window, closed=closed,
-            typeoverIdx=0)
+            typeover=closed)
         ic.replaceChild(subscriptIcon, 'attrIcon')
         if self.pendingAttr():
             subscriptIcon.replaceChild(self, 'indexIcon')
@@ -775,6 +774,9 @@ class EntryIcon(icon.Icon):
                     newOpIcon.precedence == op.precedence and (
                      op.leftAssoc() and op.leftArg() is childOp or
                      op.rightAssoc() and op.rightArg() is childOp):
+                op.replaceChild(newOpIcon, op.siteOf(childOp))
+                break
+            if op.__class__ is opicons.IfExpIcon and op.siteOf(childOp) == "testExpr":
                 op.replaceChild(newOpIcon, op.siteOf(childOp))
                 break
             if op.__class__ is opicons.UnaryOpIcon:
@@ -1101,7 +1103,7 @@ def parseAttrText(text, window):
     if text in ("i", "a", "o", "an"):
         return "accept"  # Legal precursor characters to binary keyword operation
     if text == "if":
-        return opicons.IfExpIcon(window, typeover=0), None # In-line if
+        return opicons.IfExpIcon(window, typeover=True), None # In-line if
     if text in ("and", "is", "in", "or"):
         return opicons.BinOpIcon(text, window), None # Binary keyword operation
     if text in ("*", "/", "@", "<", ">", "=", "!"):
@@ -1213,21 +1215,26 @@ def parseTopLevelText(text, window):
             if stmt[:5] == "async":
                 kwds['isAsync'] = True
             if hasattr(icClass, 'hasTypeover') and icClass.hasTypeover:
-                kwds['typeoverIdx'] = 0
+                kwds['typeover'] = True
             return icClass(window=window, **kwds), delim
+    if text == '*':
+        # Sadly, while very unusual, it is possible to write *a, b = c, and since we
+        # don't yet even know if it's a list on the first keystroke, it's necessary to
+        # generate a star icon, even though this is more likely a typing error.
+        return listicons.StarIcon(window), None
     return parseExprText(text, window)
 
 def runIconTextEntryHandlers(entryIc, text, onAttr):
     """Look for icon text entry handlers above the entry icon and execute in order,
-    until one returns a result or we hit the top"""
+    until one returns a result or we hit the top.  If a handler fired, return the
+    parse result and the icon whose textEntryHandler fired."""
     if text == "":
-        return None
+        return None, None
     for ic in entryIc.parentage(includeSelf=False):
-        if hasattr(ic, 'textEntryHandler'):
-            result = ic.textEntryHandler(entryIc, text, onAttr)
-            if result is not None:
-                return result
-    return None
+        result = ic.textEntryHandler(entryIc, text, onAttr)
+        if result is not None:
+            return result, ic
+    return None, None
 
 def findTextOffset(text, pixelOffset):
     # We use a proportionally-spaced font, but don't have full access to the font

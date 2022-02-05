@@ -101,13 +101,17 @@ subscriptRBktTypeoverPixmap = (
 subscriptRBktTypeoverImage = comn.asciiToImage(subscriptRBktTypeoverPixmap)
 
 class SubscriptIcon(icon.Icon):
-    def __init__(self, numSubscripts=1, window=None, closed=True, typeoverIdx=None,
+    hasTypeover = True
+
+    def __init__(self, numSubscripts=1, window=None, closed=True, typeover=False,
             location=None):
         icon.Icon.__init__(self, window)
         self.closed = False
-        self.typeoverIdx = typeoverIdx
-        if typeoverIdx is not None:
+        if typeover:
+            self.typeoverActive = True
             self.window.watchTypeover(self)
+        else:
+            self.typeoverActive = False
         leftWidth, leftHeight = subscriptLBktImage.size
         attrY = leftHeight // 2 + icon.ATTR_SITE_OFFSET
         self.sites.add('indexIcon', 'input',
@@ -160,10 +164,10 @@ class SubscriptIcon(icon.Icon):
                 x += self.argWidths[2]
             # Right bracket
             if self.closed:
-                if self.typeoverIdx is None:
-                    rBrktImg = subscriptRBktImage
-                else:
+                if self.typeoverActive:
                     rBrktImg = subscriptRBktTypeoverImage
+                else:
+                    rBrktImg = subscriptRBktImage
                 self.drawList.append(((x, 0), rBrktImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
 
@@ -376,20 +380,25 @@ class SubscriptIcon(icon.Icon):
         # closing of matching open brackets needs to take precedence
         return None
 
-    def setTypeover(self, idx):
+    def setTypeover(self, idx, site=None):
         self.drawList = None
         if idx is None or idx > 0:
-            self.typeoverIdx = None
+            self.typeoverActive = False
             return False
-        self.typeoverIdx = idx
+        self.typeoverActive = True
         return True
 
-    def typeoverActiveSite(self):
+    def typeoverSites(self, allRegions=False):
+        if not self.typeoverActive:
+            return [] if allRegions else (None, None, None, None)
         if self.hasSite('stepIcon'):
-            return 'stepIcon'
-        if self.hasSite('upperIcon'):
-            return 'upperIcon'
-        return 'indexIcon'
+            siteBefore = 'stepIcon'
+        elif self.hasSite('upperIcon'):
+            siteBefore = 'upperIcon'
+        else:
+            siteBefore = 'indexIcon'
+        result = siteBefore, 'attrIcon', ']', 0
+        return [result] if allRegions else result
 
     def backspace(self, siteId, evt):
         win = self.window

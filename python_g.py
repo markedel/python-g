@@ -643,14 +643,17 @@ class Window:
             self.redisplayChangedEntryIcon()
             return
         elif self.cursor.type == "typeover":
-            # Any key is accepted for typeover
             self.cursor.erase()
-            idx = self.cursor.icon.typeoverIdx
             ic = self.cursor.icon
-            if not ic.setTypeover(idx + 1):
-                # Reached the end of the typeover text, move to site after
-                cursorSite = ic.sites.lastCursorSite()
-                self.cursor.setToIconSite(self.cursor.icon, cursorSite)
+            siteBefore, siteAfter, text, idx = ic.typeoverSites()
+            if text[idx] == char:
+                cancelTypeover = not ic.setTypeover(idx + 1, siteAfter)
+            else:
+                cancelTypeover = True
+            if cancelTypeover:
+                # Reached the end of the typeover text or user typed something
+                # non-matching, move to site after
+                self.cursor.setToIconSite(ic, siteAfter)
             ic.draw()
             self.refresh(ic.rect, redraw=False, clear=False)
             return
@@ -736,13 +739,16 @@ class Window:
         if self.cursor.type == "text":
             cursorIcon = self.entryIcon
             cursorIcon, cursorSite = icon.rightmostSite(cursorIcon)
+            includeCursorIcon = True
         elif self.cursor.type  == "icon":
             cursorIcon = self.cursor.icon
             cursorSite = self.cursor.site
+            includeCursorIcon = True
         elif self.cursor.type == "typeover":
             cursorIcon = self.cursor.icon
-            cursorSite = icon.rightmostSite(cursorIcon)
+            cursorSite = icon.rightmostSite(cursorIcon)[1]
             keepAlive.add(cursorIcon)
+            includeCursorIcon = False
         else: # cursor type is window, cancel all typeovers
             self._removeTypeovers(list(self.activeTypeovers))
             return
@@ -750,7 +756,7 @@ class Window:
         # self.activeTypeovers that are either directly to the right of it, or have only
         # typeover-dimmed parts between it and the entry.  This also serves to purge the
         # list of deleted entries, and anything that is not directly next to the cursor.
-        for ic in cursorIcon.parentage(includeSelf=True):
+        for ic in cursorIcon.parentage(includeSelf=includeCursorIcon):
             rightmostIcon, rightmostSite = icon.rightmostSite(ic)
             if rightmostIcon != cursorIcon or rightmostSite != cursorSite:
                 if isinstance(rightmostIcon, opicons.DivideIcon):
@@ -766,15 +772,25 @@ class Window:
                         continue
                 if ic not in self.activeTypeovers:
                     break
-                activeSite = ic.typeoverActiveSite()
-                activeSiteIcon = ic.childAt(activeSite)
-                if activeSiteIcon is None:
-                    rightmostIcon, rightmostSite = ic, activeSite
-                else:
-                    rightmostIcon, rightmostSite = icon.rightmostSite(activeSiteIcon)
-                if rightmostIcon == cursorIcon and rightmostSite == cursorSite:
-                    keepAlive.add(ic)
-                    cursorIcon, cursorSite = icon.rightmostSite(ic)
+                typeoverSiteData = ic.typeoverSites(allRegions=True)
+                for siteBefore, siteAfter, text, idx in typeoverSiteData:
+                    activeSiteIcon = ic.childAt(siteBefore)
+                    if activeSiteIcon is None:
+                        rightmostIcon, rightmostSite = ic, siteBefore
+                    else:
+                        rightmostIcon, rightmostSite = icon.rightmostSite(activeSiteIcon)
+                    if rightmostIcon == cursorIcon and rightmostSite == cursorSite:
+                        keepAlive.add(ic)
+                        cursorIcon, cursorSite = icon.rightmostSite(ic)
+                        break
+                    else:
+                        if len(typeoverSiteData) > 1:
+                            # Icons with more than one typeover region are not removed
+                            # from the active list (which is normally how typeover gets
+                            # disabled and the redraw done), so do it here
+                            ic.setTypeover(None, siteAfter)
+                            ic.draw()
+                            self.refresh(ic.rect, redraw=False, clear=False)
                 else:
                     break
         self._removeTypeovers(self.activeTypeovers - keepAlive)
@@ -783,7 +799,7 @@ class Window:
         for ic in toRemove:
             topParent = ic.topLevelParent()
             if topParent is not None and topParent in self.topIcons:
-                ic.setTypeover(None)
+                ic.setTypeover(None, None)
                 ic.draw()
                 self.refresh(ic.rect, redraw=False, clear=False)
             self.activeTypeovers.remove(ic)
@@ -1161,17 +1177,16 @@ class Window:
                     self._backspaceIcon(evt)
             elif self.cursor.type == "typeover":
                 ic = self.cursor.icon
-                self.cursor.setToTypeover(ic, ic.typeoverIdx - 1)
+                siteBefore, siteAfter, text, idx = ic.typeoverSites()
+                ic.setTypeover(0, siteAfter)
                 ic.draw()
                 self.refresh(ic.rect, redraw=False, clear=False)
-                if ic.typeoverIdx == 0:
-                    site = ic.typeoverActiveSite()
-                    arg = ic.childAt(site)
-                    if arg:
-                        cursorIc, cursorSite = icon.rightmostSite(arg)
-                    else:
-                        cursorIc, cursorSite = ic, site
-                    self.cursor.setToIconSite(cursorIc, cursorSite)
+                arg = ic.childAt(siteBefore)
+                if arg:
+                    cursorIc, cursorSite = icon.rightmostSite(arg)
+                else:
+                    cursorIc, cursorSite = ic, siteBefore
+                self.cursor.setToIconSite(cursorIc, cursorSite)
         else:
             topIcon = self.entryIcon.topLevelParent()
             redrawRect = topIcon.hierRect()

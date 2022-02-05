@@ -572,16 +572,18 @@ class ImportIcon(SeriesStmtIcon):
 class ImportFromIcon(icon.Icon):
     hasTypeover = True
 
-    def __init__(self, window=None, typeoverIdx=None, location=None):
+    def __init__(self, window=None, typeover=False, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth = icon.getTextSize('from', icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = icon.minTxtIconHgt
         impWidth = icon.getTextSize("import", icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight, impWidth)
         self.moduleNameWidth = icon.EMPTY_ARG_WIDTH
-        self.typeoverIdx = typeoverIdx
-        if typeoverIdx is not None:
+        if typeover:
+            self.typeoverIdx = 0
             self.window.watchTypeover(self)
+        else:
+            self.typeoverIdx = None
         siteYOffset = bodyHeight // 2
         moduleOffset = bodyWidth + icon.dragSeqImage.width-1 - icon.OUTPUT_SITE_DEPTH
         self.sites.add('moduleIcon', 'input', moduleOffset, siteYOffset)
@@ -767,7 +769,7 @@ class ImportFromIcon(icon.Icon):
                 return "accept"
             rightmostIc, rightmostSite = icon.rightmostSite(iconOnModuleSite)
             if rightmostIc is entryIc and text == "i":
-                return "typeover", self
+                return "typeover"
             if onAttr:
                 # No attributes or operators of any kind are allowed on module names
                 return "reject"
@@ -793,7 +795,7 @@ class ImportFromIcon(icon.Icon):
                     return infixicon.AsIcon(self.window), None
                 return "reject"
 
-    def setTypeover(self, idx):
+    def setTypeover(self, idx, site):
         self.drawList = None  # Force redraw
         if idx is None or idx > 5:
             self.typeoverIdx = None
@@ -807,8 +809,11 @@ class ImportFromIcon(icon.Icon):
             icon.getTextSize("import"[self.typeoverIdx:], icon.boldFont)[0]
         return xOffset, importSite.yOffset
 
-    def typeoverActiveSite(self):
-        return 'moduleIcon'
+    def typeoverSites(self, allRegions=False):
+        if self.typeoverIdx is None:
+            return [] if allRegions else (None, None, None, None)
+        retVal = 'moduleIcon', 'importsIcons_0', 'import', self.typeoverIdx
+        return [retVal] if allRegions else retVal
 
 class ModuleNameIcon(TextIcon):
     def __init__(self, name, window=None, location=None):

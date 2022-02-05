@@ -747,8 +747,15 @@ class DivideIcon(icon.Icon):
 
 class IfExpIcon(icon.Icon):
     """Ternary if-else expression"""
-    def __init__(self, window, location=None):
+    hasTypeover = True
+
+    def __init__(self, window, typeover=False, location=None):
         icon.Icon.__init__(self, window)
+        if typeover:
+            self.typeoverIdx = 0
+            self.window.watchTypeover(self)
+        else:
+            self.typeoverIdx = None
         self.precedence = 0
         self.hasParens = False  # Filled in by layout methods
         self.trueExprWidth = icon.EMPTY_ARG_WIDTH
@@ -840,7 +847,8 @@ class IfExpIcon(icon.Icon):
             ifY = siteY - lParenImage.height // 2
             self.drawList.append(((ifX, ifY), img))
             # else body
-            elseImg = icon.iconBoxedText("else", icon.boldFont, icon.KEYWORD_COLOR)
+            elseImg = icon.iconBoxedText("else", icon.boldFont, icon.KEYWORD_COLOR,
+                typeover=self.typeoverIdx)
             elseWidth = elseImg.width + self.depthWidth // 2
             img = Image.new('RGBA', (elseWidth, height), color=(0, 0, 0, 0))
             if self.depthWidth > 0:
@@ -1026,6 +1034,41 @@ class IfExpIcon(icon.Icon):
         if not comn.rectsTouch(rect, self.rect):
             return False
         return comn.rectsTouch(rect, self.selectionRect())
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        # Typeover when on rightmost attribute site of test expression and user types 'e'
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId != "testExpr":
+            return None
+        iconOnTestSite = self.sites.testExpr.att
+        if iconOnTestSite is entryIc:
+            # If nothing but the entry icon is at the site, don't interfere with typing
+            # the test expression (which could start with "e")
+            return None
+        rightmostIc, rightmostSite = icon.rightmostSite(iconOnTestSite)
+        if rightmostIc is entryIc and text == "e":
+            return "typeover"
+        return None
+
+    def setTypeover(self, idx, site):
+        self.drawList = None  # Force redraw
+        if idx is None or idx > 3:
+            self.typeoverIdx = None
+            return False
+        self.typeoverIdx = idx
+        return True
+
+    def typeoverCursorPos(self):
+        falseExprSite = self.sites.falseExpr
+        xOffset = falseExprSite.xOffset + icon.OUTPUT_SITE_DEPTH - icon.TEXT_MARGIN - \
+            icon.getTextSize("else"[self.typeoverIdx:], icon.boldFont)[0]
+        return xOffset, falseExprSite.yOffset
+
+    def typeoverSites(self, allRegions=False):
+        if self.typeoverIdx is None:
+            return [] if allRegions else (None, None, None, None)
+        retVal = 'testExpr', 'falseExpr', 'else', self.typeoverIdx
+        return [retVal] if allRegions else retVal
 
     def backspace(self, siteId, evt):
         win = self.window
