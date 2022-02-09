@@ -840,9 +840,12 @@ class TupleIcon(ListTypeIcon):
 
     def calcLayouts(self):
         # If the icon is no longer at the top level and needs its parens restored, do so
-        # before calculating the layout (would be better to do this elsewhere).
-        if self.noParens and self.parent() is not None:
-            self.restoreParens()
+        # before calculating the layout (would be better to do this elsewhere). Exception
+        # is EntryIcon, which can hold a naked tuple
+        parent = self.parent()
+        if self.noParens and parent is not None:
+            if not isinstance(parent, entryicon.EntryIcon):
+                self.restoreParens()
         return ListTypeIcon.calcLayouts(self)
 
     def execute(self):
@@ -1832,7 +1835,12 @@ def backspaceListIcon(ic, site, evt):
                 ic.replaceChild(None, ic.siteOf(content))
                 win.replaceTop(ic, content)
                 topNode = reorderexpr.reorderArithExpr(content)
-                win.cursor.setToIconSite(topNode, 'output')
+                coincSite = topNode.hasCoincidentSite()
+                if coincSite:
+                    curIc, curSite = iconsites.lowestCoincidentSite(topNode, coincSite)
+                    win.cursor.setToIconSite(curIc, curSite)
+                else:
+                    win.cursor.setToIconSite(topNode, 'output')
             else:
                 # List had a parent.  Remove by attaching content to parent if
                 # the parent site is an input site.  If it's not (CallIcon), then
@@ -1865,36 +1873,44 @@ def backspaceListIcon(ic, site, evt):
         # Cursor is on comma input.  Delete if empty or previous site is empty.
         # Otherwise, create an entry icon with the comma clause content as pending
         # argument, and attach to right of previous argument
-        prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
-        childAtCursor = ic.childAt(site)
-        childAtPrevSite = ic.childAt(prevSite)
-        topIcon = ic.topLevelParent()
-        redrawRegion = comn.AccumRects(topIcon.hierRect())
-        if not childAtPrevSite:
-            # Previous comma clause is empty, remove the site
-            ic.removeEmptySeriesSite(prevSite)
-            win.cursor.setToIconSite(ic, prevSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
-            return
-        rightmostIcon, rightmostSite = icon.rightmostSite(childAtPrevSite)
-        if not childAtCursor:
-            # Comma clause with cursor is empty, remove the site
-            ic.removeEmptySeriesSite(site)
-            win.cursor.setToIconSite(rightmostIcon, rightmostSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
-            return
-        # Neither the cursor site nor the prior site is empty.  Stitch together the
-        # content of the two sites with an entry icon, and remove the cursor site
-        win.entryIcon = entryicon.EntryIcon(window=win)
-        ic.replaceChild(None, site)
-        if ic.hasSite(site):
-            ic.removeEmptySeriesSite(site)
-        rightmostIcon.replaceChild(win.entryIcon, rightmostSite)
-        win.entryIcon.setPendingArg(childAtCursor)
-        win.cursor.setToEntryIcon()
-        win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+        backspaceComma(ic, site, evt)
+
+def backspaceComma(ic, cursorSite, evt):
+    """Backspace when cursor is at the comma site of an icon with a sequence.  Deletes
+    empty site left or right of the comma, or if both sites are occupied, join them
+    with an entry icon."""
+    win = ic.window
+    siteName, index = iconsites.splitSeriesSiteId(cursorSite)
+    prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
+    childAtCursor = ic.childAt(cursorSite)
+    childAtPrevSite = ic.childAt(prevSite)
+    topIcon = ic.topLevelParent()
+    redrawRegion = comn.AccumRects(topIcon.hierRect())
+    if not childAtPrevSite:
+        # Previous comma clause is empty, remove the site
+        ic.removeEmptySeriesSite(prevSite)
+        win.cursor.setToIconSite(ic, prevSite)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+        win.refresh(redrawRegion.get())
+        return
+    rightmostIcon, rightmostSite = icon.rightmostSite(childAtPrevSite)
+    if not childAtCursor:
+        # Comma clause with cursor is empty, remove the site
+        ic.removeEmptySeriesSite(cursorSite)
+        win.cursor.setToIconSite(rightmostIcon, rightmostSite)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+        win.refresh(redrawRegion.get())
+        return
+    # Neither the cursor site nor the prior site is empty.  Stitch together the
+    # content of the two sites with an entry icon, and remove the cursor site
+    win.entryIcon = entryicon.EntryIcon(window=win)
+    ic.replaceChild(None, cursorSite)
+    if ic.hasSite(cursorSite):
+        ic.removeEmptySeriesSite(cursorSite)
+    rightmostIcon.replaceChild(win.entryIcon, rightmostSite)
+    win.entryIcon.setPendingArg(childAtCursor)
+    win.cursor.setToEntryIcon()
+    win.redisplayChangedEntryIcon(evt, redrawRegion.get())
 
 def composeAttrAstIf(ic, icAst, skipAttr):
     """Wrapper for icon.composeAttrAst, giving it a disable flag (skipAttr), to simplify

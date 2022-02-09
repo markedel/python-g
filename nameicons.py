@@ -11,7 +11,6 @@ import opicons
 import listicons
 import assignicons
 import entryicon
-import cursors
 import infixicon
 
 namedConsts = {'True':True, 'False':False, 'None':None}
@@ -188,6 +187,10 @@ class CommentIcon(TextIcon):
         text = filefmt.SegmentedText()
         text.addComment(self.string, priorComment)
         return text
+
+class PosOnlyMarkerIcon(TextIcon):
+    def __init__(self, window=None, location=None):
+        TextIcon.__init__(self, '/', window, location)
 
 class AttrIcon(icon.Icon):
     def __init__(self, name, window=None, location=None):
@@ -1150,48 +1153,29 @@ def backspaceSeriesStmt(ic, site, evt, text):
                 pendingArgSite = None
             win.backspaceIconToEntry(evt, ic, text, pendingArgSite)
         else:
-            # Multiple remaining arguments: convert to tuple with entry icon as
-            # first element
+            # Multiple remaining arguments: convert to entry icon with naked tuple
+            # as pending argument
             redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             valueIcons = [s.att for s in ic.sites.values]
             newTuple = listicons.TupleIcon(window=win, noParens=True)
             win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-            newTuple.replaceChild(win.entryIcon, "argIcons_0")
+            win.entryIcon.setPendingArg(newTuple)
             for i, arg in enumerate(valueIcons):
-                if i == 0:
-                    win.entryIcon.setPendingArg(arg)
-                else:
-                    if arg is not None:
-                        ic.replaceChild(None, ic.siteOf(arg))
-                    newTuple.insertChild(arg, "argIcons", i)
+                if arg is not None:
+                    ic.replaceChild(None, ic.siteOf(arg))
+                newTuple.insertChild(arg, "argIcons", i)
             parent = ic.parent()
             if parent is None:
-                win.replaceTop(ic, newTuple)
+                win.replaceTop(ic, win.entryIcon)
             else:
                 parentSite = parent.siteOf(ic)
-                parent.replaceChild(newTuple, parentSite)
+                parent.replaceChild(win.entryIcon, parentSite)
             win.cursor.setToEntryIcon()
             win.redisplayChangedEntryIcon(evt, redrawRegion.get())
     elif siteName == "values":
-        # Cursor is on comma input.  Delete if empty or previous site is empty
-        prevSite = iconsites.makeSeriesSiteId(siteName, index-1)
-        childAtCursor = ic.childAt(site)
-        if childAtCursor and ic.childAt(prevSite):
-            cursors.beep()
-            return
-        topIcon = ic.topLevelParent()
-        redrawRegion = comn.AccumRects(topIcon.hierRect())
-        if not ic.childAt(prevSite):
-            ic.removeEmptySeriesSite(prevSite)
-            win.cursor.setToIconSite(ic, prevSite)
-        else:
-            rightmostIcon = icon.findLastAttrIcon(ic.childAt(prevSite))
-            rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
-            ic.removeEmptySeriesSite(site)
-            win.cursor.setToIconSite(rightmostIcon, rightmostSite)
-        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-        win.refresh(redrawRegion.get())
-        win.undo.addBoundary()
+        # Cursor is on comma input.  Delete if empty or previous site is empty, merge
+        # surrounding sites if not
+        listicons.backspaceComma(ic, site, evt)
 
 def _moduleNameFromAttrs(identOrAttrIcon):
     isIdentifier = identOrAttrIcon.__class__ in (IdentifierIcon, ModuleNameIcon)

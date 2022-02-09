@@ -9,6 +9,7 @@ import filefmt
 import nameicons
 import listicons
 import infixicon
+import entryicon
 
 # Number of pixels to the left of sequence site to start else and elif icons
 ELSE_DEDENT = 21
@@ -98,19 +99,100 @@ defRParenTypeoverImage = comn.asciiToImage( (
  "o      o",
  "oooooooo"))
 
-class PosOnlyMarkerIcon(nameicons.TextIcon):
-    def __init__(self, window=None, location=None):
-        nameicons.TextIcon.__init__(self, '/', window, location)
-
-class WithIcon(nameicons.SeriesStmtIcon):
+class WithIcon(icon.Icon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
         stmt = "async with" if isAsync else "with"
-        nameicons.SeriesStmtIcon.__init__(self, stmt, window, seqIndent=True,
-                location=location)
+        icon.Icon.__init__(self, window)
+        self.stmt = stmt
+        bodyWidth = icon.getTextSize(stmt, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        bodyHeight = icon.minTxtIconHgt
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        seqX = icon.dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        seqOutIndent = comn.BLOCK_INDENT
+        self.sites.add('seqOut', 'seqOut', seqX + seqOutIndent, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        totalWidth = icon.dragSeqImage.width + bodyWidth
+        self.valueList = iconlayout.ListLayoutMgr(self, 'values', bodyWidth+1,
+                siteYOffset, simpleSpine=True)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = icon.BlockEnd(self, window)
             self.sites.seqOut.attach(self, self.blockEnd)
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            bodyWidth, bodyHeight = self.bodySize
+            bodyOffset = icon.dragSeqImage.width - 1
+            img = Image.new('RGBA', (bodyOffset + max(bodyWidth, comn.BLOCK_INDENT+2),
+             bodyHeight), color=(0, 0, 0, 0))
+            txtImg = icon.iconBoxedText(self.stmt, icon.boldFont, icon.KEYWORD_COLOR)
+            img.paste(txtImg, (bodyOffset, 0))
+            inImgX = bodyOffset + bodyWidth - icon.inSiteImage.width
+            inImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
+            img.paste(icon.inSiteImage, (inImgX, inImageY))
+            icon.drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right",
+                 extendWidth=txtImg.width)
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage, (0, bodyHeight // 2 -
+                        icon.dragSeqImage.height // 2))
+            bodyTopY = self.sites.seqIn.yOffset - 1
+            self.drawList = [((0, bodyTopY), img)]
+            # Minimal spines (if list has multi-row layout)
+            argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
+            cntrSiteY = bodyTopY + bodyHeight // 2
+            self.drawList += self.valueList.drawSimpleSpine(argsOffset, cntrSiteY)
+            # Commas
+            self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def snapLists(self, forCursor=False):
+        # Add snap sites for insertion
+        siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.valueList.makeInsertSnapList()
+        return siteSnapLists
+
+    def doLayout(self, left, top, layout):
+        self.valueList.doLayout(layout)
+        bodyWidth, bodyHeight = self.bodySize
+        heightAbove = bodyHeight // 2
+        heightBelow = bodyHeight - heightAbove
+        width = icon.dragSeqImage.width - 1 + bodyWidth + self.valueList.width + 2
+        if self.valueList.simpleSpineWillDraw():
+            heightAbove = max(heightAbove, self.valueList.spineTop)
+            heightBelow = max(heightBelow, self.valueList.spineHeight -
+                    self.valueList.spineTop)
+        self.sites.seqInsert.yOffset = heightAbove
+        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2 + 1
+        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 2
+        height = heightAbove + heightBelow
+        self.rect = left, top, left + width, top + height
+        layout.updateSiteOffsets(self.sites.seqInsert)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        bodyWidth, bodyHeight = self.bodySize
+        valueListLayouts = self.valueList.calcLayouts()
+        layouts = []
+        for valueListLayout in valueListLayouts:
+            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
+            valueListLayout.mergeInto(layout, bodyWidth - 1, 0)
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
 
     def select(self, select=True):
         icon.Icon.select(self, select)
@@ -118,6 +200,55 @@ class WithIcon(nameicons.SeriesStmtIcon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
+
+    def textRepr(self):
+        return self.stmt + " " + icon.seriesTextRepr(self.sites.values)
+
+    def dumpName(self):
+        return self.stmt
+
+    def execute(self):
+        return None  #... no idea what to do here, yet.
+
+    def backspace(self, siteId, evt):
+        siteName, index = iconsites.splitSeriesSiteId(siteId)
+        win = self.window
+        if siteName == "values" and index == 0:
+            # Cursor is on first input site.  Remove icon and replace with cursor
+            valueIcons = [s.att for s in self.sites.values if s.att is not None]
+            if len(valueIcons) in (0, 1):
+                # Zero or one argument, convert to entry icon (with pending arg if
+                # there was an argument)
+                if len(valueIcons) == 1:
+                    pendingArgSite = self.siteOf(valueIcons[0])
+                else:
+                    pendingArgSite = None
+                win.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite)
+            else:
+                # Multiple remaining arguments: convert to entry icon with naked tuple
+                # as pending argument
+                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                valueIcons = [s.att for s in self.sites.values]
+                newTuple = listicons.TupleIcon(window=win, noParens=True)
+                win.entryIcon = entryicon.EntryIcon(initialString=self.stmt, window=win,
+                    blockEnd=self.blockEnd)
+                win.entryIcon.setPendingArg(newTuple)
+                for i, arg in enumerate(valueIcons):
+                    if arg is not None:
+                        self.replaceChild(None, self.siteOf(arg))
+                    newTuple.insertChild(arg, "argIcons", i)
+                parent = self.parent()
+                if parent is None:
+                    win.replaceTop(self, win.entryIcon)
+                else:
+                    parentSite = parent.siteOf(self)
+                    parent.replaceChild(win.entryIcon, parentSite)
+                win.cursor.setToEntryIcon()
+                win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+        elif siteName == "values":
+            # Cursor is on comma input.  Delete if empty or previous site is empty, merge
+            # surrounding sites if not
+            listicons.backspaceComma(self, siteId, evt)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
@@ -1454,7 +1585,7 @@ class DefIcon(DefOrClassIcon):
                     starArgAst = ast.arg(starArg.name, lineno=arg.id, col_offset=0)
                 accumArgAsts = kwdOnlyAsts
                 accumArgDefaults = kwOnlyDefaults
-            elif isinstance(arg, PosOnlyMarkerIcon):
+            elif isinstance(arg, nameicons.PosOnlyMarkerIcon):
                 posOnlyArgAsts = normalArgAsts
                 normalArgAsts = []
                 accumArgAsts = normalArgAsts
@@ -1628,7 +1759,7 @@ def createDefIconFromAst(astNode, window):
         default = defaults[i]
         argNameIcon = nameicons.IdentifierIcon(arg, window)
         if nPosOnly != 0 and numArgs == nPosOnly:
-            posOnlyMarker = PosOnlyMarkerIcon(window=window)
+            posOnlyMarker = nameicons.PosOnlyMarkerIcon(window=window)
             defIcon.insertChild(posOnlyMarker, 'argIcons', numArgs)
             numArgs += 1
         if default is None:

@@ -2,6 +2,7 @@
 from PIL import Image, ImageDraw
 import comn
 import iconlayout
+import iconsites
 import icon
 import reorderexpr
 
@@ -202,7 +203,13 @@ class CursorParenIcon(icon.Icon):
                     self.replaceChild(None, 'argIcon')
                     win.replaceTop(self, content)
                     topNode = reorderexpr.reorderArithExpr(content)
-                    win.cursor.setToIconSite(topNode, 'output')
+                    coincidentSite = topNode.hasCoincidentSite()
+                    if coincidentSite:
+                        cursorIc, cursorSite = iconsites.lowestCoincidentSite(topNode,
+                            coincidentSite)
+                    else:
+                        cursorIc, cursorSite = topNode, 'output'
+                    win.cursor.setToIconSite(cursorIc, cursorSite)
             else:
                 # Open paren had a parent.  Remove by attaching content to parent
                 parentSite = parent.siteOf(self)
