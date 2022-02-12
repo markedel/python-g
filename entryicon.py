@@ -71,7 +71,7 @@ attrPenImage = comn.asciiToImage((
 ))
 
 class EntryIcon(icon.Icon):
-    def __init__(self, initialString="", window=None,
+    def __init__(self, initialString="", window=None, willOwnBlock=False,
      location=None):
         icon.Icon.__init__(self, window)
         self.text = initialString
@@ -84,11 +84,16 @@ class EntryIcon(icon.Icon):
         self.sites.add('output', 'output', 0, outSiteY)
         self.sites.add('attrOut', 'attrOut', 0, outSiteY + icon.ATTR_SITE_OFFSET)
         self.sites.add('seqIn', 'seqIn', 0, outSiteY)
-        self.sites.add('seqOut', 'seqOut', 0, outSiteY)
+        seqOutIndent = comn.BLOCK_INDENT if willOwnBlock else 0
+        self.sites.add('seqOut', 'seqOut', seqOutIndent, outSiteY)
         self.rect = (x, y, x + self._width(), y + self.height)
         self.markLayoutDirty()
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)
+        # If the entry icon will own a code block, create a BlockEnd icon and link it in
+        if willOwnBlock:
+            self.blockEnd = icon.BlockEnd(self, window)
+            self.sites.seqOut.attach(self, self.blockEnd)
 
     def restoreForUndo(self, text):
         """Undo restores all attachments and saves the displayed text.  Update the
@@ -181,35 +186,34 @@ class EntryIcon(icon.Icon):
         if self.text != "":
             newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
             self._setText(newText, self.cursorPos-1)
-        elif self.pendingArg() or self.pendingAttr():
-            # There's no text left but a pending arg or attribute.  The nasty hack below
-            # calls the window backspace code and then restores pending args/attrs if it
-            # can.  The right thing to do is (probably) not to allow the backspace if
-            # pending data would be lost.  Suggest merging and integrating this code with
-            # the window backspace code as a first step.
-            pendingArg = self.pendingArg()
-            pendingAttr = self.pendingAttr()
-            self.remove(forceDelete=True)
-            self.window._backspaceIcon(evt)
-            entryIcon = self.window.entryIcon
-            if entryIcon:
-                if not (entryIcon.pendingArg() or entryIcon.pendingAttr()):
-                    if pendingArg:
-                        entryIcon.setPendingArg(pendingArg)
-                    elif pendingAttr:
-                        entryIcon.setPendingAttr(pendingAttr)
-            else:
-                cursor = self.window.cursor
-                if cursor.type == "icon":
-                    if cursor.site not in ('output', 'attrOut'):
-                        self.window.entryIcon = self
-                        cursor.icon.replaceChild(self, cursor.site)
-                elif cursor.type == "window":
+            return
+        # The entry icon contains no text.  Attempt to remove it
+        if self.remove():
+            return
+        # The remove() call was unable to place pending args.  The nasty hack below
+        # calls the window backspace code and then restores pending args/attrs if it
+        # can.
+        pendingArg = self.pendingArg()
+        pendingAttr = self.pendingAttr()
+        self.remove(forceDelete=True)
+        self.window._backspaceIcon(evt)
+        entryIcon = self.window.entryIcon
+        if entryIcon:
+            if not (entryIcon.pendingArg() or entryIcon.pendingAttr()):
+                if pendingArg:
+                    entryIcon.setPendingArg(pendingArg)
+                elif pendingAttr:
+                    entryIcon.setPendingAttr(pendingAttr)
+        else:
+            cursor = self.window.cursor
+            if cursor.type == "icon":
+                if cursor.site not in ('output', 'attrOut'):
                     self.window.entryIcon = self
-                    icon.moveRect(self.rect, cursor.pos)
-                    self.window.addTop(self)
-        else:  # No text or pending icons
-            self.remove(forceDelete=True)
+                    cursor.icon.replaceChild(self, cursor.site)
+            elif cursor.type == "window":
+                self.window.entryIcon = self
+                icon.moveRect(self.rect, cursor.pos)
+                self.window.addTop(self)
 
     def arrowAction(self, direction):
         newCursorPos = self.cursorPos
@@ -230,9 +234,22 @@ class EntryIcon(icon.Icon):
         the pending args or attributes are deleted along with the entry icon."""
         attachedIcon = self.attachedIcon()
         attachedSite = self.attachedSite()
+        pendingArg = self.pendingArg()
+        pendingList = isinstance(pendingArg, listicons.TupleIcon) and pendingArg.noParens
         if attachedIcon is not None:
-            if self.pendingArg() and self.attachedSiteType() == "input":
-                attachedIcon.replaceChild(self.pendingArg(), attachedSite)
+            if pendingArg and self.attachedSiteType() == "input":
+                if iconsites.isSeriesSiteId(attachedSite) and pendingList:
+                    # Pending argument is naked tuple, and entry icon is attached to
+                    # a series site.  Splice pending arguments in to that list
+                    attachedIcon.replaceChild(None, attachedSite)
+                    parentName, parentIdx = iconsites.splitSeriesSiteId(attachedSite)
+                    for i, site in enumerate(list(pendingArg.sites.argIcons)):
+                        arg = site.att
+                        if arg is not None:
+                            pendingArg.replaceChild(None, site.name, leavePlace=True)
+                        attachedIcon.insertChild(arg, parentName, parentIdx + i)
+                else:
+                    attachedIcon.replaceChild(pendingArg, attachedSite)
                 self.setPendingArg(None)
             elif self.pendingAttr() and self.attachedSiteType() == "attrIn":
                 attachedIcon.replaceChild(self.pendingAttr(), attachedSite)
@@ -248,7 +265,6 @@ class EntryIcon(icon.Icon):
                 newSite = iconsites.makeSeriesSiteId(seriesName, seriesIdx-1)
                 self.window.cursor.setToIconSite(attachedIcon, newSite)
         else:  # Entry icon is at top level
-            pendingArg = self.pendingArg()
             if pendingArg:
                 self.replaceChild(None, 'pendingArg', 'output')
                 self.window.replaceTop(self, pendingArg)
@@ -1062,12 +1078,13 @@ class EntryIcon(icon.Icon):
             pendingArgLayouts = self.pendingAttr().calcLayouts()
         else:
             pendingArgLayouts = (None,)
-        width = self._width() - (1 if self.attachedToAttribute() else 2)
+        baseWidth = self._width() - (1 if self.attachedToAttribute() else 2)
         siteOffset = self.height // 2
         if self.attachedSite() == "attrIcon":
             siteOffset += icon.ATTR_SITE_OFFSET
         layouts = []
         for pendingArgLayout in pendingArgLayouts:
+            width = baseWidth
             layout = iconlayout.Layout(self, width, self.height, siteOffset)
             if self.pendingArg():
                 layout.addSubLayout(pendingArgLayout, 'pendingArg', width, 0)

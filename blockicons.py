@@ -231,7 +231,7 @@ class WithIcon(icon.Icon):
                 valueIcons = [s.att for s in self.sites.values]
                 newTuple = listicons.TupleIcon(window=win, noParens=True)
                 win.entryIcon = entryicon.EntryIcon(initialString=self.stmt, window=win,
-                    blockEnd=self.blockEnd)
+                    willOwnBlockEnd=True)
                 win.entryIcon.setPendingArg(newTuple)
                 for i, arg in enumerate(valueIcons):
                     if arg is not None:

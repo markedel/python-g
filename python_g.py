@@ -1220,7 +1220,8 @@ class Window:
         redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
         parent = ic.parent()
         if parent is None:
-            self.entryIcon = entryicon.EntryIcon(initialString=entryText, window=self)
+            self.entryIcon = entryicon.EntryIcon(initialString=entryText, window=self,
+                willOwnBlock=hasattr(ic, 'blockEnd'))
             self.replaceTop(ic, self.entryIcon)
         else:
             parentSite = parent.siteOf(ic)
@@ -2427,7 +2428,11 @@ class Window:
         """Replace an existing top-level icon with a new icon.  If the existing icon was
         part of a sequence, replace it in the sequence.  If the icon was not part of a
         sequence place it in the same location.  If "new" will own a code block, also
-        integrate its corresponding block-end icon.  Does not re-layout or re-draw."""
+        integrate its corresponding block-end icon.  Does not re-layout or re-draw.
+        Note that this call is not intended for integrating a new code block (new must
+        have an empty block if it has one).  If the old icon owned a code block, the new
+        icon will take it over if it can, or the owned block will be dedented back to the
+        parent sequence."""
         # Note that order is important here, because the page infrastructure duplicates
         # some of the information in the icon sequences.  .removeTop should always be
         # called before tearing down the sequence connections, and .addTop should always
@@ -2435,11 +2440,29 @@ class Window:
         # separately tracks icon attachments and add/remove from the window structures.
         self.removeTop(old)
         nextInSeq = old.nextInSeq()
-        if nextInSeq:
-            old.replaceChild(None, 'seqOut')
+        old.replaceChild(None, 'seqOut')
+        if hasattr(old, 'blockEnd'):
+            beforeBlockEnd = old.blockEnd.prevInSeq()
+            afterBlockEnd = old.blockEnd.nextInSeq()
+            old.blockEnd.replaceChild(None, 'seqIn')
+            old.blockEnd.replaceChild(None, 'seqOut')
+            if not isinstance(nextInSeq, icon.BlockEnd):
+                new.replaceChild(nextInSeq, 'seqOut')
             if hasattr(new, 'blockEnd'):
+                # New icon takes over old icon's code block (by transferring site
+                # links, not ownership of the BlockEnd icon, to integrate with undo)
+                if not isinstance(nextInSeq, icon.BlockEnd):
+                    new.blockEnd.replaceChild(beforeBlockEnd, 'seqIn')
+                new.blockEnd.replaceChild(afterBlockEnd, 'seqOut')
+            else:
+                # Icons in old block are dedented back to parent sequence
+                beforeBlockEnd.replaceChild(afterBlockEnd, 'seqOut')
+        else:
+            if hasattr(new, 'blockEnd'):
+                # BlockEnd (which is already attached to new icon's seqOut) linked in
                 new.blockEnd.replaceChild(nextInSeq, 'seqOut')
             else:
+                # Neither icon can own a code block
                 new.replaceChild(nextInSeq, 'seqOut')
         prevInSeq = old.prevInSeq()
         if prevInSeq:
