@@ -152,6 +152,17 @@ class Cursor:
         self.blinkState = True
         self.draw()
 
+    def setToBestCoincidentSite(self, ic, site):
+        if site == "output":
+            coincidentSite = ic.hasCoincidentSite()
+            if coincidentSite:
+                cursorIc, cursorSite = iconsites.lowestCoincidentSite(ic, coincidentSite)
+            else:
+                cursorIc, cursorSite = ic, site
+        else:
+            cursorIc, cursorSite = iconsites.lowestCoincidentSite(ic, site)
+        self.setToIconSite(cursorIc, cursorSite)
+
     def moveToIconSite(self, ic, site, evt):
         """Place the cursor at an icon site, paying attention to keyboard modifiers"""
         shiftPressed = evt.state & python_g.SHIFT_MASK

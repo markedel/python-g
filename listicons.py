@@ -796,6 +796,7 @@ class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, closed=True, obj=None, typeover=False,
                  location=None):
         self.noParens = noParens
+        self.coincidentSite = "argIcons_0" if noParens else None
         self.argList = None  # Temporary to help with initialization
         ListTypeIcon.__init__(self, '(', ')', window, closed=closed, obj=obj,
                 location=location, leftImgFn=self._stretchedLTupleImage,
@@ -823,6 +824,7 @@ class TupleIcon(ListTypeIcon):
             return
         self.noParens = False
         self.drawList = None
+        self.coincidentSite = None
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.removeParens)
 
@@ -831,6 +833,7 @@ class TupleIcon(ListTypeIcon):
             return
         self.noParens = True
         self.drawList = None
+        self.coincidentSite = 'argIcons_0'
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.restoreParens)
 

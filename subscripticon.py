@@ -425,13 +425,7 @@ class SubscriptIcon(icon.Icon):
                     # The icon was on the top level: replace it with its content
                     self.replaceChild(None, 'indexIcon')
                     win.replaceTop(self, content)
-                    coincidentSite = content.hasCoincidentSite()
-                    if coincidentSite:
-                        cursorIc, cursorSite = iconsites.lowestCoincidentSite(content,
-                            coincidentSite)
-                    else:
-                        cursorIc, cursorSite = content, 'output'
-                    win.cursor.setToIconSite(cursorIc, cursorSite)
+                    win.cursor.setToBestCoincidentSite(content, 'output')
                 else:
                     # The icon has a parent, but since the subscript icon sits on
                     # an attribute site we can't attach, so create an entry icon

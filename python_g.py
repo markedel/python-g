@@ -1147,7 +1147,7 @@ class Window:
             if iconOutputSite is None:
                 self.cursor.removeCursor()
             else:
-                self.cursor.setToIconSite(pastedIcons[0], "output")
+                self.cursor.setToBestCoincidentSite(pastedIcons[0], "output")
         self.undo.addBoundary()
 
     def _deleteCb(self, _evt=None):
@@ -2457,7 +2457,7 @@ class Window:
             else:
                 # Icons in old block are dedented back to parent sequence
                 beforeBlockEnd.replaceChild(afterBlockEnd, 'seqOut')
-        else:
+        elif nextInSeq is not None:
             if hasattr(new, 'blockEnd'):
                 # BlockEnd (which is already attached to new icon's seqOut) linked in
                 new.blockEnd.replaceChild(nextInSeq, 'seqOut')

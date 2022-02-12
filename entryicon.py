@@ -269,7 +269,7 @@ class EntryIcon(icon.Icon):
                 self.replaceChild(None, 'pendingArg', 'output')
                 self.window.replaceTop(self, pendingArg)
                 pendingArg.markLayoutDirty()
-                self.window.cursor.setToIconSite(pendingArg, "output")
+                self.window.cursor.setToBestCoincidentSite(pendingArg, "output")
             elif self.pendingAttr():
                 pendingAttr = self.pendingAttr()
                 self.replaceChild(None, 'pendingAttr', 'attrOut')
