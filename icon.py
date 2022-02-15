@@ -1280,6 +1280,15 @@ def rightmostSite(ic, ignoreAutoParens=False):
         return ic, lastCursorSite
     return rightmostSite(child, ignoreAutoParens)
 
+def rightmostFromSite(ic, siteId):
+    """Returns rightmost icon and siteId for an icon site.  Same as rightmostSite, but
+    passed the parent icon and site to handle the empty-site case (which would otherwise
+    accompany the call to rightmostIcon in the most common use-case)."""
+    argIcon = ic.childAt(siteId)
+    if argIcon is None:
+        return ic, siteId
+    return rightmostSite(argIcon)
+
 def findAttrOutputSite(ic):
     if ic.hasSite('output'):
         return ic

@@ -658,6 +658,8 @@ class Cursor:
         the top of the hierarchy."""
         if seqDown and ic.hasSite('seqOut'):
             return 'seqOut'
+        elif not seqDown and ic.hasSite('output'):
+            return 'output'
         elif not seqDown and ic.hasSite('seqIn'):
             return 'seqIn'
         else:

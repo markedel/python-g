@@ -210,6 +210,31 @@ class WithIcon(icon.Icon):
     def execute(self):
         return None  #... no idea what to do here, yet.
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId[:6] == 'values':
+            parent = entryIc.parent()
+            if isinstance(parent, infixicon.AsIcon):
+                # Enforce identifiers-only on right argument of "as"
+                name = text.rstrip(' ')
+                if name == ',':
+                    return "comma"
+                name = name.rstrip(',')
+                if not name.isidentifier():
+                    return "reject"
+                if text[-1] in (' ', ','):
+                    return nameicons.IdentifierIcon(name, self.window), text[-1]
+                return "accept"
+            elif text == ',':
+                return "comma"
+            elif onAttr:
+                # Allow "as" to be typed
+                if text == 'a':
+                    return "accept"
+                elif text in ('as', 'as '):
+                    return infixicon.AsIcon(self.window), None
+        return None
+
     def backspace(self, siteId, evt):
         siteName, index = iconsites.splitSeriesSiteId(siteId)
         win = self.window
@@ -375,20 +400,26 @@ class WhileIcon(icon.Icon):
         bodyAsts = createBlockAsts(self)
         return ast.While(testAst, **bodyAsts, lineno=self.id, col_offset=0)
 
+    def backspace(self, siteId, evt):
+        if siteId != "condIcon":
+            return None
+        # Cursor is directly on condition site.  Remove icon and replace with entry
+        # icon, converting condition to pending argument
+        self.window.backspaceIconToEntry(evt, self, "while", "condIcon")
+
 class ForIcon(icon.Icon):
     hasTypeover = True
 
     def __init__(self, isAsync=False, createBlockEnd=True, typeover=False,
             window=None, location=None):
         icon.Icon.__init__(self, window)
-        self.isAsync = isAsync
         if typeover:
             self.typeoverIdx = 0
             self.window.watchTypeover(self)
         else:
             self.typeoverIdx = None
-        text = "async for" if isAsync else "for"
-        bodyWidth = icon.getTextSize(text, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
+        self.stmt = "async for" if isAsync else "for"
+        bodyWidth = icon.getTextSize(self.stmt, icon.boldFont)[0]+2 * icon.TEXT_MARGIN+1
         bodyHeight = defLParenImage.height
         inWidth = icon.getTextSize("in", icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight, inWidth)
@@ -423,8 +454,7 @@ class ForIcon(icon.Icon):
             bodyOffset = icon.dragSeqImage.width - 1
             img = Image.new('RGBA', (max(comn.BLOCK_INDENT + 3, bodyWidth) + bodyOffset,
              bodyHeight), color=(0, 0, 0, 0))
-            txt = "async for" if self.isAsync else "for"
-            txtImg = icon.iconBoxedText(txt, icon.boldFont, icon.KEYWORD_COLOR)
+            txtImg = icon.iconBoxedText(self.stmt, icon.boldFont, icon.KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             cntrSiteY = self.sites.seqInsert.yOffset
             inImgX = bodyOffset + bodyWidth - 1 - icon.inSiteImage.width
@@ -503,14 +533,13 @@ class ForIcon(icon.Icon):
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
-        text = "async for" if self.isAsync else "for"
         tgtText = icon.seriesTextRepr(self.sites.targets)
         iterText = icon.seriesTextRepr(self.sites.iterIcons)
-        return text + " " + tgtText + " in " + iterText + ":"
+        return self.stmt + " " + tgtText + " in " + iterText + ":"
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText("async for " if self.isAsync else "for ")
+        text = filefmt.SegmentedText(self.stmt)
         icon.addSeriesSaveText(text, brkLvl, self.sites.targets, contNeeded,
             export)
         text.add(brkLvl, " in ", contNeeded)
@@ -523,7 +552,7 @@ class ForIcon(icon.Icon):
         return "for"
 
     def clipboardRepr(self, offset, iconsToCopy):
-        return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
+        return self._serialize(offset, iconsToCopy, isAsync=self.stmt == "async for",
          createBlockEnd=False)
 
     def execute(self):
@@ -616,6 +645,57 @@ class ForIcon(icon.Icon):
         before = iconsites.makeSeriesSiteId('targets', len(self.sites.targets) - 1)
         retVal = before, 'iterIcons_0', 'in', self.typeoverIdx
         return [retVal] if allRegions else retVal
+
+    def backspace(self, siteId, evt):
+        siteName, index = iconsites.splitSeriesSiteId(siteId)
+        win = self.window
+        if siteName == "targets":
+            if index == 0:
+                # Cursor is on first target site.  Remove icon and replace with entry
+                # icon, converting both targets and iterators in to a flat list
+                targetIcons = [s.att for s in self.sites.targets if s.att is not None]
+                iterIcons = [s.att for s in self.sites.iterIcons if s.att is not None]
+                combinedIcons = targetIcons + iterIcons
+                if len(combinedIcons) in (0, 1):
+                    # Zero or one argument, convert to entry icon (with pending arg if
+                    # there was an argument)
+                    if len(combinedIcons) == 1:
+                        pendingArgSite = self.siteOf(combinedIcons[0])
+                    else:
+                        pendingArgSite = None
+                    win.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite)
+                else:
+                    # Multiple remaining arguments: convert to entry icon with naked tuple
+                    # as pending argument
+                    redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                    newTuple = listicons.TupleIcon(window=win, noParens=True)
+                    win.entryIcon = entryicon.EntryIcon(initialString=self.stmt,
+                        window=win, willOwnBlock=True)
+                    win.entryIcon.setPendingArg(newTuple)
+                    for i, arg in enumerate(combinedIcons):
+                        self.replaceChild(None, self.siteOf(arg))
+                        newTuple.insertChild(arg, "argIcons", i)
+                    win.replaceTop(self, win.entryIcon)
+                    win.cursor.setToEntryIcon()
+                    win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+            else:
+                # Cursor is on comma input.  Delete if empty or previous site is empty.
+                # Don't try to merge surrounding sites if both are populated, as no
+                # math or attributes are allowed: just skip over the comma
+                if not listicons.backspaceComma(self, siteId, evt, joinOccupied=False):
+                    cursorSite = iconsites.makeSeriesSiteId(siteName, index-1)
+                    cursorIcon, cursorSite = icon.rightmostFromSite(self, cursorSite)
+                    win.cursor.setToIconSite(cursorIcon, cursorSite)
+        elif siteName == "iterIcons":
+            if index == 0:
+                # Cursor is on "in", jump over it to last target
+                lastTgtSite = iconsites.makeSeriesSiteId('targets',
+                    len(self.sites.targets) - 1)
+                win.cursor.setToIconSite(*icon.rightmostFromSite(self, lastTgtSite))
+            else:
+                # Cursor is on comma input.  Delete if empty or previous site is empty,
+                # merge surrounding sites if not
+                listicons.backspaceComma(self, siteId, evt)
 
 class IfIcon(icon.Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
@@ -715,6 +795,13 @@ class IfIcon(icon.Icon):
         testAst = self.sites.condIcon.att.createAst()
         bodyAsts = createBlockAsts(self)
         return ast.If(testAst, **bodyAsts, lineno=self.id, col_offset=0)
+
+    def backspace(self, siteId, evt):
+        if siteId != "condIcon":
+            return None
+        # Cursor is directly on condition site.  Remove icon and replace with entry
+        # icon, converting condition to pending argument
+        self.window.backspaceIconToEntry(evt, self, "if", "condIcon")
 
 class ElifIcon(icon.Icon):
     def __init__(self, window, location=None):
@@ -822,6 +909,13 @@ class ElifIcon(icon.Icon):
     def execute(self):
         return None  # ... no idea what to do here, yet.
 
+    def backspace(self, siteId, evt):
+        if siteId != "condIcon":
+            return None
+        # Cursor is directly on condition site.  Remove icon and replace with entry
+        # icon, converting condition to pending argument
+        self.window.backspaceIconToEntry(evt, self, "elif", "condIcon")
+
 class ElseIcon(icon.Icon):
     def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
@@ -835,7 +929,8 @@ class ElseIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
         self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
         self.sites.add('attrIcon', 'attrIn', bodyWidth,
-            bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET,
+            cursorOnly=True)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
@@ -900,6 +995,11 @@ class ElseIcon(icon.Icon):
         snapLists['seqInsert'] = []
         snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', self._snapFn)]
         return snapLists
+
+    def backspace(self, siteId, evt):
+        if siteId != "attrIcon":
+            return None
+        self.window.backspaceIconToEntry(evt, self, "else")
 
     def textRepr(self):
         return "else:"

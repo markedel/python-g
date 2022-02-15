@@ -80,6 +80,11 @@ WIN_TITLE_PREFIX = "Python-G - "
 
 startUpTime = time.monotonic()
 
+# Icons which automatically redirect to seqOut site if user attempts to type right-of
+noAppendIcons = {blockicons.ElseIcon, blockicons.TryIcon, blockicons.FinallyIcon,
+    blockicons.DefIcon, blockicons.ClassDefIcon, nameicons.PassIcon,
+    nameicons.ContinueIcon, nameicons.BreakIcon}
+
 # Notes on window drawing:
 #
 # Tkinter canvas can't handle individual images for each icon.  After about 4000
@@ -681,32 +686,34 @@ class Window:
             cursors.beep()
 
     def _insertEntryIconAtCursor(self, initialText):
+        # Note that location is set in the entry icon for the single case where it
+        # becomes the beginning of a sequence.  All others are overwritten by layout
+        self.entryIcon = entryicon.EntryIcon(window=self,
+            location=self.cursor.icon.rect[:2])
         if self.cursor.siteType == "output":
-            self.entryIcon = entryicon.EntryIcon(window=self)
             self.entryIcon.setPendingArg(self.cursor.icon)
             self.replaceTop(self.cursor.icon, self.entryIcon)
-            self.cursor.setToEntryIcon()
         elif self.cursor.siteType == "attrOut":
-            self.entryIcon = entryicon.EntryIcon(window=self)
             self.entryIcon.setPendingAttr(self.cursor.icon)
             self.replaceTop(self.cursor.icon, self.entryIcon)
-            self.cursor.setToEntryIcon()
         elif self.cursor.siteType in ("seqIn", "seqOut"):
-            self.entryIcon = entryicon.EntryIcon(window=self,
-             location=self.cursor.icon.rect[:2])
             before = self.cursor.siteType == "seqIn"
             icon.insertSeq(self.entryIcon, self.cursor.icon, before=before)
-            self.cursor.setToEntryIcon()
             self.addTopSingle(self.entryIcon)
-        else:  # Cursor site type is input or attrIn
+        elif self.cursor.siteType == "attrIn":  # Cursor site type is input or attrIn
+            if self.cursor.icon.__class__ in noAppendIcons:
+                icon.insertSeq(self.entryIcon, self.cursor.icon)
+                self.addTopSingle(self.entryIcon)
+            else:
+                pendingArg = self.cursor.icon.childAt(self.cursor.site)
+                self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
+                self.entryIcon.setPendingAttr(pendingArg)
+        else:  # Cursor site type is input
             self.entryIcon = entryicon.EntryIcon(window=self)
             pendingArg = self.cursor.icon.childAt(self.cursor.site)
             self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
-            if self.cursor.site == 'attrIcon':
-                self.entryIcon.setPendingAttr(pendingArg)
-            else:
-                self.entryIcon.setPendingArg(pendingArg)
-            self.cursor.setToEntryIcon()
+            self.entryIcon.setPendingArg(pendingArg)
+        self.cursor.setToEntryIcon()
         self.entryIcon.addText(initialText)
         self.redisplayChangedEntryIcon()
 
@@ -1181,12 +1188,7 @@ class Window:
                 ic.setTypeover(0, siteAfter)
                 ic.draw()
                 self.refresh(ic.rect, redraw=False, clear=False)
-                arg = ic.childAt(siteBefore)
-                if arg:
-                    cursorIc, cursorSite = icon.rightmostSite(arg)
-                else:
-                    cursorIc, cursorSite = ic, siteBefore
-                self.cursor.setToIconSite(cursorIc, cursorSite)
+                self.cursor.setToIconSite(*icon.rightmostFromSite(ic, siteBefore))
         else:
             topIcon = self.entryIcon.topLevelParent()
             redrawRect = topIcon.hierRect()
@@ -2104,6 +2106,7 @@ class Window:
             winWidth, winHeight = self.image.size
             x1, y1, x2, y2 = subImage
             subImage = max(0, x1), max(0, y1), min(winWidth, x2), min(winHeight, y2)
+            location = max(0, location[0]), max(0, location[1])
             image = image.crop(subImage)
         if image.width == 0 or image.height == 0:
             return
@@ -2287,13 +2290,24 @@ class Window:
         # Add those icons that are now on the top level as a result of deletion of their
         # parents (and bring those to front via ordering of .sequences page list)
         self.addTop(addTopIcons)
-        # Remove unsightly "naked tuples" left behind empty by deletion of their children
+        # Remove unsightly "naked tuples" left behind empty or with a single element
+        # by deletion of their children
         for ic, child in detachList:
             if child in deletedSet and isinstance(ic, listicons.TupleIcon) and \
-             ic.noParens and len(ic.children()) == 0 and ic.parent() is None and \
-             ic.nextInSeq() is None and ic.prevInSeq() is None and ic in self.topIcons:
+             ic.noParens and len(ic.sites.argIcons) <= 1 and ic.parent() is None and \
+             ic in self.topIcons:
                 redrawRegion.add(ic.rect)
-                self.removeTop(ic)
+                argIcon = ic.sites.argIcons[0].att
+                if argIcon is None:  #... Not sure what happens here when no icons are left
+                    nextIc = ic.nextInSeq()
+                    prevIc = ic.prevInSeq()
+                    ic.replaceChild(None, 'seqOut')
+                    ic.replaceChild(None, 'seqIn')
+                    self.removeTop(ic)
+                    if prevIc is not None:
+                        prevIc.replaceChild(nextIc, 'seqOut')
+                else:
+                    self.replaceTop(ic, argIcon)
         # Redo layouts of icons affected by detachment of children
         redrawRegion.add(self.layoutDirtyIcons())
         # Redraw the area affected by the deletion
@@ -2440,12 +2454,13 @@ class Window:
         # separately tracks icon attachments and add/remove from the window structures.
         self.removeTop(old)
         nextInSeq = old.nextInSeq()
-        old.replaceChild(None, 'seqOut')
         if hasattr(old, 'blockEnd'):
             beforeBlockEnd = old.blockEnd.prevInSeq()
             afterBlockEnd = old.blockEnd.nextInSeq()
+            old.replaceChild(None, 'seqOut')
             old.blockEnd.replaceChild(None, 'seqIn')
             old.blockEnd.replaceChild(None, 'seqOut')
+            self.removeTop(old.blockEnd)
             if not isinstance(nextInSeq, icon.BlockEnd):
                 new.replaceChild(nextInSeq, 'seqOut')
             if hasattr(new, 'blockEnd'):
@@ -2458,6 +2473,7 @@ class Window:
                 # Icons in old block are dedented back to parent sequence
                 beforeBlockEnd.replaceChild(afterBlockEnd, 'seqOut')
         elif nextInSeq is not None:
+            old.replaceChild(None, 'seqOut')
             if hasattr(new, 'blockEnd'):
                 # BlockEnd (which is already attached to new icon's seqOut) linked in
                 new.blockEnd.replaceChild(nextInSeq, 'seqOut')

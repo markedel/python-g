@@ -397,11 +397,11 @@ class IconSiteList:
                 continue
             # The first icon in a sequence hosts the snap site for the sequence
             hasPrev = ic.prevInSeq() is not None
-            if hasPrev and site.type in ('output', 'seqInsert'):
+            if hasPrev and site.type in ('output', 'seqInsert') and not forCursor:
                 continue
             # If the icon is in a sequence, convert the output site to a seqInsert
             hasNext = ic.nextInSeq()
-            if site.type == 'output' and (hasPrev or hasNext):
+            if site.type == 'output' and (hasPrev or hasNext) and not forCursor:
                 siteType = 'seqInsert'
             else:
                 siteType = site.type

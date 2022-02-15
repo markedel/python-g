@@ -356,6 +356,7 @@ class AssignIcon(icon.Icon):
                 win.cursor.setToIconSite(newTuple, cursorSite)
             else:
                 # Merge lists around '=' to convert it to ','
+                #... This should do the same as backspaceComma and insert entry icon
                 topIcon = self.topLevelParent()
                 redrawRegion = comn.AccumRects(topIcon.hierRect())
                 if siteName == "values":
@@ -376,34 +377,14 @@ class AssignIcon(icon.Icon):
                     self.insertChild(arg, destSite, destIdx + i)
                 self.removeTargetGroup(removetgtGrpIdx)
                 cursorSite = iconsites.makeSeriesSiteId(destSite, cursorIdx)
-                cursorIc = self.childAt(cursorSite)
-                if cursorIc is None:
-                    cursorIc = self
-                else:
-                    cursorIc, cursorSite = icon.rightmostSite(
-                        icon.findLastAttrIcon(cursorIc))
-                win.cursor.setToIconSite(cursorIc, cursorSite)
+                win.cursor.setToIconSite(*icon.rightmostFromSite(self, cursorSite))
         else:
             # Cursor is on comma input.  Delete if empty or previous site is empty
-            prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
-            childAtCursor = self.childAt(siteId)
-            if childAtCursor and self.childAt(prevSite):
-                cursors.beep()
-                return
-            topIcon = self.topLevelParent()
-            redrawRegion = comn.AccumRects(topIcon.hierRect())
-            if not self.childAt(prevSite):
-                self.removeEmptySeriesSite(prevSite)
-                win.cursor.setToIconSite(self, prevSite)
-            else:
-                rightmostIcon = icon.findLastAttrIcon(self.childAt(prevSite))
-                rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
-                self.removeEmptySeriesSite(siteId)
-                win.cursor.setToIconSite(rightmostIcon, rightmostSite)
+            listicons.backspaceComma(self, siteId, evt)
+            return
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
         win.refresh(redrawRegion.get())
         win.undo.addBoundary()
-
 
 class AugmentedAssignIcon(icon.Icon):
     def __init__(self, op, window, location=None):

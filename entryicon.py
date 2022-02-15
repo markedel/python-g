@@ -279,18 +279,20 @@ class EntryIcon(icon.Icon):
             else:
                 prevIcon = self.prevInSeq()
                 nextIcon = self.nextInSeq()
-                self.window.removeIcons([self])
+                if hasattr(self, 'blockEnd'):
+                    self.window.removeIcons([self, self.blockEnd])
+                else:
+                    self.window.removeIcons([self])
                 if prevIcon:
                     self.window.cursor.setToIconSite(prevIcon, 'seqOut')
-                elif nextIcon:
+                elif nextIcon and nextIcon is not self.blockEnd:
                     self.window.cursor.setToIconSite(nextIcon, 'seqIn')
                 else:
-                    self.window.cursor.setToWindowPos((self.rect[0], self.rect[1]))
+                    self.window.cursor.setToWindowPos(self.rect[:2])
         self.window.entryIcon = None
         return True
 
     def _setText(self, newText, newCursorPos):
-        oldWidth = self._width()
         if self.attachedToAttribute():
             parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=True)
             if parseResult is None:
@@ -311,8 +313,7 @@ class EntryIcon(icon.Icon):
             cursor.erase()
             self.cursorPos = newCursorPos
             cursor.draw()
-            if self._width() != oldWidth:
-                self.markLayoutDirty()
+            self.markLayoutDirty()
             return
         elif parseResult == "typeover":
             if self.pendingArg() is None and self.pendingAttr() is None:
@@ -499,6 +500,9 @@ class EntryIcon(icon.Icon):
              cursor.icon.childAt(cursor.site) is None:
                 cursor.icon.replaceChild(self.pendingAttr(), cursor.site)
                 self.setPendingAttr(None)
+        # If the inserted icon had typeover parts, placing pending arguments usually
+        # separates the cursor from them.  Negate if necessary
+        self.window.updateTypeoverStates()
         # If the entry icon can go away, remove it and we're done
         if self.pendingArg() is None and self.pendingAttr() is None and \
                 remainingText == "":
