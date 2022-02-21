@@ -576,7 +576,7 @@ class EntryIcon(icon.Icon):
         elif onIcon.__class__ is parenicon.CursorParenIcon and siteType != 'attrIn':
             # Cursor paren needs to be converted to a tuple
             tupleIcon = listicons.TupleIcon(window=self.window, closed=True,
-                typeoverIdx=0)
+                typeover=not onIcon.closed)
             args = [None]
             if onIcon.sites.argIcon.att and onIcon.sites.argIcon.att is not self:
                 args += [onIcon.sites.argIcon.att]
@@ -630,7 +630,8 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToIconSite(parent, seriesName, cursorIdx)
                 return True
             if parent.__class__ is parenicon.CursorParenIcon:
-                tupleIcon = listicons.TupleIcon(window=self.window, typeover=True)
+                tupleIcon = listicons.TupleIcon(window=self.window,
+                    typeover=not parent.closed)
                 tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
                 parentParent = parent.parent()
                 if parentParent is None:

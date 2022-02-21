@@ -840,13 +840,20 @@ class TupleIcon(ListTypeIcon):
         return len(self.sites.argIcons) <= 1 and not self.noParens
 
     def calcLayouts(self):
-        # If the icon is no longer at the top level and needs its parens restored, do so
-        # before calculating the layout (would be better to do this elsewhere). Exception
-        # is EntryIcon, which can hold a naked tuple
+        # If a naked tuple is no longer at the top level and needs its parens restored,
+        # do so before calculating the layout (would be better to do this elsewhere).
+        # Exception is EntryIcon, which can hold a naked tuple
         parent = self.parent()
         if self.noParens and parent is not None:
             if not isinstance(parent, entryicon.EntryIcon):
                 self.restoreParens()
+        # Enforce no display of single (populated) site tuple without comma.  (This is
+        # also a questionable side-effect for a layout calculation.  It's safe because
+        # we already do site-list adjustments in doLayout, and this change must be done
+        # regardless of which layout is chosen.  Doing it early saves having to special-
+        # case the layout calculations for a comma that doesn't yet exist.)
+        if self.sites.argIcons[0].att is not None and len(self.sites.argIcons) <= 1:
+            self.sites.argIcons.insertSite(1)
         return ListTypeIcon.calcLayouts(self)
 
     def execute(self):
@@ -1875,9 +1882,27 @@ def backspaceListIcon(ic, site, evt):
             # while up, which is unfortunate as you'd really like to type [ or (
             win.listPopup.tk_popup(evt.x_root, evt.y_root, 0)
     else:
-        # Cursor is on comma input.  Delete if empty or previous site is empty.
-        # Otherwise, create an entry icon with the comma clause content as pending
-        # argument, and attach to right of previous argument
+        # Cursor is on comma input.  Use the backspaceComma function common to all
+        # sequences, except: 1) Backspacing the last comma out of a single-element tuple,
+        # and 2) If this is a naked tuple, remove if no longer needed
+        if isinstance(ic, TupleIcon) and ic.closed and len(ic.sites.argIcons) == 2 and \
+                site == 'argIcons_1' and ic.sites.argIcons[1].att is  None and \
+                ic.sites.argIcons[0].att is not None:
+            # Backspace of last comma of single (populated) element tuple: change to paren
+            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
+            arg = ic.childAt("argIcons_0")
+            ic.replaceChild(None, 'argIcons_0')
+            newParen = parenicon.CursorParenIcon(window=win, closed=True)
+            newParen.replaceChild(arg, 'argIcon')
+            parent = ic.parent()
+            if parent is None:
+                win.replaceTop(ic, newParen)
+            else:
+                parent.replaceChild(newParen, parent.siteOf(ic))
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
+            win.cursor.setToIconSite(*icon.rightmostSite(arg))
+            return
         backspaceComma(ic, site, evt)
         if isinstance(ic, TupleIcon) and ic.noParens and len(ic.sites.argIcons) <= 1:
             # If this is a naked tuple down to 0 or 1 arguments, get rid of it
@@ -1910,20 +1935,6 @@ def backspaceListIcon(ic, site, evt):
                 parent.replaceChild(argIcon, parentSite)
                 if cursorOnIcon:
                     win.cursor.setToIconSite(parent, parentSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
-        elif isinstance(ic, TupleIcon) and ic.closed and len(ic.sites.argIcons) == 1:
-            # If a tuple is now down to one element, convert it into parens
-            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
-            arg = ic.childAt("argIcons_0")
-            ic.replaceChild(None, 'argIcons_0')
-            newParen = parenicon.CursorParenIcon(window=win, closed=True)
-            newParen.replaceChild(arg, 'argIcon')
-            parent = ic.parent()
-            if parent is None:
-                win.replaceTop(ic, newParen)
-            else:
-                parent.replaceChild(newParen, parent.siteOf(ic))
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
 
