@@ -2308,6 +2308,19 @@ class Window:
                         prevIc.replaceChild(nextIc, 'seqOut')
                 else:
                     self.replaceTop(ic, argIcon)
+        # If any tuples are now down to one element, convert them into parens
+        for ic, child in detachList:
+            if child in deletedSet and isinstance(ic, listicons.TupleIcon) and \
+                    ic.closed and len(ic.sites.argIcons) == 1:
+                arg = ic.childAt("argIcons_0")
+                ic.replaceChild(None, 'argIcons_0')
+                newParen = parenicon.CursorParenIcon(window=self, closed=True)
+                newParen.replaceChild(arg, 'argIcon')
+                parent = ic.parent()
+                if parent is None:
+                    self.replaceTop(ic, newParen)
+                else:
+                    parent.replaceChild(newParen, parent.siteOf(ic))
         # Redo layouts of icons affected by detachment of children
         redrawRegion.add(self.layoutDirtyIcons())
         # Redraw the area affected by the deletion

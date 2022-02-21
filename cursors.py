@@ -619,8 +619,41 @@ class Cursor:
         return fromIcon, fromSite
 
     def movePastEndParen(self, token):
+        """Move the cursor to the next cursor position to the right, only if it is the
+        matching end paren/bracket/brace per token (one of "endParen", "endBracket", or
+        "endBrace)."""
+        #... This should go away once typeover is 100% trustworthy, as typing should
+        #    otherwise always insert
+        nextIc, nextSite = self._lexicalTraverse(self.icon, self.site, 'Right')
+        while nextIc.typeOf(nextSite) == 'cprhIn':
+            # lexical traversal returns comprehension sites which are usually
+            # coincident with an attribute site and shouldn't get cursor
+            nextIc, nextSite = self._lexicalTraverse(nextIc, nextSite, 'Right')
+        nextIcClass = nextIc.__class__
+        if nextSite != "attrIcon":
+            return False
+        if token == "endParen" and not (
+                nextIcClass in (opicons.BinOpIcon, opicons.IfExpIcon) and
+                 opicons.needsParens(nextIc) or
+                nextIcClass in (listicons.CallIcon, listicons.TupleIcon,
+                 blockicons.DefIcon) and nextIc.closed or
+                nextIcClass is blockicons.ClassDefIcon and nextIc.hasArgs or
+                nextIcClass is parenicon.CursorParenIcon and nextIc.closed):
+            return False
+        if token == "endBrace" and not (
+                nextIcClass is listicons.DictIcon and nextIc.closed):
+            return False
+        if token == "endBracket" and not (
+                nextIcClass in (listicons.ListIcon, subscripticon.SubscriptIcon) and
+                nextIc.closed):
+            return False
+        self.setToIconSite(nextIc, nextSite)
+        return True
+
+    def moveOutOfEndParen(self, token):
         """Move the cursor past the next end paren/bracket/brace (token is one of
-        "endParen", "endBracket", or "endBrace"."""
+        "endParen", "endBracket", or "endBrace", even if it is not adjacent to the
+        cursor."""
         if self.type != "icon":
             return False
         siteType = self.siteType
@@ -633,12 +666,14 @@ class Cursor:
              (token == "endParen" and (
               parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
               opicons.needsParens(parent) or parent.__class__ in (listicons.CallIcon,
-               listicons.TupleIcon, blockicons.DefIcon) or
+               listicons.TupleIcon, blockicons.DefIcon) and parent.closed or
               parent.__class__ is blockicons.ClassDefIcon and parent.hasArgs or
               parent.__class__ is parenicon.CursorParenIcon and parent.closed)) or
-             (token == "endBrace" and isinstance(parent, listicons.DictIcon)) or
+             (token == "endBrace" and isinstance(parent, listicons.DictIcon) and
+              parent.closed) or
              (token == "endBracket" and
-              parent.__class__ in (listicons.ListIcon, subscripticon.SubscriptIcon))):
+              parent.__class__ in (listicons.ListIcon, subscripticon.SubscriptIcon) and
+              parent.closed)):
                 self.setToIconSite(parent, "attrIcon")
                 return True
             child = parent
@@ -693,3 +728,5 @@ topLevelStmts = {'async def': blockicons.DefIcon, 'def': blockicons.DefIcon,
     'raise': nameicons.RaiseIcon, 'try': blockicons.TryIcon,
     'async while': blockicons.WhileIcon, 'while': blockicons.WhileIcon,
     'async with': blockicons.WithIcon, 'with': blockicons.WithIcon}
+
+stmtIcons = {v for v in topLevelStmts.values()}

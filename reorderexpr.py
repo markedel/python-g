@@ -35,10 +35,10 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     topNode = highestAffectedExpr(changedIcon)
     topNodeParent = topNode.parent()
     topNodeParentSite = None if topNodeParent is None else topNodeParent.siteOf(topNode)
-    if changedIcon.__class__ in (listicons.ListIcon, listicons.DictIcon,
+    if changedIcon.__class__ in (listicons.ListIcon, listicons.DictIcon, listicons.TupleIcon,
      listicons.CallIcon, blockicons.DefIcon, subscripticon.SubscriptIcon) or \
      isinstance(changedIcon, blockicons.ClassDefIcon) and changedIcon.argList:
-        allowedNonParen = OpenParenToken(changedIcon)
+        allowedNonParen = OpenParenToken(changedIcon, contentChild=closeParenAt)
     else:
         allowedNonParen = None
     operatorStack = []
@@ -96,7 +96,7 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     # print('before reorder') ; icon.dumpHier(topNode)
     # Requested paren can now be safely closed
     if closeParenAt:
-        changedIcon.close()
+        changedIcon.close(typeover=True)
     # Re-link the icons to the new expression form based on the token tree
     # print('token tree') ; dumpTok(operandStack[0])
     newTopNode = relinkExprFromTokens(operandStack[0])
@@ -181,13 +181,14 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
         yield CloseParenToken(None)
 
 class OpenParenToken:
-    """This class wraps various types of parentheses-like icon (brackets, braces,
-    etc.) in the operator stack to simplify paren handling in reorderArithExpr.  Most
-    importantly, it allows reorderArithExpr to treat an entire chain of attributes
-    leading to paren types that are connected to attribute sites (CallIcon and
-    SubscriptIcon) as a unit, in the same manner it treats cursor parens, lists,
-    and dicts."""
-    def __init__(self, parenIcon):
+    """This class wraps various types of parentheses-like icon (brackets, braces, etc.)
+    in the operator stack to simplify paren handling in reorderArithExpr.  In addition
+    to generalizing paren types, themselves, it also allows reorderArithExpr to treat
+    large groups of icons, such as entire attribute chains, and multi-element lists to
+    simply as enclosing parenthesis of a sort.  If contentChild is specified, it is used
+    to fill in the contentSite member of the token object, which where reorderArithExpr
+    will descend and treat as what the "paren" is enclosing."""
+    def __init__(self, parenIcon, contentChild=None):
         self.representedIcons = [parenIcon]
         self.parenIcon = parenIcon
         if parenIcon.hasSite('attrOut'):
@@ -202,7 +203,9 @@ class OpenParenToken:
             attrIcon = parenIcon.childAt('attrIcon')
             if attrIcon is not None:
                 self.representedIcons += list(attrIcon.traverse())
-        if parenIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon):
+        if contentChild is not None:
+            self.contentSite = parenIcon.siteOf(contentChild, recursive=True)
+        elif parenIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon):
             self.contentSite = None
         elif parenIcon.hasSite('argIcons_0'):
             self.contentSite = 'argIcons_0'
@@ -279,7 +282,9 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
             token.ic.replaceChild(rightArg, token.rightArgSite)
         return token.ic
     elif isinstance(token, OpenParenToken):
-        if token.closed and isinstance(token.arg, BinaryOpToken) and \
+        isArithParenType = token.ic.__class__ in (parenicon.CursorParenIcon,
+            opicons.BinOpIcon, opicons.IfExpIcon)
+        if isArithParenType and token.closed and isinstance(token.arg, BinaryOpToken) and\
                 opicons.needsParens(token.arg.ic, parentIc, parentSite=parentSite):
             # Binary op child icon will provide its own auto-parens
             parenIc = relinkExprFromTokens(token.arg, parentIc, parentSite)

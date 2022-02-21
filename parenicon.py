@@ -133,7 +133,7 @@ class CursorParenIcon(icon.Icon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
-    def close(self):
+    def close(self, typeover=False):
         if self.closed:
             return
         self.closed = True

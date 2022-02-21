@@ -106,12 +106,8 @@ class SubscriptIcon(icon.Icon):
     def __init__(self, numSubscripts=1, window=None, closed=True, typeover=False,
             location=None):
         icon.Icon.__init__(self, window)
-        self.closed = False
-        if typeover:
-            self.typeoverActive = True
-            self.window.watchTypeover(self)
-        else:
-            self.typeoverActive = False
+        self.closed = False         # self.close call will set this and typeoverActive
+        self.typeoverActive = False
         leftWidth, leftHeight = subscriptLBktImage.size
         attrY = leftHeight // 2 + icon.ATTR_SITE_OFFSET
         self.sites.add('indexIcon', 'input',
@@ -129,7 +125,7 @@ class SubscriptIcon(icon.Icon):
         # at the attribute site (as most attributes normally can).
         self.sticksToAttr = True
         if closed:
-            self.close()
+            self.close(typeover)
 
     def _size(self):
         rBrktWidth = subscriptRBktImage.width - 1 if self.closed else 0
@@ -255,10 +251,13 @@ class SubscriptIcon(icon.Icon):
         self.window.undo.registerCallback(self.changeNumSubscripts, oldN)
         self.markLayoutDirty()
 
-    def close(self):
+    def close(self, typeover=False):
         if self.closed:
             return
         self.closed = True
+        self.typeoverActive = typeover
+        if typeover:
+            self.window.watchTypeover(self)
         self.markLayoutDirty()
         # Add back the attribute site on the end paren.  Done here to allow the site to
         # be used for cursor or new attachments before layout knows where it goes
