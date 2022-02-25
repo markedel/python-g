@@ -2,7 +2,6 @@ import iconsites
 import icon
 import opicons
 import listicons
-import blockicons
 import subscripticon
 import parenicon
 
@@ -29,15 +28,25 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     types, changing an operator to one of a different precedence or adding or removing a
     paren, can drastically change what the expression means to the user.  This routine
     rearranges the hierarchy to match what the user sees.  changedIcon should specify an
-    icon involved in the change.  If the changed icon is a paren/bracket/brace that needs
-    to be closed, use closeParenAt to specify the rightmost icon to be enclosed (if
-    successful, this function will close the paren/bracket/brace of changedIcon)."""
+    icon involved in the change.
+
+    Normally the scope of the change will be bounded both above and below changedIcon in
+    the hierarchy by any icon that is not an arithmetic operator. However, if changedIcon
+    is one of a specific set of grouping icons (list, dict, tuple, call, or subscript),
+    it is treated as a special sort of paren with additional sub-parts that it carries
+    along with it in the reorder operation.  These sub-parts include the icon hierarchy
+    below all but the last element of the sequence and (for subscript and call icons) the
+    entire attribute chain holding the icon and its sub-parts.
+
+    If the changed icon is a paren/bracket/brace that needs to be closed, pass it unclosed
+    and use closeParenAt to specify the rightmost icon it should enclose.  If successful,
+    this function will close the paren/bracket/brace of changedIcon)."""
+
     topNode = highestAffectedExpr(changedIcon)
     topNodeParent = topNode.parent()
     topNodeParentSite = None if topNodeParent is None else topNodeParent.siteOf(topNode)
-    if changedIcon.__class__ in (listicons.ListIcon, listicons.DictIcon, listicons.TupleIcon,
-     listicons.CallIcon, blockicons.DefIcon, subscripticon.SubscriptIcon) or \
-     isinstance(changedIcon, blockicons.ClassDefIcon) and changedIcon.argList:
+    if changedIcon.__class__ in (listicons.ListIcon, listicons.DictIcon,
+            listicons.TupleIcon, listicons.CallIcon, subscripticon.SubscriptIcon):
         allowedNonParen = OpenParenToken(changedIcon, contentChild=closeParenAt)
     else:
         allowedNonParen = None
@@ -72,7 +81,7 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
                     if stackOp.parenIcon is not op.parenIcon:
                         # If parens have shifted, any attributes attached to the parens
                         # also need to shift.  Likewise for attached cursor & entry icon
-                        if stackOp is allowedNonParen:
+                        if stackOp is allowedNonParen and op.parenIcon is not None:
                             print('reorderArithExpr did not close matching brace/bracket')
                         stackOp.endParenAttr = None if op.parenIcon is None else \
                                 op.parenIcon.childAt('attrIcon')
@@ -153,6 +162,9 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
          closeParenAfter)
         if topNode.hasParens:
             yield CloseParenToken(topNode)
+            attrIcon = topNode.childAt('attrIcon')
+            if attrIcon:
+                representedIcons = [topNode] + list(attrIcon.traverse(includeSelf=True))
     elif isinstance(topNode, opicons.UnaryOpIcon):
         yield UnaryOpToken(topNode)
         yield from traverseExprLeftToRight(topNode.arg(), allowedNonParen,
@@ -161,6 +173,8 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
         yield allowedNonParen
         parenContent = allowedNonParen.parenIcon.childAt(allowedNonParen.contentSite)
         yield from traverseExprLeftToRight(parenContent, allowedNonParen, closeParenAfter)
+        if allowedNonParen.parenIcon.closed:
+            yield CloseParenToken(topNode)
         representedIcons = allowedNonParen.representedIcons
     elif isinstance(topNode, parenicon.CursorParenIcon):
         openParenOp = OpenParenToken(topNode)
@@ -184,10 +198,10 @@ class OpenParenToken:
     """This class wraps various types of parentheses-like icon (brackets, braces, etc.)
     in the operator stack to simplify paren handling in reorderArithExpr.  In addition
     to generalizing paren types, themselves, it also allows reorderArithExpr to treat
-    large groups of icons, such as entire attribute chains, and multi-element lists to
-    simply as enclosing parenthesis of a sort.  If contentChild is specified, it is used
-    to fill in the contentSite member of the token object, which where reorderArithExpr
-    will descend and treat as what the "paren" is enclosing."""
+    large groups of icons, such as multi-element lists and entire attribute chains, as a
+    single unit (as if they were a type of parenthesis).  If contentChild is specified,
+    it is used to fill in the contentSite member of the token object, which designates
+    which site reorderArithExpr will treat as what the "paren" is enclosing."""
     def __init__(self, parenIcon, contentChild=None):
         self.representedIcons = [parenIcon]
         self.parenIcon = parenIcon
@@ -208,9 +222,14 @@ class OpenParenToken:
         elif parenIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon):
             self.contentSite = None
         elif parenIcon.hasSite('argIcons_0'):
-            self.contentSite = 'argIcons_0'
+            self.contentSite = parenIcon.sites.argIcons[-1].name
         elif isinstance(parenIcon, subscripticon.SubscriptIcon):
-            self.contentSite = 'indexIcon'
+            if parenIcon.hasSite('stepIcon'):
+                self.contentSite = 'stepIcon'
+            elif parenIcon.hasSite('upperIcon'):
+                self.contentSite = 'upperIcon'
+            else:
+                self.contentSite = 'indexIcon'
         else:
             self.contentSite = 'argIcon'
         self.closed = self.parenIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) \

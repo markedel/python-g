@@ -594,7 +594,7 @@ class ListTypeIcon(icon.Icon):
                 layout.addSubLayout(attrLayout, 'attrIcon', layout.width-1,
                         icon.ATTR_SITE_OFFSET)
             else:
-                layout.width = leftWidth - 1 + argListLayout.width - 1 + cprhWidth
+                layout.width = leftWidth - 1 + argListLayout.width + cprhWidth
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
@@ -685,7 +685,7 @@ class ListTypeIcon(icon.Icon):
         return [site.att for site in self.sites.argIcons]
 
     def dumpName(self):
-        return self.leftText + ("" if self.closed else self.rightText)
+        return self.leftText + (self.rightText if self.closed else "")
 
     def compareData(self, data, compareContent=False):
         if self.object is None or data is not self.object:
@@ -1765,45 +1765,11 @@ def backspaceListIcon(ic, site, evt):
     attrAttached = ic.closed and ic.childAt('attrIcon')
     win = ic.window
     if site == "attrIcon":
-        # On backspace from the outside right paren
-        if len(allArgs) < 2 and not attrAttached:
-            if isinstance(ic, TupleIcon):
-                # For tuple icons, turn back in to cursor paren
-                cursorParen = parenicon.CursorParenIcon(window=win)
-                parent = ic.parent()
-                child = ic.childAt('argIcons_0')
-                if parent is None:
-                    ic.replaceChild(None, 'argIcons_0')
-                    win.replaceTop(ic, cursorParen)
-                else:
-                    parent.replaceChild(cursorParen, parent.siteOf(ic))
-                cursorParen.replaceChild(child, 'argIcon')
-                ic = cursorParen
-            # With either 0 or 1 argument, safe to remove right bracket
-            if numArgs == 0:
-                cursIc = ic
-                cursSite = 'argIcon' if isinstance(ic, parenicon.CursorParenIcon) \
-                    else 'argIcons_0'
-            else:
-                cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(allArgs[-1]))
-            # Expand scope of the paren to its max, rearrange hierarchy around it
-            reorderexpr.reorderArithExpr(ic)
-            ic.reopen()
-            win.cursor.setToIconSite(cursIc, cursSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
-            return
-        else:
-            # Multiple arguments remaining or attribute attached to right paren.
-            # Not safe to open.  Just move the cursor in to the list.
-            lastIdx = len(allArgs) - 1
-            if allArgs[lastIdx] is None:
-                win.cursor.setToIconSite(ic, "argIcons", lastIdx)
-            else:
-                rightmostIcon = icon.findLastAttrIcon(allArgs[lastIdx])
-                rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
-                win.cursor.setToIconSite(rightmostIcon, rightmostSite)
-            return
+        # On backspace from the outside right paren, reopen the list
+        entryicon.reopenParen(ic)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+        win.refresh(redrawRegion.get())
+        return
     elif index == 0:
         # Backspace in to the open paren/bracket/brace: delete if possible
         parent = ic.parent()
@@ -1885,12 +1851,13 @@ def backspaceListIcon(ic, site, evt):
         # Cursor is on comma input.  Use the backspaceComma function common to all
         # sequences, except: 1) Backspacing the last comma out of a single-element tuple,
         # and 2) If this is a naked tuple, remove if no longer needed
-        if isinstance(ic, TupleIcon) and ic.closed and len(ic.sites.argIcons) == 2 and \
+        if isinstance(ic, TupleIcon) and len(ic.sites.argIcons) == 2 and \
                 site == 'argIcons_1' and ic.sites.argIcons[1].att is  None and \
                 ic.sites.argIcons[0].att is not None:
             # Backspace of last comma of single (populated) element tuple: change to paren
             redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             arg = ic.childAt("argIcons_0")
+            attr = ic.childAt("attrIcon")
             ic.replaceChild(None, 'argIcons_0')
             newParen = parenicon.CursorParenIcon(window=win, closed=True)
             newParen.replaceChild(arg, 'argIcon')
@@ -1899,6 +1866,8 @@ def backspaceListIcon(ic, site, evt):
                 win.replaceTop(ic, newParen)
             else:
                 parent.replaceChild(newParen, parent.siteOf(ic))
+            if attr:
+                newParen.replaceChild(attr, 'attrIcon')
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
             win.cursor.setToIconSite(*icon.rightmostSite(arg))

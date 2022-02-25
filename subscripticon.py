@@ -440,41 +440,13 @@ class SubscriptIcon(icon.Icon):
                 win.refresh(redrawRegion.get())
             return
         elif siteId == 'attrIcon':
-            # The cursor is on the attr site, remove the end bracket if possible,
-            # otherwise move the cursor in to the bracket
-            if self.hasSite('upperIcon') or self.hasSite('stepIcon') or \
-                    self.childAt('attrIcon'):
-                # Subscript has colons (and may also have multiple arguments) or has
-                # something attached to attribute site.  Don't remove end bracket,
-                # just move cursor in to icon.
-                for siteId in ('stepIcon', 'upperIcon', 'indexIcon'):
-                    if self.hasSite(siteId):
-                        break
-                siteIcon = self.childAt(siteId)
-                if siteIcon:
-                    rightIcon = icon.findLastAttrIcon(siteIcon)
-                    rightIcon, rightSite = icon.rightmostSite(rightIcon)
-                    win.cursor.setToIconSite(rightIcon, rightSite)
-                else:
-                    win.cursor.setToIconSite(self, siteId)
-            else:
-                # Reopen right bracket
-                arg = self.sites.indexIcon.att
-                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
-                if arg is None:
-                    cursIc = self
-                    cursSite = 'indexIcon'
-                else:
-                    cursIc, cursSite = icon.rightmostSite(
-                        icon.findLastAttrIcon(arg))
-                # Expand scope of bracket to its max, rearrange hierarchy around it
-                reorderexpr.reorderArithExpr(self)
-                self.reopen()
-                win.cursor.setToIconSite(cursIc, cursSite)
-                redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-                win.refresh(redrawRegion.get())
+            # The cursor is on the attr site, remove the end bracket
+            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            entryicon.reopenParen(self)
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
             return
-            # Site is after a colon.  Try to remove it
+        # Site is after a colon.  Try to remove it
         redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
         if siteId == 'upperIcon':
             # Remove first colon
@@ -494,7 +466,7 @@ class SubscriptIcon(icon.Icon):
             self.replaceChild(mergeIcon2, mergeSite1)
         elif mergeIcon1.hasSite('attrIcon'):
             # Site before colon is not empty, but has site for entry icon
-            win.entryIcon = entryicon.EntryIcon(mergeIcon1, 'attrIcon', window=win)
+            win.entryIcon = entryicon.EntryIcon('', window=win)
             win.entryIcon.setPendingArg(mergeIcon2)
             mergeIcon1.replaceChild(win.entryIcon, 'attrIcon')
         else:

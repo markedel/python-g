@@ -2,7 +2,7 @@
 from PIL import Image, ImageDraw
 import comn
 import iconlayout
-import iconsites
+import entryicon
 import icon
 import reorderexpr
 
@@ -152,33 +152,28 @@ class CursorParenIcon(icon.Icon):
         self.window.undo.registerCallback(self.close)
 
     def backspace(self, siteId, evt):
-        arg = self.sites.argIcon.att
-        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
-        # If an attribute is attached to the parens, don't delete, just select
-        attrIcon = self.childAt('attrIcon')
         win = self.window
-        if attrIcon:
-            win.unselectAll()
-            toSelect = list(attrIcon.traverse())
-            if siteId == 'argIcon':
-                toSelect.append(self)
-            for i in toSelect:
-                win.select(i)
-            win.refresh(redrawRegion.get())
-            return
+        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
         if siteId == 'attrIcon':
             # Cursor is on attribute site of right paren.  Re-open the paren
-            if arg is None:
-                cursIc = self
-                cursSite = 'argIcon'
-            else:
-                cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(arg))
-            # Expand the scope of the paren to its max, rearrange hierarchy around it
-            self.reopen()
-            reorderexpr.reorderArithExpr(self)
-            win.cursor.setToIconSite(cursIc, cursSite)
+            # On backspace from the outside right paren, reopen the list
+            entryicon.reopenParen(self)
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.refresh(redrawRegion.get())
+            return
         else:
-            # Cursor is on the argument site: remove the parens
+            # Cursor is on the argument site: remove the parens unless an attribute is
+            # attached to the parens, in which case, don't delete, just select
+            attrIcon = self.childAt('attrIcon')
+            if attrIcon:
+                win.unselectAll()
+                toSelect = list(attrIcon.traverse())
+                if siteId == 'argIcon':
+                    toSelect.append(self)
+                for i in toSelect:
+                    win.select(i)
+                win.refresh(redrawRegion.get())
+                return
             parent = self.parent()
             content = self.childAt('argIcon')
             if parent is None:
@@ -208,10 +203,7 @@ class CursorParenIcon(icon.Icon):
                 # Open paren had a parent.  Remove by attaching content to parent
                 parentSite = parent.siteOf(self)
                 if content is None:
-                    redrawRegion.add(win.removeIcons([self], refresh=False))
-                    if not parent.hasSite(parentSite):
-                        # Last element of a list can disappear when icon is removed
-                        parent.insertChild(None, parentSite)
+                    parent.replaceChild(None, parentSite, leavePlace=True)
                     win.cursor.setToIconSite(parent, parentSite)
                 else:
                     parent.replaceChild(content, parentSite)
