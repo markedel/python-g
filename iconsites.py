@@ -445,11 +445,15 @@ def isCoincidentSite(ic, siteId):
     """Returns True if siteId is a site of ic that is coincident with its output"""
     return ic is not None and siteId == ic.hasCoincidentSite()
 
-def highestCoincidentIcon(ic):
-    """Return highest icon with an output coincident with that of ic"""
+def highestCoincidentIcon(ic, arithOnly=False):
+    """Return highest icon with an output coincident with that of ic.  There is an
+    optional (arithOnly=True) exception for naked tuples.  This is needed when the
+    call is used to help find the top of an arithmetic expression"""
     while True:
         parent = ic.parent()
         if parent is None or not isCoincidentSite(parent, parent.siteOf(ic)):
+            return ic
+        if arithOnly and hasattr(parent, 'noParens') and parent.noParens:
             return ic
         ic = parent
 

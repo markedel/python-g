@@ -363,95 +363,28 @@ class EntryIcon(icon.Icon):
             self.insertOpenParen(listicons.ListIcon)
             return
         elif parseResult == "endBracket":
-            matchedBracket = self.getUnclosedParen(parseResult)
-            if matchedBracket is None:
-                if not self.remove():
-                    # Cant unload pending args from cursor.  Don't allow move
-                    cursors.beep()
-                    return
-                if not cursor.movePastEndParen(parseResult):
-                    cursors.beep()
-            else:
-                matchedBracket.close()
-                if self.remove():
-                    cursor.setToIconSite(matchedBracket, "attrIcon")
-                else:
-                    # Move entry icon past the paren
-                    self.attachedIcon().replaceChild(None, self.attachedSite())
-                    matchedBracket.replaceChild(self, 'attrIcon')
-                    # May now be possible (though unlikely) to remove entry icon
-                    self.remove()
-            self.window.updateTypeoverStates()
+            if not self.insertEndParen(parseResult):
+                cursors.beep()
             return
         elif parseResult == "openBrace":
             self.insertOpenParen(listicons.DictIcon)
             return
         elif parseResult == "endBrace":
-            matchedBracket = self.getUnclosedParen(parseResult)
-            if matchedBracket is None:
-                if not self.remove():
-                    # Cant unload pending args from cursor.  Don't allow move
-                    cursors.beep()
-                    return
-                if not cursor.movePastEndParen(parseResult):
-                    cursors.beep()
-            else:
-                matchedBracket.close()
-                if self.remove():
-                    cursor.setToIconSite(matchedBracket, "attrIcon")
-                else:
-                    # Move entry icon past the paren
-                    self.attachedIcon().replaceChild(None, self.attachedSite())
-                    matchedBracket.replaceChild(self, 'attrIcon')
-                    # May now be possible (though unlikely) to remove entry icon
-                    self.remove()
-            self.window.updateTypeoverStates()
+            if not self.insertEndParen(parseResult):
+                cursors.beep()
             return
         elif parseResult == "openParen":
             self.insertOpenParen(parenicon.CursorParenIcon)
             return
         elif parseResult == "endParen":
-            matchingParen = self.getUnclosedParen(parseResult)
-            if matchingParen is None:
-                # Maybe user was just trying to move past an existing paren by typing it
-                if not self.remove():
-                    # Cant unload pending args from cursor.  Don't allow move
-                    cursors.beep()
-                    return
-                if not cursor.movePastEndParen(parseResult):
-                    cursors.beep()
-            elif matchingParen.__class__ is parenicon.CursorParenIcon and \
-                    matchingParen is self.attachedIcon() and (
-                    self.attachedSite() == 'argIcon' or
-                    self.attachedSite() == 'attrIcon' and
-                    matchingParen.childAt('argIcon') is None):
-                # The entry icon is directly on the input site of a cursor paren icon to
-                # be closed, this is the special case of an empty tuple: convert it to one
-                parent = matchingParen.parent()
-                tupleIcon = listicons.TupleIcon(window=self.window)
-                if parent is None:
-                    self.window.replaceTop(matchingParen, tupleIcon)
-                    tupleIcon.markLayoutDirty()
-                else:
-                    parent.replaceChild(tupleIcon, parent.siteOf(matchingParen))
-                if self.pendingArg() or self.pendingAttr():
-                    # Move entry icon with pending args past the paren
-                    tupleIcon.replaceChild(self, "attrIcon")
-                else:
-                    self.window.entryIcon = None
-                    self.window.cursor.setToIconSite(tupleIcon, "attrIcon")
-            else:
-                # Try to place pending arguments where they came from.
-                self.remove()
-                self.window.updateTypeoverStates()
+            if not self.insertEndParen(parseResult):
+                cursors.beep()
             return
         elif parseResult == "makeFunction":
-            if not self.makeFunction(self.attachedIcon()):
-                cursors.beep()
+            self.insertOpenParen(listicons.CallIcon)
             return
         elif parseResult == "makeSubscript":
-            if not self.makeSubscript(self.attachedIcon()):
-                cursors.beep()
+            self.insertOpenParen(subscripticon.SubscriptIcon)
             return
         # Parser emitted an icon.  Splice it in to the hierarchy
         ic, remainingText = parseResult
@@ -716,7 +649,7 @@ class EntryIcon(icon.Icon):
         attachedIc = self.attachedIcon()
         attachedSite = self.attachedSite()
         transferParentArgs = None
-        if attachedIc is not None:
+        if attachedIc is not None and iconClass is not subscripticon.SubscriptIcon:
             seqIc, seqSite = _findEnclosingSite(self)
             if seqIc and iconsites.isSeriesSiteId(seqSite):
                 siteName, siteIdx = iconsites.splitSeriesSiteId(seqSite)
@@ -728,23 +661,30 @@ class EntryIcon(icon.Icon):
         # Create an icon of the requested class and move the entry icon inside of it
         if iconClass is parenicon.CursorParenIcon:
             closed = False  # We leave even empty paren open to detect () for empty tuple
-            inputSite = 'argIcon'
         else:
             # Close parens only if there are no pending args and (if transferring parent
             # args) transfer source is also closed
             closed = not self.pendingArg()
             if transferParentArgs is not None:
-                seqIc, seqSite = transferParentArgs
-                if hasattr(seqIc, 'noParens') and seqIc.noParens:
-                    closed = False
-                elif hasattr(seqIc, 'closed') and not seqIc.closed:
-                    closed = False
-            inputSite = 'argIcons_0'
+                closed = False
+            if attachedIc is not None:
+                seqIc, seqSite = _findEnclosingSite(self)
+                if seqIc:
+                    rightmostIc, rightmostSite = icon.rightmostFromSite(seqIc, seqSite)
+                    if rightmostIc is not self and \
+                            self.siteOf(rightmostIc, recursive=True) is None:
+                        closed = False
         newParenIcon = iconClass(window=self.window, closed=closed, typeover=closed)
         if attachedIc is None:
             self.window.replaceTop(self, newParenIcon)
         else:
             attachedIc.replaceChild(newParenIcon, attachedSite)
+        if iconClass is parenicon.CursorParenIcon:
+            inputSite = 'argIcon'
+        elif iconClass is subscripticon.SubscriptIcon:
+            inputSite = 'indexIcon'
+        else:
+            inputSite = 'argIcons_0'
         newParenIcon.replaceChild(self, inputSite)
         # Attempt to get rid of the entry icon and place pending arg in its place
         self.remove()
@@ -768,37 +708,53 @@ class EntryIcon(icon.Icon):
                 newTopIcon = rightOfIc.childAt('argIcons_0')
                 rightOfIc.replaceChild(None, 'argIcons_0')
                 self.window.replaceTop(rightOfIc, newTopIcon)
-                if attachedIc is rightOfIc:
-                    attachedIc = None
 
-    def getUnclosedParen(self, token):
+    def insertEndParen(self, token):
         """Find a matching open paren/bracket/brace or paren-less tuple that could be
         closed by an end paren/bracket/brace (which type is specified by token) typed at
         the attached icon/site.  If a matching unclosed item is found, relocate it to the
-        appropriate level and rearrange the icon hierarchy such that it can be closed.
-        Rearrangement may be significant.  Unclosed icons are inserted and maintained at
-        the highest level in the hierarchy that they can reach.  In addition to changing
-        the level of the matching item itself, closing can expose lower-precedence
-        operations that will get moved above it in the hierarchy."""
+        appropriate level, close it, and rearrange the icon hierarchy such that the
+        expressions and attribute attachments match what has been typed.  Rearrangement
+        may be significant.  Excluded sequence clauses are also relocated to a parent
+        icon, following the rules for canonical arrangement of sequence items."""
         fromIcon = self.attachedIcon()
         fromSite = self.attachedSite()
-        matchingParen = searchForOpenParen(token, fromIcon, fromSite)
-        if matchingParen is None and token == 'endParen':
-            # Arithmetic parens are more forgiving and reorderArithExpr can shift
-            # them around even if there is not a match on the appropriate level, in
-            # which case, all we need is an unclosed paren left of the end paren
-            for op in reorderexpr.traverseExprLeftToRight(
-                    reorderexpr.highestAffectedExpr(fromIcon), closeParenAfter=fromIcon):
-                if isinstance(op, reorderexpr.CloseParenToken) and op.parenIcon is None:
-                    # A CloseParenToken with parenIcon of None is the inserted end paren
-                    break
-                if isinstance(op, reorderexpr.OpenParenToken) and isinstance(op.parenIcon,
-                 parenicon.CursorParenIcon) and not op.parenIcon.closed:
-                    matchingParen = op.parenIcon
+        # Check for special case of the entry icon directly on the input site of a cursor
+        # paren icon to be closed (empty tuple): convert it to one
+        if isinstance(fromIcon, parenicon.CursorParenIcon) and token == "endParen" and (
+                fromSite == 'argIcon' or
+                fromSite == 'attrIcon' and fromIcon.childAt('argIcon') is None):
+            parent = fromIcon.parent()
+            tupleIcon = listicons.TupleIcon(window=self.window)
+            if parent is None:
+                self.window.replaceTop(fromIcon, tupleIcon)
+                tupleIcon.markLayoutDirty()
             else:
-                print('getUnclosedParen failed to find close-paren site')
+                parent.replaceChild(tupleIcon, parent.siteOf(fromIcon))
+            # If there are pending args or attributes, they need to go *after* the newly-
+            # closed paren, so we can't just use .remove() to place them
+            fromIcon.replaceChild(None, fromSite)
+            if self.pendingArg():
+                # Have to keep the entry icon, but move it to after the end paren
+                tupleIcon.replaceChild(self, 'attrIcon')
+            else:
+                # Can safely remove entry icon (placing pending attribute on paren)
+                if self.pendingAttr():
+                    tupleIcon.replaceChild(self.pendingAttr(), 'attrIcon')
+                    self.setPendingAttr(None)
+                self.window.entryIcon = None
+                self.window.cursor.setToIconSite(tupleIcon, 'attrIcon')
+            self.window.updateTypeoverStates()
+            return True
+        matchingParen = searchForOpenParen(token, self)
         if matchingParen is None:
-            return None
+            # No matching paren was found.  Remove cursor and look for typeover
+            typeoverIc = _findEndParenTypeover(self, token)
+            if typeoverIc is None:
+                return False
+            self.remove()  # Safe, since args would have invalidated typeover
+            self.window.cursor.setToIconSite(typeoverIc, 'attrIcon')
+            return True
         if not isinstance(matchingParen, parenicon.CursorParenIcon):
             # If the icon that matches might have arguments beyond the end paren/bracket/
             # brace, check whether it does.  If so, transfer them upward to the next icon
@@ -811,10 +767,8 @@ class EntryIcon(icon.Icon):
                 siteOfMatch = matchingParen.siteOf(fromIcon, recursive=True)
             name, idx = iconsites.splitSeriesSiteId(siteOfMatch)
             if name == "argIcons" and idx < len(matchingParen.sites.argIcons) - 1:
-                print(f"... relocating params {idx+1} thru "
-                    f"{len(matchingParen.sites.argIcons)-1}")
                 if not _transferToParentList(matchingParen, idx+1):
-                    return None
+                    return False
                 if isinstance(matchingParen, listicons.TupleIcon) and idx == 0:
                     # Tuple is down to 1 argument.  Convert to arithmetic parens
                     arg = matchingParen.childAt("argIcons_0")
@@ -831,34 +785,21 @@ class EntryIcon(icon.Icon):
         # should enclose and outside of those it does not enclose.  reorderArithExpr
         # closes the parens if it succeeds.
         reorderexpr.reorderArithExpr(matchingParen, closeParenAt=self)
-        return matchingParen
-
-    def makeFunction(self, ic):
-        closed = self.pendingArg() is None
-        callIcon = listicons.CallIcon(window=self.window,
-            closed=closed, typeover=closed)
-        ic.replaceChild(callIcon, 'attrIcon')
-        if self.pendingAttr():
-            callIcon.replaceChild(self, 'argIcons_0')
-            return True
+        # If there are pending args or attributes, they need to go *after* the newly-
+        # closed paren, so we can't just use .remove() to place them
+        cursorPos = self.attachedIcon(), self.attachedSite()
+        self.attachedIcon().replaceChild(None, self.attachedSite())
         if self.pendingArg():
-            callIcon.replaceChild(self.pendingArg(), 'argIcons_0')
-        self.window.entryIcon = None
-        self.window.cursor.setToIconSite(callIcon, "argIcons", 0)
-        return True
-
-    def makeSubscript(self, ic):
-        closed = self.pendingArg() is None
-        subscriptIcon = subscripticon.SubscriptIcon(window=self.window, closed=closed,
-            typeover=closed)
-        ic.replaceChild(subscriptIcon, 'attrIcon')
-        if self.pendingAttr():
-            subscriptIcon.replaceChild(self, 'indexIcon')
-            return True
-        if self.pendingArg():
-            subscriptIcon.replaceChild(self.pendingArg(), 'indexIcon')
-        self.window.entryIcon = None
-        self.window.cursor.setToIconSite(subscriptIcon, 'indexIcon')
+            # Have to keep the entry icon, but move it to after the end paren
+            matchingParen.replaceChild(self, 'attrIcon')
+        else:
+            # Can safely remove entry icon (possibly placing pending attribute on paren)
+            if self.pendingAttr():
+                matchingParen.replaceChild(self.pendingAttr(), 'attrIcon')
+                self.setPendingAttr(None)
+            self.window.entryIcon = None
+            self.window.cursor.setToIconSite(*cursorPos)
+        self.window.updateTypeoverStates()
         return True
 
     def appendOperator(self, newOpIcon):
@@ -1391,18 +1332,21 @@ def binOpLeftArgSite(ic):
 def binOpRightArgSite(ic):
     return 'falseExpr' if ic.__class__ == opicons.IfExpIcon else 'rightArg'
 
-def searchForOpenParen(token, fromIc, fromSite):
+def searchForOpenParen(token, closeParenAt):
     """Find an open paren/bracket/brace to match an end paren/bracket/brace placed at a
     given cursor position (fromIc, fromSite).  token indicates what type of paren-like
-    object is to be closed.  In the case of an open paren, can also return a naked tuple
-    that needs parentheses added."""
-    # Note that this takes advantage of the fact that insertOpenParen places open parens/
-    # brackets/braces at the highest level possible, and shifts list elements down to
-    # the level of the innermost unclosed list, so the matching icon will always be a
-    # parent or owner of the site requested.
-    ic = fromIc
-    site = fromSite
+    object is to be closed."""
+    # Search first for a proper match.  This takes advantage of the fact that
+    # insertOpenParen places open parens/brackets/braces at the highest level possible,
+    # and shifts list elements down to the level of the innermost unclosed list, so the
+    # matching icon will always be a parent or owner of the site requested.
+    ic = closeParenAt
     while True:
+        parent = ic.parent()
+        if parent is None:
+            break
+        site = parent.siteOf(ic)
+        ic = parent
         siteType = ic.typeOf(site)
         if siteType == 'input':
             if token == "endParen" and isinstance(ic, parenicon.CursorParenIcon) and \
@@ -1422,32 +1366,48 @@ def searchForOpenParen(token, fromIc, fromSite):
                     not ic.closed:
                 # Can only match from the rightmost slice, otherwise there are colons to
                 # the right which can't be left on their own
-                sliceSite = ic.siteOf(fromIc, recursive=True)
+                sliceSite = ic.siteOf(closeParenAt, recursive=True)
                 if sliceSite is None:
                     sliceSite = site
                 if ic.hasSite('stepIcon') and sliceSite != 'stepIcon' or \
                         ic.hasSite('upperIcon') and sliceSite == 'indexIcon':
-                    return None
+                    break
                 return ic
             if token == "endBrace" and isinstance(ic, listicons.DictIcon) and \
                     not ic.closed:
                 return ic
             if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and ic.hasParens:
                 # Don't allow search to escape enclosing arithmetic parens
-                return None
+                break
             rightmostSite = ic.sites.lastCursorSite()
-            if ic.typeOf(rightmostSite) != 'input' or \
+            if ic.typeOf(rightmostSite) not in ('input', 'cprhIn') or \
+                    hasattr(ic, 'closed') or \
                     isinstance(ic, opicons.IfExpIcon) and site == 'testExpr':
-                # Anything that doesn't have an input on the right (calls, tuples,
-                # subscripts, etc.) can be assumed to be enclosing its children and
-                # search should not extend beyond.  Inline if is the exception in having
-                # a middle site that encloses its child icon
-                return None
-        parent = ic.parent()
-        if parent is None:
-            return None
-        site = parent.siteOf(ic)
-        ic = parent
+                # Anything that doesn't have an input on the right or could be closed can
+                # be assumed to enclose its children and search should not extend beyond.
+                # Inline if is the exception in having a middle site that encloses its
+                # child icon
+                break
+    # No matching paren/bracket/brace found at the level of closeParenAt
+    if token != 'endParen':
+        # Braces and brackets require a match at the correct level
+        return None
+    # Arithmetic parens do not require a properly-nested match.  reorderArithExpr can
+    # shift parens around even if there is not a match on the appropriate level, in
+    # which case, what we need is an unclosed paren left of the end paren, and the
+    # end paren not to be on the other side of code that can trap it
+    matchingParen = None
+    for op in reorderexpr.traverseExprLeftToRight(
+            reorderexpr.highestAffectedExpr(closeParenAt), closeParenAfter=closeParenAt):
+        if isinstance(op, reorderexpr.CloseParenToken) and op.parenIcon is None:
+            # A CloseParenToken with parenIcon of None is the inserted end paren
+            break
+        if isinstance(op, reorderexpr.OpenParenToken) and isinstance(op.parenIcon,
+         parenicon.CursorParenIcon) and not op.parenIcon.closed:
+            matchingParen = op.parenIcon
+    else:
+        print('searchForOpenParen internal error: failed to find close-paren site')
+    return matchingParen
 
 def parseExprToAst(text):
     try:
@@ -1526,6 +1486,11 @@ def reopenParen(ic):
         # The bounding icon has no clauses(s) beyond ic to transfer
         return
     # At this point we know boundingParent has arguments we need to transfer to ic
+    if isinstance(ic, subscripticon.SubscriptIcon):
+        # If ic is a subscript, we can't transfer args, which leaves an open bracket with
+        # clauses following that belong to a parent.  This is weird, but necessary so
+        # users can adjust the right paren of a subscript that happens to be in a list.
+        return
     # If ic is a cursor paren, change it to tuple to accept more arguments
     if isinstance(ic, parenicon.CursorParenIcon):
         tupleIcon = listicons.TupleIcon(window=ic.window, closed=False)
@@ -1615,3 +1580,34 @@ def _findEnclosingSite(startIc):
                 parentClass is opicons.IfExpIcon and site == 'textExpr' or \
                 parentClass in cursors.topLevelStmts:
             return parent, site
+
+def _findEndParenTypeover(entryIc, token):
+    """If there is an icon with active typeover matching token ("endBracket", "endBrace",
+    "endParen") directly to the right of the entry icon, return it.  Note that pending
+    args and attributes invalidate typeover, so if entryIc has them, there can't be
+    active typeover.  If there's no matching paren with active typeover, return None."""
+    if entryIc.pendingArg() or entryIc.pendingAttr():
+        return None
+    # March up the hierarchy from the entry icon, looking for a matching paren icon
+    # with active typeover
+    for ic in entryIc.parentage(includeSelf=False):
+        rightmostIcon, rightmostSite = icon.rightmostSite(ic)
+        if rightmostIcon == entryIc:
+            continue
+        if isinstance(rightmostIcon, opicons.DivideIcon):
+            # Divide icon has *two* sites considered next-to adjacent typeover
+            # (due to how it's typed): attribute (handled above) and bottomArg
+            divisor = rightmostIcon.childAt('bottomArg')
+            if divisor is None and rightmostIcon is entryIc or divisor is not None and \
+                    icon.rightmostSite(divisor)[0] == entryIc:
+                continue
+        if token == "endBracket" and ic.__class__ in (listicons.ListIcon,
+                    subscripticon.SubscriptIcon) or \
+                token == "endParen" and ic.__class__ in (listicons.TupleIcon,
+                    listicons.CallIcon) or \
+                token == "endBrace" and ic.__class__ is listicons.DictIcon:
+            siteBefore, siteAfter, _text, _idx  = ic.typeoverSites()
+            if ic.siteOf(entryIc, recursive=True) == siteBefore and ic.typeoverActive:
+                return ic
+        return None
+    return None

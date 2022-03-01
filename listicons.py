@@ -673,6 +673,7 @@ class ListTypeIcon(icon.Icon):
 
     def typeoverSites(self, allRegions=False):
         if self.typeoverActive:
+            #... I think this needs to take in to account cphr site
             before = iconsites.makeSeriesSiteId('argIcons', len(self.sites.argIcons) - 1)
             returnData = before, 'attrIcon', ')', 0
             return [returnData] if allRegions else returnData
@@ -1766,6 +1767,22 @@ def backspaceListIcon(ic, site, evt):
     win = ic.window
     if site == "attrIcon":
         # On backspace from the outside right paren, reopen the list
+        if isinstance(ic, TupleIcon) and len(ic.sites.argIcons) == 1 and \
+                ic.sites.argIcons[0].att is None:
+            # Special case of removing the right paren of an empty tuple, change it to
+            # a paren icon before opening so we don't get lingering comma
+            parent = ic.parent()
+            attr = ic.childAt('attrIcon')
+            parenIcon = parenicon.CursorParenIcon(window=ic.window, closed=True)
+            if parent is None:
+                ic.window.replaceTop(ic, parenIcon)
+                parenIcon.markLayoutDirty()
+            else:
+                parent.replaceChild(parenIcon, parent.siteOf(ic))
+            if attr:
+                ic.replaceChild(None, 'attrIcon')
+                parenIcon.replaceChild(attr, 'attrIcon')
+            ic = parenIcon
         entryicon.reopenParen(ic)
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
         win.refresh(redrawRegion.get())

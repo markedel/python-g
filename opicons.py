@@ -1038,14 +1038,9 @@ class IfExpIcon(icon.Icon):
     def textEntryHandler(self, entryIc, text, onAttr):
         # Typeover when on rightmost attribute site of test expression and user types 'e'
         siteId = self.siteOf(entryIc, recursive=True)
-        if siteId != "testExpr":
+        if siteId != "testExpr" or not onAttr:
             return None
-        iconOnTestSite = self.sites.testExpr.att
-        if iconOnTestSite is entryIc:
-            # If nothing but the entry icon is at the site, don't interfere with typing
-            # the test expression (which could start with "e")
-            return None
-        rightmostIc, rightmostSite = icon.rightmostSite(iconOnTestSite)
+        rightmostIc, rightmostSite = icon.rightmostFromSite(self, 'testExpr')
         if rightmostIc is entryIc and text == "e":
             return "typeover"
         return None

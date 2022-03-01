@@ -128,7 +128,7 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     return newTopNode
 
 def highestAffectedExpr(changedIcon):
-    topCoincidentIcon = iconsites.highestCoincidentIcon(changedIcon)
+    topCoincidentIcon = iconsites.highestCoincidentIcon(changedIcon, arithOnly=True)
     for ic in topCoincidentIcon.parentage(includeSelf=True):
         parent = ic.parent()
         if parent is None:
@@ -174,7 +174,7 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
         parenContent = allowedNonParen.parenIcon.childAt(allowedNonParen.contentSite)
         yield from traverseExprLeftToRight(parenContent, allowedNonParen, closeParenAfter)
         if allowedNonParen.parenIcon.closed:
-            yield CloseParenToken(topNode)
+            yield CloseParenToken(allowedNonParen.parenIcon)
         representedIcons = allowedNonParen.representedIcons
     elif isinstance(topNode, parenicon.CursorParenIcon):
         openParenOp = OpenParenToken(topNode)
