@@ -852,8 +852,9 @@ class TupleIcon(ListTypeIcon):
         # also a questionable side-effect for a layout calculation.  It's safe because
         # we already do site-list adjustments in doLayout, and this change must be done
         # regardless of which layout is chosen.  Doing it early saves having to special-
-        # case the layout calculations for a comma that doesn't yet exist.)
-        if self.sites.argIcons[0].att is not None and len(self.sites.argIcons) <= 1:
+        # case the layout calculations for a comma that doesn't yet exist.).
+        if self.sites.argIcons[0].att is not None and len(self.sites.argIcons) <= 1 and \
+                not self.noParens:
             self.sites.argIcons.insertSite(1)
         return ListTypeIcon.calcLayouts(self)
 
@@ -1870,7 +1871,7 @@ def backspaceListIcon(ic, site, evt):
         # and 2) If this is a naked tuple, remove if no longer needed
         if isinstance(ic, TupleIcon) and len(ic.sites.argIcons) == 2 and \
                 site == 'argIcons_1' and ic.sites.argIcons[1].att is  None and \
-                ic.sites.argIcons[0].att is not None:
+                ic.sites.argIcons[0].att is not None and not ic.noParens:
             # Backspace of last comma of single (populated) element tuple: change to paren
             redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             arg = ic.childAt("argIcons_0")
@@ -1912,6 +1913,7 @@ def backspaceListIcon(ic, site, evt):
                         win.cursor.setToWindowPos(*ic.rect[:2])
                 else:
                     cursorOnIcon = win.cursor.type == "icon" and win.cursor.icon is ic
+                    ic.replaceChild(None, 'argIcons_0')
                     win.replaceTop(ic, argIcon)
                     if cursorOnIcon:
                         win.cursor.setToIconSite(argIcon, 'output')
