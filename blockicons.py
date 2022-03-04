@@ -1608,6 +1608,7 @@ class ClassDefIcon(DefOrClassIcon):
                 print("turning on parens")
                 self.addArgs()
                 self.setTypeover(0, None)
+                self.window.watchTypeover(self)
                 return "typeover"
             # Let the parent handler enforce name
             return DefOrClassIcon.textEntryHandler(self, entryIc, text, onAttr)

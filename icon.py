@@ -131,6 +131,21 @@ commaImage = comn.asciiToImage((
  "ooooo"))
 commaImageSiteYOffset = 3
 
+commaTypeoverImage = comn.asciiToImage((
+ "ooooo",
+ "o   o",
+ "o  o.",
+ "o o..",
+ "o  o.",
+ "o   o",
+ "o   o",
+ "o 89o",
+ "o 89o",
+ "o8  o",
+ "o   o",
+ "ooooo"))
+commaImageSiteYOffset = 3
+
 colonImage = comn.asciiToImage((
  "ooooo",
  "o   o",

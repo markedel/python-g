@@ -630,7 +630,7 @@ class Window:
         # If there's a cursor displayed somewhere, use it
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
-            oldLoc = self.entryIcon.hierRect()
+            oldLoc = self.entryIcon.topLevelParent().hierRect()
             self.entryIcon.addText(char)
             self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             return
@@ -688,6 +688,7 @@ class Window:
     def _insertEntryIconAtCursor(self, initialText):
         # Note that location is set in the entry icon for the single case where it
         # becomes the beginning of a sequence.  All others are overwritten by layout
+        redrawRect = self.cursor.icon.topLevelParent().hierRect()
         self.entryIcon = entryicon.EntryIcon(window=self,
             location=self.cursor.icon.rect[:2])
         if self.cursor.siteType == "output":
@@ -715,7 +716,7 @@ class Window:
             self.entryIcon.setPendingArg(pendingArg)
         self.cursor.setToEntryIcon()
         self.entryIcon.addText(initialText)
-        self.redisplayChangedEntryIcon()
+        self.redisplayChangedEntryIcon(oldLoc=redrawRect)
 
     def redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
         redrawRegion = comn.AccumRects(oldLoc)

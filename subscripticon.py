@@ -106,8 +106,8 @@ class SubscriptIcon(icon.Icon):
     def __init__(self, numSubscripts=1, window=None, closed=True, typeover=False,
             location=None):
         icon.Icon.__init__(self, window)
-        self.closed = False         # self.close call will set this and typeoverActive
-        self.typeoverActive = False
+        self.closed = False         # self.close call will set this and endParenTypeover
+        self.endParenTypeover = False
         leftWidth, leftHeight = subscriptLBktImage.size
         attrY = leftHeight // 2 + icon.ATTR_SITE_OFFSET
         self.sites.add('indexIcon', 'input',
@@ -160,7 +160,7 @@ class SubscriptIcon(icon.Icon):
                 x += self.argWidths[2]
             # Right bracket
             if self.closed:
-                if self.typeoverActive:
+                if self.endParenTypeover:
                     rBrktImg = subscriptRBktTypeoverImage
                 else:
                     rBrktImg = subscriptRBktImage
@@ -255,7 +255,7 @@ class SubscriptIcon(icon.Icon):
         if self.closed:
             return
         self.closed = True
-        self.typeoverActive = typeover
+        self.endParenTypeover = typeover
         if typeover:
             self.window.watchTypeover(self)
         self.markLayoutDirty()
@@ -382,13 +382,13 @@ class SubscriptIcon(icon.Icon):
     def setTypeover(self, idx, site=None):
         self.drawList = None
         if idx is None or idx > 0:
-            self.typeoverActive = False
+            self.endParenTypeover = False
             return False
-        self.typeoverActive = True
+        self.endParenTypeover = True
         return True
 
     def typeoverSites(self, allRegions=False):
-        if not self.typeoverActive:
+        if not self.endParenTypeover:
             return [] if allRegions else (None, None, None, None)
         if self.hasSite('stepIcon'):
             siteBefore = 'stepIcon'

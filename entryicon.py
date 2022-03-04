@@ -484,6 +484,11 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
             self.window.replaceTop(self, tupleIcon)
             return True
+        typeoverIc = _findParenTypeover(self, "comma")
+        if typeoverIc is not None:
+            self.remove()  # Safe, since args would have invalidated typeover
+            self.window.cursor.setToIconSite(typeoverIc, 'argIcons_1')
+            return True
         siteType = onIcon.typeOf(site)
         if iconsites.isSeriesSiteId(site) and siteType == "input":
             # This is essentially ",,", which means leave a new space for an arg
@@ -555,7 +560,8 @@ class EntryIcon(icon.Icon):
                 parent.replaceChild(leftArg, childSite, leavePlace=True)
                 seriesName, seriesIndex = iconsites.splitSeriesSiteId(childSite)
                 parent.insertChild(rightArg, seriesName, seriesIndex + 1)
-                if hasattr(parent, "closed") and not parent.closed:
+                if hasattr(parent, "closed") and not parent.closed and \
+                        not parent.noParens:
                     # Once an item has a comma, we know what it is and where it ends, and
                     # an open paren/bracket/brace with commas would be hard to handle.
                     parent.close(typeover=True)
@@ -749,7 +755,7 @@ class EntryIcon(icon.Icon):
         matchingParen = searchForOpenParen(token, self)
         if matchingParen is None:
             # No matching paren was found.  Remove cursor and look for typeover
-            typeoverIc = _findEndParenTypeover(self, token)
+            typeoverIc = _findParenTypeover(self, token)
             if typeoverIc is None:
                 return False
             self.remove()  # Safe, since args would have invalidated typeover
@@ -1581,11 +1587,11 @@ def _findEnclosingSite(startIc):
                 parentClass in cursors.topLevelStmts:
             return parent, site
 
-def _findEndParenTypeover(entryIc, token):
+def _findParenTypeover(entryIc, token):
     """If there is an icon with active typeover matching token ("endBracket", "endBrace",
-    "endParen") directly to the right of the entry icon, return it.  Note that pending
-    args and attributes invalidate typeover, so if entryIc has them, there can't be
-    active typeover.  If there's no matching paren with active typeover, return None."""
+    "endParen", or "comma") directly to the right of the entry icon, return it. Note that
+    pending args and attributes invalidate typeover, so if entryIc has them, there can't
+    be active typeover.  If there's no active typeover to process, return None."""
     if entryIc.pendingArg() or entryIc.pendingAttr():
         return None
     # March up the hierarchy from the entry icon, looking for a matching paren icon
@@ -1607,7 +1613,15 @@ def _findEndParenTypeover(entryIc, token):
                     listicons.CallIcon) or \
                 token == "endBrace" and ic.__class__ is listicons.DictIcon:
             siteBefore, siteAfter, _text, _idx  = ic.typeoverSites()
-            if ic.siteOf(entryIc, recursive=True) == siteBefore and ic.typeoverActive:
+            if ic.siteOf(entryIc, recursive=True) == siteBefore and ic.endParenTypeover:
                 return ic
-        return None
+        if token == "endParen" and ic.__class__ in (blockicons.DefIcon,
+                    blockicons.ClassDefIcon):
+            siteBefore, siteAfter, _text, _idx  = ic.typeoverSites()
+            if ic.siteOf(entryIc, recursive=True) == siteBefore and ic.rParenTypeover:
+                return ic
+        if token == "comma" and ic.__class__ is listicons.TupleIcon:
+            siteBefore, siteAfter, _text, _idx  = ic.typeoverSites()
+            if ic.siteOf(entryIc, recursive=True) == siteBefore and ic.commaTypeover:
+                return ic
     return None

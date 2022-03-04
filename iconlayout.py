@@ -106,13 +106,17 @@ class ListLayoutMgr:
         self.commaSitePositions = None
         self.rowWidths = None
 
-    def drawListCommas(self, leftSiteX, leftSiteY):
+    def drawListCommas(self, leftSiteX, leftSiteY, typeoverIdx=None):
         xOff = leftSiteX + icon.inSiteImage.width - icon.commaImage.width
         yOff = leftSiteY - icon.commaImageSiteYOffset
         if self.commaSitePositions is None:
             print("ListLayoutMgr draw before layout")
             return []
-        return [((x+xOff, y+yOff), icon.commaImage) for x, y in self.commaSitePositions]
+        drawList = []
+        for i, (x, y) in enumerate(self.commaSitePositions):
+            img = icon.commaTypeoverImage if i+1 == typeoverIdx else icon.commaImage
+            drawList.append(((x+xOff, y+yOff), img))
+        return drawList
 
     def drawBodySites(self, bodyImg):
         xOff = bodyImg.width - icon.inSiteImage.width
