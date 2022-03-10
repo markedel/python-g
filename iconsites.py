@@ -432,6 +432,10 @@ def splitSeriesSiteId(siteId):
         return None, None
     return name, int(idx)
 
+def nextSeriesSiteId(siteId):
+    name, idx = splitSeriesSiteId(siteId)
+    return makeSeriesSiteId(name, idx+1)
+
 def hasLowerCoincidentSite(ic, siteId):
     """Returns True if there is an icon lower in the hierarchy sharing this site of ic"""
     if ic is None or ic.typeOf(siteId) != "input":

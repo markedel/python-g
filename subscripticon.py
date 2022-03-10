@@ -460,38 +460,49 @@ class SubscriptIcon(icon.Icon):
         mergeIcon2 = self.childAt(mergeSite2)
         if mergeIcon2 is None:
             # Site after colon is empty (no need to merge)
-            pass
+            cursorIc, cursorSite = icon.rightmostFromSite(self, mergeSite1)
         elif mergeIcon1 is None:
             # Site before colon is empty, move the icon after the colon to it
+            self.replaceChild(None, mergeSite2)
             self.replaceChild(mergeIcon2, mergeSite1)
-        elif mergeIcon1.hasSite('attrIcon'):
-            # Site before colon is not empty, but has site for entry icon
-            win.entryIcon = entryicon.EntryIcon('', window=win)
-            win.entryIcon.setPendingArg(mergeIcon2)
-            mergeIcon1.replaceChild(win.entryIcon, 'attrIcon')
+            cursorIc, cursorSite = self, mergeSite1
         else:
-            # Can't safely remove the colon
-            cursors.beep()
-            return
+            # Both sites are occupied merge the two expressions
+            rightmostIc, rightmostSite = icon.rightmostSite(mergeIcon1)
+            if rightmostIc.typeOf(rightmostSite) == 'input':
+                # An empty input on the right allows merge without inserting entry icon
+                self.replaceChild(None, mergeSite2)
+                rightmostIc.replaceChild(mergeIcon2, rightmostSite)
+                reorderexpr.reorderArithExpr(mergeIcon1)
+                cursorIc, cursorSite = rightmostIc, rightmostSite
+            else:
+                lowestIc, lowestSite = iconsites.lowestCoincidentSite(self, mergeSite2)
+                if lowestIc.childAt(lowestSite):
+                    # Can't merge the two expressions: insert an entry icon
+                    self.replaceChild(None, mergeSite2)
+                    win.entryIcon = entryicon.EntryIcon('', window=win)
+                    win.entryIcon.setPendingArg(mergeIcon2)
+                    rightmostIc.replaceChild(win.entryIcon, rightmostSite)
+                    cursorIc = cursorSite = None
+                else:
+                    # Empty site right of colon, merge left side in to that and reorder
+                    self.replaceChild(None, mergeSite2)
+                    self.replaceChild(mergeIcon2, mergeSite1)
+                    lowestIc.replaceChild(mergeIcon1, lowestSite)
+                    reorderexpr.reorderArithExpr(lowestIc)
+                    cursorIc, cursorSite = rightmostIc, rightmostSite
         # If there is a step site that wasn't part of the merge, shift it.
         if self.hasSite('stepIcon') and mergeSite2 != 'stepIcon':
             moveIcon = self.childAt('stepIcon')
             self.replaceChild(moveIcon, 'upperIcon')
-        # Clear the site to be removed (may not be necessary, but may be safer) and
-        # remove the colon (colonectomy)
+        # Remove the colon (colonectomy)
         if self.hasSite('stepIcon'):
-            self.replaceChild(None, 'stepIcon')
             self.changeNumSubscripts(2)
         else:
-            self.replaceChild(None, 'upperIcon')
             self.changeNumSubscripts(1)
         # Place the cursor or new entry icon, and redraw
         if win.entryIcon is None:
-            if mergeIcon2 is None and mergeIcon1 is not None and \
-                    mergeIcon1.hasSite('attrIcon'):
-                win.cursor.setToIconSite(mergeIcon1, "attrIcon")
-            else:
-                win.cursor.setToIconSite(self, mergeSite1)
+            win.cursor.setToIconSite(cursorIc, cursorSite)
             redrawRegion.add(win.layoutDirtyIcons())
             win.refresh(redrawRegion.get())
         else:

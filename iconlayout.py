@@ -113,8 +113,8 @@ class ListLayoutMgr:
             print("ListLayoutMgr draw before layout")
             return []
         drawList = []
-        for i, (x, y) in enumerate(self.commaSitePositions):
-            img = icon.commaTypeoverImage if i+1 == typeoverIdx else icon.commaImage
+        for siteIdx, (x, y) in self.commaSitePositions:
+            img = icon.commaTypeoverImage if siteIdx == typeoverIdx else icon.commaImage
             drawList.append(((x+xOff, y+yOff), img))
         return drawList
 
@@ -195,11 +195,11 @@ class ListLayoutMgr:
                 self.siteSeriesName + 'ListMgrData')
         self.commaSitePositions = []
         self.bodySitePositions = []
-        for offset in siteOffsets.values():
+        for i, offset in enumerate(siteOffsets.values()):
             if offset[0] == leftSublayoutOffset:
                 self.bodySitePositions.append(offset)
             else:
-                self.commaSitePositions.append(offset)
+                self.commaSitePositions.append((i, offset))
         minBodySiteY = 0   # Include the anchor point (y == 0)
         maxBodySiteY = 0
         for bodySitePos in self.bodySitePositions:

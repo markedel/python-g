@@ -333,26 +333,7 @@ class EntryIcon(icon.Icon):
                 cursors.beep()
                 return
         elif parseResult == "comma":
-            if self.commaEntered(self.attachedIcon(), self.attachedSite()):
-                if self.attachedIcon() is not None:
-                    self.attachedIcon().replaceChild(None, self.attachedSite())
-                if self.pendingArg() is None and self.pendingAttr() is None:
-                    self.window.entryIcon = None
-                elif self.pendingArg() is not None and cursor.type == "icon" and \
-                 cursor.siteType == "input" and cursor.icon.childAt(cursor.site) is None:
-                    # Pending args can safely be placed (note that commaEntered will not
-                    # put the cursor on an attribute site, so don't bother with them)
-                    cursor.icon.replaceChild(self.pendingArg(), cursor.site)
-                    self.setPendingArg(None)
-                    self.window.entryIcon = None
-                elif cursor.icon.childAt(cursor.site):
-                    print("Yipes, can't place pending icons")
-                    self.window.entryIcon = None
-                else:
-                    # Could not remove entry icon due to pending arguments
-                    cursor.icon.replaceChild(self, cursor.site)
-                    cursor.setToEntryIcon()
-            else:
+            if not self.insertComma():
                 cursors.beep()
             return
         elif parseResult == "colon":
@@ -381,6 +362,9 @@ class EntryIcon(icon.Icon):
                 cursors.beep()
             return
         elif parseResult == "makeFunction":
+            if self.attachedIcon().isCursorOnlySite(self.attachedSite()):
+                cursors.beep()
+                return
             self.insertOpenParen(listicons.CallIcon)
             return
         elif parseResult == "makeSubscript":
@@ -464,159 +448,87 @@ class EntryIcon(icon.Icon):
         # (we only get here if something was processed, so this won't loop forever)
         self._setText(remainingText, len(remainingText))
 
-    def commaEntered(self, onIcon, site):
+    def insertComma(self):
         """A comma has been entered.  Search up the hierarchy to find a list, tuple,
         cursor-paren, or parameter list, parting every expression about the newly inserted
         comma.  If no comma-separated type is found, part the expression up to either an
         assignment, or the top level.  Return False if user tries to place comma within
         unary or binary op auto-parens, or on an icon that interrupts horizontal sequence
         of icons (divide)."""
-        # This allows a comma to be typed anywhere in an expression, which is probably
-        # massive overkill.  Probably just beeping to say "no, you can't put a comma
-        # there", would be just as reasonable as ripping apart the enclosing expression
-        # and leaving a hole somewhere.
-        cursorPlaced = False
-        if onIcon is None:
-            # The cursor is on the top level
-            tupleIcon = listicons.TupleIcon(window=self.window)
-            tupleIcon.insertChildren([None, self.pendingArg()], "argIcons", 0)
-            self.setPendingArg(None)
-            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
-            self.window.replaceTop(self, tupleIcon)
-            return True
+        if self.attachedIcon() is None:
+            # The entry icon is on the top level.  Reject, so as not to create a naked
+            # tuple containing just a comma, which is more confusing than useful
+            return False
+        # Look for comma typeover opportunity
         typeoverIc = _findParenTypeover(self, "comma")
         if typeoverIc is not None:
             self.remove()  # Safe, since args would have invalidated typeover
-            self.window.cursor.setToIconSite(typeoverIc, 'argIcons_1')
+            _siteBefore, siteAfter, _text, _idx = typeoverIc.typeoverSites()
+            self.window.cursor.setToIconSite(typeoverIc, siteAfter)
             return True
-        siteType = onIcon.typeOf(site)
-        if iconsites.isSeriesSiteId(site) and siteType == "input":
-            # This is essentially ",,", which means leave a new space for an arg
-            # Entry icon holds pending arguments
-            seriesName, seriesIndex = iconsites.splitSeriesSiteId(site)
-            onIcon.insertChildren([None], seriesName, seriesIndex)
-            siteAfterComma = iconsites.makeSeriesSiteId(seriesName, seriesIndex + 1)
-            if onIcon.childAt(siteAfterComma) == self:
-                # Remove the Entry Icon and restore its pending arguments
-                if self.pendingArg() is None:
-                    # replaceChild on listTypeIcon removes comma.  Put it back
-                    onIcon.replaceChild(None, siteAfterComma, leavePlace=True)
+        # Find the top of the expression to which the entry icon is attached
+        ic, splitSite = _findEnclosingSite(self)
+        if ic is None:
+            # There's no enclosing site, add a naked tuple
+            ic = listicons.TupleIcon(window=self.window, noParens=True)
+            splitSite = 'argIcons_0'
+            top = self.topLevelParent()
+            self.window.replaceTop(top, ic)
+            ic.replaceChild(top, 'argIcons_0')
+        if not iconsites.isSeriesSiteId(splitSite):
+            # The bounding icon is not a sequence and will not accept a comma.  If it's
+            # something with parens, turn it in to a tuple.  Otherwise reject
+            if ic.__class__ is parenicon.CursorParenIcon:
+                # Convert cursor paren to a tuple
+                closed = ic.closed or _canCloseParen(self)
+                tupleIcon = listicons.TupleIcon(window=self.window, closed=closed,
+                    typeover=closed and not ic.closed)
+                arg = ic.childAt('argIcon')
+                ic.replaceChild(None, 'argIcon')
+                parent = ic.parent()
+                if parent is None:
+                    self.window.replaceTop(ic, tupleIcon)
                 else:
-                    onIcon.replaceChild(self.pendingArg(), siteAfterComma)
-                    self.setPendingArg(None)
-            self.window.cursor.setToIconSite(onIcon, siteAfterComma)
-            return True
-        if onIcon.__class__ in (opicons.UnaryOpIcon, opicons.DivideIcon) and \
-         siteType == "input":
-            return False
-        elif onIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
-                siteType == "input" and onIcon.hasParens:
-            return False
-        elif onIcon.__class__ is parenicon.CursorParenIcon and siteType != 'attrIn':
-            # Cursor paren needs to be converted to a tuple
-            tupleIcon = listicons.TupleIcon(window=self.window, closed=True,
-                typeover=not onIcon.closed)
-            args = [None]
-            if onIcon.sites.argIcon.att and onIcon.sites.argIcon.att is not self:
-                args += [onIcon.sites.argIcon.att]
-            tupleIcon.insertChildren(args, "argIcons", 0)
-            parent = onIcon.parent()
-            if parent is None:
-                self.window.replaceTop(onIcon, tupleIcon)
-            else:
-                parent.replaceChild(tupleIcon, parent.siteOf(onIcon))
-            if onIcon.closed:
-                attrIcon = onIcon.sites.attrIcon.att
-                onIcon.replaceChild(None, 'attrIcon')
-                tupleIcon.replaceChild(attrIcon, 'attrIcon')
-            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 0)
-            return True
-        if onIcon.__class__ in (opicons.BinOpIcon, infixicon.InfixIcon,
-                opicons.IfExpIcon) and site == binOpLeftArgSite(onIcon):
-            leftArg = None
-            rightArg = onIcon
-            if onIcon.leftArg() is self:
-                onIcon.replaceChild(self.pendingArg(), binOpLeftArgSite(onIcon))
-                self.setPendingArg(None)
-        elif onIcon.__class__ in (opicons.BinOpIcon, infixicon.InfixIcon,
-                opicons.IfExpIcon) and site == binOpRightArgSite(onIcon):
-            leftArg = onIcon
-            rightArg = onIcon.rightArg()
-            if rightArg is self:
-                rightArg = self.pendingArg()
-                self.setPendingArg(None)
-            onIcon.replaceChild(None, binOpRightArgSite(onIcon))
-            self.window.cursor.setToIconSite(onIcon,  binOpRightArgSite(onIcon))
-            cursorPlaced = True
-        else:
-            onIcon = icon.findAttrOutputSite(onIcon)
-            leftArg = onIcon
-            rightArg = None
-        child = onIcon
-        for parent in onIcon.parentage():
-            childSite = parent.siteOf(child)
-            if iconsites.isSeriesSiteId(childSite):
-                onIcon.markLayoutDirty()
-                parent.replaceChild(leftArg, childSite, leavePlace=True)
-                seriesName, seriesIndex = iconsites.splitSeriesSiteId(childSite)
-                parent.insertChild(rightArg, seriesName, seriesIndex + 1)
-                if hasattr(parent, "closed") and not parent.closed and \
-                        not parent.noParens:
-                    # Once an item has a comma, we know what it is and where it ends, and
-                    # an open paren/bracket/brace with commas would be hard to handle.
-                    parent.close(typeover=True)
-                if not cursorPlaced:
-                    cursorIdx = seriesIndex if leftArg is None else seriesIndex + 1
-                    self.window.cursor.setToIconSite(parent, seriesName, cursorIdx)
-                return True
-            if parent.__class__ is parenicon.CursorParenIcon:
-                tupleIcon = listicons.TupleIcon(window=self.window,
-                    typeover=not parent.closed)
-                tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
-                parentParent = parent.parent()
-                if parentParent is None:
-                    self.window.replaceTop(parent, tupleIcon)
-                else:
-                    parentParent.replaceChild(tupleIcon, parentParent.siteOf(parent))
-                if parent.hasSite('attrIcon'):
-                    attrIcon = parent.sites.attrIcon.att
-                    parent.replaceChild(None, 'attrIcon')
+                    parent.replaceChild(tupleIcon, parent.siteOf(ic))
+                tupleIcon.replaceChild(arg, 'argIcons_0')
+                if ic.closed:
+                    attrIcon = ic.sites.attrIcon.att
+                    ic.replaceChild(None, 'attrIcon')
                     tupleIcon.replaceChild(attrIcon, 'attrIcon')
-                if not cursorPlaced:
-                    idx = 0 if leftArg is None else 1
-                    self.window.cursor.setToIconSite(tupleIcon, "argIcons", idx)
-                return True
-            if isinstance(parent, opicons.UnaryOpIcon):
-                leftArg = parent
-            elif parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
-                    not parent.hasParens or isinstance(parent, infixicon.InfixIcon):
-                # Parent is a binary op icon without parens, and site is one of the two
-                # input sites
-                if parent.leftArg() is child:  # Insertion was on left side of operator
-                    parent.replaceChild(rightArg, binOpLeftArgSite(parent))
-                    if parent.leftArg() is None:
-                        self.window.cursor.setToIconSite(parent, binOpLeftArgSite(parent))
-                        cursorPlaced = True
-                    rightArg = parent
-                elif parent.rightArg() is child:   # Insertion on right side of operator
-                    parent.replaceChild(leftArg, binOpRightArgSite(parent))
-                    if parent.rightArg() is None:
-                        self.window.cursor.setToIconSite(parent, binOpRightArgSite(parent))
-                        cursorPlaced = True
-                    leftArg = parent
+                ic = tupleIcon
+                splitSite = 'argIcons_0'
+            elif ic.__class__ is opicons.BinOpIcon and ic.hasParens or \
+                    ic.__class__ is opicons.IfExpIcon and ic.hasParens and \
+                        splitSite != 'testExpr':
+                # Convert  binary operator with parens to a tuple
+                tupleIcon = listicons.TupleIcon(window=self.window, closed=True)
+                parent = ic.parent()
+                if parent is None:
+                    self.window.replaceTop(ic, tupleIcon)
                 else:
-                    print('Unexpected site attachment in "commaEntered" function')
-                    return False
+                    parent.replaceChild(tupleIcon, parent.siteOf(ic))
+                tupleIcon.replaceChild(ic, 'argIcons_0')
+                attrIcon = ic.sites.attrIcon.att
+                ic.replaceChild(None, 'attrIcon')
+                tupleIcon.replaceChild(attrIcon, 'attrIcon')
+                ic.hasParens = False
+                ic = tupleIcon
+                splitSite = 'argIcons_0'
             else:
-                # Parent was not an arithmetic operator or had parens
+                # Bounding icon will not accept comma: reject
                 return False
-            child = parent
-        # Reached top level.  Create Tuple
-        tupleIcon = listicons.TupleIcon(window=self.window, noParens=True)
-        self.window.replaceTop(child, tupleIcon)
-        tupleIcon.insertChildren([leftArg, rightArg], "argIcons", 0)
-        if not cursorPlaced:
-            self.window.cursor.setToIconSite(tupleIcon, "argIcons", 1)
+        # ic can accept a new comma clause after splitSite.  Split expression in two at
+        # entry icon
+        left, right = _splitExprAtEntryIcon(self, ic)
+        if left is None and right is None:
+            # Deadly failure probably dropped content (diagnostics already printed)
+            return False
+        # Place the newly-split expression in to the series, creating a new clause
+        ic.replaceChild(None, splitSite)
+        splitSiteSeriesName, splitSiteIdx = iconsites.splitSeriesSiteId(splitSite)
+        ic.insertChildren((left, right), splitSiteSeriesName, splitSiteIdx)
+        # Remove entry icon and place pending arguments (if possible)
+        self.remove()
         return True
 
     def insertOpenParen(self, iconClass):
@@ -668,18 +580,7 @@ class EntryIcon(icon.Icon):
         if iconClass is parenicon.CursorParenIcon:
             closed = False  # We leave even empty paren open to detect () for empty tuple
         else:
-            # Close parens only if there are no pending args and (if transferring parent
-            # args) transfer source is also closed
-            closed = not self.pendingArg()
-            if transferParentArgs is not None:
-                closed = False
-            if attachedIc is not None:
-                seqIc, seqSite = _findEnclosingSite(self)
-                if seqIc:
-                    rightmostIc, rightmostSite = icon.rightmostFromSite(seqIc, seqSite)
-                    if rightmostIc is not self and \
-                            self.siteOf(rightmostIc, recursive=True) is None:
-                        closed = False
+            closed = transferParentArgs is None and _canCloseParen(self)
         newParenIcon = iconClass(window=self.window, closed=closed, typeover=closed)
         if attachedIc is None:
             self.window.replaceTop(self, newParenIcon)
@@ -976,111 +877,111 @@ class EntryIcon(icon.Icon):
         return False
 
     def insertColon(self):
-        # Look for a parent icon that supports colons (subscript or dictionary)
-        for parent in self.attachedIcon().parentage(includeSelf=True):
-            if isinstance(parent, subscripticon.SubscriptIcon):
-                if parent.hasSite('stepIcon'):
-                    # Subscript already has all 3 colons
-                    colonInserted = False
-                    break
-                # Subscript icon accepting colon, found.  Add a new site to it
-                subsIc = parent
-                if subsIc.hasSite('upperIcon'):
-                    subsIc.changeNumSubscripts(3)
-                    siteAdded = 'stepIcon'
-                else:
-                    subsIc.changeNumSubscripts(2)
-                    siteAdded = 'upperIcon'
-                # If the cursor was on the first site, may need to shift second-site icons
-                entrySite = subsIc.siteOf(self, recursive=True)
-                if entrySite == 'indexIcon' and siteAdded == "stepIcon":
-                    toShift = subsIc.childAt('upperIcon')
-                    subsIc.replaceChild(None, "upperIcon")
-                    subsIc.replaceChild(toShift, 'stepIcon')
-                    cursorToSite = 'upperIcon'
-                else:
-                    cursorToSite = siteAdded
-                cursorToIcon = subsIc
-                colonInserted = True
-                break
-            if isinstance(parent, listicons.DictIcon):
-                dictIc = parent
-                site = parent.siteOf(self, recursive=True)
-                child = dictIc.childAt(site)
-                dictElem = listicons.DictElemIcon(window=self.window)
-                if isinstance(child, listicons.DictElemIcon):
-                    # There's already a colon in this clause.  We allow a colon to be
-                    # typed on the left of an existing clause, since that is how one
-                    # naturally types a new clause (when they begin after the comma or to
-                    # the left of the first clause).  Typing a colon on the right side of
-                    # a dictElem is not expected without a comma, and not supported.
-                    dictElemSite = child.siteOf(self, recursive=True)
-                    if dictElemSite != 'leftArg':
-                        colonInserted = False
-                        break
-                    # Splitting apart an expression is hard.  Here we cheat and use the
-                    # commaEntered function to do it (since we need a comma, too).
-                    if not self.commaEntered(self.attachedIcon(), self.attachedSite()):
-                        colonInserted = False
-                        break
-                    # commaEntered will set the cursor position to the site where any
-                    # pending args should be deposited.  If appropriate, deposit them.
-                    cursor = self.window.cursor
-                    if self.pendingArg() and cursor.type == 'icon' and \
-                     cursor.siteType == 'input' and \
-                     cursor.icon.childAt(cursor.site) is None:
-                        cursor.icon.replaceChild(self.pendingArg(), cursor.site)
-                        self.replaceChild(None, 'pendingArg')
-                    # Insert the new dictElem before the dictElem that originally held
-                    # the entry icon in its left argument.
-                    dictElemArg = parent.childAt(site)
-                    parent.replaceChild(dictElem, site)
-                    dictElem.replaceChild(dictElemArg, 'leftArg')
-                elif child is self:
-                    # There's nothing at the site except entry icon and whatever we are
-                    # holding, move entry icon to right arg, unless we're *holding* a
-                    # dictElem, in which case, don't insert the new dictElem
-                    if isinstance(self.pendingArg(), listicons.DictElemIcon):
-                        colonInserted = False
-                        break
-                    dictIc.replaceChild(dictElem, site)
-                    dictElem.replaceChild(self, 'rightArg')
-                else:
-                    # There's something at the site.  Put a colon after it
-                    dictIc.replaceChild(dictElem, site)
-                    dictElem.replaceChild(child, 'leftArg')
-                cursorToIcon = dictElem
-                cursorToSite = 'rightArg'
-                colonInserted = True
-                break
+        if self.attachedIcon() is None:
+            # Not allowed to type colon at the top level: Reject
+            return False
+        # Find the top of the expression to which the entry icon is attached
+        ic, splitSite = _findEnclosingSite(self)
+        if isinstance(ic, listicons.DictIcon):
+            return self.insertDictColon(ic)
+        if isinstance(ic, subscripticon.SubscriptIcon):
+            return self.insertSubscriptColon(ic)
+        return False
+
+    def insertDictColon(self, onIcon):
+        onSite = onIcon.siteOf(self, recursive=True)
+        child = onIcon.childAt(onSite)
+        if isinstance(child, listicons.DictElemIcon):
+            # There's already a colon in this clause.  We allow a colon to be
+            # typed on the left of an existing clause, since that is how one
+            # naturally types a new clause (when they begin after the comma or to
+            # the left of the first clause).  Typing a colon on the right side of
+            # a dictElem is not expected without a comma, and not allowed.
+            dictElemSite = child.siteOf(self, recursive=True)
+            if dictElemSite != 'leftArg':
+                return False
+            # Split across entry icon, insert both a colon and a comma w/typeover
+            left, right = _splitExprAtEntryIcon(self, child)
+            if left is None and right is None:
+                return False
+            newDictElem = listicons.DictElemIcon(window=self.window)
+            newDictElem.replaceChild(left, 'leftArg')
+            onIcon.replaceChild(newDictElem, onSite, leavePlace=True)
+            nextSite = iconsites.nextSeriesSiteId(onSite)
+            onIcon.insertChild(child, nextSite)
+            child.replaceChild(right, 'leftArg')
+            # Remove entry icon, placing pending args on the right side of the new comma
+            # but cursor before the comma... Checking for pending args needs to happen
+            # earlier while we can still bail
+            if self.remove():
+                self.window.cursor.setToIconSite(newDictElem, 'rightArg')
+            onIcon.setTypeover(0, nextSite)
+            self.window.watchTypeover(onIcon)
+        elif isinstance(self.pendingArg(), listicons.DictElemIcon):
+            # We are holding a dictElem as a pending arg: add a new clause and deposit
+            # the pending arg in to it.  Note that since DictElemIcons can only appear
+            # on the top level of a dictionary icon, we assume that the entry icon's
+            # parent expression does not extend to the right of the pending arg
+            nextSite = iconsites.nextSeriesSiteId(onSite)
+            onIcon.insertChild(self.pendingArg(), nextSite)
+            self.setPendingArg(None)
+            newDictElem = listicons.DictElemIcon(window=self.window)
+            onIcon.replaceChild(newDictElem, onSite)
+            newDictElem.replaceChild(child, 'leftArg')
+            self.remove()
+            self.window.cursor.setToIconSite(newDictElem, 'rightArg')
+            onIcon.setTypeover(0, nextSite)
+            self.window.watchTypeover(onIcon)
+        elif child is self:
+            # There's nothing at the site except entry icon and whatever we are holding.
+            # Place a new DictElemIcon, move entry icon to right arg, try to place
+            # pending args and remove
+            newDictElem = listicons.DictElemIcon(window=self.window)
+            onIcon.replaceChild(newDictElem, onSite)
+            newDictElem.replaceChild(self, 'rightArg')
+            self.remove()
         else:
-            colonInserted = False
-        if not colonInserted:
-            # Icon not found or colon couldn't be placed
-            cursorToIcon = self.attachedIcon()
-            cursorToSite = self.attachedSite()
-        # Decide on appropriate disposition for entry icon and cursor.  Try to remove
-        # entry icon if at all possible, even if the colon was rejected, since there
-        # won't be any text left in it.
-        cursorSiteType = cursorToIcon.typeOf(cursorToSite)
-        if self.pendingArg() and cursorSiteType == 'input' or \
-         self.pendingAttr() and cursorSiteType == 'attrIn':
-            # Entry icon has a pending argument which can be attached
-            self.attachedIcon().replaceChild(None, self.attachedSite())
-            self.window.entryIcon = None
-            pend = self.pendingArg() if cursorSiteType == "input" else self.pendingAttr()
-            cursorToIcon.replaceChild(pend, cursorToSite)
-            self.window.cursor.setToIconSite(cursorToIcon, cursorToSite)
-        elif self.pendingAttr() or self.pendingArg():
-            # Entry icon has a pending arg or attr which could not be attached
-            self.attachedIcon().replaceChild(None, self.attachedSite())
-            cursorToIcon.replaceChild(self, cursorToSite)
+            # There's something at the site.  Put a colon in it
+            left, right = _splitExprAtEntryIcon(self, onIcon)
+            if left is None and right is None:
+                return False
+            newDictElem = listicons.DictElemIcon(window=self.window)
+            onIcon.replaceChild(newDictElem, onSite)
+            newDictElem.replaceChild(left, 'leftArg')
+            newDictElem.replaceChild(right, 'rightArg')
+            self.remove()
+        return True
+
+    def insertSubscriptColon(self, onIcon):
+        if onIcon.hasSite('stepIcon'):
+            return False   # Subscript already has all 3 colons
+        onSite = onIcon.siteOf(self, recursive=True)
+        # Split the expression holding the entry icon in two at the entry icon
+        left, right = _splitExprAtEntryIcon(self, onIcon)
+        if left is None and right is None:
+            # Deadly failure probably dropped content (diagnostics already printed)
+            return False
+        # Create a new clause and put the two halves in to them
+        if onIcon.hasSite('upperIcon'):
+            onIcon.changeNumSubscripts(3)
+            siteAdded = 'stepIcon'
         else:
-            # Entry icon has nothing pending and can safely be removed
-            self.attachedIcon().replaceChild(None, self.attachedSite())
-            self.window.entryIcon = None
-            self.window.cursor.setToIconSite(cursorToIcon, cursorToSite)
-        return colonInserted
+            onIcon.changeNumSubscripts(2)
+            siteAdded = 'upperIcon'
+        # If the cursor was on the first site, may need to shift second-site icons
+        if onSite == 'indexIcon' and siteAdded == "stepIcon":
+            toShift = onIcon.childAt('upperIcon')
+            onIcon.replaceChild(None, "upperIcon")
+            onIcon.replaceChild(toShift, 'stepIcon')
+            nextSite = 'upperIcon'
+        else:
+            nextSite = siteAdded
+        # Place the newly-split expression in to its assigned slots
+        onIcon.replaceChild(left, onSite)
+        onIcon.replaceChild(right, nextSite)
+        # Remove entry icon and place pending arguments (if possible)
+        self.remove()
+        return True
 
     def click(self, evt):
         self.window.cursor.erase()
@@ -1581,8 +1482,8 @@ def _findEnclosingSite(startIc):
         # statements that take single arguments, and the center site of an inline-if.
         parentClass = parent.__class__
         if parentClass in (opicons.BinOpIcon, opicons.IfExpIcon) and parent.hasParens or \
-                parentClass is opicons.DivideIcon or \
-                parentClass is parenicon.CursorParenIcon or \
+                parentClass in (opicons.DivideIcon, parenicon.CursorParenIcon,
+                    subscripticon.SubscriptIcon) or \
                 parentClass is opicons.IfExpIcon and site == 'textExpr' or \
                 parentClass in cursors.topLevelStmts:
             return parent, site
@@ -1620,8 +1521,68 @@ def _findParenTypeover(entryIc, token):
             siteBefore, siteAfter, _text, _idx  = ic.typeoverSites()
             if ic.siteOf(entryIc, recursive=True) == siteBefore and ic.rParenTypeover:
                 return ic
-        if token == "comma" and ic.__class__ is listicons.TupleIcon:
+        if token == "comma" and ic.__class__ in (listicons.TupleIcon, listicons.DictIcon):
             siteBefore, siteAfter, _text, _idx  = ic.typeoverSites()
             if ic.siteOf(entryIc, recursive=True) == siteBefore and ic.commaTypeover:
                 return ic
     return None
+
+def _splitExprAtEntryIcon(entryIc, splitTo):
+    """Split a (paren-less) arithmetic expression in two parts at entryIc, up to splitTo.
+    Note that this expects that splitTo has already been vetted as holding the root of
+    the expression (probably by _findEnclosingSite), and will fail badly if splitTo does
+    not."""
+    if entryIc.parent() is None:
+        return None, entryIc
+    leftArg = None
+    rightArg = entryIc
+    child = entryIc
+    for parent in list(entryIc.parentage(includeSelf=False)):
+        childSite = parent.siteOf(child)
+        childSiteType = parent.typeOf(childSite)
+        if parent is splitTo:
+            break
+        if isinstance(parent, opicons.UnaryOpIcon):
+            leftArg = parent
+        elif childSiteType == 'input' and (isinstance(parent, infixicon.InfixIcon) or
+                parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and not
+                parent.hasParens):
+            # Parent is a binary op icon without parens, and site is one of the two
+            # input sites
+            if parent.leftArg() is child:  # Insertion was on left side of operator
+                parent.replaceChild(rightArg, binOpLeftArgSite(parent))
+                rightArg = parent
+            elif parent.rightArg() is child:  # Insertion on right side of operator
+                parent.replaceChild(leftArg, binOpRightArgSite(parent))
+                leftArg = parent
+            else:
+                print('Unexpected site attachment in "_splitExprAtEntryIcon" function')
+                return None, None
+        elif childSiteType == 'attrIn':
+            leftArg = parent
+        else:
+            # Parent was not an arithmetic operator or had parens
+            print('Bounding expression found in "_splitExprAtEntryIcon" function')
+            return None, None
+        if child is entryIc and child.attachedSite() == 'attrIcon':
+            parent.replaceChild(None, childSite)
+        child = parent
+    else:
+        print('"_splitExprAtEntryIcon" function reached top without finding splitTo')
+        return None, None
+    return leftArg, rightArg
+
+def _canCloseParen(entryIc):
+    """Determine if it is safe to close a newly-entered open-paren/bracket/brace.  Also
+    used when close of an open cursor-paren has been deferred until we know what sort of
+    paren it is."""
+    if entryIc.pendingArg():
+        return False
+    if entryIc.attachedIcon() is not None:
+        seqIc, seqSite = _findEnclosingSite(entryIc)
+        if seqIc:
+            rightmostIc, rightmostSite = icon.rightmostFromSite(seqIc, seqSite)
+            if rightmostIc is not entryIc and \
+                    entryIc.siteOf(rightmostIc, recursive=True) is None:
+                return False
+    return True

@@ -417,6 +417,7 @@ class ListTypeIcon(icon.Icon):
         icon.Icon.__init__(self, window)
         self.closed = False         # self.close call will set this and endParenTypeover
         self.endParenTypeover = False
+        self.commaTypeover = None
         self.leftText = leftText
         self.rightText = rightText
         self.leftImgFn = leftImgFn
@@ -461,11 +462,8 @@ class ListTypeIcon(icon.Icon):
                         fill=comn.ICON_BG_COLOR, width=3)
             self.drawList = [((0, 0), leftImg)]
             # Commas
-            commaTypeover = None
-            if hasattr(self, 'commaTypeover') and self.commaTypeover:
-                commaTypeover = self.commaTypeover
             self.drawList += self.argList.drawListCommas(inSiteX,
-                    self.sites.output.yOffset, typeoverIdx=commaTypeover)
+                    self.sites.output.yOffset, typeoverIdx=self.commaTypeover)
             # End paren/brace/bracket
             if self.closed:
                 rightImg = self.rightImgFn(self.argList.spineHeight)
@@ -670,15 +668,32 @@ class ListTypeIcon(icon.Icon):
         self.drawList = None
         if idx is None or idx > 0:
             self.endParenTypeover = False
+            self.commaTypeover = None
             return False
-        self.endParenTypeover = True
-        return True
+        if (site is None or site == "attrIcon"):
+            self.endParenTypeover = True
+            return True
+        name, idx = iconsites.splitSeriesSiteId(site)
+        if name == 'argIcons' and idx >= 1:
+            self.commaTypeover = idx
+            self.window.watchTypeover(self)
+            return True
+        return False
 
     def typeoverSites(self, allRegions=False):
+        # Note that the code below takes advantage of the fact that both typeover regions
+        # will not be active at the same time (comma typeovers are used in very limited
+        # circumstances, none of which currently will lead to them being adjacent with
+        # the end paren)
         if self.endParenTypeover:
             #... I think this needs to take in to account cphr site
             before = iconsites.makeSeriesSiteId('argIcons', len(self.sites.argIcons) - 1)
             returnData = before, 'attrIcon', ')', 0
+            return [returnData] if allRegions else returnData
+        if self.commaTypeover:
+            before = 'argIcons_%d' % (self.commaTypeover - 1)
+            after = 'argIcons_%d' % self.commaTypeover
+            returnData = before, after, ',', 0
             return [returnData] if allRegions else returnData
         return [] if allRegions else (None, None, None, None)
 
@@ -798,7 +813,6 @@ class TupleIcon(ListTypeIcon):
     def __init__(self, window, noParens=False, closed=True, obj=None, typeover=False,
                  location=None):
         self.noParens = noParens
-        self.commaTypeover = None
         self.coincidentSite = "argIcons_0" if noParens else None
         if noParens:
             closed = False
@@ -882,28 +896,6 @@ class TupleIcon(ListTypeIcon):
                     curs.site == 'argIcons_1'):
                 self.sites.argIcons.removeSite(self, 1)
         return ListTypeIcon.calcLayouts(self)
-
-    def setTypeover(self, idx, site):
-        if site == 'argIcons_0':
-            if idx is None or idx > 0:
-                self.commaTypeover = None
-                return False
-            self.commaTypeover = 1
-            return True
-        if site == None and idx is None or idx > 0:
-            self.commaTypeover = None
-        return ListTypeIcon.setTypeover(self, idx, site)
-
-    def typeoverSites(self, allRegions=False):
-        # The comma typeover region is only for the very specific case of an empty tuple
-        # being converted to a single-entry tuple, and both typeover regions can not be
-        # simultaneously active
-        if self.endParenTypeover:
-            return ListTypeIcon.typeoverSites(self, allRegions)
-        if self.commaTypeover:
-            returnData = 'argIcons_0', 'argIcons_1', ',', 0
-            return [returnData] if allRegions else returnData
-        return [] if allRegions else (None, None, None, None)
 
     def execute(self):
         if self.isComprehension():
@@ -1933,7 +1925,7 @@ def backspaceListIcon(ic, site, evt):
                 parent.replaceChild(newParen, parent.siteOf(ic))
             if attr:
                 newParen.replaceChild(attr, 'attrIcon')
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=True))
             win.refresh(redrawRegion.get())
             win.cursor.setToIconSite(*icon.rightmostSite(arg))
             return
@@ -1999,16 +1991,53 @@ def backspaceComma(ic, cursorSite, evt, joinOccupied=True):
         redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
         win.refresh(redrawRegion.get())
         return True
-    # Neither the cursor site nor the prior site is empty.  Stitch together the
-    # content of the two sites with an entry icon, and remove the cursor site
+    # Neither the cursor site nor the prior site is empty.  Does either clause have an
+    # adjacent empty site?
+    if rightmostIcon.typeOf(rightmostSite) != 'input' or \
+            rightmostIcon.childAt(rightmostSite):
+        leftEmptyIc, leftEmptySite = None, None
+    else:
+        leftEmptyIc, leftEmptySite = rightmostIcon, rightmostSite
+    lowestIc, lowestSite = iconsites.lowestCoincidentSite(ic, cursorSite)
+    if lowestIc.childAt(lowestSite):
+        rightEmptyIc, rightEmptySite = None, None
+    else:
+        rightEmptyIc, rightEmptySite = lowestIc, lowestSite
+    if leftEmptyIc and not rightEmptyIc:
+        # Empty site left of cursor, merge right side in to that and reorder arithmetic
+        ic.replaceChild(None, cursorSite)
+        leftEmptyIc.replaceChild(childAtCursor, leftEmptySite)
+        reorderexpr.reorderArithExpr(leftEmptyIc)
+        win.cursor.setToIconSite(leftEmptyIc, leftEmptySite)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+        win.refresh(redrawRegion.get())
+        return True
+    if rightEmptyIc and not leftEmptyIc:
+        # Empty site right of cursor, merge left side in to that and reorder arithmetic
+        ic.replaceChild(None, prevSite)
+        rightEmptyIc.replaceChild(childAtPrevSite, rightEmptySite)
+        reorderexpr.reorderArithExpr(rightEmptyIc)
+        win.cursor.setToIconSite(rightmostIcon, rightmostSite)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+        win.refresh(redrawRegion.get())
+        win.updateTypeoverStates()
+        return True
+    # Left and right sites both have content and can only be merged by inserting an entry
+    # icon.  Stitch together the two sites with an entry icon in the middle
     if not joinOccupied:
         return False
     win.entryIcon = entryicon.EntryIcon(window=win)
-    ic.replaceChild(None, cursorSite)
-    if ic.hasSite(cursorSite):
-        ic.removeEmptySeriesSite(cursorSite)
-    rightmostIcon.replaceChild(win.entryIcon, rightmostSite)
-    win.entryIcon.setPendingArg(childAtCursor)
+    if leftEmptyIc and rightEmptyIc:
+        # There are empty sites both left and right.  Put the right clause into the empty
+        # site of the left clause and put the entry icon into the right empty site.
+        ic.replaceChild(None, cursorSite)
+        rightEmptyIc.replaceChild(win.entryIcon, rightEmptySite)
+        leftEmptyIc.replaceChild(childAtCursor, leftEmptySite)
+        reorderexpr.reorderArithExpr(leftEmptyIc)
+    else:
+        ic.replaceChild(None, cursorSite)
+        rightmostIcon.replaceChild(win.entryIcon, rightmostSite)
+        win.entryIcon.setPendingArg(childAtCursor)
     win.cursor.setToEntryIcon()
     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
     return True

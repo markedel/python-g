@@ -76,16 +76,16 @@ attrSiteCursorImage = comn.asciiToImage((
 attrSiteCursorOffset = 11
 
 seqInSiteCursorImage = comn.asciiToImage((
-    "   .   ",
-    "%%% %%%",
-    "...%...",
+    ".......",
+    "%25852%",
+    ".52%25.",
 ))
 seqInSiteCursorXOffset = 3
 seqInSiteCursorYOffset = 3
 
 seqOutSiteCursorImage = comn.asciiToImage((
-    "   %   ",
-    "%%%.%%%",
+    ".52%25.",
+    "%25852%",
     ".......",))
 seqOutSiteCursorXOffset = 3
 seqOutSiteCursorYOffset = 0
@@ -496,8 +496,14 @@ class Cursor:
                 highestIc = iconsites.highestCoincidentIcon(fromIcon)
                 parent = highestIc.parent()
                 if parent is None:
+                    if highestIc.hasCoincidentSite():
+                        return iconsites.lowestCoincidentSite(highestIc,
+                            highestIc.hasCoincidentSite())
                     return highestIc, self._topSite(highestIc, seqDown=False)
-                return parent, parent.siteOf(highestIc)
+                parentSite = parent.siteOf(highestIc)
+                if highestIc == fromIcon and fromIcon.hasCoincidentSite():
+                    return self._lexicalTraverse(parent, parentSite, direction)
+                return iconsites.lowestCoincidentSite(parent, parentSite)
             iconAtPrevSite = fromIcon.childAt(prevSite)
             if iconAtPrevSite is None:
                 return fromIcon, prevSite
@@ -507,6 +513,8 @@ class Cursor:
                 nextSite = fromIcon.sites.firstCursorSite()
                 if nextSite is None:
                     return fromIcon, self._topSite(fromIcon, seqDown=True)
+                if fromSite == 'output' and nextSite == fromIcon.hasCoincidentSite():
+                    return self._lexicalTraverse(fromIcon, nextSite, direction)
                 return fromIcon, nextSite
             if fromSite == 'seqOut':
                 nextStmt = fromIcon.nextInSeq()
@@ -527,9 +535,9 @@ class Cursor:
             # There is no icon attached to the site that can accept a cursor.  Iterate up
             # the hierarchy to find an icon with a site to take one.  If none is found,
             # attach to the seqOut or output site of the top icon
-            nextSite = fromIcon.sites.nextCursorSite(site)
+            nextSite = ic.sites.nextCursorSite(site)
             nextIcon = ic
-            while nextSite is None:
+            while nextSite is None or nextSite == nextIcon.hasCoincidentSite():
                 parent = nextIcon.parent()
                 if parent is None:
                     return nextIcon, self._topSite(nextIcon, seqDown=True)

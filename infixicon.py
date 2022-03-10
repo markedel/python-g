@@ -90,8 +90,10 @@ class InfixIcon(icon.Icon):
             layout.addSubLayout(lArgLayout, "leftArg", 0, 0)
             lArgWidth = icon.EMPTY_ARG_WIDTH if lArgLayout is None else lArgLayout.width
             layout.lArgWidth = lArgWidth
-            layout.width = lArgWidth - 1 + opWidth
-            layout.addSubLayout(rArgLayout, "rightArg", layout.width - 1, 0)
+            rArgSiteX = lArgWidth - 1 + opWidth - 1
+            layout.addSubLayout(rArgLayout, "rightArg", rArgSiteX, 0)
+            rArgWidth = icon.EMPTY_ARG_WIDTH if rArgLayout is None else rArgLayout.width
+            layout.width = rArgSiteX + rArgWidth
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 

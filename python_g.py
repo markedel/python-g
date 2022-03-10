@@ -711,8 +711,13 @@ class Window:
                 self.entryIcon.setPendingAttr(pendingArg)
         else:  # Cursor site type is input
             self.entryIcon = entryicon.EntryIcon(window=self)
-            pendingArg = self.cursor.icon.childAt(self.cursor.site)
-            self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
+            cursorIc, cursorSite = iconsites.lowestCoincidentSite(self.cursor.icon,
+                self.cursor.site)
+            if cursorIc != self.cursor.icon:
+                #... leave this in until better understood
+                print('Moved cursor to lowest coincident site')
+            pendingArg = cursorIc.childAt(cursorSite)
+            cursorIc.replaceChild(self.entryIcon, cursorSite)
             self.entryIcon.setPendingArg(pendingArg)
         self.cursor.setToEntryIcon()
         self.entryIcon.addText(initialText)
@@ -2061,11 +2066,19 @@ class Window:
             if icon.seqRuleTouches(ic, region):
                 icon.drawSeqRule(ic, clip=region)
 
-    def _dumpCb(self, evt):
+    def _dumpCb(self, evt=None):
         for seqStartPage in self.sequences:
             for ic in icon.traverseSeq(seqStartPage.startIcon):
                 icon.dumpHier(ic)
-
+        print(f"Cursor type {self.cursor.type} ", end='')
+        if self.cursor.type == "window":
+            print(f"{self.cursor.pos}")
+        elif self.cursor.type == "typeover":
+            print(f"Icon: {self.cursor.icon.dumpName()}")
+        elif self.cursor.type == "icon":
+            print(f"Icon: {self.cursor.icon.dumpName()}, Site: {self.cursor.site}")
+        elif self.cursor.type == "text":
+            print(f"{repr(self.entryIcon.text)}, self.entryIcon.cursorPos")
     def _debugLayoutCb(self, evt):
         topIcons = findTopIcons(self.selectedIcons())
         for ic in topIcons:
