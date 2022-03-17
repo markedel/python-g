@@ -726,6 +726,7 @@ class Window:
     def redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
         redrawRegion = comn.AccumRects(oldLoc)
         if self.entryIcon is not None:
+            self.entryIcon.minimizePendingArgs()
             redrawRegion.add(self.entryIcon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
@@ -2059,7 +2060,8 @@ class Window:
         # the icons they connect but below any icons that might be placed on top of them.
         drawStyle = "outline" if showOutlines else None
         for ic in self.findIconsInRegion(region, inclSeqRules=True):
-            ic.draw(clip=region, style=drawStyle)
+            ic.draw(clip=region, style=ic.highlight if drawStyle is None and
+                hasattr(ic, "highlight") else drawStyle)
             # Looks better without connectors, but not willing to remove permanently, yet:
             # if region is None or icon.seqConnectorTouches(topIcon, region):
             #     icon.drawSeqSiteConnection(topIcon, clip=region)

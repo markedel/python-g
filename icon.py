@@ -57,6 +57,8 @@ SHOW_OUTLINE_TINT = (220, 220, 220, 255)
 KEYWORD_COLOR = (48, 0, 128, 255)
 SELECT_TINT = (0, 0, 255, 0)
 ERR_TINT = (255, 0, 0, 0)
+PENDING_TINT = (255, 192, 192, 192)
+PENDING_REMOVE_TINT = (255, 32, 32, 32)
 BLACK = (0, 0, 0, 255)
 SEQ_RULE_COLOR = (165, 180, 165, 255)
 SEQ_CONNECT_COLOR = (70, 100, 70, 255)
@@ -1059,6 +1061,10 @@ def tintSelectedImage(image, selected, style):
         color = ERR_TINT
     elif selected:
         color = SELECT_TINT
+    elif style == "highlightPend":
+        color = PENDING_TINT
+    elif style == "highlightDel":
+        color = PENDING_REMOVE_TINT
     else:  # No outline and no additional coloring
         return image
     alphaImg = image.getchannel('A')

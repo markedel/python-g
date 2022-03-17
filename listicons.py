@@ -1949,7 +1949,7 @@ def backspaceListIcon(ic, site, evt):
                     elif nextIc is not None:
                         win.cursor.setToIconSite(nextIc, 'seqIn')
                     else:
-                        win.cursor.setToWindowPos(*ic.rect[:2])
+                        win.cursor.setToWindowPos(ic.rect[:2])
                 else:
                     cursorOnIcon = win.cursor.type == "icon" and win.cursor.icon is ic
                     ic.replaceChild(None, 'argIcons_0')

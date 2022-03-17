@@ -101,6 +101,7 @@ class EntryIcon(icon.Icon):
         remaining internal state based on attachments and passed text."""
         self.text = text
         self.cursorPos = len(text)
+        self._recolorPending()
         self.markLayoutDirty()
 
     def _width(self, boxOnly=False):
@@ -136,24 +137,59 @@ class EntryIcon(icon.Icon):
 
     def setPendingArg(self, newArg):
         if self.hasSite('pendingAttr'):
+            _removeHighlights(self.sites.pendingAttr.att)
             self.sites.remove('pendingAttr')
-        if not self.hasSite('pendingArg'):
+        if self.hasSite('pendingArg'):
+            _removeHighlights(self.sites.pendingArg.att)
+        else:
             x = self.sites.output.xOffset + self._width()
             y = self.sites.output.yOffset
             self.sites.add('pendingArg', 'input', x, y)
         self.sites.pendingArg.attach(self, newArg, "output")
+        self._recolorPending()
+
+    def minimizePendingArgs(self):
+        # Unload as much data as possible from pendingArgs as possible by moving the
+        # entry icon down in the hierarchy (may also invlove arithmetic reordering).
+        pendingArg = self.pendingArg()
+        if pendingArg is None:
+            return
+        coincSite = pendingArg.hasCoincidentSite()
+        if coincSite is None:
+            return
+        lowestIc, lowestSite = iconsites.lowestCoincidentSite(pendingArg, coincSite)
+        if lowestIc is pendingArg:
+            return
+        lowestArg = lowestIc.childAt(lowestSite)
+        lowestIc.replaceChild(None, lowestSite)
+        self.setPendingArg(lowestArg)
+        if self.attachedSiteType() == 'attrIn':
+            outIc = icon.findAttrOutputSite(self.attachedIcon())
+        else:
+            outIc = self
+        outIcParent = outIc.parent()
+        if outIcParent is None:
+            self.window.replaceTop(outIc, pendingArg)
+        else:
+            outIcParent.replaceChild(pendingArg, outIcParent.siteOf(outIc))
+        lowestIc.replaceChild(outIc, lowestSite)
+        reorderexpr.reorderArithExpr(pendingArg)
 
     def pendingArg(self):
         return self.sites.pendingArg.att if self.hasSite('pendingArg') else None
 
     def setPendingAttr(self, newAttr):
         if self.hasSite('pendingArg'):
+            _removeHighlights(self.sites.pendingArg.att)
             self.sites.remove('pendingArg')
-        if not self.hasSite('pendingAttr'):
+        if self.hasSite('pendingAttr'):
+            _removeHighlights(self.sites.pendingAttr.att)
+        else:
             x = self.sites.output.xOffset + self._width()
             y = self.sites.output.yOffset + icon.ATTR_SITE_OFFSET
             self.sites.add('pendingAttr', 'attrIn', x, y)
         self.sites.pendingAttr.attach(self, newAttr, "attrOut")
+        _addHighlights(self.sites.pendingAttr.att, 'highlightPend')
 
     def pendingAttr(self):
         return self.sites.pendingAttr.att if self.hasSite('pendingAttr') else None
@@ -182,11 +218,15 @@ class EntryIcon(icon.Icon):
     def addText(self, char):
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
+        if self.window.entryIcon is not None:
+            self._recolorPending()
 
     def backspaceInText(self, evt=None):
         if self.text != "":
             newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
             self._setText(newText, self.cursorPos-1)
+            if self.window.entryIcon is not None:
+                self._recolorPending()
             return
         # The entry icon contains no text.  Attempt to remove it
         if self.remove():
@@ -205,6 +245,7 @@ class EntryIcon(icon.Icon):
                     entryIcon.setPendingArg(pendingArg)
                 elif pendingAttr:
                     entryIcon.setPendingAttr(pendingAttr)
+            self._recolorPending()
         else:
             cursor = self.window.cursor
             if cursor.type == "icon":
@@ -252,10 +293,12 @@ class EntryIcon(icon.Icon):
                         attachedIcon.insertChild(arg, parentName, parentIdx + i)
                 else:
                     attachedIcon.replaceChild(pendingArg, attachedSite)
+                _removeHighlights(pendingArg)
                 self.setPendingArg(None)
                 reorderexpr.reorderArithExpr(attachedIcon)
             elif self.pendingAttr() and self.attachedSiteType() == "attrIn" and not \
                     attachedIcon.isCursorOnlySite(attachedSite):
+                _removeHighlights(self.pendingAttr())
                 attachedIcon.replaceChild(self.pendingAttr(), attachedSite)
                 self.setPendingAttr(None)
             elif forceDelete or self.pendingArg() is None and self.pendingAttr() is None:
@@ -270,11 +313,13 @@ class EntryIcon(icon.Icon):
                 self.window.cursor.setToIconSite(attachedIcon, newSite)
         else:  # Entry icon is at top level
             if pendingArg:
+                _removeHighlights(pendingArg)
                 self.replaceChild(None, 'pendingArg', 'output')
                 self.window.replaceTop(self, pendingArg)
                 pendingArg.markLayoutDirty()
                 self.window.cursor.setToBestCoincidentSite(pendingArg, "output")
             elif self.pendingAttr():
+                _removeHighlights(self.pendingAttr())
                 pendingAttr = self.pendingAttr()
                 self.replaceChild(None, 'pendingAttr', 'attrOut')
                 self.window.replaceTop(self, pendingAttr)
@@ -410,19 +455,23 @@ class EntryIcon(icon.Icon):
         # If entry icon has pending arguments, try to place them.  Code does its best
         # to place the cursor at the most reasonable spot.  If vacant, place pending
         # args there
-        if self.pendingArg() is not None and remainingText == "":
+        pendingArg = self.pendingArg()
+        if pendingArg is not None and remainingText == "":
             if cursor.type == "icon" and cursor.siteType == "input" and \
              cursor.icon.childAt(cursor.site) is None:
-                cursor.icon.replaceChild(self.pendingArg(), cursor.site)
+                cursor.icon.replaceChild(pendingArg, cursor.site)
+                _removeHighlights(pendingArg)
                 self.setPendingArg(None)
                 if cursor.icon.__class__ in (opicons.BinOpIcon, opicons.UnaryOpIcon,
                         opicons.IfExpIcon):
                     # Changing an operand of an arithmetic operator may require reorder
                     reorderexpr.reorderArithExpr(cursor.icon)
-        if self.pendingAttr() is not None and remainingText == "":
+        pendingAttr = self.pendingAttr()
+        if pendingAttr is not None and remainingText == "":
             if cursor.type == "icon" and cursor.siteType == "attrIn" and \
              cursor.icon.childAt(cursor.site) is None:
-                cursor.icon.replaceChild(self.pendingAttr(), cursor.site)
+                cursor.icon.replaceChild(pendingAttr, cursor.site)
+                _removeHighlights(pendingAttr)
                 self.setPendingAttr(None)
         # If the inserted icon had typeover parts, placing pending arguments usually
         # separates the cursor from them.  Negate if necessary
@@ -923,6 +972,7 @@ class EntryIcon(icon.Icon):
             # on the top level of a dictionary icon, we assume that the entry icon's
             # parent expression does not extend to the right of the pending arg
             nextSite = iconsites.nextSeriesSiteId(onSite)
+            _removeHighlights(self.pendingArg())
             onIcon.insertChild(self.pendingArg(), nextSite)
             self.setPendingArg(None)
             newDictElem = listicons.DictElemIcon(window=self.window)
@@ -1053,6 +1103,42 @@ class EntryIcon(icon.Icon):
         penImgWidth = attrPenImage.width if self.attachedToAttribute() else penImage.width
         return penImgWidth - PEN_MARGIN
 
+    def _recolorPending(self):
+        if self._canPlaceArgs():
+            highlight = 'highlightPend'
+        else:
+            highlight = 'highlightDel'
+        if self.pendingArg():
+            _addHighlights(self.pendingArg(), highlight)
+            self.pendingArg().markLayoutDirty()
+        if self.pendingAttr():
+            _addHighlights(self.pendingAttr(), highlight)
+            self.pendingAttr().markLayoutDirty()
+
+    def _canPlaceArgs(self, ignoreText=False):
+        if self.text == "" or ignoreText:
+            if self.attachedIcon() is None:
+                return True
+            if self.pendingArg() and self.attachedSiteType() == "input":
+                return True
+            elif self.pendingAttr() and self.attachedSiteType() == "attrIn" and not \
+                    self.attachedIcon().isCursorOnlySite(self.attachedSite()):
+                return True
+            return self.pendingArg() is None and self.pendingAttr() is None
+        if self.text.isidentifier():
+            if not self.attachedSiteType() == 'input':
+                return False
+            return self.pendingAttr() and not self.pendingArg()
+        if self.text in binaryOperators or self.text in compareOperators:
+            if not self.attachedSiteType() == 'attrIn':
+                return False
+            return self.pendingArg() and not self.pendingAttr()
+        if attrPattern.fullmatch(self.text):
+            if self.attachedSiteType() != "attrIn" or \
+                    self.attachedIcon().isCursorOnlySite(self.attachedSite()):
+                return False
+            return self.pendingAttr() and not self.pendingArg()
+        return False
 
 def parseAttrText(text, window):
     if len(text) == 0:
@@ -1586,3 +1672,21 @@ def _canCloseParen(entryIc):
                     entryIc.siteOf(rightmostIc, recursive=True) is None:
                 return False
     return True
+
+def _removeHighlights(icTree):
+    """Remove highlight property from icons in icTree.  This is called automatically by
+    setProperty, but is sometimes invoked explicitly when the existing pending arg may
+    have already been linked somewhere else."""
+    if icTree is not None:
+        if hasattr(icTree, 'highlight'):
+            icTree.window.undo.registerCallback(_addHighlights, icTree, icTree.highlight)
+        for ic in icTree.traverse(includeSelf=True):
+            if hasattr(ic, 'highlight'):
+                del ic.highlight
+
+def _addHighlights(icTree, highlight):
+    """Add highlight property to icTree and all of its children"""
+    if icTree is not None:
+        icTree.window.undo.registerCallback(_removeHighlights, icTree)
+        for ic in icTree.traverse(includeSelf=True):
+            ic.highlight = highlight
