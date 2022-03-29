@@ -12,6 +12,7 @@ import listicons
 import assignicons
 import entryicon
 import infixicon
+import parenicon
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
@@ -1159,11 +1160,11 @@ def backspaceSeriesStmt(ic, site, evt, text):
             valueIcons = [s.att for s in ic.sites.values]
             newTuple = listicons.TupleIcon(window=win, noParens=True)
             win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-            win.entryIcon.setPendingArg(newTuple)
             for i, arg in enumerate(valueIcons):
                 if arg is not None:
                     ic.replaceChild(None, ic.siteOf(arg))
                 newTuple.insertChild(arg, "argIcons", i)
+            win.entryIcon.setPendingArg(newTuple)
             parent = ic.parent()
             if parent is None:
                 win.replaceTop(ic, win.entryIcon)
@@ -1217,7 +1218,8 @@ def determineCtx(ic):
         if parent is None:
             return ast.Load()
     parentClass = parent.__class__
-    if parentClass in (listicons.ListIcon, listicons.TupleIcon):
+    if parentClass in (listicons.ListIcon, listicons.TupleIcon,
+            parenicon.CursorParenIcon):
         # An element of a list or tuple can be an assignment target (provided the list is
         # not a mutable): look above for assignment
         if hasattr(parent, 'mutableModified'):

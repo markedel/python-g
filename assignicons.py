@@ -9,6 +9,7 @@ import nameicons
 import listicons
 import opicons
 import entryicon
+import parenicon
 import cursors
 
 assignDragImage = comn.asciiToImage((
@@ -228,10 +229,15 @@ class AssignIcon(icon.Icon):
              lineno=self.id, col_offset=0)
         tgtAsts = []
         for tgts in tgtLists:
+            perTgtAsts = []
+            for tgt in tgts:
+                if isinstance(tgt, parenicon.CursorParenIcon):
+                    perTgtAsts.append(tgt.childAt('argIcon').createAst())
+                else:
+                    perTgtAsts.append(tgt.createAst())
             if len(tgts) == 1:
-                tgtAst = tgts[0].createAst()
+                tgtAst = perTgtAsts[0]
             else:
-                perTgtAsts = [tgt.createAst() for tgt in tgts]
                 tgtAst = ast.Tuple(perTgtAsts, ctx=ast.Store(), lineno=self.id,
                  col_offset=0)
             tgtAsts.append(tgtAst)

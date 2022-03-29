@@ -427,6 +427,7 @@ class ListTypeIcon(icon.Icon):
         self.sites.add('output', 'output', 0, height // 2)
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', leftWidth-1, height//2)
         self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)])
+        self.sites.cprhIcons.order=None  # No lexical traversal of cprh sites
         width = self.sites.cprhIcons[-1].xOffset + rightImgFn(0).width
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
@@ -810,6 +811,20 @@ class ListIcon(ListTypeIcon):
         return icon.yStretchImage(img, listRBrktExtendDupRows, desiredHeight)
 
 class TupleIcon(ListTypeIcon):
+    """Tuple icons have a bunch of special cases worth mentioning:
+        1) We retain the python text-syntax for a single element tuple containing a
+           comma.  I tried, initially, to eliminate this and allow the differing paren
+           appearance alone to distinguish tuples from parens.  The problem was that it
+           made using conventional text-editing techniques for converting back and forth,
+           impossible to use, requiring users to learn new editing methods.
+        2) The concept of a paren-less (naked) tuple is necessary to allow typing of
+           lists that precede the assignment operator.  They are also used in dragging
+           elements from one list to another.  Naked tuples are only allowed in three
+           places: 1) on the top level, 2) being dragged, and 3) as the pending arg of
+           the entry icon.  In the entry icon, it allows the entire list to be easily
+           dragged away as a unit.  The entry icon holds the list without parens
+           because parens have too much meaning to the user, who will interpret them
+           as gathering the arguments in to a single object."""
     def __init__(self, window, noParens=False, closed=True, obj=None, typeover=False,
                  location=None):
         self.noParens = noParens
