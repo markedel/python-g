@@ -1844,9 +1844,24 @@ def backspaceListIcon(ic, site, evt):
         return
     elif index == 0:
         # Backspace in to the open paren/bracket/brace: delete if possible
+        # Start by figuring out whether the list has an attribute that's going to require
+        # removing more than just the list icon.  If so, we won't do the deletion
         parent = ic.parent()
-        if numArgs == 0 and not attrAttached:
-            # Delete the list if it's empty
+        argPlaceFail = False
+        attrPlaceFail = False
+        attrDestination = None
+        if attrAttached:
+            if numArgs == 0:
+                attrPlaceFail = parent is not None and not isinstance(ic, CallIcon)
+                attrDestination = parent
+            else:
+                attrDestination, attrDestSite  = icon.rightmostSite(nonEmptyArgs[-1])
+                if attrDestSite != 'attrIcon' or hasattr(attrDestination.sites.attrIcon,
+                        'cursorOnly'):
+                    attrPlaceFail = True
+                    attrDestination = None
+        if numArgs == 0 and not attrPlaceFail:
+            # Empty list
             if parent is None:
                 # Open paren was the only thing left of the statement.  Remove
                 if ic.prevInSeq() is not None:
@@ -1860,13 +1875,23 @@ def backspaceListIcon(ic, site, evt):
                     pos = ic.pos()
                 win.removeIcons([ic])
                 if cursorIc is None:
-                    win.cursor.setToWindowPos(pos)
+                    if attrAttached:
+                        win.cursor.setToIconSite(ic.childAt('attrIcon'), 'attrOut')
+                    else:
+                        win.cursor.setToWindowPos(pos)
                 else:
+                    if attrDestination is not None:
+                        attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
+                        redrawRegion.add(win.layoutDirtyIcons(
+                            filterRedundantParens=False))
+                    win.refresh(redrawRegion.get())
                     win.cursor.setToIconSite(cursorIc, cursorSite)
             else:
                 parentSite = None if parent is None else parent.siteOf(ic)
                 redrawRect = win.removeIcons([ic], refresh=False)
                 redrawRegion.add(redrawRect)
+                if attrAttached:
+                    parent.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
                 if not parent.hasSite(parentSite):
                     # Last element of a list can disappear when icon is removed
                     parent.insertChild(None, parentSite)
@@ -1875,11 +1900,13 @@ def backspaceListIcon(ic, site, evt):
                 win.cursor.setToIconSite(parent, parentSite)
                 win.refresh(redrawRegion.get())
             return
-        elif numArgs == 1 and not attrAttached:
+        elif numArgs == 1 and not attrPlaceFail:
             # Just one item left in the list.  Unwrap the parens/brackets/braces
             # from around the content
             parent = ic.parent()
             content = nonEmptyArgs[0]
+            if attrAttached:
+                content.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
             if parent is None:
                 # List was on top level
                 ic.replaceChild(None, ic.siteOf(content))
@@ -1892,17 +1919,17 @@ def backspaceListIcon(ic, site, evt):
                 else:
                     win.cursor.setToIconSite(topNode, 'output')
             else:
-                # List had a parent.  Remove by attaching content to parent if
-                # the parent site is an input site.  If it's not (CallIcon), then
-                # load the content in to the pendingArg of an entry icon
+                # List had a parent.  Remove by attaching content to parent if the parent
+                # site can accept it.  If not (ic is CallIcon and attached to attribute),
+                # then load the content in to the pendingArg of an entry icon
                 parentSite = parent.siteOf(ic)
-                if parent.typeOf('parentSite') == 'input':
+                if not isinstance(ic, CallIcon):
                     parent.replaceChild(content, parentSite)
                     reorderexpr.reorderArithExpr(content)
                     win.cursor.setToIconSite(parent, parentSite)
                 else:  # ic is on an attribute site.  Create an entry icon
                     win.entryIcon = entryicon.EntryIcon(window=win)
-                    parent.replaceChild(win.entryIcon, parentSite)
+                    parent.replaceChild(win.entryIcon, 'attrIcon')
                     win.entryIcon.setPendingArg(content)
                     win.cursor.setToEntryIcon()
                     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
@@ -1910,15 +1937,151 @@ def backspaceListIcon(ic, site, evt):
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
             return
-        else:
-            # Multiple arguments remaining in list, or icon attached to attribute
-            # site.  Not safe to remove.  Pop  up context menu to change type.
-            win.listPopupIcon = ic
-            win.listPopupVal.set(
-                '(' if isinstance(ic, TupleIcon) else '[')
-            # Tkinter's pop-up grab does not allow accelerator keys to operate
-            # while up, which is unfortunate as you'd really like to type [ or (
-            win.listPopup.tk_popup(evt.x_root, evt.y_root, 0)
+        elif numArgs > 1 and ic.parent() is None and not attrPlaceFail:
+            # Multi-argument list on top level.  Make naked tuple and transfer all
+            # arguments to it
+            if isinstance(ic, TupleIcon):
+                ic.removeParens()
+                newTuple = ic
+            else:
+                newTuple = TupleIcon(window=ic.window, noParens=True)
+                ic.window.replaceTop(ic, newTuple)
+                args = [site.att for site in ic.sites.argIcons]
+                for i in range(len(args)):
+                    ic.replaceChild(None, 'argIcons_0')
+                newTuple.insertChildren(args, 'argIcons', 0)
+            if attrDestination is not None:
+                attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+            win.cursor.setToIconSite(newTuple, 'argIcons_0')
+            win.refresh(redrawRegion.get())
+            return
+        elif numArgs > 1 and ic.parent() is not None:
+            # The list has multiple arguments and is not on the top level.  Determine
+            # whether argument transfer is possible, and if so, what icon will receive
+            # the remaining arguments.
+            recipient, recipientSite = entryicon.findEnclosingSite(ic)
+            argPlaceFail = not (recipient is None or
+                iconsites.isSeriesSiteId(recipientSite) or
+                isinstance(recipient, parenicon.CursorParenIcon))
+            if not attrPlaceFail and not argPlaceFail:
+                # Both argument and attribute transfer are doable.  Do the transfer.
+                if recipient is None:
+                    # We reached the top of the hierarchy without getting trapped.
+                    # Add a naked tuple as parent to which to transfer the arguments
+                    recipient = TupleIcon(window=ic.window, noParens=True)
+                    topIc = ic.topLevelParent()
+                    ic.window.replaceTop(topIc, recipient)
+                    recipient.replaceChild(topIc, 'argIcons_0')
+                    recipientSite = 'argIcons_0'
+                elif isinstance(recipient, parenicon.CursorParenIcon):
+                    # Found a cursor paren icon that can be converted to a tuple
+                    newTuple = TupleIcon(window=ic.window)
+                    arg = recipient.childAt('argIcon')
+                    recipient.replaceChild(None, 'argIcon')
+                    recipientParent = recipient.parent()
+                    if recipientParent is None:
+                        ic.window.replaceTop(recipient, newTuple)
+                    else:
+                        recipientParent.replaceChild(newTuple,
+                            recipientParent.siteOf(recipient))
+                    newTuple.replaceChild(arg, 'argIcons_0')
+                    recipient = newTuple
+                    recipientSite = 'argIcons_0'
+                cursorIcon = ic.parent()
+                cursorSite = cursorIcon.siteOf(ic)
+                if isinstance(ic, CallIcon):
+                    # If ic is a CallIcon, it's attached to an attribute site, so we need
+                    # to create an entry icon to adapt the first element of the list
+                    # (which is an input site).  The code below is a bit of a hack.
+                    # Rather than complicating the already complex code for splitting and
+                    # reordering after paren removal, we temporarily rearrange the icons
+                    # representing the function call from the root of its attribute chain
+                    # in to a tuple icon that will yield the correct result when removed
+                    # by the code that handles the general case.  For example:
+                    #   a * b.c(d, e) * f   ->   a * (b.c|d, e) * f
+                    callRoot = icon.findAttrOutputSite(ic)
+                    newTuple = TupleIcon(window=ic.window)
+                    win.entryIcon = entryicon.EntryIcon(window=win)
+                    firstArg = ic.childAt('argIcons_0')
+                    ic.parent().replaceChild(win.entryIcon, 'attrIcon')
+                    ic.replaceChild(None, 'argIcons_0')
+                    win.entryIcon.setPendingArg(firstArg)
+                    rootParent = callRoot.parent()  # recipient is above so can't be None
+                    rootParentSite = rootParent.siteOf(callRoot)
+                    rootParent.replaceChild(newTuple, rootParentSite)
+                    newTuple.replaceChild(callRoot, 'argIcons_0')
+                    for i in range(len(ic.sites.argIcons)):
+                        arg = ic.childAt('argIcons_0')
+                        ic.replaceChild(None, 'argIcons_0')
+                        newTuple.insertChild(arg, 'argIcons', i+1)
+                    attrIcon = ic.childAt('attrIcon')
+                    if attrIcon is not None:
+                        ic.replaceChild(None, 'attrIcon')
+                        newTuple.replaceChild(attrIcon, 'attrIcon')
+                    print('reorder call to tuple...')
+                    ic.window._dumpCb()
+                    ic = newTuple
+                    cursorIcon = win.entryIcon
+                    cursorSite = None
+                if recipient is not ic.parent():
+                    # The list is part of an arithmetic expression that must be split
+                    # around it.  The splitExprAtIcon function will return a left
+                    # side and a right side with firstArg integrated in to the left
+                    # expression, but ic still attached to the right expression.  We
+                    # then reorder everything so recipient holds ic directly and ic
+                    # ic integrates the left side of the containing expression in its
+                    # first argument and the right side of the containing expression
+                    # in its last argument.
+                    print('pre-split...')
+                    ic.window._dumpCb()
+                    firstArg = ic.childAt('argIcons_0')
+                    left, right = entryicon.splitExprAtIcon(ic, recipient, firstArg)
+                    lastArg = ic.sites.argIcons[-1].att
+                    lastArgSite = ic.sites.argIcons[-1].name
+                    icParent = ic.parent()
+                    if icParent is not None:
+                        icParent.replaceChild(lastArg, icParent.siteOf(ic))
+                        ic.replaceChild(right, lastArgSite)
+                    ic.replaceChild(left, 'argIcons_0')
+                    recipient.replaceChild(ic, recipientSite)
+                    print('pre-reorder...')
+                    ic.window._dumpCb()
+                    reorderexpr.reorderArithExpr(left)
+                    reorderexpr.reorderArithExpr(right)
+                    print('reordered...')
+                    ic.window._dumpCb()
+                args = [site.att for site in ic.sites.argIcons]
+                for i in range(len(args)):
+                    ic.replaceChild(None, 'argIcons_0')
+                recipient.replaceChild(None, recipientSite)
+                recipient.insertChildren(args,
+                    *iconsites.splitSeriesSiteId(recipientSite))
+                if attrDestination is not None:
+                    attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
+                if cursorIcon is win.entryIcon:
+                    win.cursor.setToEntryIcon()
+                else:
+                    win.cursor.setToIconSite(cursorIcon, cursorSite)
+                redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+                win.refresh(redrawRegion.get())
+                return
+        # Either can't place args or can't place attribute.  In either case, select the
+        # list icon and whatever parts can't be placed, so that the next backspace will
+        # delete them.  Note that the list's attribute is selected both when it can't be
+        # placed AND if the list args can't be placed.  I'm not sure what the user would
+        # expect or want in this case, and deleting it easier since attrPlaceFail is no
+        # longer valid after arg deletion and would have to be figured out again.
+        iconsToSelect = [ic]
+        if attrPlaceFail or argPlaceFail and ic.childAt('attrIcon'):
+            iconsToSelect.append(ic.childAt('attrIcon'))
+        if argPlaceFail:
+            iconsToSelect += nonEmptyArgs[1:]
+        for iconToSelect in iconsToSelect:
+            iconToSelect.select()
+            redrawRegion.add(iconToSelect.rect)
+        win.refresh(redrawRegion.get())
+        return
     else:
         # Cursor is on comma input.  Use the backspaceComma function common to all
         # sequences, except: 1) Backspacing the last comma out of a single-element tuple,

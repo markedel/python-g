@@ -40,7 +40,8 @@ keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
 # Statements that can be typed into the first element of a top-level naked tuple (to
 # allow the user to prepend them to the existing list)
 listPrependableStmts = {nameicons.ReturnIcon, nameicons.YieldIcon, nameicons.DelIcon,
- nameicons.GlobalIcon, nameicons.NonlocalIcon, nameicons.ImportIcon, blockicons.WithIcon}
+ nameicons.GlobalIcon, nameicons.NonlocalIcon, nameicons.ImportIcon, blockicons.WithIcon,
+ blockicons.ForIcon}
 
 identPattern = re.compile('^[a-zA-z_][a-zA-Z_\\d]*$')
 numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
@@ -171,7 +172,7 @@ class EntryIcon(icon.Icon):
         # more optimization may still be possible)
         if isinstance(pendingArg, listicons.TupleIcon):
             toUnhighlight = [site.att for site in pendingArg.sites.argIcons][1:]
-            if _transferToParentList(pendingArg, 1, self):
+            if transferToParentList(pendingArg, 1, self):
                 firstArg = pendingArg.childAt('argIcons_0')
                 pendingArg.replaceChild(None, 'argIcons_0')
                 # setPendingArg can't remove highlights because we've already
@@ -543,7 +544,7 @@ class EntryIcon(icon.Icon):
             self.window.cursor.setToIconSite(typeoverIc, siteAfter)
             return True
         # Find the top of the expression to which the entry icon is attached
-        ic, splitSite = _findEnclosingSite(self)
+        ic, splitSite = findEnclosingSite(self)
         if ic is None:
             # There's no enclosing site, add a naked tuple
             ic = listicons.TupleIcon(window=self.window, noParens=True)
@@ -595,7 +596,7 @@ class EntryIcon(icon.Icon):
                 return False
         # ic can accept a new comma clause after splitSite.  Split expression in two at
         # entry icon
-        left, right = _splitExprAtEntryIcon(self, ic)
+        left, right = splitExprAtIcon(self, ic)
         if left is None and right is None:
             # Deadly failure probably dropped content (diagnostics already printed)
             return False
@@ -644,7 +645,7 @@ class EntryIcon(icon.Icon):
         attachedSite = self.attachedSite()
         transferParentArgs = None
         if attachedIc is not None and iconClass is not subscripticon.SubscriptIcon:
-            seqIc, seqSite = _findEnclosingSite(self)
+            seqIc, seqSite = findEnclosingSite(self)
             if seqIc and iconsites.isSeriesSiteId(seqSite):
                 siteName, siteIdx = iconsites.splitSeriesSiteId(seqSite)
                 rightOfSite = iconsites.makeSeriesSiteId(siteName, siteIdx + 1)
@@ -750,7 +751,7 @@ class EntryIcon(icon.Icon):
                 siteOfMatch = transferArgsFrom.siteOf(fromIcon, recursive=True)
             name, idx = iconsites.splitSeriesSiteId(siteOfMatch)
             if name == "argIcons" and idx < len(transferArgsFrom.sites.argIcons) - 1:
-                if not _transferToParentList(transferArgsFrom, idx+1, matchingParen):
+                if not transferToParentList(transferArgsFrom, idx+1, matchingParen):
                     return False
                 if isinstance(transferArgsFrom, listicons.TupleIcon) and idx == 0:
                     # Tuple is down to 1 argument.  Convert to arithmetic parens
@@ -886,7 +887,7 @@ class EntryIcon(icon.Icon):
             # Not allowed to type colon at the top level: Reject
             return False
         # Find the top of the expression to which the entry icon is attached
-        ic, splitSite = _findEnclosingSite(self)
+        ic, splitSite = findEnclosingSite(self)
         if isinstance(ic, listicons.DictIcon):
             return self.insertDictColon(ic)
         if isinstance(ic, subscripticon.SubscriptIcon):
@@ -941,7 +942,7 @@ class EntryIcon(icon.Icon):
             if dictElemSite != 'leftArg':
                 return False
             # Split across entry icon, insert both a colon and a comma w/typeover
-            left, right = _splitExprAtEntryIcon(self, child)
+            left, right = splitExprAtIcon(self, child)
             if left is None and right is None:
                 return False
             newDictElem = listicons.DictElemIcon(window=self.window)
@@ -983,7 +984,7 @@ class EntryIcon(icon.Icon):
             self.remove()
         else:
             # There's something at the site.  Put a colon in it
-            left, right = _splitExprAtEntryIcon(self, onIcon)
+            left, right = splitExprAtIcon(self, onIcon)
             if left is None and right is None:
                 return False
             newDictElem = listicons.DictElemIcon(window=self.window)
@@ -998,7 +999,7 @@ class EntryIcon(icon.Icon):
             return False   # Subscript already has all 3 colons
         onSite = onIcon.siteOf(self, recursive=True)
         # Split the expression holding the entry icon in two at the entry icon
-        left, right = _splitExprAtEntryIcon(self, onIcon)
+        left, right = splitExprAtIcon(self, onIcon)
         if left is None and right is None:
             # Deadly failure probably dropped content (diagnostics already printed)
             return False
@@ -1525,7 +1526,7 @@ def reopenParen(ic):
     reorderexpr.reorderArithExpr(ic)
     # Determine if the bounding icon has sequence clauses to the right of ic that now
     # need to be transferred to the newly-reopened icon or one of its children
-    boundingParent, boundingParentSite = _findEnclosingSite(ic)
+    boundingParent, boundingParentSite = findEnclosingSite(ic)
     if boundingParent is None or not iconsites.isSeriesSiteId(boundingParentSite):
         # There was no bounding icon or the bounding icon was not a sequence
         return
@@ -1580,17 +1581,20 @@ def reopenParen(ic):
         boundingParent.replaceChild(None, 'argIcons_0')
         recipient.window.replaceTop(boundingParent, newTopIcon)
 
-def _transferToParentList(fromIc, startIdx, aboveIc):
-    """Find a suitable parent to receive remaining arguments from a list whose end paren
-    is being closed or an unclosed list that is between the paren closing site and the
-    paren being closed, and transfer arguments beyond startIdx to that icon.  If there is
-    not a suitable icon because an enclosing parent does not take a sequence (such as the
-    testIcon site of an inline-if, or an if or while statement), returns False."""
-    numListArgs = len(fromIc.sites.argIcons)
+def transferToParentList(fromIc, startIdx, aboveIc, seriesSiteName='argIcons'):
+    """Find a suitable parent to receive remaining arguments from a site series that
+    needs to be shortened, and transfer those arguments (beginning at startIdx) to the
+    selected parent if possible.  This will not be possible when an enclosing parent does
+    not take a sequence (such as the testIcon site of an inline-if, or an if or while
+    statement), in which case the function will do nothing and return False.  Search for
+    a suitable parent begins at the parent of aboveIc (which may be the same as fromIc,
+    but if fromIc is attached to an attribute site, would typically be set to the base of
+    the attribute chain).  seriesSiteName is the base name of the site series."""
+    numListArgs = len(getattr(fromIc.sites, seriesSiteName))
     if numListArgs < startIdx:
         # There are no arguments to transfer
         return True
-    recipient, site = _findEnclosingSite(aboveIc)
+    recipient, site = findEnclosingSite(aboveIc)
     if recipient is None:
         # We reached the top of the hierarchy without getting trapped.  Add a naked tuple
         # as parent to which to transfer the arguments
@@ -1622,13 +1626,13 @@ def _transferToParentList(fromIc, startIdx, aboveIc):
         # There are arguments to transfer, but no place to put them
         return False
     # Transfer the arguments beyond startIdx
-    args = [fromIc.childAt('argIcons', i) for i in range(startIdx, numListArgs)]
+    args = [fromIc.childAt(seriesSiteName, i) for i in range(startIdx, numListArgs)]
     for i in range(startIdx, numListArgs):
-        fromIc.replaceChild(None, iconsites.makeSeriesSiteId('argIcons', startIdx))
+        fromIc.replaceChild(None, iconsites.makeSeriesSiteId(seriesSiteName, startIdx))
     recipient.insertChildren(args, siteName, siteIdx)
     return True
 
-def _findEnclosingSite(startIc):
+def findEnclosingSite(startIc):
     """Search upward in the hierarchy above startIc to find a parent that bounds the
     scope of expression-processing, such as a sequence (expressions can't cross commas)
     or parens.  If found, return the icon and site at which startIc is (indirectly)
@@ -1654,7 +1658,7 @@ def _findEnclosingSite(startIc):
                 parentClass in (opicons.DivideIcon, parenicon.CursorParenIcon,
                     subscripticon.SubscriptIcon) or \
                 parentClass is opicons.IfExpIcon and site == 'textExpr' or \
-                parentClass in cursors.topLevelStmts:
+                parentClass in cursors.stmtIcons:
             return parent, site
 
 def _findParenTypeover(entryIc, token):
@@ -1696,17 +1700,18 @@ def _findParenTypeover(entryIc, token):
                 return ic
     return None
 
-def _splitExprAtEntryIcon(entryIc, splitTo):
-    """Split a (paren-less) arithmetic expression in two parts at entryIc, up to splitTo.
+def splitExprAtIcon(splitAt, splitTo, insertLeftArg=None):
+    """Split a (paren-less) arithmetic expression in two parts at splitAt, up to splitTo.
     Note that this expects that splitTo has already been vetted as holding the root of
-    the expression (probably by _findEnclosingSite), and will fail badly if splitTo does
-    not."""
-    if entryIc.parent() is None:
-        return None, entryIc
-    leftArg = None
-    rightArg = entryIc
-    child = entryIc
-    for parent in list(entryIc.parentage(includeSelf=False)):
+    the expression (probably by findEnclosingSite), and will fail badly if splitTo does
+    not.  splitTo will end up on the right side.  Optional argument insertLeftArg will be
+    used to fill in empty site on the left."""
+    if splitAt.parent() is None:
+        return None, splitAt
+    leftArg = insertLeftArg
+    rightArg = splitAt
+    child = splitAt
+    for parent in list(splitAt.parentage(includeSelf=False)):
         childSite = parent.siteOf(child)
         childSiteType = parent.typeOf(childSite)
         if parent is splitTo:
@@ -1725,19 +1730,19 @@ def _splitExprAtEntryIcon(entryIc, splitTo):
                 parent.replaceChild(leftArg, binOpRightArgSite(parent))
                 leftArg = parent
             else:
-                print('Unexpected site attachment in "_splitExprAtEntryIcon" function')
+                print('Unexpected site attachment in "splitExprAtIcon" function')
                 return None, None
         elif childSiteType == 'attrIn':
             leftArg = parent
         else:
             # Parent was not an arithmetic operator or had parens
-            print('Bounding expression found in "_splitExprAtEntryIcon" function')
+            print('Bounding expression found in "splitExprAtIcon" function')
             return None, None
-        if child is entryIc and child.attachedSite() == 'attrIcon':
+        if child is splitAt and childSiteType == 'attrIn':
             parent.replaceChild(None, childSite)
         child = parent
     else:
-        print('"_splitExprAtEntryIcon" function reached top without finding splitTo')
+        print('"splitExprAtIcon" function reached top without finding splitTo')
         return None, None
     return leftArg, rightArg
 
@@ -1748,7 +1753,7 @@ def _canCloseParen(entryIc):
     if entryIc.pendingArg():
         return False
     if entryIc.attachedIcon() is not None:
-        seqIc, seqSite = _findEnclosingSite(entryIc)
+        seqIc, seqSite = findEnclosingSite(entryIc)
         if seqIc:
             rightmostIc, rightmostSite = icon.rightmostFromSite(seqIc, seqSite)
             if rightmostIc is not entryIc and \
