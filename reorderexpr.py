@@ -345,8 +345,8 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
         if token.takeCursor:
             parenIc.window.cursor.setToIconSite(token.endParenAttr, 'attrIcon')
         if token.takeEntryIcon:
-            entryIcon = parenIc.window.entryIcon
-            if entryIcon is not None:
+            if parenIc.window.cursor.type == "text":
+                entryIcon = parenIc.window.cursor.icon
                 eiParent = entryIcon.parent()
                 eiParent.replaceChild(None, eiParent.siteOf(entryIcon))
                 parenIc.replaceChild(entryIcon, 'attrIcon')

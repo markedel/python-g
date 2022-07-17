@@ -120,7 +120,7 @@ class Boundary:
             self.cursorWindow = None
             self.cursorPos = None
             self.cursorSite = None
-            self.entryIcon = None
+            self.cursorIcon = None
             self.entryText = None
         else:
             cursor = window.cursor
@@ -129,26 +129,22 @@ class Boundary:
             self.cursorPos = cursor.pos
             self.cursorIcon = cursor.icon
             self.cursorSite = cursor.site
-            self.entryIcon = window.entryIcon
-            if self.entryIcon is None:
-                self.entryText = None
+            if window.cursor.type == "text":
+                self.entryText = window.cursor.icon.text
             else:
-                self.entryText = self.entryIcon.text
+                self.entryText = None
 
     def restoreCursorAndEntryIcon(self, window):
         cursor = window.cursor
-        window.entryIcon = self.entryIcon
         if self.cursorType is None:
-            cursor.removeCursor()
+            cursor.removeCursor(placeEntryText=False)
         elif self.cursorType == "window":
-            cursor.setToWindowPos(self.cursorPos)
+            cursor.setToWindowPos(self.cursorPos, placeEntryText=False)
         elif self.cursorType == "icon":
-            cursor.setToIconSite(self.cursorIcon, self.cursorSite)
+            cursor.setToIconSite(self.cursorIcon, self.cursorSite, placeEntryText=False)
         elif self.cursorType == "text":
-            cursor.setToEntryIcon()
-        if self.entryIcon is not None:
-            window.entryIcon.restoreForUndo(self.entryText)
-            cursor.setToEntryIcon()
+            self.cursorIcon.restoreForUndo(self.entryText)
+            cursor.setToText(self.cursorIcon, placeEntryText=False)
 
 class Attach(UndoListEntry):
     def __init__(self, parentIcon, siteId, origChild, childSite):

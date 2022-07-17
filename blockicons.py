@@ -255,20 +255,20 @@ class WithIcon(icon.Icon):
                 redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
                 valueIcons = [s.att for s in self.sites.values]
                 newTuple = listicons.TupleIcon(window=win, noParens=True)
-                win.entryIcon = entryicon.EntryIcon(initialString=self.stmt, window=win,
+                entryIcon = entryicon.EntryIcon(initialString=self.stmt, window=win,
                     willOwnBlock=True)
-                win.entryIcon.setPendingArg(newTuple)
+                entryIcon.setPendingArg(newTuple)
                 for i, arg in enumerate(valueIcons):
                     if arg is not None:
                         self.replaceChild(None, self.siteOf(arg))
                     newTuple.insertChild(arg, "argIcons", i)
                 parent = self.parent()
                 if parent is None:
-                    win.replaceTop(self, win.entryIcon)
+                    win.replaceTop(self, entryIcon)
                 else:
                     parentSite = parent.siteOf(self)
-                    parent.replaceChild(win.entryIcon, parentSite)
-                win.cursor.setToEntryIcon()
+                    parent.replaceChild(entryIcon, parentSite)
+                win.cursor.setToText(entryIcon, drawNew=False)
                 win.redisplayChangedEntryIcon(evt, redrawRegion.get())
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty, merge
@@ -669,14 +669,14 @@ class ForIcon(icon.Icon):
                     # as pending argument
                     redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
                     newTuple = listicons.TupleIcon(window=win, noParens=True)
-                    win.entryIcon = entryicon.EntryIcon(initialString=self.stmt,
+                    entryIcon = entryicon.EntryIcon(initialString=self.stmt,
                         window=win, willOwnBlock=True)
-                    win.entryIcon.setPendingArg(newTuple)
+                    entryIcon.setPendingArg(newTuple)
                     for i, arg in enumerate(combinedIcons):
                         self.replaceChild(None, self.siteOf(arg))
                         newTuple.insertChild(arg, "argIcons", i)
-                    win.replaceTop(self, win.entryIcon)
-                    win.cursor.setToEntryIcon()
+                    win.replaceTop(self, entryIcon)
+                    win.cursor.setToText(entryIcon, drawNew=False)
                     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
             else:
                 # Cursor is on comma input.  Delete if empty or previous site is empty.
@@ -686,12 +686,14 @@ class ForIcon(icon.Icon):
                     cursorSite = iconsites.makeSeriesSiteId(siteName, index-1)
                     cursorIcon, cursorSite = icon.rightmostFromSite(self, cursorSite)
                     win.cursor.setToIconSite(cursorIcon, cursorSite)
+                    win.refreshDirty()
         elif siteName == "iterIcons":
             if index == 0:
                 # Cursor is on "in", jump over it to last target
                 lastTgtSite = iconsites.makeSeriesSiteId('targets',
                     len(self.sites.targets) - 1)
                 win.cursor.setToIconSite(*icon.rightmostFromSite(self, lastTgtSite))
+                win.refreshDirty()
             else:
                 # Cursor is on comma input.  Delete if empty or previous site is empty,
                 # merge surrounding sites if not

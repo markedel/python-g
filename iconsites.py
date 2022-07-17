@@ -407,7 +407,7 @@ class IconSiteList:
                 siteType = site.type
             # If the icon has an attrIn site with something connected, also give it an
             # insertAttr site
-            if site.type == 'attrIn' and ic.sites.attrIcon.att is not None:
+            if site.type == 'attrIn' and site.att is not None:
                 snapSites['insertAttr'] = [(ic, (x + site.xOffset,
                  y + site.yOffset + icon.INSERT_SITE_Y_OFFSET), site.name)]
             # Add the snap site to the list

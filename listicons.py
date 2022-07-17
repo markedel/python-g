@@ -1879,26 +1879,28 @@ def backspaceListIcon(ic, site, evt):
                         win.cursor.setToIconSite(ic.childAt('attrIcon'), 'attrOut')
                     else:
                         win.cursor.setToWindowPos(pos)
+                    win.refreshDirty()
                 else:
                     if attrDestination is not None:
                         attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
-                        redrawRegion.add(win.layoutDirtyIcons(
-                            filterRedundantParens=False))
-                    win.refresh(redrawRegion.get())
                     win.cursor.setToIconSite(cursorIc, cursorSite)
+                    redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
+                    win.refresh(redrawRegion.get())
             else:
                 parentSite = None if parent is None else parent.siteOf(ic)
                 redrawRect = win.removeIcons([ic], refresh=False)
                 redrawRegion.add(redrawRect)
                 if attrAttached:
                     parent.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
+                    win.cursor.setToIconSite(parent, parentSite)
+                    win.refreshDirty()
                 if not parent.hasSite(parentSite):
                     # Last element of a list can disappear when icon is removed
                     parent.insertChild(None, parentSite)
+                    win.cursor.setToIconSite(parent, parentSite)
                     redrawRegion.add(win.layoutDirtyIcons(
                         filterRedundantParens=False))
-                win.cursor.setToIconSite(parent, parentSite)
-                win.refresh(redrawRegion.get())
+                    win.refresh(redrawRegion.get())
             return
         elif numArgs == 1 and not attrPlaceFail:
             # Just one item left in the list.  Unwrap the parens/brackets/braces
@@ -1928,10 +1930,10 @@ def backspaceListIcon(ic, site, evt):
                     reorderexpr.reorderArithExpr(content)
                     win.cursor.setToIconSite(parent, parentSite)
                 else:  # ic is on an attribute site.  Create an entry icon
-                    win.entryIcon = entryicon.EntryIcon(window=win)
-                    parent.replaceChild(win.entryIcon, 'attrIcon')
-                    win.entryIcon.setPendingArg(content)
-                    win.cursor.setToEntryIcon()
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    parent.replaceChild(entryIcon, 'attrIcon')
+                    entryIcon.setPendingArg(content)
+                    win.cursor.setToText(entryIcon, drawNew=False)
                     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
                     return
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -1952,8 +1954,8 @@ def backspaceListIcon(ic, site, evt):
                 newTuple.insertChildren(args, 'argIcons', 0)
             if attrDestination is not None:
                 attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.cursor.setToIconSite(newTuple, 'argIcons_0')
+            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
             return
         elif numArgs > 1 and ic.parent() is not None:
@@ -2002,11 +2004,11 @@ def backspaceListIcon(ic, site, evt):
                     #   a * b.c(d, e) * f   ->   a * (b.c|d, e) * f
                     callRoot = icon.findAttrOutputSite(ic)
                     newTuple = TupleIcon(window=ic.window)
-                    win.entryIcon = entryicon.EntryIcon(window=win)
+                    entryIcon = entryicon.EntryIcon(window=win)
                     firstArg = ic.childAt('argIcons_0')
-                    ic.parent().replaceChild(win.entryIcon, 'attrIcon')
+                    ic.parent().replaceChild(entryIcon, 'attrIcon')
                     ic.replaceChild(None, 'argIcons_0')
-                    win.entryIcon.setPendingArg(firstArg)
+                    entryIcon.setPendingArg(firstArg)
                     rootParent = callRoot.parent()  # recipient is above so can't be None
                     rootParentSite = rootParent.siteOf(callRoot)
                     rootParent.replaceChild(newTuple, rootParentSite)
@@ -2022,7 +2024,7 @@ def backspaceListIcon(ic, site, evt):
                     print('reorder call to tuple...')
                     ic.window._dumpCb()
                     ic = newTuple
-                    cursorIcon = win.entryIcon
+                    cursorIcon = entryIcon
                     cursorSite = None
                 if recipient is not ic.parent():
                     # The list is part of an arithmetic expression that must be split
@@ -2059,8 +2061,8 @@ def backspaceListIcon(ic, site, evt):
                     *iconsites.splitSeriesSiteId(recipientSite))
                 if attrDestination is not None:
                     attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
-                if cursorIcon is win.entryIcon:
-                    win.cursor.setToEntryIcon()
+                if cursorSite is None and isinstance(cursorIcon, entryicon.EntryIcon):
+                    win.cursor.setToText(entryIcon, drawNew=False)
                 else:
                     win.cursor.setToIconSite(cursorIcon, cursorSite)
                 redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -2103,9 +2105,9 @@ def backspaceListIcon(ic, site, evt):
                 parent.replaceChild(newParen, parent.siteOf(ic))
             if attr:
                 newParen.replaceChild(attr, 'attrIcon')
+            win.cursor.setToIconSite(*icon.rightmostSite(arg))
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=True))
             win.refresh(redrawRegion.get())
-            win.cursor.setToIconSite(*icon.rightmostSite(arg))
             return
         backspaceComma(ic, site, evt)
         if isinstance(ic, TupleIcon) and ic.noParens and len(ic.sites.argIcons) <= 1:
@@ -2204,19 +2206,19 @@ def backspaceComma(ic, cursorSite, evt, joinOccupied=True):
     # icon.  Stitch together the two sites with an entry icon in the middle
     if not joinOccupied:
         return False
-    win.entryIcon = entryicon.EntryIcon(window=win)
+    entryIcon = entryicon.EntryIcon(window=win)
     if leftEmptyIc and rightEmptyIc:
         # There are empty sites both left and right.  Put the right clause into the empty
         # site of the left clause and put the entry icon into the right empty site.
         ic.replaceChild(None, cursorSite)
-        rightEmptyIc.replaceChild(win.entryIcon, rightEmptySite)
+        rightEmptyIc.replaceChild(entryIcon, rightEmptySite)
         leftEmptyIc.replaceChild(childAtCursor, leftEmptySite)
         reorderexpr.reorderArithExpr(leftEmptyIc)
     else:
         ic.replaceChild(None, cursorSite)
-        rightmostIcon.replaceChild(win.entryIcon, rightmostSite)
-        win.entryIcon.setPendingArg(childAtCursor)
-    win.cursor.setToEntryIcon()
+        rightmostIcon.replaceChild(entryIcon, rightmostSite)
+        entryIcon.setPendingArg(childAtCursor)
+    win.cursor.setToText(entryIcon, drawNew=False)
     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
     return True
 

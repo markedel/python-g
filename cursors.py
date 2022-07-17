@@ -109,17 +109,38 @@ class Cursor:
         self.lastSelIc = None
         self.lastSelSite = None
 
-    def setToWindowPos(self, pos):
-        if self.type is not None:
+    def setToWindowPos(self, pos, eraseOld=True, drawNew=True, placeEntryText=True):
+        """Place the cursor at an arbitrary location on the window background.  Be
+        aware that this can cause rearrangement of icons by virtue of taking focus from
+        an entry icon, which will then try to place its text content and pending
+        arguments.  You must therefore either call this where rearrangement is safe,
+        or suppress this behavior by setting placeEntryText=False.  Even if
+        placeEntryText is set to False, it is still necessary to check for dirty icon
+        layouts after calling, as this is the mechanism by which icons that draw
+        additional focus graphics can redraw them."""
+        if self.type == "text":
+            self.icon.focusOut(placeEntryText)
+        if self.type is not None and eraseOld:
             self.erase()
         self.type = "window"
         self.pos = pos
         self.window.updateTypeoverStates()
         self.blinkState = True
-        self.draw()
+        if drawNew:
+            self.draw()
 
-    def setToIconSite(self, ic, siteIdOrSeriesName, seriesIndex=None):
-        if self.type is not None:
+    def setToIconSite(self, ic, siteIdOrSeriesName, seriesIndex=None, eraseOld=True,
+            drawNew=True, placeEntryText=True):
+        """Place the cursor on an icon site.  Be aware that this can cause
+        rearrangement of icons by virtue of taking focus from an entry icon, which will
+        then try to place its text content and pending arguments.  You must therefore
+        either call this where rearrangement is safe, or suppress this behavior by
+        setting placeEntryText=False.  Even if placeEntryText is set to False, it is
+        still necessary to check for dirty icon layouts after calling, as this is the
+        mechanism by which icons that draw additional focus graphics can redraw them."""
+        if self.type == "text":
+            self.icon.focusOut(placeEntryText)
+        if self.type is not None and eraseOld:
             self.erase()
         self.type = "icon"
         self.icon = ic
@@ -130,27 +151,43 @@ class Cursor:
         self.siteType = ic.typeOf(self.site)
         self.window.updateTypeoverStates()
         self.blinkState = True
-        self.draw()
+        if drawNew:
+            self.draw()
 
-    def setToEntryIcon(self):
-        if self.type is not None:
+    def setToText(self, ic, eraseOld=True, drawNew=True, placeEntryText=True):
+        """Place the cursor within a text-edit-capable icon (ic), such as an entry
+        icon, text icon or comment icon.  Note that the cursor position within the text
+        is not held by the cursor object, but by ic.  Also be aware that this can cause
+        rearrangement of icons by virtue of taking focus from an entry icon, which will
+        then try to place its text content and pending arguments.  You must therefore
+        either call this where rearrangement is safe, or suppress this behavior by
+        setting placeEntryText=False.  Even if placeEntryText is set to False, it is
+        still necessary to check for dirty icon layouts after calling, as this is the
+        mechanism by which icons that draw additional focus graphics can redraw them."""
+        if self.type == "text" and self.icon != ic:
+            self.icon.focusOut(placeEntryText)
+        if self.type is not None and eraseOld:
             self.erase()
         self.type = "text"
+        self.icon = ic
         self.window.updateTypeoverStates()
         self.blinkState = True
-        self.draw()
+        ic.focusIn()
+        if drawNew:
+            self.draw()
 
-    def setToTypeover(self, ic):
+    def setToTypeover(self, ic, eraseOld=True, drawNew=True):
         """Place the cursor into a typeover-icon.  Note that you must also call the
         icon's setTypeover() function to actually set the typeover index (this function
         directs keyboard focus and controls cursor drawing)"""
-        if self.type is not None:
+        if self.type is not None and eraseOld:
             self.erase()
         self.type = "typeover"
         self.icon = ic
         self.window.updateTypeoverStates()
         self.blinkState = True
-        self.draw()
+        if drawNew:
+            self.draw()
 
     def setToBestCoincidentSite(self, ic, site):
         if site == "output":
@@ -291,8 +328,15 @@ class Cursor:
         # return the full hierarchy
         return [i for ic in iconsInSeq for i in ic.traverse()]
 
-    def removeCursor(self):
-        if self.type is not None:
+    def removeCursor(self, eraseOld=True, placeEntryText=True):
+        """Remove the cursor from the window.  Be aware that this can cause rearrangement
+        of icons by virtue of taking focus from an entry icon, which will then try to
+        place its text content and pending arguments (so 1. don't call this where such
+        rearrangement would cause trouble and 2. be sure to check for dirty icon layouts
+        after calling)."""
+        if self.type == "text":
+            self.icon.focusOut(placeEntryText)
+        if self.type is not None and eraseOld:
             self.erase()
         self.type = None
 
@@ -332,7 +376,7 @@ class Cursor:
             else:
                 return
         elif self.type == "text":
-            eIcon = self.window.entryIcon
+            eIcon = self.icon
             if eIcon is None:
                 return
             cursorPos = min(eIcon.cursorPos, len(eIcon.text))
@@ -360,7 +404,7 @@ class Cursor:
         if self.type is None:
             return
         elif self.type == "text":
-            self.window.entryIcon.arrowAction(direction)
+            self.icon.arrowAction(direction)
             return
         elif self.type == "typeover":
             self.erase()

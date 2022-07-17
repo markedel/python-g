@@ -1097,9 +1097,9 @@ class IfExpIcon(icon.Icon):
             # Expand the scope of the paren to its max, by rearranging the icon
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
+            win.cursor.setToIconSite(cursIc, cursSite)
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
-            win.cursor.setToIconSite(cursIc, cursSite)
             return
         if siteId == 'trueExpr' and self.hasParens:
             # Cursor is on left paren: User wants to remove parens
@@ -1181,27 +1181,27 @@ class IfExpIcon(icon.Icon):
             # Ignore auto parens because we are removing the supporting operator
             entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
-        win.entryIcon = entryicon.EntryIcon(initialString="if", window=win)
+        entryIcon = entryicon.EntryIcon(initialString="if", window=win)
         if leftArg is not None:
             leftArg.replaceChild(None, 'output')
         if rightArg is not None:
             rightArg.replaceChild(None, 'output')
-            win.entryIcon.setPendingArg(rightArg)
+            entryIcon.setPendingArg(rightArg)
         if parent is None:
             if leftArg is None:
-                win.replaceTop(self, win.entryIcon)
+                win.replaceTop(self, entryIcon)
             else:
                 win.replaceTop(self, leftArg)
-                entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+                entryAttachedIcon.replaceChild(entryIcon, entryAttachedSite)
         else:
             parentSite = parent.siteOf(self)
             if leftArg is not None:
                 parent.replaceChild(leftArg, parentSite)
-            entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+            entryAttachedIcon.replaceChild(entryIcon, entryAttachedSite)
         self.replaceChild(None, 'trueExpr')
         self.replaceChild(None, 'testExpr')
         self.replaceChild(None, 'falseExpr')
-        win.cursor.setToEntryIcon()
+        win.cursor.setToText(entryIcon, drawNew=False)
         win.redisplayChangedEntryIcon(evt, redrawRect)
 
     def updateParens(self):
@@ -1283,6 +1283,7 @@ def backspaceBinOpIcon(ic, site, evt):
                 cursorIc, cursorSite = icon.rightmostSite(
                     icon.findLastAttrIcon(bottomArg))
             win.cursor.setToIconSite(cursorIc, cursorSite)
+            win.refreshDirty()
         else:
             # Cursor is on attribute site of right paren.  Convert to open
             # (unclosed) cursor paren
@@ -1313,9 +1314,9 @@ def backspaceBinOpIcon(ic, site, evt):
             # Expand the scope of the paren to its max, by rearranging the icon
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
+            win.cursor.setToIconSite(cursIc, cursSite)
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
-            win.cursor.setToIconSite(cursIc, cursSite)
         return
     if site == leftSiteOf(ic) and ic.hasParens:
         # Cursor is on left paren: User wants to remove parens
@@ -1390,30 +1391,30 @@ def backspaceBinOpIcon(ic, site, evt):
         # Ignore auto parens because we are removing the supporting operator
         entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
             icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
-    win.entryIcon = entryicon.EntryIcon(initialString=op, window=win)
+    entryIcon = entryicon.EntryIcon(initialString=op, window=win)
     if leftArg is not None:
         leftArg.replaceChild(None, 'output')
     if rightArg is not None:
         rightArg.replaceChild(None, 'output')
-        win.entryIcon.setPendingArg(rightArg)
+        entryIcon.setPendingArg(rightArg)
     if parent is None:
         if leftArg is None:
-            win.replaceTop(ic, win.entryIcon)
+            win.replaceTop(ic, entryIcon)
         else:
             win.replaceTop(ic, leftArg)
-            entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+            entryAttachedIcon.replaceChild(entryIcon, entryAttachedSite)
     else:
         parentSite = parent.siteOf(ic)
         if leftArg is not None:
             parent.replaceChild(leftArg, parentSite)
-        entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+        entryAttachedIcon.replaceChild(entryIcon, entryAttachedSite)
     if isinstance(ic, DivideIcon):
         ic.replaceChild(None, 'topArg')
         ic.replaceChild(None, 'bottomArg')
     else:
         ic.replaceChild(None, 'leftArg')
         ic.replaceChild(None, 'rightArg')
-    win.cursor.setToEntryIcon()
+    win.cursor.setToText(entryIcon, drawNew=False)
     win.redisplayChangedEntryIcon(evt, redrawRect)
 
 def createUnaryOpIconFromAst(astNode, window):

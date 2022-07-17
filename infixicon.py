@@ -147,26 +147,26 @@ class InfixIcon(icon.Icon):
         else:  # leftArg is not None, attach to that
             entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
-        win.entryIcon = entryicon.EntryIcon(initialString=op, window=win)
+        entryIcon = entryicon.EntryIcon(initialString=op, window=win)
         if leftArg is not None:
             leftArg.replaceChild(None, 'output')
         if rightArg is not None:
             rightArg.replaceChild(None, 'output')
-            win.entryIcon.setPendingArg(rightArg)
+            entryIcon.setPendingArg(rightArg)
         if parent is None:
             if leftArg is None:
-                win.replaceTop(self, win.entryIcon)
+                win.replaceTop(self, entryIcon)
             else:
                 win.replaceTop(self, leftArg)
-                entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+                entryAttachedIcon.replaceChild(entryIcon, entryAttachedSite)
         else:
             parentSite = parent.siteOf(self)
             if leftArg is not None:
                 parent.replaceChild(leftArg, parentSite)
-            entryAttachedIcon.replaceChild(win.entryIcon, entryAttachedSite)
+            entryAttachedIcon.replaceChild(entryIcon, entryAttachedSite)
         self.replaceChild(None, 'leftArg')
         self.replaceChild(None, 'rightArg')
-        win.cursor.setToEntryIcon()
+        win.cursor.setToText(entryIcon, drawNew=False)
         win.redisplayChangedEntryIcon(evt, redrawRect)
 
 class AsIcon(InfixIcon):

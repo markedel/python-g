@@ -401,6 +401,7 @@ class SubscriptIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         win = self.window
+        entryIcon = None
         if siteId == 'indexIcon':
             # Cursor is on the index site.  Try to remove brackets
             if self.hasSite('upperIcon') and self.childAt('upperIcon') or \
@@ -414,6 +415,7 @@ class SubscriptIcon(icon.Icon):
                 win.removeIcons([self])
                 if parent is not None:
                     win.cursor.setToIconSite(parent, 'attrIcon')
+                    win.refreshDirty()
             else:
                 # Icon has a single argument and it's in the first slot: unwrap
                 # the bracket from around it.
@@ -425,15 +427,16 @@ class SubscriptIcon(icon.Icon):
                     self.replaceChild(None, 'indexIcon')
                     win.replaceTop(self, content)
                     win.cursor.setToBestCoincidentSite(content, 'output')
+                    win.refreshDirty()
                 else:
                     # The icon has a parent, but since the subscript icon sits on
                     # an attribute site we can't attach, so create an entry icon
                     # and make the content a pending argument to it.
                     parentSite = parent.siteOf(self)
-                    win.entryIcon = entryicon.EntryIcon(parent, parentSite, window=win)
-                    parent.replaceChild(win.entryIcon, parentSite)
-                    win.entryIcon.setPendingArg(content)
-                    win.cursor.setToEntryIcon()
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    parent.replaceChild(entryIcon, parentSite)
+                    entryIcon.setPendingArg(content)
+                    win.cursor.setToText(entryIcon, drawNew=False)
                     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
                     return
                 redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -480,9 +483,9 @@ class SubscriptIcon(icon.Icon):
                 if lowestIc.childAt(lowestSite):
                     # Can't merge the two expressions: insert an entry icon
                     self.replaceChild(None, mergeSite2)
-                    win.entryIcon = entryicon.EntryIcon('', window=win)
-                    win.entryIcon.setPendingArg(mergeIcon2)
-                    rightmostIc.replaceChild(win.entryIcon, rightmostSite)
+                    entryIcon = entryicon.EntryIcon('', window=win)
+                    entryIcon.setPendingArg(mergeIcon2)
+                    rightmostIc.replaceChild(entryIcon, rightmostSite)
                     cursorIc = cursorSite = None
                 else:
                     # Empty site right of colon, merge left side in to that and reorder
@@ -501,12 +504,12 @@ class SubscriptIcon(icon.Icon):
         else:
             self.changeNumSubscripts(1)
         # Place the cursor or new entry icon, and redraw
-        if win.entryIcon is None:
+        if entryIcon is None:
             win.cursor.setToIconSite(cursorIc, cursorSite)
             redrawRegion.add(win.layoutDirtyIcons())
             win.refresh(redrawRegion.get())
         else:
-            win.cursor.setToEntryIcon()
+            win.cursor.setToText(entryIcon, drawNew=False)
             win.redisplayChangedEntryIcon(evt, redrawRegion.get())
 
 def createSubscriptIconFromAst(astNode, window):

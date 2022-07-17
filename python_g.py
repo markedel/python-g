@@ -289,7 +289,6 @@ class Window:
         self.image = Image.new('RGB', (width, height), color=WINDOW_BG_COLOR)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
-        self.entryIcon = None
         self.cursor = cursors.Cursor(self, None)
         self.execResultPositions = {}
         self.undo = undo.UndoRedoList(self)
@@ -630,8 +629,8 @@ class Window:
         # If there's a cursor displayed somewhere, use it
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
-            oldLoc = self.entryIcon.topLevelParent().hierRect()
-            self.entryIcon.addText(char)
+            oldLoc = self.cursor.icon.topLevelParent().hierRect()
+            self.cursor.icon.addText(char)
             self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             return
         elif self.cursor.type == "icon":
@@ -639,12 +638,12 @@ class Window:
             return
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
-            self.entryIcon = entryicon.EntryIcon(window=self)
-            y -= self.entryIcon.sites.output.yOffset
-            self.entryIcon.rect = comn.offsetRect(self.entryIcon.rect, x, y)
-            self.addTopSingle(self.entryIcon, newSeq=True)
-            self.cursor.setToEntryIcon()
-            self.entryIcon.addText(char)
+            entryIcon = entryicon.EntryIcon(window=self)
+            y -= entryIcon.sites.output.yOffset
+            entryIcon.rect = comn.offsetRect(entryIcon.rect, x, y)
+            self.addTopSingle(entryIcon, newSeq=True)
+            self.cursor.setToText(entryIcon, drawNew=False)
+            entryIcon.addText(char)
             self.redisplayChangedEntryIcon()
             return
         elif self.cursor.type == "typeover":
@@ -671,14 +670,14 @@ class Window:
             pendingAttr = replaceIcon.childAt('attrIcon')
             if iconParent is None:
                 # Icon is at top, but may be part of a sequence
-                self.entryIcon = entryicon.EntryIcon(window=self)
-                self.replaceTop(replaceIcon, self.entryIcon)
+                entryIcon = entryicon.EntryIcon(window=self)
+                self.replaceTop(replaceIcon, entryIcon)
             else:
-                self.entryIcon = entryicon.EntryIcon(window=self)
-                iconParent.replaceChild(self.entryIcon, iconParent.siteOf(replaceIcon))
-            self.entryIcon.setPendingAttr(pendingAttr)
-            self.cursor.setToEntryIcon()
-            self.entryIcon.addText(char)
+                entryIcon = entryicon.EntryIcon(window=self)
+                iconParent.replaceChild(entryIcon, iconParent.siteOf(replaceIcon))
+            entryIcon.setPendingAttr(pendingAttr)
+            self.cursor.setToText(entryIcon, drawNew=False)
+            entryIcon.addText(char)
             self.redisplayChangedEntryIcon()
         else:
             # Either no icons were selected, or multiple icons were selected (so
@@ -689,45 +688,46 @@ class Window:
         # Note that location is set in the entry icon for the single case where it
         # becomes the beginning of a sequence.  All others are overwritten by layout
         redrawRect = self.cursor.icon.topLevelParent().hierRect()
-        self.entryIcon = entryicon.EntryIcon(window=self,
+        entryIcon = entryicon.EntryIcon(window=self,
             location=self.cursor.icon.rect[:2])
         if self.cursor.siteType == "output":
-            self.entryIcon.setPendingArg(self.cursor.icon)
-            self.replaceTop(self.cursor.icon, self.entryIcon)
+            entryIcon.setPendingArg(self.cursor.icon)
+            self.replaceTop(self.cursor.icon, entryIcon)
         elif self.cursor.siteType == "attrOut":
-            self.entryIcon.setPendingAttr(self.cursor.icon)
-            self.replaceTop(self.cursor.icon, self.entryIcon)
+            entryIcon.setPendingAttr(self.cursor.icon)
+            self.replaceTop(self.cursor.icon, entryIcon)
         elif self.cursor.siteType in ("seqIn", "seqOut"):
             before = self.cursor.siteType == "seqIn"
-            icon.insertSeq(self.entryIcon, self.cursor.icon, before=before)
-            self.addTopSingle(self.entryIcon)
+            icon.insertSeq(entryIcon, self.cursor.icon, before=before)
+            self.addTopSingle(entryIcon)
         elif self.cursor.siteType == "attrIn":  # Cursor site type is input or attrIn
             if self.cursor.icon.__class__ in noAppendIcons:
-                icon.insertSeq(self.entryIcon, self.cursor.icon)
-                self.addTopSingle(self.entryIcon)
+                icon.insertSeq(entryIcon, self.cursor.icon)
+                self.addTopSingle(entryIcon)
             else:
                 pendingArg = self.cursor.icon.childAt(self.cursor.site)
-                self.cursor.icon.replaceChild(self.entryIcon, self.cursor.site)
-                self.entryIcon.setPendingAttr(pendingArg)
+                self.cursor.icon.replaceChild(entryIcon, self.cursor.site)
+                entryIcon.setPendingAttr(pendingArg)
         else:  # Cursor site type is input
-            self.entryIcon = entryicon.EntryIcon(window=self)
+            entryIcon = entryicon.EntryIcon(window=self)
             cursorIc, cursorSite = iconsites.lowestCoincidentSite(self.cursor.icon,
                 self.cursor.site)
             if cursorIc != self.cursor.icon:
                 #... leave this in until better understood
                 print('Moved cursor to lowest coincident site')
             pendingArg = cursorIc.childAt(cursorSite)
-            cursorIc.replaceChild(self.entryIcon, cursorSite)
-            self.entryIcon.setPendingArg(pendingArg)
-        self.cursor.setToEntryIcon()
-        self.entryIcon.addText(initialText)
+            cursorIc.replaceChild(entryIcon, cursorSite)
+            entryIcon.setPendingArg(pendingArg)
+        self.cursor.setToText(entryIcon, drawNew=False)
+        entryIcon.addText(initialText)
         self.redisplayChangedEntryIcon(oldLoc=redrawRect)
 
     def redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
         redrawRegion = comn.AccumRects(oldLoc)
-        if self.entryIcon is not None:
-            self.entryIcon.minimizePendingArgs()
-            redrawRegion.add(self.entryIcon.rect)
+        if self.cursor.type == "text":
+            if isinstance(self.cursor.icon, entryicon.EntryIcon):
+                self.cursor.icon.minimizePendingArgs()
+            redrawRegion.add(self.cursor.icon.rect)
         # If the size of the entry icon changes it requests re-layout of parent.  Figure
         # out if layout needs to change and do so, otherwise just redraw the entry icon
         layoutNeeded = self.layoutDirtyIcons()
@@ -736,8 +736,8 @@ class Window:
             redrawRegion.add(layoutNeeded)
             self.refresh(redrawRegion.get())
         else:
-            if self.entryIcon is not None:
-                self.entryIcon.draw()
+            if self.cursor.type == "text":
+                self.cursor.icon.draw()
         self.undo.addBoundary()
 
     def watchTypeover(self, ic):
@@ -751,7 +751,7 @@ class Window:
         just as well navigate over it as type over it)"""
         keepAlive = set()
         if self.cursor.type == "text":
-            cursorIcon = self.entryIcon
+            cursorIcon = self.cursor.icon
             cursorIcon, cursorSite = icon.rightmostSite(cursorIcon)
             includeCursorIcon = True
         elif self.cursor.type  == "icon":
@@ -909,14 +909,14 @@ class Window:
                 self.doubleClickFlag = True
                 return
         x, y = self.imageToContentCoord(evt.x, evt.y)
-        if self.entryIcon and self.entryIcon.pointInTextArea(x, y):
-            self.entryIcon.click(evt)
+        ic = self.findIconAt(x, y)
+        if hasattr(ic, "pointInTextArea") and ic.pointInTextArea(x, y):
+            ic.click(evt)
             return
         self.buttonDownTime = msTime()
         self.buttonDownLoc = x, y
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
-        ic = self.findIconAt(x, y)
         if (ic is None or not ic.isSelected()) and not (evt.state & SHIFT_MASK or
                 evt.state & CTRL_MASK):
             self.unselectAll()
@@ -974,14 +974,13 @@ class Window:
             if ic is not None and ic.posOfSite('seqOut')[1] >= y:
                 self._select(ic, op="hier")
                 return
-            if self.entryIcon is not None:  # Might want to flash entry icon, here
-                return
             siteIcon, site = self.siteSelected(evt)
             if siteIcon:
                 self.cursor.setToIconSite(siteIcon, site)
             else:
                 self.unselectAll()
                 self.cursor.setToWindowPos((x, y))
+            self.refreshDirty()
             return
         if self.buttonDownState & SHIFT_MASK:
             self._select(clickedIcon, 'add')
@@ -992,10 +991,10 @@ class Window:
         action = self._nextProgressiveClickAction(clickedIcon, evt)
         if action == "moveCursor":
             self.unselectAll()
-            if self.entryIcon is None:  # Might want to flash entry icon, here
-                siteIcon, site = self.siteSelected(evt)
-                if siteIcon is not None:
-                    self.cursor.setToIconSite(siteIcon, site)
+            siteIcon, site = self.siteSelected(evt)
+            if siteIcon is not None:
+                self.cursor.setToIconSite(siteIcon, site)
+                self.refreshDirty()
             return
         self._select(clickedIcon, action)
 
@@ -1072,8 +1071,8 @@ class Window:
                 text = self.top.clipboard_get(type="STRING")
             except:
                 return
-            oldLoc = self.entryIcon.hierRect()
-            self.entryIcon.addText(text)
+            oldLoc = self.cursor.icon.hierRect()
+            self.cursor.icon.addText(text)
             self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
             return
         # Look at what is on the clipboard and make the best possible conversion to icons
@@ -1117,7 +1116,7 @@ class Window:
                 y -= yOff
             pastePos = x, y
         elif self.cursor.type == "icon":
-            if self.cursor.site[0] != "input" or len(pastedIcons) != 1:
+            if self.cursor.siteType != "input" or len(pastedIcons) != 1:
                 cursors.beep()
                 return
             replaceParent = self.cursor.icon
@@ -1143,25 +1142,26 @@ class Window:
             topIcon = replaceParent.topLevelParent()
             redrawRegion = comn.AccumRects(topIcon.hierRect())
             replaceParent.replaceChild(pastedIcons[0], replaceSite)
+            self.cursor.setToIconSite(replaceParent, replaceSite)
             print('start layout', time.monotonic())
             redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
             print('finish layout', time.monotonic())
             self.refresh(redrawRegion.get())
-            self.cursor.setToIconSite(replaceParent, replaceSite)
         else:  # Place at top level
             x, y = pastePos
             for topIcon in pastedIcons:
                 for ic in topIcon.traverse():
                     ic.rect = comn.offsetRect(ic.rect, x, y)
             self.addTop(pastedIcons)
-            print('start layout', time.monotonic())
-            redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
-            print('finish layout', time.monotonic())
-            self.refresh(redrawRect, clear=False)
             if iconOutputSite is None:
                 self.cursor.removeCursor()
             else:
                 self.cursor.setToBestCoincidentSite(pastedIcons[0], "output")
+            print('start layout', time.monotonic())
+            redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
+            print('finish layout', time.monotonic())
+            if redrawRect is not None:
+                self.refresh(redrawRect, clear=False)
         self.undo.addBoundary()
 
     def _deleteCb(self, _evt=None):
@@ -1176,7 +1176,7 @@ class Window:
         self.undo.addBoundary()
 
     def _backspaceCb(self, evt=None):
-        if self.entryIcon is None:
+        if self.cursor.type != "text":
             selectedIcons = self.selectedIcons()
             if len(selectedIcons) > 0:
                 self.removeIcons(selectedIcons)
@@ -1196,10 +1196,11 @@ class Window:
                 ic.draw()
                 self.refresh(ic.rect, redraw=False, clear=False)
                 self.cursor.setToIconSite(*icon.rightmostFromSite(ic, siteBefore))
+            self.refreshDirty()  # Just changing cursor position can require redraw
         else:
-            topIcon = self.entryIcon.topLevelParent()
+            topIcon = self.cursor.icon.topLevelParent()
             redrawRect = topIcon.hierRect()
-            self.entryIcon.backspaceInText(evt)
+            self.cursor.icon.backspaceInText(evt)
             self.redisplayChangedEntryIcon(evt, redrawRect)
 
     def _backspaceIcon(self, evt):
@@ -1229,22 +1230,22 @@ class Window:
         redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
         parent = ic.parent()
         if parent is None:
-            self.entryIcon = entryicon.EntryIcon(initialString=entryText, window=self,
+            entryIcon = entryicon.EntryIcon(initialString=entryText, window=self,
                 willOwnBlock=hasattr(ic, 'blockEnd'))
-            self.replaceTop(ic, self.entryIcon)
+            self.replaceTop(ic, entryIcon)
         else:
             parentSite = parent.siteOf(ic)
-            self.entryIcon = entryicon.EntryIcon(initialString=entryText, window=self)
-            parent.replaceChild(self.entryIcon, parentSite)
+            entryIcon = entryicon.EntryIcon(initialString=entryText, window=self)
+            parent.replaceChild(entryIcon, parentSite)
         if pendingArgSite is not None:
             child = ic.childAt(pendingArgSite)
             if child is not None:
                 siteType = ic.typeOf(pendingArgSite)
                 if siteType == "input":
-                    self.entryIcon.setPendingArg(child)
+                    entryIcon.setPendingArg(child)
                 elif siteType == "attrIn":
-                    self.entryIcon.setPendingAttr(child)
-        self.cursor.setToEntryIcon()
+                    entryIcon.setPendingAttr(child)
+        self.cursor.setToText(entryIcon, drawNew=False)
         self.redisplayChangedEntryIcon(evt, redrawRegion.get())
 
     def _listPopupCb(self):
@@ -1286,12 +1287,14 @@ class Window:
         self.cursor.processArrowKey(evt)
 
     def _cancelCb(self, evt=None):
-        if self.entryIcon is not None:
-            oldLoc = self.entryIcon.hierRect()
-            self.entryIcon.remove(forceDelete=True)
+        if self.cursor.type == "text" and \
+                isinstance(self.cursor.icon, entryicon.EntryIcon):
+            oldLoc = self.cursor.icon.hierRect()
+            self.cursor.icon.remove(forceDelete=True)
             self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
         else:
             self.cursor.removeCursor()
+            self.refreshDirty()
         self._cancelDrag()
 
     def _enterCb(self, evt):
@@ -1396,22 +1399,22 @@ class Window:
     def _completeEntry(self, evt):
         """Attempt to finish any text entry in progress.  Returns True if successful,
         false if text remains unprocessed in the entry icon."""
-        if self.entryIcon is None:
+        if self.cursor.type != "text":
             return True
         # Add a delimiter character to force completion
-        oldLoc = self.entryIcon.rect
-        self.entryIcon.addText(" ")
+        entryIcon = self.cursor.icon
+        oldLoc = entryIcon.rect
+        entryIcon.addText(" ")
         self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
         # If the entry icon is still there, check if it's empty and attached to an icon.
         # If so, remove.  Otherwise, give up and fail out
-        if self.entryIcon is not None and self.entryIcon.attachedIcon() is not None:
-            if len(self.entryIcon.text) == 0 and \
-             self.entryIcon.pendingAttr() is None and \
-             self.entryIcon.pendingArg() is None:
-                self.cursor.setToIconSite(self.entryIcon.attachedIcon(),
-                 self.entryIcon.attachedSite)
-                self.removeIcons([self.entryIcon])
-                self.entryIcon = None
+        if entryIcon is not None and entryIcon.attachedIcon() is not None:
+            if len(entryIcon.text) == 0 and \
+             entryIcon.pendingAttr() is None and \
+             entryIcon.pendingArg() is None:
+                self.cursor.setToIconSite(entryIcon.attachedIcon(),
+                    entryIcon.attachedSite)
+                self.removeIcons([entryIcon])
             else:
                 return False
         return True
@@ -1639,6 +1642,7 @@ class Window:
         self.lastRectSelect = None
         self.rectSelectInitialState = self.selectedSet.copy()
         self._updateRectSelect(evt)
+        self.refreshDirty()
 
     def _updateRectSelect(self, evt):
         toggle = evt.state & CTRL_MASK
@@ -1999,7 +2003,7 @@ class Window:
         containing ic"""
         if op in ('select', 'hier', 'left', 'block'):
             self.unselectAll()
-        if ic is None or ic is self.entryIcon:
+        if ic is None or self.cursor.type == "text" and ic is self.cursor.icon:
             return
         refreshRegion = comn.AccumRects()
         if op == 'hier':
@@ -2026,8 +2030,9 @@ class Window:
                 ic.select(not ic.isSelected())
             else:
                 ic.select()
-        self.refresh(refreshRegion.get(), clear=False)
         self.cursor.removeCursor()
+        refreshRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
+        self.refresh(refreshRegion.get(), clear=False)
 
     def unselectAll(self):
         refreshRegion = comn.AccumRects()
@@ -2080,7 +2085,7 @@ class Window:
         elif self.cursor.type == "icon":
             print(f"Icon: {self.cursor.icon.dumpName()}, Site: {self.cursor.site}")
         elif self.cursor.type == "text":
-            print(f"{repr(self.entryIcon.text)}, self.entryIcon.cursorPos")
+            print(f"{repr(self.cursor.icon.text)}, {self.cursor.icon.cursorPos}")
     def _debugLayoutCb(self, evt):
         topIcons = findTopIcons(self.selectedIcons())
         for ic in topIcons:
@@ -2112,6 +2117,15 @@ class Window:
         else:
             region = self.contentToImageRect(region)
             self.drawImage(self.image, (region[0], region[1]), region)
+
+    def refreshDirty(self):
+        """Refresh any icons marked as dirty.  If nothing is marked as dirty, do nothing.
+        Because refresh will redraw the entire window if the region parameter is None,
+        refresh(layoutDirtyIcons()) can be wasteful when there is a possibility that
+        nothing is dirty, so you should almost always use this call, instead."""
+        dirty = self.layoutDirtyIcons(filterRedundantParens=False)
+        if dirty is not None:
+            self.refresh()
 
     def drawImage(self, image, location, subImage=None):
         """Draw an arbitrary image anywhere in the window, ignoring the window image.

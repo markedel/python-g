@@ -18,8 +18,9 @@ import infixicon
 import cursors
 import reorderexpr
 
-PEN_BG_COLOR = (255, 245, 245, 255)
-PEN_OUTLINE_COLOR = (255, 97, 120, 255)
+PLAIN_BG_COLOR = (255, 245, 245, 255)
+FOCUS_BG_COLOR = (255, 230, 230, 255)
+OUTLINE_COLOR = (230, 230, 230, 255)
 
 # Gap to be left between the entry icon and next icons to the right of it
 ENTRY_ICON_GAP = 3
@@ -62,6 +63,7 @@ penImage = comn.asciiToImage((
     "..o%%%%%%%oo",
     "...o%%%%oo  ",
     "....oooo    "))
+dimPenImage = penImage.point(lambda p: p + 200)
 
 attrPenImage = comn.asciiToImage((
     "....oooo...",
@@ -76,6 +78,7 @@ attrPenImage = comn.asciiToImage((
     "o7%%oooo...",
     "oooo......."
 ))
+dimAttrPenImage = attrPenImage.point(lambda p: p + 200)
 
 class EntryIcon(icon.Icon):
     def __init__(self, initialString="", window=None, willOwnBlock=False,
@@ -97,6 +100,8 @@ class EntryIcon(icon.Icon):
         self.markLayoutDirty()
         self.textOffset = penImage.width + icon.TEXT_MARGIN
         self.cursorPos = len(initialString)
+        self.hasFocus = False
+        self.focusChanged = False
         # If the entry icon will own a code block, create a BlockEnd icon and link it in
         if willOwnBlock:
             self.blockEnd = icon.BlockEnd(self, window)
@@ -123,23 +128,51 @@ class EntryIcon(icon.Icon):
         return boxWidth + self.penOffset()
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
-        if self.drawList is None:
+        if self.drawList is None or self.focusChanged:
             boxWidth = self._width(boxOnly=True) - 1
             img = Image.new('RGBA', (comn.rectWidth(self.rect), self.height))
-            bgColor = PEN_OUTLINE_COLOR if style else PEN_BG_COLOR
+            bgColor = FOCUS_BG_COLOR if self.hasFocus else PLAIN_BG_COLOR
             draw = ImageDraw.Draw(img)
             draw.rectangle((self.penOffset(), 0, self.penOffset() + boxWidth,
-             self.height-1), fill=bgColor, outline=PEN_OUTLINE_COLOR)
+             self.height-1), fill=bgColor, outline=OUTLINE_COLOR)
             draw.text((self.textOffset, icon.TEXT_MARGIN), self.text,
              font=icon.globalFont, fill=(0, 0, 0, 255))
             if self.attachedToAttribute():
                 nibTop = self.sites.attrOut.yOffset - attrPenImage.height + 2
-                img.paste(attrPenImage, box=(0, nibTop), mask=attrPenImage)
+                img.paste(attrPenImage if self.hasFocus else dimAttrPenImage,
+                    box=(0, nibTop), mask=attrPenImage)
             else:
                 nibTop = self.sites.output.yOffset - penImage.height // 2
-                img.paste(penImage, box=(0, nibTop), mask=penImage)
+                img.paste(penImage if self.hasFocus else dimPenImage, box=(0, nibTop),
+                    mask=penImage)
             self.drawList = [((0, 0), img)]
+            self.focusChanged = False
         self._drawFromDrawList(toDragImage, location, clip, style)
+
+    def focusIn(self):
+        if not self.hasFocus:
+            self.focusChanged = True
+            self.hasFocus = True
+            self.markLayoutDirty()
+
+    def focusOut(self, removeIfPossible=True):
+        if self.hasFocus:
+            self.focusChanged = True
+            self.hasFocus = False
+            self.markLayoutDirty()
+            # If both text and arguments can be placed, do so.  Note that this is a bit
+            # hairy, because focus out is invoked via cursor movement calls, which are
+            # plentiful, and which older code did not expect to be rearranging icons.
+            # Start by at least making sure that the icon is still in the window
+            if not removeIfPossible:
+                return
+            topIcon = self.topLevelParentSafe()
+            if topIcon is None or topIcon not in self.window.topIcons:
+                return
+            if not self._canPlaceArgs():
+                return
+            newText = self.text + ' '
+            self._setText(newText, len(newText))
 
     def setPendingArg(self, newArg):
         if newArg is None:
@@ -247,15 +280,18 @@ class EntryIcon(icon.Icon):
     def addText(self, char):
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
-        if self.window.entryIcon is not None:
+        if self.window.cursor.type == "text" and self.window.cursor.icon is self:
+            # Currently we're not coloring based on text, but may want to restore later
             self._recolorPending()
 
     def backspaceInText(self, evt=None):
         if self.text != "":
             newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
             self._setText(newText, self.cursorPos-1)
-            if self.window.entryIcon is not None:
+            if self.window.cursor.type == "text" and self.window.cursor.icon is self:
+                # Currently not coloring based on text, but may want to restore later
                 self._recolorPending()
+            self.markLayoutDirty()
             return
         # The entry icon contains no text.  Attempt to remove it
         if self.remove():
@@ -267,8 +303,9 @@ class EntryIcon(icon.Icon):
         pendingAttr = self.pendingAttr()
         self.remove(forceDelete=True)
         self.window._backspaceIcon(evt)
-        entryIcon = self.window.entryIcon
-        if entryIcon:
+        if self.window.cursor.type == "text" and \
+                isinstance(self.window.cursor.icon, EntryIcon):
+            entryIcon = self.window.cursor.icon
             if not (entryIcon.pendingArg() or entryIcon.pendingAttr()):
                 if pendingArg:
                     entryIcon.setPendingArg(pendingArg)
@@ -279,13 +316,12 @@ class EntryIcon(icon.Icon):
             cursor = self.window.cursor
             if cursor.type == "icon":
                 if cursor.site not in ('output', 'attrOut'):
-                    self.window.entryIcon = self
                     cursor.icon.replaceChild(self, cursor.site)
-                    cursor.setToEntryIcon()
+                    cursor.setToText(self, drawNew=False)
             elif cursor.type == "window":
-                self.window.entryIcon = self
                 icon.moveRect(self.rect, cursor.pos)
                 self.window.addTop(self)
+                cursor.setToText(self, drawNew=False)
 
     def arrowAction(self, direction):
         newCursorPos = self.cursorPos
@@ -355,7 +391,6 @@ class EntryIcon(icon.Icon):
                 seriesName, seriesIdx = iconsites.splitSeriesSiteId(attachedSite)
                 newSite = iconsites.makeSeriesSiteId(seriesName, seriesIdx - 1)
                 self.window.cursor.setToIconSite(attachedIcon, newSite)
-        self.window.entryIcon = None
         return True
 
     def _setText(self, newText, newCursorPos):
@@ -509,12 +544,11 @@ class EntryIcon(icon.Icon):
             self.attachedIcon().replaceChild(None, self.attachedSite())
         # If the entry icon can go away, remove it and we're done
         if pendingArgsCleared and remainingText == "":
-            self.window.entryIcon = None
             self.window.cursor.setToIconSite(cursorIcon, cursorSite)
             return
         # There is remaining text or pending arguments.  Restore the entry icon
         cursorIcon.replaceChild(self, cursorSite)
-        self.window.cursor.setToEntryIcon()
+        self.window.cursor.setToText(self)
         self.markLayoutDirty()
         self.text = ""
         self.cursorPos = 0
@@ -635,7 +669,6 @@ class EntryIcon(icon.Icon):
                 pendingArg.replaceChild(None, 'argIcons_0')
                 newList.insertChild(arg, "argIcons", i)
             self.window.replaceTop(self, newList)
-            self.window.entryIcon = None
             self.window.cursor.setToIconSite(newList, 'argIcons_0')
             return
         # Determine if a parent has sequence clauses to the right of the entry icon that
@@ -726,7 +759,6 @@ class EntryIcon(icon.Icon):
                 if self.pendingAttr():
                     tupleIcon.replaceChild(self.pendingAttr(), 'attrIcon')
                     self.setPendingAttr(None)
-                self.window.entryIcon = None
                 self.window.cursor.setToIconSite(tupleIcon, 'attrIcon')
             self.window.updateTypeoverStates()
             return True
@@ -782,7 +814,6 @@ class EntryIcon(icon.Icon):
             if self.pendingAttr():
                 matchingParen.replaceChild(self.pendingAttr(), 'attrIcon')
                 self.setPendingAttr(None)
-            self.window.entryIcon = None
             self.window.cursor.setToIconSite(*cursorPos)
         self.window.updateTypeoverStates()
         return True
@@ -1028,6 +1059,8 @@ class EntryIcon(icon.Icon):
     def click(self, evt):
         self.window.cursor.erase()
         self.cursorPos = findTextOffset(self.text, evt.x - self.rect[0] - self.textOffset)
+        self.window.cursor.setToText(self, drawNew=False)
+        self.window.refreshDirty()
         self.window.cursor.draw()
 
     def pointInTextArea(self, x, y):
@@ -1118,18 +1151,18 @@ class EntryIcon(icon.Icon):
                 return True
             return self.pendingArg() is None and self.pendingAttr() is None
         if self.text.isidentifier():
-            if not self.attachedSiteType() == 'input':
+            if self.attachedSite() is not None and self.attachedSiteType() != 'input':
                 return False
-            return self.pendingAttr() and not self.pendingArg()
+            return not self.pendingArg()  # Pending attr is ok, but not handling lists yet
         if self.text in binaryOperators or self.text in compareOperators:
             if not self.attachedSiteType() == 'attrIn':
                 return False
-            return self.pendingArg() and not self.pendingAttr()
+            return not self.pendingAttr()
         if attrPattern.fullmatch(self.text):
             if self.attachedSiteType() != "attrIn" or \
                     self.attachedIcon().isCursorOnlySite(self.attachedSite()):
                 return False
-            return self.pendingAttr() and not self.pendingArg()
+            return not self.pendingArg()
         return False
 
     def _placePendingArgs(self, onIcon, onSite):
@@ -1498,18 +1531,18 @@ def reopenParen(ic):
         ic.replaceChild(None, 'attrIcon')
         if lastArg is None:
             # Empty site gets attribute: create an entry icon with pending attribute
-            ic.window.entryIcon = EntryIcon(window=ic.window)
-            ic.window.entryIcon.setPendingAttr(attrIcon)
-            ic.replaceChild(ic.window.entryIcon, lastArgSite)
-            ic.window.cursor.setToEntryIcon()
+            entryIcon = EntryIcon(window=ic.window)
+            entryIcon.setPendingAttr(attrIcon)
+            ic.replaceChild(entryIcon, lastArgSite)
+            ic.window.cursor.setToText(entryIcon, drawNew=False)
         else :
             rightmostIc, rightmostSite = icon.rightmostSite(lastArg)
             if rightmostSite != 'attrIcon' or rightmostIc.isCursorOnlySite(rightmostSite):
                 # Can't place attribute: create an entry icon to stitch attribute on
-                ic.window.entryIcon = EntryIcon(window=ic.window)
-                ic.window.entryIcon.setPendingAttr(attrIcon)
-                rightmostIc.replaceChild(ic.window.entryIcon, rightmostSite)
-                ic.window.cursor.setToEntryIcon()
+                entryIcon = EntryIcon(window=ic.window)
+                entryIcon.setPendingAttr(attrIcon)
+                rightmostIc.replaceChild(entryIcon, rightmostSite)
+                ic.window.cursor.setToText(entryIcon, drawNew=False)
             else:
                 # attrIcon can be safely attached to the last argument
                 rightmostIc.replaceChild(attrIcon, rightmostSite)

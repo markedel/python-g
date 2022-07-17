@@ -559,14 +559,14 @@ class AugmentedAssignIcon(icon.Icon):
                     print('AugmentedAssign has parent?????')
                     return
                 if targetIcon is None:
-                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-                    win.replaceTop(self, win.entryIcon)
+                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+                    win.replaceTop(self, entryIcon)
                 else:
-                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                     win.replaceTop(self, targetIcon)
-                    targetIcon.replaceChild(win.entryIcon, 'attrIcon')
+                    targetIcon.replaceChild(entryIcon, 'attrIcon')
                 if len(valueIcons) == 1:
-                    win.entryIcon.setPendingArg(valueIcons[0])
+                    entryIcon.setPendingArg(valueIcons[0])
             else:
                 # Multiple remaining arguments: convert to tuple with entry icon as
                 # first element
@@ -574,20 +574,20 @@ class AugmentedAssignIcon(icon.Icon):
                 valueIcons = [s.att for s in self.sites.values if s.att is not None]
                 newTuple = listicons.TupleIcon(window=win, noParens=True)
                 if targetIcon is None:
-                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-                    newTuple.replaceChild(win.entryIcon, "argIcons_0")
+                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+                    newTuple.replaceChild(entryIcon, "argIcons_0")
                 else:
-                    win.entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-                    targetIcon.replaceChild(win.entryIcon, 'attrIcon')
+                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+                    targetIcon.replaceChild(entryIcon, 'attrIcon')
                     newTuple.replaceChild(targetIcon, 'argIcons_0')
                 for i, arg in enumerate(valueIcons):
                     if i == 0:
-                        win.entryIcon.setPendingArg(arg)
+                        entryIcon.setPendingArg(arg)
                     else:
                         self.replaceChild(None, self.siteOf(arg))
                         newTuple.insertChild(arg, "argIcons", i)
                 win.replaceTop(self, newTuple)
-            win.cursor.setToEntryIcon()
+            win.cursor.setToText(entryIcon, drawNew=False)
             win.redisplayChangedEntryIcon(evt, redrawRegion.get())
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty
