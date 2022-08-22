@@ -8,6 +8,12 @@ import entryicon
 import opicons
 import cursors
 
+# Self-delimiting infix operators, which respond to backspace by removing the
+# delimiting character.  This both mimics normal typing, and avoids having a pre-typed
+# delimiter in the entry text which would require special consideration in the parser
+# (which is not currently there).
+delimitOperators = (':')
+
 class InfixIcon(icon.Icon):
     def __init__(self, op, opImg=None, isKwd=False, window=None, location=None):
         icon.Icon.__init__(self, window)
@@ -133,6 +139,10 @@ class InfixIcon(icon.Icon):
         return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
     def backspace(self, siteId, evt):
+        if siteId == 'leftArg':
+            # We shouldn't be called in this case, because we have no content to the
+            # left of the left input, but this can happen on the top level
+            return
         redrawRect = self.topLevelParent().hierRect()
         parent = self.parent()
         leftArg = self.leftArg()
@@ -147,12 +157,13 @@ class InfixIcon(icon.Icon):
         else:  # leftArg is not None, attach to that
             entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
-        entryIcon = entryicon.EntryIcon(initialString=op, window=win)
+        entryString = op[:-1] if op in delimitOperators else op
+        entryIcon = entryicon.EntryIcon(initialString=entryString, window=win)
         if leftArg is not None:
             leftArg.replaceChild(None, 'output')
         if rightArg is not None:
             rightArg.replaceChild(None, 'output')
-            entryIcon.setPendingArg(rightArg)
+            entryIcon.appendPendingArgs([rightArg])
         if parent is None:
             if leftArg is None:
                 win.replaceTop(self, entryIcon)

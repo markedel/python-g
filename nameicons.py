@@ -1154,17 +1154,15 @@ def backspaceSeriesStmt(ic, site, evt, text):
                 pendingArgSite = None
             win.backspaceIconToEntry(evt, ic, text, pendingArgSite)
         else:
-            # Multiple remaining arguments: convert to entry icon with naked tuple
-            # as pending argument
+            # Multiple remaining arguments: convert to entry icon with pending args in
+            # a list (entry icon's minimizePendingArgs will unload to parent if possible)
             redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
             valueIcons = [s.att for s in ic.sites.values]
-            newTuple = listicons.TupleIcon(window=win, noParens=True)
             entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-            for i, arg in enumerate(valueIcons):
+            for arg in valueIcons:
                 if arg is not None:
                     ic.replaceChild(None, ic.siteOf(arg))
-                newTuple.insertChild(arg, "argIcons", i)
-            entryIcon.setPendingArg(newTuple)
+            entryIcon.appendPendingArgs([valueIcons])
             parent = ic.parent()
             if parent is None:
                 win.replaceTop(ic, entryIcon)

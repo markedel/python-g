@@ -901,6 +901,99 @@ class Icon:
         and attributes attached to the entry icon as pending args/attributes."""
         print('Backspace method not yet implemented for', self.dumpName())
 
+    def placeArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+        """Attach icons in placement list to icon sites.  Unlike replace/insertChild
+        methods, allows for multiple attachments to a (contiguous) range of sites, and
+        creation of sites that don't yet exist on the icon.  Used for placing icons from
+        entry icon pending args list and (eventually) for multi-element pastes.  The
+        format of the placementList is a list of elements which can be either:
+        1. An icon to be placed.  Icons on the top level of the list originate from
+           individual (not sequence) sites of the icon whose arguments were transferred.
+        2. None, representing an empty site in the icon whose arguments were transferred
+        3. A tuple or list of icons originating from a site series.  This may also
+           contain Nones, representing empty series sites.
+        Starts placing at startAtSite.  if startAtSite is None, starts at the first
+        child-type cursor site.  Placement will proceed until any of the following
+        conditions are met:
+        1. All icons in placementList are placed
+        3. The next icon's parent attachment site is incompatible with the next site
+        2. The next (non-list) site to be placed is already occupied.  Note, however:
+            a. If ignoreOccupiedStart is True, the starting site will be placed
+               even if it is already occupied (replacing the existing icon).
+            b. List sites are *inserted*, not replaced, so (provided that the site
+               types match) an icon can always be placed on a list site, regardless of
+               whether it is currently occupied.
+        Returns two values: 1) the index in to placementList of the last icon placed
+        or None if no icons could be placed, and 2) if that icon was from a series,
+        the index in to that series of the icon (or None if it was not from a series).
+        The Icon base class method handles only the simple cases of a single input or
+        a single list (as detected from the icon site list).  While it can also handle
+        multiple inputs or multiple inputs followed by a list, it will fill them in
+        blindly disregarding site/list boundaries of the original icon, which is probably
+        not what you want.  Icons with more complicated needs must redefine the method.
+        (For the Python language, itself, the few icons that do have combinations of
+        sites also have content-specific placement criteria, so there was no point in
+        trying to define placement rules in the base class that no one would use).
+        Note that the placement list format matches that of the call to add icons to an
+        entry icon's pending argument list.  This is not a coincidence, because this is
+        the mechanism by which argument attachments get reestablished when an icon with
+        multiple argument sites (for, def, class, inline-if) gets converted back and
+        forth to/from an entry icon.  While the placementList format does manage to
+        encode all of the information needed to reproduce argument configurations for all
+        of the Python-language icons, this mechanism may be insufficient for arbitrary
+        icon designs, since some information from the original configuration is lost."""
+        return self._placeArgs(placementList, startSiteId, ignoreOccupiedStart, True)
+
+    def canPlaceArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+        """Determine if placeArgs would succeed if called.  Returns the number of icons
+        that would be placed, 0 if none would be placed.  See placeArgs for details."""
+        return self._placeArgs(placementList, startSiteId, ignoreOccupiedStart, False)
+
+    def _placeArgs(self, placementList, startSiteId, ignoreOccupiedStart, doPlacement):
+        """"Common method to perform both placeArgs and canPlaceArgs (the only
+        difference between the two is the two lines of code that actually insert/replace
+        the argument icons, which are called (or not) based on the value of doPlacement)."""
+        placedIdx = None
+        placedSeriesIdx = None
+        siteId = self.sites.firstCursorSite() if startSiteId is None else startSiteId
+        placeListIter = placementListIter(placementList)
+        while siteId is not None:
+            if iconsites.isSeriesSiteId(siteId):
+                # If we're placing in a series, we can keep going until we exhaust
+                # placementList or something is the wrong type, so we'll never return
+                # to the outer while loop
+                seriesName, seriesIdx = iconsites.splitSeriesSiteId(siteId)
+                for i, (ic, placeListIdx, placeListSeriesIdx) in enumerate(placeListIter):
+                    if not validateCompatibleChild(ic, self, seriesName):
+                        return placedIdx, placedSeriesIdx
+                    if doPlacement:
+                        if i == 0:
+                            self.replaceChild(ic,
+                                iconsites.makeSeriesSiteId(seriesName, seriesIdx))
+                        else:
+                            self.insertChild(ic, seriesName, seriesIdx + i)
+                    placedIdx = placeListIdx
+                    placedSeriesIdx = placeListSeriesIdx
+                return placedIdx, placedSeriesIdx
+            else:
+                ic, placeListIdx, seriesIdx = next(placeListIter, ("end", None, None))
+                if ic == "end":
+                    return placedIdx, placedSeriesIdx
+                site = getattr(self.sites, siteId)
+                if hasattr(site, 'cursorOnly') and site.cursorOnly:
+                    return placedIdx, placedSeriesIdx
+                if siteId == startSiteId and not ignoreOccupiedStart:
+                    if site.att is not None:
+                        return placedIdx, placedSeriesIdx
+                if not validateCompatibleChild(ic, self, siteId):
+                    return placedIdx, placedSeriesIdx
+                if doPlacement:
+                    self.replaceChild(ic, siteId)
+                placedIdx = placeListIdx
+                placedSeriesIdx = None
+                siteId = self.sites.nextCursorSite(siteId)
+        return placedIdx, placedSeriesIdx
+
     @staticmethod
     def fromClipboard(clipData, window, offset):
         iconClass, location, args, childData = clipData
@@ -1520,3 +1613,38 @@ def createFromAst(astNode, window):
     if creationFn is None:
         return astDecodeFallback(astNode, window)
     return creationFn(astNode, window)
+
+def placementListIter(placeList, stopAfterIdx=None, stopAfterSeriesIdx=None,
+        includeEmptySites=False, includeEmptySeriesSites=True):
+    """Iterate through placement list of the form accepted by Icon.placeArgs, returning
+    icon, index in the place list of the icon, and if the icon came from a series, the
+    index in to the series from which it was taken."""
+    for placeListIdx, placeItem in enumerate(placeList):
+        if isinstance(placeItem, (list, tuple)):
+            for seriesIdx, ic in enumerate(placeItem):
+                if ic is not None or includeEmptySeriesSites:
+                    yield ic, placeListIdx, seriesIdx
+                if stopAfterIdx == placeListIdx and stopAfterSeriesIdx == seriesIdx:
+                    return
+        else:
+            if placeItem is not None or includeEmptySites:
+                yield placeItem, placeListIdx, None
+        if stopAfterIdx == placeListIdx:
+            return
+
+def firstPlaceListIcon(placeList):
+    for ic, placeListIdx, seriesIdx in placementListIter(placeList):
+        if ic is not None:
+            return ic, placeListIdx, seriesIdx
+    return None, None, None
+
+def validateCompatibleChild(child, parent, siteOrSeriesName):
+    if child is None:
+        return True  # Anything can have an empty site
+    parentSiteOrSeries = getattr(parent.sites, siteOrSeriesName)
+    for childParentSite in child.sites.parentSites():
+        if iconsites.matingSiteType[parentSiteOrSeries.type] == childParentSite.type:
+            break
+    else:
+        return False
+    return True

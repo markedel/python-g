@@ -566,7 +566,7 @@ class AugmentedAssignIcon(icon.Icon):
                     win.replaceTop(self, targetIcon)
                     targetIcon.replaceChild(entryIcon, 'attrIcon')
                 if len(valueIcons) == 1:
-                    entryIcon.setPendingArg(valueIcons[0])
+                    entryIcon.appendPendingArgs([valueIcons[0]])
             else:
                 # Multiple remaining arguments: convert to tuple with entry icon as
                 # first element
@@ -582,7 +582,7 @@ class AugmentedAssignIcon(icon.Icon):
                     newTuple.replaceChild(targetIcon, 'argIcons_0')
                 for i, arg in enumerate(valueIcons):
                     if i == 0:
-                        entryIcon.setPendingArg(arg)
+                        entryIcon.appendPendingArgs([arg])
                     else:
                         self.replaceChild(None, self.siteOf(arg))
                         newTuple.insertChild(arg, "argIcons", i)

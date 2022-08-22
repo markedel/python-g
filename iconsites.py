@@ -214,7 +214,7 @@ class IconSiteList:
             self.nextCursorTraverseOrder += 1
         elif cursorTraverseOrder is not None:
             self.nextCursorTraverseOrder = max(cursorTraverseOrder+1,
-                self.nextCursorTravOrder)
+                self.nextCursorTraverseOrder)
         series = IconSiteSeries(name, siteType, initCount, initOffsets,
             cursorTraverseOrder)
         setattr(self, name, series)
@@ -236,6 +236,20 @@ class IconSiteList:
         setattr(self, newName, series)
         self._typeDict[series.type].remove(oldName)
         self._typeDict[series.type].append(newName)
+
+    def renameSite(self, oldName, newName):
+        if not hasattr(self, oldName):
+            print('renameSite: passed site series')
+            return
+        site = getattr(self, oldName)
+        if not isinstance(site, IconSite):
+            print('renameSite: siteId not found in site list')
+            return
+        site.name = newName
+        delattr(self, oldName)
+        setattr(self, newName, site)
+        self._typeDict[site.type].remove(oldName)
+        self._typeDict[site.type].append(newName)
 
     def getSeries(self, siteIdOrSeriesName):
         """If siteId is the part of a series, return a list of all of the sites in the
@@ -310,12 +324,20 @@ class IconSiteList:
                 print("nextCursorSite called with non-existent site")
                 return None
             order = site.order
-        for i in range(order+1, self.nextCursorTraverseOrder):
+        nextSite = self.nextTraversalSiteOrSeries(order)
+        if nextSite is None:
+            return None
+        if isinstance(nextSite, IconSiteSeries):
+            return makeSeriesSiteId(nextSite.name, 0)
+        return nextSite.name
+
+    def nextTraversalSiteOrSeries(self, orderIdx):
+        """Returns the next site or series in the site list with higher traversal order
+        (right of) orderIdx."""
+        for i in range(orderIdx+1, self.nextCursorTraverseOrder):
             nextSite = self.nthCursorSite(i)
             if nextSite is not None:
-                if isinstance(nextSite, IconSiteSeries):
-                    return makeSeriesSiteId(nextSite.name, 0)
-                return nextSite.name
+                return nextSite
         return None
 
     def prevCursorSite(self, siteId):
@@ -354,7 +376,10 @@ class IconSiteList:
         return lastSite.name
 
     def firstCursorSite(self):
+        """Returns siteId for the leftmost (child-containing-type) site of the list"""
         firstSite = self.nthCursorSite(0)
+        if firstSite is None:  # order of the first item does not have to be 0
+            firstSite = self.nextTraversalSiteOrSeries(0)
         if firstSite is None:
             return None
         if isinstance(firstSite, IconSiteSeries):

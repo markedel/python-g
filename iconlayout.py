@@ -93,11 +93,13 @@ class ListLayoutMgr:
     appear when the list becomes multi-row.  Both the layout and the .width attribute
     incorporate the additional space where the spine will draw, but the caller must
     invoke drawSimpleSpine to actually draw it"""
-    def __init__(self, ic, siteSeriesName, leftSiteX, leftSiteY, simpleSpine=False):
+    def __init__(self, ic, siteSeriesName, leftSiteX, leftSiteY, simpleSpine=False,
+            cursorTraverseOrder=None):
         self.icon = ic
         self.siteSeriesName = siteSeriesName
         self.simpleSpine = simpleSpine
-        ic.sites.addSeries(siteSeriesName, 'input', 1, [(leftSiteX, leftSiteY)])
+        ic.sites.addSeries(siteSeriesName, 'input', 1, [(leftSiteX, leftSiteY)],
+            cursorTraverseOrder=cursorTraverseOrder)
         self.width = 0
         self.height = icon.minTxtIconHgt
         self.spineHeight = icon.minTxtIconHgt
@@ -157,6 +159,8 @@ class ListLayoutMgr:
 
     def makeInsertSnapList(self):
         """Generate snap sites for item insertion"""
+        if self.bodySitePositions is None:
+            return []
         insertSites = []
         inputSites = self.icon.sites.getSeries(self.siteSeriesName)
         if len(inputSites) > 1 or len(inputSites) == 1 and inputSites[0].att is not None:

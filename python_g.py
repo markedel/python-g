@@ -675,7 +675,7 @@ class Window:
             else:
                 entryIcon = entryicon.EntryIcon(window=self)
                 iconParent.replaceChild(entryIcon, iconParent.siteOf(replaceIcon))
-            entryIcon.setPendingAttr(pendingAttr)
+            entryIcon.appendPendingArgs([pendingAttr])
             self.cursor.setToText(entryIcon, drawNew=False)
             entryIcon.addText(char)
             self.redisplayChangedEntryIcon()
@@ -691,10 +691,10 @@ class Window:
         entryIcon = entryicon.EntryIcon(window=self,
             location=self.cursor.icon.rect[:2])
         if self.cursor.siteType == "output":
-            entryIcon.setPendingArg(self.cursor.icon)
+            entryIcon.appendPendingArgs([self.cursor.icon])
             self.replaceTop(self.cursor.icon, entryIcon)
         elif self.cursor.siteType == "attrOut":
-            entryIcon.setPendingAttr(self.cursor.icon)
+            entryIcon.appendPendingArgs([self.cursor.icon])
             self.replaceTop(self.cursor.icon, entryIcon)
         elif self.cursor.siteType in ("seqIn", "seqOut"):
             before = self.cursor.siteType == "seqIn"
@@ -707,7 +707,7 @@ class Window:
             else:
                 pendingArg = self.cursor.icon.childAt(self.cursor.site)
                 self.cursor.icon.replaceChild(entryIcon, self.cursor.site)
-                entryIcon.setPendingAttr(pendingArg)
+                entryIcon.appendPendingArgs([pendingArg])
         else:  # Cursor site type is input
             entryIcon = entryicon.EntryIcon(window=self)
             cursorIc, cursorSite = iconsites.lowestCoincidentSite(self.cursor.icon,
@@ -717,7 +717,7 @@ class Window:
                 print('Moved cursor to lowest coincident site')
             pendingArg = cursorIc.childAt(cursorSite)
             cursorIc.replaceChild(entryIcon, cursorSite)
-            entryIcon.setPendingArg(pendingArg)
+            entryIcon.appendPendingArgs([pendingArg])
         self.cursor.setToText(entryIcon, drawNew=False)
         entryIcon.addText(initialText)
         self.redisplayChangedEntryIcon(oldLoc=redrawRect)
@@ -1214,7 +1214,8 @@ class Window:
         while site == ic.hasCoincidentSite():
             parent = ic.parent()
             if parent is None:
-                site = 'output'
+                # Site is coincident with output, but is at the top level.  Call the
+                # icon's backspace routine, but I can't imagine why it would do anything.
                 break
             site = parent.siteOf(ic)
             ic = parent
@@ -1242,9 +1243,9 @@ class Window:
             if child is not None:
                 siteType = ic.typeOf(pendingArgSite)
                 if siteType == "input":
-                    entryIcon.setPendingArg(child)
+                    entryIcon.appendPendingArgs([child])
                 elif siteType == "attrIn":
-                    entryIcon.setPendingAttr(child)
+                    entryIcon.appendPendingArgs([child])
         self.cursor.setToText(entryIcon, drawNew=False)
         self.redisplayChangedEntryIcon(evt, redrawRegion.get())
 
@@ -1409,9 +1410,7 @@ class Window:
         # If the entry icon is still there, check if it's empty and attached to an icon.
         # If so, remove.  Otherwise, give up and fail out
         if entryIcon is not None and entryIcon.attachedIcon() is not None:
-            if len(entryIcon.text) == 0 and \
-             entryIcon.pendingAttr() is None and \
-             entryIcon.pendingArg() is None:
+            if len(entryIcon.text) == 0 and not entryIcon.hasPendingArgs():
                 self.cursor.setToIconSite(entryIcon.attachedIcon(),
                     entryIcon.attachedSite)
                 self.removeIcons([entryIcon])
@@ -2086,6 +2085,7 @@ class Window:
             print(f"Icon: {self.cursor.icon.dumpName()}, Site: {self.cursor.site}")
         elif self.cursor.type == "text":
             print(f"{repr(self.cursor.icon.text)}, {self.cursor.icon.cursorPos}")
+
     def _debugLayoutCb(self, evt):
         topIcons = findTopIcons(self.selectedIcons())
         for ic in topIcons:
@@ -2486,6 +2486,8 @@ class Window:
         nextInSeq = old.nextInSeq()
         if hasattr(old, 'blockEnd'):
             beforeBlockEnd = old.blockEnd.prevInSeq()
+            if beforeBlockEnd is old:
+                beforeBlockEnd = new
             afterBlockEnd = old.blockEnd.nextInSeq()
             old.replaceChild(None, 'seqOut')
             old.blockEnd.replaceChild(None, 'seqIn')
@@ -2837,7 +2839,7 @@ class Window:
         for ic in self.findIconsInRegion((left, top, right, bottom), order='pick'):
             iconSites = ic.snapLists(forCursor=True)
             for siteType, siteList in iconSites.items():
-                for siteIcon, (x, y), siteName in siteList:
+                for siteIcon, (x, y), siteName, *_ in siteList:
                     # Tweak site location based on cursor appearance and differentiation
                     if siteType in ("input", "output"):
                         x += 2

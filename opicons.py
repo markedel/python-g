@@ -477,6 +477,31 @@ class BinOpIcon(icon.Icon):
             text.add(None, ")")
         return text
 
+    def canPlaceArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+        iconToPlace, placeListIdx, seriesIdx = icon.firstPlaceListIcon(placementList)
+        if iconToPlace is None:
+            return None, None
+        siteId = 'leftArg' if startSiteId is None else startSiteId
+        if not icon.validateCompatibleChild(iconToPlace, self, siteId):
+            return None, None
+        if not ignoreOccupiedStart and self.childAt(siteId):
+            return None, None
+        return placeListIdx, seriesIdx
+
+    def placeArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+        placeListIdx, seriesIdx = self.canPlaceArgs(placementList, startSiteId,
+            ignoreOccupiedStart)
+        if placeListIdx is None:
+            return None, None
+        if seriesIdx is None:
+            argIcon = placementList[placeListIdx]
+        else:
+            argIcon = placementList[placeListIdx][seriesIdx]
+        siteId = 'leftArg' if startSiteId is None else startSiteId
+        self.replaceChild(argIcon, siteId)
+        reorderexpr.reorderArithExpr(self)
+        return placeListIdx, seriesIdx
+
     def dumpName(self):
         return ("(%s)" if self.hasParens else "%s") % self.operator
 
@@ -1186,7 +1211,7 @@ class IfExpIcon(icon.Icon):
             leftArg.replaceChild(None, 'output')
         if rightArg is not None:
             rightArg.replaceChild(None, 'output')
-            entryIcon.setPendingArg(rightArg)
+            entryIcon.appendPendingArgs([rightArg])
         if parent is None:
             if leftArg is None:
                 win.replaceTop(self, entryIcon)
@@ -1318,7 +1343,11 @@ def backspaceBinOpIcon(ic, site, evt):
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
         return
-    if site == leftSiteOf(ic) and ic.hasParens:
+    if site == leftSiteOf(ic):
+        if not ic.hasParens:
+            # We shouldn't be called in this case, because we have no content to the
+            # left of the left input, but this can happen on the top level
+            return
         # Cursor is on left paren: User wants to remove parens
         redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
         attrIcon = ic.childAt('attrIcon')
@@ -1396,7 +1425,7 @@ def backspaceBinOpIcon(ic, site, evt):
         leftArg.replaceChild(None, 'output')
     if rightArg is not None:
         rightArg.replaceChild(None, 'output')
-        entryIcon.setPendingArg(rightArg)
+        entryIcon.appendPendingArgs([rightArg])
     if parent is None:
         if leftArg is None:
             win.replaceTop(ic, entryIcon)

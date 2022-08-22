@@ -250,18 +250,16 @@ class WithIcon(icon.Icon):
                     pendingArgSite = None
                 win.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite)
             else:
-                # Multiple remaining arguments: convert to entry icon with naked tuple
-                # as pending argument
+                # Multiple remaining arguments: convert to entry icon with pending
+                # arguments as a single list
                 redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
                 valueIcons = [s.att for s in self.sites.values]
-                newTuple = listicons.TupleIcon(window=win, noParens=True)
                 entryIcon = entryicon.EntryIcon(initialString=self.stmt, window=win,
                     willOwnBlock=True)
-                entryIcon.setPendingArg(newTuple)
-                for i, arg in enumerate(valueIcons):
+                for arg in valueIcons:
                     if arg is not None:
                         self.replaceChild(None, self.siteOf(arg))
-                    newTuple.insertChild(arg, "argIcons", i)
+                entryIcon.appendPendingArgs([valueIcons])
                 parent = self.parent()
                 if parent is None:
                     win.replaceTop(self, entryIcon)
@@ -625,6 +623,52 @@ class ForIcon(icon.Icon):
             return "reject"
         return None
 
+    def placeArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, False)
+
+    def _placeArgsCommon(self, placeList, startSiteId, doPlacement):
+        # ForIcon has two lists: targets and iterIcons.  To properly reassemble the icon
+        # from entry icon pending args, we take whatever is in the first element of
+        # placement list (be it single input or series) as targets and the rest (that can
+        # be placed) as iterIcons.  This uses the superclass placeArgs and canPlaceArgs
+        # methods to do verification and placement, but feeds the two series separately.
+        # This is somewhat complicated by the need to allow placement to start on the
+        # iterIcons list if startSiteId is in that series.
+        if len(placeList) == 0:
+            return None, None
+        if doPlacement:
+            placeArgsCall = icon.Icon.placeArgs
+        else:
+            placeArgsCall = icon.Icon.canPlaceArgs
+        tgtsStartId = 'targets_0'
+        iterIconsStartId = 'iterIcons_0'
+        tgts = placeList[:1]
+        iterIcons = placeList[1:]
+        if startSiteId is not None:
+            startSeriesName, startSeriesIdx = iconsites.splitSeriesSiteId(startSiteId)
+            if startSeriesName == 'targets':
+                tgtsStartId = startSiteId
+            elif startSeriesName == 'iterIcons':
+                iterIconsStartId = startSiteId
+                tgts = []
+                iterIcons = placeList
+            else:
+                print('ForIcon.placeArgs: bad startSiteId')
+                return None, None
+        if len(tgts) != 0:
+            placedIdx, placedSeriesIdx = placeArgsCall(self, tgts, tgtsStartId)
+            if placedIdx is None:
+                return None, None
+            if len(iterIcons) == 0:
+                return placedIdx, placedSeriesIdx
+        placedIdx, placedSeriesIdx = placeArgsCall(self, iterIcons, iterIconsStartId)
+        if placedIdx is None:
+            return (0 if len(tgts) != 0 else None), None
+        return placedIdx + len(tgts), placedSeriesIdx
+
     def setTypeover(self, idx, site):
         self.drawList = None  # Force redraw
         if idx is None or idx > 1:
@@ -665,16 +709,17 @@ class ForIcon(icon.Icon):
                         pendingArgSite = None
                     win.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite)
                 else:
-                    # Multiple remaining arguments: convert to entry icon with naked tuple
-                    # as pending argument
+                    # Multiple remaining arguments: convert to entry icon holding pending
+                    # arguments in the form of two lists: targets and values
                     redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
-                    newTuple = listicons.TupleIcon(window=win, noParens=True)
                     entryIcon = entryicon.EntryIcon(initialString=self.stmt,
                         window=win, willOwnBlock=True)
-                    entryIcon.setPendingArg(newTuple)
-                    for i, arg in enumerate(combinedIcons):
+                    if len(iterIcons) == 0:
+                        entryIcon.appendPendingArgs([targetIcons])
+                    else:
+                        entryIcon.appendPendingArgs([targetIcons, iterIcons])
+                    for arg in combinedIcons:
                         self.replaceChild(None, self.siteOf(arg))
-                        newTuple.insertChild(arg, "argIcons", i)
                     win.replaceTop(self, entryIcon)
                     win.cursor.setToText(entryIcon, drawNew=False)
                     win.redisplayChangedEntryIcon(evt, redrawRegion.get())

@@ -1818,7 +1818,7 @@ def backspaceListIcon(ic, site, evt):
     nonEmptyArgs = [i for i in allArgs if i is not None]
     numArgs = len(nonEmptyArgs)
     redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
-    attrAttached = ic.closed and ic.childAt('attrIcon')
+    attrIcon = ic.childAt('attrIcon') if ic.closed else None
     win = ic.window
     if site == "attrIcon":
         # On backspace from the outside right paren, reopen the list
@@ -1847,10 +1847,9 @@ def backspaceListIcon(ic, site, evt):
         # Start by figuring out whether the list has an attribute that's going to require
         # removing more than just the list icon.  If so, we won't do the deletion
         parent = ic.parent()
-        argPlaceFail = False
         attrPlaceFail = False
         attrDestination = None
-        if attrAttached:
+        if attrIcon:
             if numArgs == 0:
                 attrPlaceFail = parent is not None and not isinstance(ic, CallIcon)
                 attrDestination = parent
@@ -1859,11 +1858,10 @@ def backspaceListIcon(ic, site, evt):
                 if attrDestSite != 'attrIcon' or hasattr(attrDestination.sites.attrIcon,
                         'cursorOnly'):
                     attrPlaceFail = True
-                    attrDestination = None
-        if numArgs == 0 and not attrPlaceFail:
+        if numArgs == 0:
             # Empty list
-            if parent is None:
-                # Open paren was the only thing left of the statement.  Remove
+            if parent is None and not attrIcon:
+                # Empty paren was the only thing left of the statement.  Remove
                 if ic.prevInSeq() is not None:
                     cursorIc = ic.prevInSeq()
                     cursorSite = 'seqOut'
@@ -1875,10 +1873,7 @@ def backspaceListIcon(ic, site, evt):
                     pos = ic.pos()
                 win.removeIcons([ic])
                 if cursorIc is None:
-                    if attrAttached:
-                        win.cursor.setToIconSite(ic.childAt('attrIcon'), 'attrOut')
-                    else:
-                        win.cursor.setToWindowPos(pos)
+                    win.cursor.setToWindowPos(pos)
                     win.refreshDirty()
                 else:
                     if attrDestination is not None:
@@ -1886,29 +1881,69 @@ def backspaceListIcon(ic, site, evt):
                     win.cursor.setToIconSite(cursorIc, cursorSite)
                     redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
                     win.refresh(redrawRegion.get())
-            else:
-                parentSite = None if parent is None else parent.siteOf(ic)
-                redrawRect = win.removeIcons([ic], refresh=False)
-                redrawRegion.add(redrawRect)
-                if attrAttached:
-                    parent.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
-                    win.cursor.setToIconSite(parent, parentSite)
-                    win.refreshDirty()
-                if not parent.hasSite(parentSite):
-                    # Last element of a list can disappear when icon is removed
-                    parent.insertChild(None, parentSite)
-                    win.cursor.setToIconSite(parent, parentSite)
-                    redrawRegion.add(win.layoutDirtyIcons(
-                        filterRedundantParens=False))
+            elif parent is None:
+                # Top-level empty paren w/attribute: Leave just an attribute
+                if ic.prevInSeq() or ic.nextInSeq():
+                    # ic was part of a sequence, hang the attribute off an entry icon
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    win.replaceTop(ic, entryIcon)
+                    entryIcon.appendPendingArgs([attrIcon])
+                    win.cursor.setToText(entryIcon, drawNew=False)
+                    win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+                    return
+                else:
+                    # ic was not part of a sequence (loose in window), attribute can
+                    # simply replace it
+                    win.replaceTop(ic, attrIcon)
+                    win.cursor.setToIconSite(attrIcon, 'attrOut')
+                    redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
                     win.refresh(redrawRegion.get())
+            else:
+                # ic is an empty list with a parent
+                parentSite = parent.siteOf(ic)
+                if attrIcon:
+                    if parentSite == 'attrIcon':
+                        # ic was on an attribute site, place attribute on parent
+                        parent.replaceChild(attrIcon, 'attrIcon')
+                        win.cursor.setToIconSite(parent, parentSite)
+                        redrawRegion.add(
+                            win.layoutDirtyIcons(filterRedundantParens=False))
+                        win.refresh(redrawRegion.get())
+                    else:
+                        # Can't place attribute on parent, use an entry icon to place it
+                        entryIcon = entryicon.EntryIcon(window=win)
+                        parent.replaceChild(entryIcon, parentSite)
+                        entryIcon.appendPendingArgs([attrIcon])
+                        win.cursor.setToText(entryIcon, drawNew=False)
+                        win.redisplayChangedEntryIcon(evt, redrawRegion.get())
+                else:
+                    # There's no attribute icon, just remove the icon
+                    win.cursor.setToIconSite(parent, parentSite)
+                    redrawRect = win.removeIcons([ic], refresh=False)
+                    redrawRegion.add(redrawRect)
+                    if not parent.hasSite(parentSite):
+                        # Last element of a list can disappear when icon is removed
+                        parent.insertChild(None, parentSite)
+                        win.cursor.setToIconSite(parent, parentSite)
+                        redrawRegion.add(win.layoutDirtyIcons(
+                            filterRedundantParens=False))
+                        win.refresh(redrawRegion.get())
             return
-        elif numArgs == 1 and not attrPlaceFail:
+        elif numArgs == 1:
             # Just one item left in the list.  Unwrap the parens/brackets/braces
             # from around the content
             parent = ic.parent()
             content = nonEmptyArgs[0]
-            if attrAttached:
-                content.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
+            if attrIcon and not attrPlaceFail:
+                # Place attribute on the content icon
+                content.replaceChild(attrIcon, 'attrIcon')
+            elif attrIcon and not isinstance(ic, CallIcon):
+                # Can't place attribute on content icon, add an entry icon, but don't
+                # give it the cursor.  Note that we don't do this if ic is a callIcon
+                # because we don't want to create two entry icons
+                entryIcon = entryicon.EntryIcon(window=win)
+                content.replaceChild(entryIcon, 'attrIcon')
+                entryIcon.appendPendingArgs([attrIcon])
             if parent is None:
                 # List was on top level
                 ic.replaceChild(None, ic.siteOf(content))
@@ -1932,14 +1967,16 @@ def backspaceListIcon(ic, site, evt):
                 else:  # ic is on an attribute site.  Create an entry icon
                     entryIcon = entryicon.EntryIcon(window=win)
                     parent.replaceChild(entryIcon, 'attrIcon')
-                    entryIcon.setPendingArg(content)
+                    entryIcon.appendPendingArgs([content])
+                    if attrPlaceFail:
+                        entryIcon.appendPendingArgs([attrIcon])
                     win.cursor.setToText(entryIcon, drawNew=False)
                     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
                     return
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
             win.refresh(redrawRegion.get())
             return
-        elif numArgs > 1 and ic.parent() is None and not attrPlaceFail:
+        elif numArgs > 1 and ic.parent() is None:
             # Multi-argument list on top level.  Make naked tuple and transfer all
             # arguments to it
             if isinstance(ic, TupleIcon):
@@ -1952,7 +1989,14 @@ def backspaceListIcon(ic, site, evt):
                 for i in range(len(args)):
                     ic.replaceChild(None, 'argIcons_0')
                 newTuple.insertChildren(args, 'argIcons', 0)
-            if attrDestination is not None:
+            if attrPlaceFail and not isinstance(ic, CallIcon):
+                # Can't place attribute on last arg, add an entry icon, but don't
+                # give it the cursor.  Note that we don't do this if ic is a callIcon
+                # because we don't want to create two entry icons
+                entryIcon = entryicon.EntryIcon(window=win)
+                attrDestination.replaceChild(entryIcon, 'attrIcon')
+                entryIcon.appendPendingArgs([attrIcon])
+            elif attrDestination is not None and not attrPlaceFail:
                 attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
             win.cursor.setToIconSite(newTuple, 'argIcons_0')
             redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
@@ -1963,11 +2007,9 @@ def backspaceListIcon(ic, site, evt):
             # whether argument transfer is possible, and if so, what icon will receive
             # the remaining arguments.
             recipient, recipientSite = entryicon.findEnclosingSite(ic)
-            argPlaceFail = not (recipient is None or
-                iconsites.isSeriesSiteId(recipientSite) or
-                isinstance(recipient, parenicon.CursorParenIcon))
-            if not attrPlaceFail and not argPlaceFail:
-                # Both argument and attribute transfer are doable.  Do the transfer.
+            if recipient is None or iconsites.isSeriesSiteId(recipientSite) or \
+                    isinstance(recipient, parenicon.CursorParenIcon):
+                # Argument transfer is doable.  Do the transfer.
                 if recipient is None:
                     # We reached the top of the hierarchy without getting trapped.
                     # Add a naked tuple as parent to which to transfer the arguments
@@ -2008,7 +2050,7 @@ def backspaceListIcon(ic, site, evt):
                     firstArg = ic.childAt('argIcons_0')
                     ic.parent().replaceChild(entryIcon, 'attrIcon')
                     ic.replaceChild(None, 'argIcons_0')
-                    entryIcon.setPendingArg(firstArg)
+                    entryIcon.appendPendingArgs([firstArg])
                     rootParent = callRoot.parent()  # recipient is above so can't be None
                     rootParentSite = rootParent.siteOf(callRoot)
                     rootParent.replaceChild(newTuple, rootParentSite)
@@ -2047,20 +2089,21 @@ def backspaceListIcon(ic, site, evt):
                         ic.replaceChild(right, lastArgSite)
                     ic.replaceChild(left, 'argIcons_0')
                     recipient.replaceChild(ic, recipientSite)
-                    print('pre-reorder...')
-                    ic.window._dumpCb()
                     reorderexpr.reorderArithExpr(left)
                     reorderexpr.reorderArithExpr(right)
-                    print('reordered...')
-                    ic.window._dumpCb()
                 args = [site.att for site in ic.sites.argIcons]
                 for i in range(len(args)):
                     ic.replaceChild(None, 'argIcons_0')
                 recipient.replaceChild(None, recipientSite)
                 recipient.insertChildren(args,
                     *iconsites.splitSeriesSiteId(recipientSite))
-                if attrDestination is not None:
-                    attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
+                if attrPlaceFail:
+                    placeholderEntryIcon = entryicon.EntryIcon(window=win)
+                    attrDestination.replaceChild(placeholderEntryIcon, 'attrIcon')
+                    placeholderEntryIcon.appendPendingArgs([attrIcon])
+                else:
+                    if attrDestination is not None:
+                        attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
                 if cursorSite is None and isinstance(cursorIcon, entryicon.EntryIcon):
                     win.cursor.setToText(entryIcon, drawNew=False)
                 else:
@@ -2068,20 +2111,22 @@ def backspaceListIcon(ic, site, evt):
                 redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
                 win.refresh(redrawRegion.get())
                 return
-        # Either can't place args or can't place attribute.  In either case, select the
-        # list icon and whatever parts can't be placed, so that the next backspace will
-        # delete them.  Note that the list's attribute is selected both when it can't be
-        # placed AND if the list args can't be placed.  I'm not sure what the user would
-        # expect or want in this case, and deleting it easier since attrPlaceFail is no
-        # longer valid after arg deletion and would have to be figured out again.
-        iconsToSelect = [ic]
-        if attrPlaceFail or argPlaceFail and ic.childAt('attrIcon'):
-            iconsToSelect.append(ic.childAt('attrIcon'))
-        if argPlaceFail:
-            iconsToSelect += nonEmptyArgs[1:]
-        for iconToSelect in iconsToSelect:
-            iconToSelect.select()
-            redrawRegion.add(iconToSelect.rect)
+        # Argument transfer was not possible, create an entry icon and stuff everything
+        # into its pending argument list.
+        entryIcon = entryicon.EntryIcon(window=win)
+        argList = ic.argIcons()
+        for _ in range(len(argList)):
+            ic.replaceChild(None, 'argIcons_0')
+        entryIcon.appendPendingArgs([argList])
+        attrIcon = ic.childAt('attrIcon')
+        if attrIcon is not None:
+            ic.replaceChild(None, 'attrIcon')
+            entryIcon.appendPendingArgs([attrIcon])
+        parent = ic.parent()
+        parentSite = parent.siteOf(ic)
+        parent.replaceChild(entryIcon, parentSite)
+        win.cursor.setToText(entryIcon, drawNew=False)
+        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
         win.refresh(redrawRegion.get())
         return
     else:
@@ -2217,7 +2262,7 @@ def backspaceComma(ic, cursorSite, evt, joinOccupied=True):
     else:
         ic.replaceChild(None, cursorSite)
         rightmostIcon.replaceChild(entryIcon, rightmostSite)
-        entryIcon.setPendingArg(childAtCursor)
+        entryIcon.appendPendingArgs([childAtCursor])
     win.cursor.setToText(entryIcon, drawNew=False)
     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
     return True

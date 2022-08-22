@@ -435,7 +435,7 @@ class SubscriptIcon(icon.Icon):
                     parentSite = parent.siteOf(self)
                     entryIcon = entryicon.EntryIcon(window=win)
                     parent.replaceChild(entryIcon, parentSite)
-                    entryIcon.setPendingArg(content)
+                    entryIcon.appendPendingArgs([content])
                     win.cursor.setToText(entryIcon, drawNew=False)
                     win.redisplayChangedEntryIcon(evt, redrawRegion.get())
                     return
@@ -484,7 +484,7 @@ class SubscriptIcon(icon.Icon):
                     # Can't merge the two expressions: insert an entry icon
                     self.replaceChild(None, mergeSite2)
                     entryIcon = entryicon.EntryIcon('', window=win)
-                    entryIcon.setPendingArg(mergeIcon2)
+                    entryIcon.appendPendingArgs([mergeIcon2])
                     rightmostIc.replaceChild(entryIcon, rightmostSite)
                     cursorIc = cursorSite = None
                 else:

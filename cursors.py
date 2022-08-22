@@ -497,9 +497,9 @@ class Cursor:
         self.moveToIconSite(ic, site, evt)
 
     def _processIconArrowKey(self, evt):
-        """For cursor on icon site, set new site based on arrow direction"""
-        if self.type == "icon" and evt.keysym in ('Left', 'Right') and \
-                not (evt.state & python_g.CTRL_MASK):
+        """For cursor on icon site (self.type == "icon"), set new site based on arrow
+        direction"""
+        if evt.keysym in ('Left', 'Right') and not (evt.state & python_g.CTRL_MASK):
             ic, site = self._lexicalTraverse(self.icon, self.site, evt.keysym)
             while ic.typeOf(site) == 'cprhIn':
                 # lexical traversal returns comprehension sites which are usually
@@ -593,6 +593,20 @@ class Cursor:
     def _geometricTraverse(self, fromIcon, fromSite, direction):
         """Return the next cursor position (icon and siteId) in a given direction
         (physically, not lexically) from the given position (fromIcon, fromSite)."""
+        # Special cases for traversing block end icons up and down, since their sites
+        # are not physically up and down from each other, but need to be visited as such
+        if isinstance(fromIcon, icon.BlockEnd) and fromSite == 'seqIn' and \
+                direction == 'Down':
+            return fromIcon, 'seqOut'
+        if isinstance(fromIcon.nextInSeq(), icon.BlockEnd) and fromSite == 'seqOut' and \
+                direction == 'Down':
+            return fromIcon.nextInSeq(), 'seqOut'
+        if isinstance(fromIcon, icon.BlockEnd) and fromSite == 'seqOut' and \
+                direction == 'Up':
+            return fromIcon, 'seqIn'
+        if isinstance(fromIcon.prevInSeq(), icon.BlockEnd) and fromSite == 'seqIn' and \
+                direction == 'Up':
+            return fromIcon.prevInSeq(), 'seqIn'
         # Build a list of possible destination cursor positions, normalizing attribute
         # site positions to the center of the cursor (in/out site position).
         cursorX, cursorY = fromIcon.posOfSite(fromSite)
