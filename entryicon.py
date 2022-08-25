@@ -481,38 +481,68 @@ class EntryIcon(icon.Icon):
             self._recolorPending()
 
     def backspaceInText(self, evt=None):
-        if self.text != "":
-            newText = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
-            self._setText(newText, self.cursorPos-1)
-            if self.window.cursor.type == "text" and self.window.cursor.icon is self:
-                # Currently not coloring based on text, but may want to restore later
-                self._recolorPending()
+        if self.text != "" and self.cursorPos != 0:
+            # Erase the character before the text cursor
+            self.text = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
+            self.cursorPos -= 1
+            # self._setText(newText, self.cursorPos-1)
+            # if self.window.cursor.type == "text" and self.window.cursor.icon is self:
+            #     # Currently not coloring based on text, but may want to restore later
+            #     self._recolorPending()
             self.markLayoutDirty()
             return
-        # The entry icon contains no text.  Attempt to remove it
-        if self.remove():
+        if self.text == '' and not self.hasPendingArgs():
+            self.remove()
             return
-        # The remove() call was unable to place pending args.  The nasty hack below
-        # calls the window backspace code and then restores pending args/attrs if it
-        # can, but deletes them if it cannot
-        pendingArgs = self.listPendingArgs()
-        self.remove(forceDelete=True)
-        self.window._backspaceIcon(evt)
-        if self.window.cursor.type == "text" and \
-                isinstance(self.window.cursor.icon, EntryIcon):
-            entryIcon = self.window.cursor.icon
-            self.popPendingArgs("all")
-            entryIcon.appendPendingArgs(pendingArgs)
-        else:
-            cursor = self.window.cursor
-            if cursor.type == "icon":
-                if cursor.site not in ('output', 'attrOut'):
-                    cursor.icon.replaceChild(self, cursor.site)
-                    cursor.setToText(self, drawNew=False)
-            elif cursor.type == "window":
-                icon.moveRect(self.rect, cursor.pos)
-                self.window.addTop(self)
-                cursor.setToText(self, drawNew=False)
+        if self.attachedIcon() is None:
+            cursors.beep()
+            return
+        # Text cursor is at the left edge of the text field.  Temporarily remove the text
+        # cursor from the entry icon and put an icon cursor on the site to which it is
+        # currently attached.
+        cursor = self.window.cursor
+        cursor.setToIconSite(self.attachedIcon(), self.attachedSite(),
+            placeEntryText=False)
+        # Call the icon's backspace method
+        cursor.icon.backspace(cursor.site, evt)
+        # If the icon backspace method created an entry icon at the cursor, it will
+        # put a text cursor in it.  If not, the original entry icon should still be in
+        # the right place, and we can simply move the cursor back in to it.
+        if cursor.type != "text":
+            cursor.setToText(self)
+            return
+        # The backspace method created a new entry icon.  Since the existing entry icon
+        # (self) was the first thing to the right of the cursor, it should now be the
+        # first pending argument of the new entry icon.  If it's not, print a warning
+        # and give up.
+        newEntryIcon = cursor.icon
+        if not isinstance(newEntryIcon, EntryIcon):
+            print('Entry icon backspaceInText: Unexpected text icon from backspace')
+            return
+        if not hasattr(newEntryIcon.sites, 'pendingArg0'):
+            print('Entry icon backspaceInText: Entry icon site not found')
+            return
+        newPendingArgs = newEntryIcon.listPendingArgs()
+        oldEntryIcon, oldIdx, oldSeriesIdx = icon.firstPlaceListIcon(newPendingArgs)
+        if oldEntryIcon is not self:
+            print('Entry icon backspaceInText: Entry icon not recovered')
+            return
+        # Combine the two entry icons' text and arguments in to the new icon
+        # (... I don't understand why explicit redraw/refresh is needed below, since the
+        # caller is supposedly doing this.  It may have something to do with the icon
+        # backspace method doing its own redraw/refresh, but marking the new entry icon
+        # as dirty again is still not enough to clear out uncovered window background.)
+        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+        oldPendingArgs = self.listPendingArgs()
+        self.popPendingArgs("all")
+        newEntryIcon.popPendingArgs(oldIdx, oldSeriesIdx)
+        newPendingArgs = newEntryIcon.listPendingArgs()
+        newEntryIcon.popPendingArgs("all")
+        newPendingArgs = oldPendingArgs + newPendingArgs
+        newEntryIcon.appendPendingArgs(newPendingArgs)
+        newEntryIcon.text = newEntryIcon.text + self.text
+        redrawRegion.add(self.window.layoutDirtyIcons(filterRedundantParens=False))
+        self.window.refresh(redrawRegion.get())
 
     def arrowAction(self, direction):
         newCursorPos = self.cursorPos

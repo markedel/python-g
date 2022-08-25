@@ -976,7 +976,8 @@ class Icon:
                     placedSeriesIdx = placeListSeriesIdx
                 return placedIdx, placedSeriesIdx
             else:
-                ic, placeListIdx, seriesIdx = next(placeListIter, ("end", None, None))
+                ic, placeListIdx, placeListSeriesIdx = next(placeListIter,
+                    ("end", None, None))
                 if ic == "end":
                     return placedIdx, placedSeriesIdx
                 site = getattr(self.sites, siteId)
@@ -990,7 +991,7 @@ class Icon:
                 if doPlacement:
                     self.replaceChild(ic, siteId)
                 placedIdx = placeListIdx
-                placedSeriesIdx = None
+                placedSeriesIdx = placeListSeriesIdx
                 siteId = self.sites.nextCursorSite(siteId)
         return placedIdx, placedSeriesIdx
 
