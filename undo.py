@@ -79,23 +79,20 @@ class UndoRedoList:
             self.redoList.append(Boundary(self.window))
         if undoList[-1].__class__ is Boundary:
             undoList.pop(-1)
-        redrawRegion = AccumRect()
         while len(undoList) > 0:
             u = undoList.pop(-1)
             if u.__class__ is Boundary:
                 u.restoreCursorAndEntryIcon(self.window)
                 break
-            redrawRegion.add(u.undo(self))
+            redrawRect = u.undo(self)
+            self.window.requestRedraw(redrawRect)
         else:
             listType = "Undo" if undoList is self.undoList else "Redo"
             #... I don't think the redo list is supposed to end in a boundary
             print("Warning:", listType, "list does not end in boundary")
             self.window.cursor.removeCursor()
-        # Layouts may now be dirty
-        redrawRegion.add(self.window.layoutDirtyIcons())
-        # Redraw the areas affected by the updated layouts
-        if redrawRegion.rect is not None:
-            self.window.refresh(redrawRegion.rect)
+        # Update dirty layouts and redraw the areas affected
+        self.window.refreshDirty()
 
     def _addUndoRedoEntry(self, undoEntry):
         """Add undo entry to the appropriate list (undo or redo) based upon whether

@@ -415,11 +415,10 @@ class SubscriptIcon(icon.Icon):
                 win.removeIcons([self])
                 if parent is not None:
                     win.cursor.setToIconSite(parent, 'attrIcon')
-                    win.refreshDirty()
             else:
                 # Icon has a single argument and it's in the first slot: unwrap
                 # the bracket from around it.
-                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                win.requestRedraw(self.topLevelParent().hierRect())
                 parent = self.parent()
                 content = self.childAt('indexIcon')
                 if parent is None:
@@ -427,7 +426,6 @@ class SubscriptIcon(icon.Icon):
                     self.replaceChild(None, 'indexIcon')
                     win.replaceTop(self, content)
                     win.cursor.setToBestCoincidentSite(content, 'output')
-                    win.refreshDirty()
                 else:
                     # The icon has a parent, but since the subscript icon sits on
                     # an attribute site we can't attach, so create an entry icon
@@ -437,20 +435,15 @@ class SubscriptIcon(icon.Icon):
                     parent.replaceChild(entryIcon, parentSite)
                     entryIcon.appendPendingArgs([content])
                     win.cursor.setToText(entryIcon, drawNew=False)
-                    win.redisplayChangedEntryIcon(evt, redrawRegion.get())
-                    return
-                redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-                win.refresh(redrawRegion.get())
             return
         elif siteId == 'attrIcon':
             # The cursor is on the attr site, remove the end bracket
-            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            win.requestRedraw(self.topLevelParent().hierRect(),
+                filterRedundantParens=True)
             entryicon.reopenParen(self)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
             return
         # Site is after a colon.  Try to remove it
-        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+        win.requestRedraw(self.topLevelParent().hierRect(), filterRedundantParens=True)
         if siteId == 'upperIcon':
             # Remove first colon
             mergeSite1 = 'indexIcon'
@@ -506,11 +499,8 @@ class SubscriptIcon(icon.Icon):
         # Place the cursor or new entry icon, and redraw
         if entryIcon is None:
             win.cursor.setToIconSite(cursorIc, cursorSite)
-            redrawRegion.add(win.layoutDirtyIcons())
-            win.refresh(redrawRegion.get())
         else:
             win.cursor.setToText(entryIcon, drawNew=False)
-            win.redisplayChangedEntryIcon(evt, redrawRegion.get())
 
 def createSubscriptIconFromAst(astNode, window):
     if astNode.slice.__class__ == ast.Index:

@@ -252,7 +252,8 @@ class WithIcon(icon.Icon):
             else:
                 # Multiple remaining arguments: convert to entry icon with pending
                 # arguments as a single list
-                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                self.window.requestRedraw(self.topLevelParent().hierRect(),
+                    filterRedundantParens=True)
                 valueIcons = [s.att for s in self.sites.values]
                 entryIcon = entryicon.EntryIcon(initialString=self.stmt, window=win,
                     willOwnBlock=True)
@@ -267,7 +268,6 @@ class WithIcon(icon.Icon):
                     parentSite = parent.siteOf(self)
                     parent.replaceChild(entryIcon, parentSite)
                 win.cursor.setToText(entryIcon, drawNew=False)
-                win.redisplayChangedEntryIcon(evt, redrawRegion.get())
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty, merge
             # surrounding sites if not
@@ -711,7 +711,8 @@ class ForIcon(icon.Icon):
                 else:
                     # Multiple remaining arguments: convert to entry icon holding pending
                     # arguments in the form of two lists: targets and values
-                    redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                    win.requestRedraw(self.topLevelParent().hierRect(),
+                        filterRedundantParens=True)
                     entryIcon = entryicon.EntryIcon(initialString=self.stmt,
                         window=win, willOwnBlock=True)
                     if len(iterIcons) == 0:
@@ -722,26 +723,17 @@ class ForIcon(icon.Icon):
                         self.replaceChild(None, self.siteOf(arg))
                     win.replaceTop(self, entryIcon)
                     win.cursor.setToText(entryIcon, drawNew=False)
-                    win.redisplayChangedEntryIcon(evt, redrawRegion.get())
             else:
-                # Cursor is on comma input.  Delete if empty or previous site is empty.
-                # Don't try to merge surrounding sites if both are populated, as no
-                # math or attributes are allowed: just skip over the comma
-                if not listicons.backspaceComma(self, siteId, evt, joinOccupied=False):
-                    cursorSite = iconsites.makeSeriesSiteId(siteName, index-1)
-                    cursorIcon, cursorSite = icon.rightmostFromSite(self, cursorSite)
-                    win.cursor.setToIconSite(cursorIcon, cursorSite)
-                    win.refreshDirty()
+                # Cursor is on comma input
+                listicons.backspaceComma(self, siteId, evt)
         elif siteName == "iterIcons":
             if index == 0:
                 # Cursor is on "in", jump over it to last target
                 lastTgtSite = iconsites.makeSeriesSiteId('targets',
                     len(self.sites.targets) - 1)
                 win.cursor.setToIconSite(*icon.rightmostFromSite(self, lastTgtSite))
-                win.refreshDirty()
             else:
-                # Cursor is on comma input.  Delete if empty or previous site is empty,
-                # merge surrounding sites if not
+                # Cursor is on comma input
                 listicons.backspaceComma(self, siteId, evt)
 
 class IfIcon(icon.Icon):

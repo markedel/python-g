@@ -159,6 +159,8 @@ class AssignIcon(icon.Icon):
             newName = "targets%d" % i
             if oldName != newName:
                 tgtList.rename(newName)
+                getattr(self.sites, newName).order = i
+        self.sites.values.order = len(self.tgtLists)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion to those representing actual attachment sites
@@ -335,8 +337,8 @@ class AssignIcon(icon.Icon):
     def backspace(self, siteId, evt):
         siteName, index = iconsites.splitSeriesSiteId(siteId)
         topIcon = self.topLevelParent()
-        redrawRegion = comn.AccumRects(topIcon.hierRect())
         win = self.window
+        win.requestRedraw(topIcon.hierRect())
         if index == 0:
             if siteName == "targets0":
                 return
@@ -388,9 +390,6 @@ class AssignIcon(icon.Icon):
             # Cursor is on comma input.  Delete if empty or previous site is empty
             listicons.backspaceComma(self, siteId, evt)
             return
-        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-        win.refresh(redrawRegion.get())
-        win.undo.addBoundary()
 
 class AugmentedAssignIcon(icon.Icon):
     def __init__(self, op, window, location=None):
@@ -554,7 +553,8 @@ class AugmentedAssignIcon(icon.Icon):
             if len(valueIcons) in (0, 1):
                 # Zero or one argument, convert to entry icon (with pending arg if
                 # there was an argument) attached to name icon
-                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                win.requestRedraw(self.topLevelParent().hierRect(),
+                    filterRedundantParens=True)
                 if self.parent() is not None:
                     print('AugmentedAssign has parent?????')
                     return
@@ -570,7 +570,8 @@ class AugmentedAssignIcon(icon.Icon):
             else:
                 # Multiple remaining arguments: convert to tuple with entry icon as
                 # first element
-                redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+                win.requestRedraw(self.topLevelParent().hierRect(),
+                    filterRedundantParens=True)
                 valueIcons = [s.att for s in self.sites.values if s.att is not None]
                 newTuple = listicons.TupleIcon(window=win, noParens=True)
                 if targetIcon is None:
@@ -588,7 +589,6 @@ class AugmentedAssignIcon(icon.Icon):
                         newTuple.insertChild(arg, "argIcons", i)
                 win.replaceTop(self, newTuple)
             win.cursor.setToText(entryIcon, drawNew=False)
-            win.redisplayChangedEntryIcon(evt, redrawRegion.get())
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty
             prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
@@ -597,7 +597,7 @@ class AugmentedAssignIcon(icon.Icon):
                 cursors.beep()
                 return
             topIcon = self.topLevelParent()
-            redrawRegion = comn.AccumRects(topIcon.hierRect())
+            win.requestRedraw(topIcon.hierRect())
             if not self.childAt(prevSite):
                 self.removeEmptySeriesSite(prevSite)
                 win.cursor.setToIconSite(self, prevSite)
@@ -606,9 +606,6 @@ class AugmentedAssignIcon(icon.Icon):
                 rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
                 self.removeEmptySeriesSite(siteId)
                 win.cursor.setToIconSite(rightmostIcon, rightmostSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
-            win.undo.addBoundary()
 
 def createAssignIconFromAst(astNode, window):
     topIcon = AssignIcon(len(astNode.targets), window)

@@ -143,12 +143,12 @@ class InfixIcon(icon.Icon):
             # We shouldn't be called in this case, because we have no content to the
             # left of the left input, but this can happen on the top level
             return
-        redrawRect = self.topLevelParent().hierRect()
+        win = self.window
+        win.requestRedraw(self.topLevelParent().hierRect())
         parent = self.parent()
         leftArg = self.leftArg()
         rightArg = self.rightArg()
         op = self.operator
-        win = self.window
         if parent is None and leftArg is None:
             entryAttachedIcon, entryAttachedSite = None, None
         elif parent is not None and leftArg is None:
@@ -178,7 +178,6 @@ class InfixIcon(icon.Icon):
         self.replaceChild(None, 'leftArg')
         self.replaceChild(None, 'rightArg')
         win.cursor.setToText(entryIcon, drawNew=False)
-        win.redisplayChangedEntryIcon(evt, redrawRect)
 
 class AsIcon(InfixIcon):
     allowableSnaps = {"WithIcon": "values", "ImportIcon": "values",

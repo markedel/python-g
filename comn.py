@@ -73,3 +73,6 @@ class AccumRects:
     def get(self):
         """Return the enclosing rectangle.  Returns None if no rectangles were added"""
         return self.rect
+
+    def clear(self):
+        self.rect = None

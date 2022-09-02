@@ -1095,14 +1095,13 @@ class IfExpIcon(icon.Icon):
         if siteId == 'attrIcon':
             # Cursor is on attribute site of right paren.  Convert to open
             # (unclosed) cursor paren
-            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            win.requestRedraw(self.topLevelParent().hierRect())
             attrIcon = self.childAt('attrIcon')
             if attrIcon:
                 # If an attribute is attached to the parens, just select
                 win.unselectAll()
                 for i in attrIcon.traverse():
                     win.select(i)
-                win.refresh(redrawRegion.get())
                 return
             parent = self.parent()
             cursorParen = parenicon.CursorParenIcon(window=win)
@@ -1123,19 +1122,16 @@ class IfExpIcon(icon.Icon):
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
             win.cursor.setToIconSite(cursIc, cursSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
             return
         if siteId == 'trueExpr' and self.hasParens:
             # Cursor is on left paren: User wants to remove parens
-            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            win.requestRedraw(self.topLevelParent().hierRect())
             attrIcon = self.childAt('attrIcon')
             if attrIcon:
                 # If an attribute is attached to the parens, don't delete, just select
                 win.unselectAll()
                 for i in attrIcon.traverse():
                     win.select(i)
-                win.refresh(redrawRegion.get())
                 return
             # Finding the correct position for the cursor after reorderArithExpr is
             # surprisingly difficult.  It is done by temporarily setting the cursor
@@ -1167,12 +1163,10 @@ class IfExpIcon(icon.Icon):
             if removeTempCursorIcon:
                 updatedCursorIc.replaceChild(None, updatedCursorSite)
             win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
             return
         if siteId == 'falseExpr':
             # Cursor was on else, just move the cursor to the test
-            redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+            win.requestRedraw(self.topLevelParent().hierRect())
             if self.sites.trueExpr.att is None:
                 updatedCursorIc = self
                 updatedCursorSite = 'testExpr'
@@ -1180,11 +1174,9 @@ class IfExpIcon(icon.Icon):
                 updatedCursorIc, updatedCursorSite = icon.rightmostSite(
                     icon.findLastAttrIcon(self.sites.testExpr.att), ignoreAutoParens=True)
             win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
             return
         # Cursor was on the if itself
-        redrawRect = self.topLevelParent().hierRect()
+        win.requestRedraw(self.topLevelParent().hierRect())
         if self.hasParens:
             # If the operation had parens, place temporary parens for continuity
             cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
@@ -1227,7 +1219,6 @@ class IfExpIcon(icon.Icon):
         self.replaceChild(None, 'testExpr')
         self.replaceChild(None, 'falseExpr')
         win.cursor.setToText(entryIcon, drawNew=False)
-        win.redisplayChangedEntryIcon(evt, redrawRect)
 
     def updateParens(self):
         needs = needsParens(self)
@@ -1308,18 +1299,16 @@ def backspaceBinOpIcon(ic, site, evt):
                 cursorIc, cursorSite = icon.rightmostSite(
                     icon.findLastAttrIcon(bottomArg))
             win.cursor.setToIconSite(cursorIc, cursorSite)
-            win.refreshDirty()
         else:
             # Cursor is on attribute site of right paren.  Convert to open
             # (unclosed) cursor paren
-            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
+            win.requestRedraw(ic.topLevelParent().hierRect())
             attrIcon = ic.childAt('attrIcon')
             if attrIcon:
                 # If an attribute is attached to the parens, just select
                 win.unselectAll()
                 for i in attrIcon.traverse():
                     win.select(i)
-                win.refresh(redrawRegion.get())
                 return
             parent = ic.parent()
             cursorParen = parenicon.CursorParenIcon(window=win)
@@ -1340,8 +1329,6 @@ def backspaceBinOpIcon(ic, site, evt):
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
             win.cursor.setToIconSite(cursIc, cursSite)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
         return
     if site == leftSiteOf(ic):
         if not ic.hasParens:
@@ -1349,14 +1336,13 @@ def backspaceBinOpIcon(ic, site, evt):
             # left of the left input, but this can happen on the top level
             return
         # Cursor is on left paren: User wants to remove parens
-        redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
+        win.requestRedraw(ic.topLevelParent().hierRect())
         attrIcon = ic.childAt('attrIcon')
         if attrIcon:
             # If an attribute is attached to the parens, don't delete, just select
             win.unselectAll()
             for i in attrIcon.traverse():
                 win.select(i)
-            win.refresh(redrawRegion.get())
             return
         # Finding the correct position for the cursor after reorderArithExpr is
         # surprisingly difficult.  It is done by temporarily setting the cursor
@@ -1388,11 +1374,9 @@ def backspaceBinOpIcon(ic, site, evt):
         if removeTempCursorIcon:
             updatedCursorIc.replaceChild(None, updatedCursorSite)
         win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
-        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-        win.refresh(redrawRegion.get())
         return
     # Cursor was on the operator itself
-    redrawRect = ic.topLevelParent().hierRect()
+    win.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
     if not isinstance(ic, DivideIcon) and ic.hasParens:
         # If the operation had parens, place temporary parens for continuity
         cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
@@ -1444,7 +1428,6 @@ def backspaceBinOpIcon(ic, site, evt):
         ic.replaceChild(None, 'leftArg')
         ic.replaceChild(None, 'rightArg')
     win.cursor.setToText(entryIcon, drawNew=False)
-    win.redisplayChangedEntryIcon(evt, redrawRect)
 
 def createUnaryOpIconFromAst(astNode, window):
     topIcon = UnaryOpIcon(unaryOps[astNode.op.__class__], window)

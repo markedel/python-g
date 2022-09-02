@@ -41,7 +41,7 @@ keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
 
 # Statements that can be typed into the first element of a top-level naked tuple (to
 # allow the user to prepend them to the existing list)
-listPrependableStmts = {nameicons.ReturnIcon:'values', nameicons.YieldIcon:'values',
+listPrependableStmts = {nameicons.ReturnIcon:'values',
  nameicons.DelIcon:'values', nameicons.GlobalIcon:'values',
  nameicons.NonlocalIcon:'values', nameicons.ImportIcon:'values',
  blockicons.WithIcon:'values', blockicons.ForIcon:'targets'}
@@ -169,6 +169,12 @@ class EntryIcon(icon.Icon):
             self.markLayoutDirty()
 
     def focusOut(self, removeIfPossible=True):
+        """Remove cursor focus from the icon.  If removeIfPossible is True, try to place
+        the text as it currently stands, replacing the entry icon with whatever it
+        generates.  Returns False only if removal was requested and current text or
+        pending arguments prevent it from being placed.  Note that the use of this
+        function in cursor movement means that simply moving the cursor can reorder the
+        icon structure and thus require layout/refresh/redraw."""
         if self.hasFocus:
             self.focusChanged = True
             self.hasFocus = False
@@ -177,15 +183,16 @@ class EntryIcon(icon.Icon):
             # hairy, because focus out is invoked via cursor movement calls, which are
             # plentiful, and which older code did not expect to be rearranging icons.
             if not removeIfPossible:
-                return
+                return True
             # Start by at least making sure that the icon is still in the window
             topIcon = self.topLevelParentSafe()
             if topIcon is None or topIcon not in self.window.topIcons:
-                return
+                return True
             if not self.canPlaceEntryText(requireArgPlacement=True):
-                return
+                return False
             newText = self.text + ' '
             self._setText(newText, len(newText))
+            return True
 
     def hasPendingArgs(self):
         """Return True if the entry icon has pending arguments."""
@@ -501,7 +508,9 @@ class EntryIcon(icon.Icon):
         # cursor from the entry icon and put an icon cursor on the site to which it is
         # currently attached.
         cursor = self.window.cursor
-        cursor.setToIconSite(self.attachedIcon(), self.attachedSite(),
+        highestIcon = iconsites.highestCoincidentIcon(self)
+        parent = highestIcon.parent()
+        cursor.setToIconSite(parent, parent.siteOf(highestIcon),
             placeEntryText=False)
         # Call the icon's backspace method
         cursor.icon.backspace(cursor.site, evt)
@@ -524,25 +533,43 @@ class EntryIcon(icon.Icon):
             return
         newPendingArgs = newEntryIcon.listPendingArgs()
         oldEntryIcon, oldIdx, oldSeriesIdx = icon.firstPlaceListIcon(newPendingArgs)
-        if oldEntryIcon is not self:
+        if oldEntryIcon is not highestIcon:
             print('Entry icon backspaceInText: Entry icon not recovered')
             return
         # Combine the two entry icons' text and arguments in to the new icon
-        # (... I don't understand why explicit redraw/refresh is needed below, since the
-        # caller is supposedly doing this.  It may have something to do with the icon
-        # backspace method doing its own redraw/refresh, but marking the new entry icon
-        # as dirty again is still not enough to clear out uncovered window background.)
-        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+        self.window.requestRedraw(self.topLevelParent().hierRect())
         oldPendingArgs = self.listPendingArgs()
         self.popPendingArgs("all")
         newEntryIcon.popPendingArgs(oldIdx, oldSeriesIdx)
         newPendingArgs = newEntryIcon.listPendingArgs()
         newEntryIcon.popPendingArgs("all")
         newPendingArgs = oldPendingArgs + newPendingArgs
-        newEntryIcon.appendPendingArgs(newPendingArgs)
-        newEntryIcon.text = newEntryIcon.text + self.text
-        redrawRegion.add(self.window.layoutDirtyIcons(filterRedundantParens=False))
-        self.window.refresh(redrawRegion.get())
+        newText = newEntryIcon.text + self.text
+        if highestIcon is self:
+            # Use the entry icon created by the backspace operation
+            newEntryIcon.appendPendingArgs(newPendingArgs)
+            newEntryIcon.text = newText
+            # (no need to set cursor, as we've already confirmed it's set to entry icon)
+        elif hasattr(newEntryIcon, 'blockEnd') and \
+                newEntryIcon.nextInSeq() is not newEntryIcon.blockEnd:
+            # Need to use the new entry icon because it owns a non-empty block (the user
+            # backspaced in to a block-owning icon), but the old entry icon is embedded
+            # in an expression, so we'll have to leave a hole.
+            self.attachedIcon().replaceChild(None, self.attachedSite())
+            newEntryIcon.appendPendingArgs([highestIcon] + newPendingArgs)
+            newEntryIcon.text = newText
+        else:
+            # The existing entry icon is embedded in an expression.  Use it so it can
+            # retain its position within the the expression and not leave a hole.
+            self.appendPendingArgs(newPendingArgs)
+            if newEntryIcon.attachedIcon() is None:
+                self.window.replaceTop(newEntryIcon, highestIcon)
+            else:
+                newEntryIcon.attachedIcon().replaceChild(highestIcon,
+                    newEntryIcon.attachedSite())
+            self.text = newText
+            self.cursorPos = len(newEntryIcon.text)
+            self.window.cursor.setToText(self)
 
     def arrowAction(self, direction):
         newCursorPos = self.cursorPos
@@ -564,6 +591,7 @@ class EntryIcon(icon.Icon):
         deleted along with the entry icon."""
         attachedIcon = self.attachedIcon()
         attachedSite = self.attachedSite()
+        redrawRect = self.rect
         if attachedIcon is None:
             # Entry icon is at top level
             if self.hasPendingArgs():
@@ -669,6 +697,7 @@ class EntryIcon(icon.Icon):
                 seriesName, seriesIdx = iconsites.splitSeriesSiteId(attachedSite)
                 newSite = iconsites.makeSeriesSiteId(seriesName, seriesIdx - 1)
                 self.window.cursor.setToIconSite(attachedIcon, newSite)
+        self.window.requestRedraw(redrawRect)
         return True
 
     def parseEntryText(self, newText):
@@ -677,8 +706,8 @@ class EntryIcon(icon.Icon):
         "end"bracket" "openBrace", "endBrace", "openParen", "endParen", "makeFunction",
         "makeSubscript", or a pair of a created icon and delimiter.  1) If the text was
         processed by a per-icon textHandler method, the responsible icon, 3) A boolean
-        value indicating that the text will consume the parent icon and "steal" its
-        arguments (as when the user prepends a top-level statement to a naked tuple."""
+        value indicating that the text represents a statement that needs to be prepended
+        to the attached icon, as opposed to being inserted at the site."""
         if self.attachedToAttribute():
             parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=True)
             if parseResult is None:
@@ -690,35 +719,26 @@ class EntryIcon(icon.Icon):
             parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=False)
             if parseResult is None:
                 parseResult = parseExprText(newText, self.window)
-        if parseResult == "reject" and \
-                isinstance(self.attachedIcon(), listicons.TupleIcon) and \
-                self.attachedIcon().noParens and self.attachedSite() == 'argIcons_0':
-            altParseResult = parseTopLevelText(newText, self.window)
-            if len(altParseResult) == 2 and \
-                    altParseResult[0].__class__ in listPrependableStmts:
-                return altParseResult, handlerIc, True
+        if parseResult == "reject" and self.attachedSiteType() == 'input':
+            coincidentSite = self.attachedIcon().hasCoincidentSite()
+            if coincidentSite is not None and coincidentSite == self.attachedSite() and \
+                    iconsites.highestCoincidentIcon(self.attachedIcon()).parent() is None:
+                # Site is coincident with the start of the statement. We might be able to
+                # prepend a top-level statement
+                altParseResult = parseTopLevelText(newText, self.window)
+                if len(altParseResult) == 2 and \
+                        altParseResult[0].__class__ in listPrependableStmts:
+                    return altParseResult, handlerIc, True
         return parseResult, handlerIc, False
 
     def _setText(self, newText, newCursorPos):
-        parseResult, handlerIc, consumeParent = self.parseEntryText(newText)
+        parseResult, handlerIc, prepend = self.parseEntryText(newText)
         # print('parse result', parseResult)
-        if consumeParent:
-            # When the entry icon is the first element of a naked tuple, the user is
-            # allowed to prepend a top-level statement (if it can accept a list).
-            # Replace the naked tuple with the entry icon, and pre-load the new statement
-            # icon with the content of the naked tuple (leaving the first series site
-            # open for the entry icon's pending arg(s) to be placed
-            parentTuple = self.attachedIcon()
-            placeList = parentTuple.argIcons()[1:]
-            for ic in placeList:
-                parentTuple.replaceChild(None, parentTuple.siteOf(ic))
-            stmtIcon = parseResult[0]
-            self.window.replaceTop(parentTuple, self)
-            stmtSiteSeries = listPrependableStmts[stmtIcon.__class__]
-            stmtIcon.insertChildren(placeList, stmtSiteSeries, 1)
         if parseResult == "reject":
             cursors.beep()
             return
+        self.window.requestRedraw(self.topLevelParent().hierRect(),
+            filterRedundantParens=True)
         if parseResult == "accept":
             self.text = newText
             self.window.cursor.erase()
@@ -818,26 +838,67 @@ class EntryIcon(icon.Icon):
                     self.attachedSite())
         elif self.attachedSiteType() == "input":
             # Entry icon is attached to an input site
-            self.attachedIcon().replaceChild(ic, self.attachedSite())
-            if "input" in snapLists:
-                cursorIcon, cursorSite = ic, snapLists["input"][0][2]  # First input site
+            if prepend:
+                # When the entry icon is at a site coincident with the very left of a
+                # top-level statement, such as the first element of a naked tuple or the
+                # left operand of a boolean operator, the user is allowed to prepend a
+                # top-level statement (if it can accept an input argument).
+                stmtSiteSeries = listPrependableStmts[ic.__class__]
+                if isinstance(self.attachedIcon(), listicons.TupleIcon):
+                    # The entry icon is the first element of a naked tuple.  Replace the
+                    # naked tuple with the ic and make the entry icon its first argument
+                    # and the remaining tuple elements as its 2nd-nth.
+                    parentTuple = self.attachedIcon()
+                    parentTuple.replaceChild(None, self.attachedSite(), leavePlace=True)
+                    placeList = parentTuple.argIcons()[1:]
+                    for icn in placeList:
+                        parentTuple.replaceChild(None, parentTuple.siteOf(icn))
+                    self.window.replaceTop(parentTuple, ic)
+                    ic.replaceChild(self, iconsites.makeSeriesSiteId(stmtSiteSeries, 0))
+                    ic.insertChildren(placeList, stmtSiteSeries, 1)
+                    cursorIcon = ic
+                    cursorSite = iconsites.makeSeriesSiteId(stmtSiteSeries, 0)
+                else:
+                    # The entry icon is attached to some sort of binary operator on a site
+                    # coincident with the left of the statement.  Leave the entry icon
+                    # where it is in the expression, and wrap the statement icon around
+                    # the entire expression
+                    topIcon = self.attachedIcon().topLevelParent()
+                    self.window.replaceTop(topIcon, ic)
+                    ic.insertChild(topIcon, stmtSiteSeries, 0)
+                    cursorIcon = self.attachedIcon()
+                    cursorSite = self.attachedSite()
             else:
-                cursorIcon, cursorSite = icon.rightmostSite(ic)
-        # If entry icon has pending arguments, try to place them at the cursor site.
-        # If we have more than one pending arg and _placePendingArgs can't place them
-        # all, it will create a new (placeholder) entry icon to hold the remaining ones.
-        ignoreEI = cursorIcon == self.attachedIcon() and cursorSite == self.attachedSite()
-        pendingArgsCleared = self._placePendingArgs(cursorIcon, cursorSite,
-            ignoreOccupiedStart=ignoreEI)
-        # If the entry icon is still attached to the original site, remove it
-        if self.attachedIcon() is not None:
+                # Entry icon is on an input site that does not require special treatment
+                self.attachedIcon().replaceChild(ic, self.attachedSite())
+                if "input" in snapLists:
+                    cursorIcon, cursorSite = ic, snapLists["input"][0][2]  # First input site
+                else:
+                    cursorIcon, cursorSite = icon.rightmostSite(ic)
+        # If there is no remaining text or it's an empty delimiter, try to place pending
+        # arguments.  If there are no pending arguments or all can be placed, we're done.
+        if len(remainingText) == 0:
+            # If entry icon has pending arguments, try to place them at the cursor site.
+            # If we have more than one pending arg and _placePendingArgs can't place them
+            # all, it will create a new placeholder entry icon to hold the remaining ones.
+            if self._placePendingArgs(cursorIcon, cursorSite, ignoreOccupiedStart=
+                    cursorIcon==self.attachedIcon() and cursorSite==self.attachedSite()):
+                # Args were placed, and there is no remaining text, so we can remove
+                # the entry icon (if still attached), and be done
+                if self.attachedIcon() is not None:
+                    self.attachedIcon().replaceChild(None, self.attachedSite())
+                self.window.cursor.setToIconSite(cursorIcon, cursorSite)
+                return
+        # There is remaining text or pending arguments.  Restore the entry icon.  Note
+        # that the code above is guaranteed to put the cursor in the right place, but
+        # (I think) is allowed to leave the entry icon in the wrong place.  If the print
+        # statement diagnostic below never shows up, the relocation code is not necessary
+        # and can be safely removed.
+        if self.attachedIcon() is not None and self.attachedIcon() is not cursorIcon:
+            print('relocating entry icon... code is necessary, remove this diagnostic')
             self.attachedIcon().replaceChild(None, self.attachedSite())
-        # If the entry icon can go away, remove it and we're done
-        if pendingArgsCleared and remainingText == "":
-            self.window.cursor.setToIconSite(cursorIcon, cursorSite)
-            return
-        # There is remaining text or pending arguments.  Restore the entry icon
-        cursorIcon.replaceChild(self, cursorSite)
+        if self.attachedIcon() is None:
+            cursorIcon.replaceChild(self, cursorSite)
         self.window.cursor.setToText(self)
         self.markLayoutDirty()
         self.text = ""
@@ -1127,11 +1188,11 @@ class EntryIcon(icon.Icon):
         # should enclose and outside of those it does not enclose.  reorderArithExpr
         # closes the parens if it succeeds.
         reorderexpr.reorderArithExpr(matchingParen, closeParenAt=self)
-        # If there are pending args, they need to go *after* the newly-closed paren, so
-        # move the entry icon before calling .remove(), which will place them and replace
-        # the entry icon with the cursor (if possible) or leave the entry icon (if not).
-        self.attachedIcon().replaceChild(None, self.attachedSite())
-        matchingParen.replaceChild(self, 'attrIcon')
+        # If there are pending args, they need to go *after* the newly-closed paren.
+        # reorderArithExpr will move the entry icon there, and the remove() call below
+        # will place them. ...however at some point I added (incorrect) code (here) to
+        # move the entry icon after the fact.  I've now removed the code and it seems to
+        # be working correctly, but this is a good place to check if something's wrong.
         self.remove()
         self.window.updateTypeoverStates()
         return True
@@ -1422,8 +1483,6 @@ class EntryIcon(icon.Icon):
         self.window.cursor.erase()
         self.cursorPos = findTextOffset(self.text, evt.x - self.rect[0] - self.textOffset)
         self.window.cursor.setToText(self, drawNew=False)
-        self.window.refreshDirty()
-        self.window.cursor.draw()
 
     def pointInTextArea(self, x, y):
         left, top, right, bottom = self.rect
@@ -1528,6 +1587,9 @@ class EntryIcon(icon.Icon):
 
     def clipboardRepr(self, offset):
         return None
+
+    def createAst(self):
+        raise icon.IconExecException(self, "Remove text-entry field")
 
     def execute(self):
         raise icon.IconExecException(self, "Can't execute text-entry field")
@@ -1821,9 +1883,10 @@ def searchForOpenParen(token, closeParenAt):
             if token == "endParen" and isinstance(ic, parenicon.CursorParenIcon) and \
                     not ic.closed:
                 return ic, transferArgsFrom
-            if token == "endParen" and isinstance(ic, listicons.TupleIcon) and (
-                    not ic.closed or ic.noParens):
-                # Found either an unclosed tuple or a naked tuple
+            if token == "endParen" and isinstance(ic, listicons.TupleIcon) and \
+                    not ic.closed and not ic.noParens:
+                # Found either an unclosed tuple (... removed if clause above to activate
+                # on naked tuples, which I hope was just wrong and not needed elsewhere)
                 return ic, transferArgsFrom if transferArgsFrom else ic
             if token == "endParen" and isinstance(ic, listicons.CallIcon) and \
                     not ic.closed:

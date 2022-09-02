@@ -309,6 +309,12 @@ class Window:
         # list of icons with dimmed text to receive (unnecessary) user typing when we've
         # already filled in to the right of the cursor.
         self.activeTypeovers = set()
+        # Accumulates screen area needing refresh, to be processed by refreshDirty()
+        self.refreshRequests = comn.AccumRects()
+        # Set if icons marked with dirty layouts should also be run through redundant
+        # parenthesis removal.
+        self.redundantParenFilterRequested = False
+
         # If a filename was specified, open it
         print("before open file")
         if filename is not None:
@@ -326,7 +332,10 @@ class Window:
         print('start layout', time.monotonic())
         redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
         print('finish layout', time.monotonic())
-        self.refresh(redrawRect, clear=False)
+        print('start draw', time.monotonic())
+        self.redraw(redrawRect, clear=False)
+        print('finish draw', time.monotonic())
+        self.refresh(redrawRect, clear=False, redraw=False)
         self.undo.addBoundary()
 
     def selectedIcons(self):
@@ -405,11 +414,10 @@ class Window:
                 if parent in needUpdate:
                     ignore.add(ic)
                     break
-        redrawRegion = comn.AccumRects()
         for ic in needUpdate:
             if ic in ignore:
                 continue
-            redrawRegion.add(ic.topLevelParent().hierRect())
+            self.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
             # Update the icon.  For the moment, this is brutal reconstruction and
             # replacement of the entire hierarchy from the data (losing selections and
             # attached comments).  This also blows away the cursor attachment (if that
@@ -419,11 +427,6 @@ class Window:
             cursorPath = self.recordCursorPositionInData(ic)
             newIcon = self.objectToIcons(ic.object, updateMutable=ic)
             self.restoreCursorPositionInData(newIcon, cursorPath)
-        # Redraw the areas affected by the updated layouts
-        layoutNeeded = self.layoutDirtyIcons()
-        if layoutNeeded:
-            redrawRegion.add(layoutNeeded)
-            self.refresh(redrawRegion.get())
 
     def makeId(self, ic):
         """Return an unused icon ID number.  ID numbers correlate icons with executing
@@ -626,16 +629,14 @@ class Window:
         char = cursors.tkCharFromEvt(evt)
         if char is None:
             return
-        # If there's a cursor displayed somewhere, use it
+        # If there's a cursor displayed somewhere, use it, otherwise, use selection
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
-            oldLoc = self.cursor.icon.topLevelParent().hierRect()
+            self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
             self.cursor.icon.addText(char)
-            self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
-            return
         elif self.cursor.type == "icon":
+            self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
             self._insertEntryIconAtCursor(char)
-            return
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
             entryIcon = entryicon.EntryIcon(window=self)
@@ -644,8 +645,6 @@ class Window:
             self.addTopSingle(entryIcon, newSeq=True)
             self.cursor.setToText(entryIcon, drawNew=False)
             entryIcon.addText(char)
-            self.redisplayChangedEntryIcon()
-            return
         elif self.cursor.type == "typeover":
             self.cursor.erase()
             ic = self.cursor.icon
@@ -659,35 +658,39 @@ class Window:
                 # non-matching, move to site after
                 self.cursor.setToIconSite(ic, siteAfter)
             ic.draw()
+            # No need to layout or redraw, just refresh the icon with the typeover
             self.refresh(ic.rect, redraw=False, clear=False)
             return
-        # If there's an appropriate selection, use that
-        selectedIcons = findTopIcons(self.selectedIcons())
-        if len(selectedIcons) == 1:
-            # A single icon was selected.  Replace it and its children
-            replaceIcon = selectedIcons[0]
-            iconParent = replaceIcon.parent()
-            pendingAttr = replaceIcon.childAt('attrIcon')
-            if iconParent is None:
-                # Icon is at top, but may be part of a sequence
-                entryIcon = entryicon.EntryIcon(window=self)
-                self.replaceTop(replaceIcon, entryIcon)
-            else:
-                entryIcon = entryicon.EntryIcon(window=self)
-                iconParent.replaceChild(entryIcon, iconParent.siteOf(replaceIcon))
-            entryIcon.appendPendingArgs([pendingAttr])
-            self.cursor.setToText(entryIcon, drawNew=False)
-            entryIcon.addText(char)
-            self.redisplayChangedEntryIcon()
         else:
-            # Either no icons were selected, or multiple icons were selected (so
-            # we don't know what to replace).
-            cursors.beep()
+            # If there's an appropriate selection, use that
+            selectedIcons = findTopIcons(self.selectedIcons())
+            if len(selectedIcons) == 1:
+                # A single icon was selected.  Replace it and its children
+                replaceIcon = selectedIcons[0]
+                self.requestRedraw(replaceIcon.topLevelParent().hierRect())
+                iconParent = replaceIcon.parent()
+                pendingAttr = replaceIcon.childAt('attrIcon')
+                if iconParent is None:
+                    # Icon is at top, but may be part of a sequence
+                    entryIcon = entryicon.EntryIcon(window=self)
+                    self.replaceTop(replaceIcon, entryIcon)
+                else:
+                    entryIcon = entryicon.EntryIcon(window=self)
+                    iconParent.replaceChild(entryIcon, iconParent.siteOf(replaceIcon))
+                entryIcon.appendPendingArgs([pendingAttr])
+                self.cursor.setToText(entryIcon, drawNew=False)
+                entryIcon.addText(char)
+            else:
+                # Either no icons were selected, or multiple icons were selected (so
+                # we don't know what to replace).
+                cursors.beep()
+                return
+        self.refreshDirty(addUndoBoundary=True)
 
     def _insertEntryIconAtCursor(self, initialText):
         # Note that location is set in the entry icon for the single case where it
         # becomes the beginning of a sequence.  All others are overwritten by layout
-        redrawRect = self.cursor.icon.topLevelParent().hierRect()
+        self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
         entryIcon = entryicon.EntryIcon(window=self,
             location=self.cursor.icon.rect[:2])
         if self.cursor.siteType == "output":
@@ -720,25 +723,6 @@ class Window:
             entryIcon.appendPendingArgs([pendingArg])
         self.cursor.setToText(entryIcon, drawNew=False)
         entryIcon.addText(initialText)
-        self.redisplayChangedEntryIcon(oldLoc=redrawRect)
-
-    def redisplayChangedEntryIcon(self, evt=None, oldLoc=None):
-        redrawRegion = comn.AccumRects(oldLoc)
-        if self.cursor.type == "text":
-            if isinstance(self.cursor.icon, entryicon.EntryIcon):
-                self.cursor.icon.minimizePendingArgs()
-            redrawRegion.add(self.cursor.icon.rect)
-        # If the size of the entry icon changes it requests re-layout of parent.  Figure
-        # out if layout needs to change and do so, otherwise just redraw the entry icon
-        layoutNeeded = self.layoutDirtyIcons()
-        # Redraw the areas affected by the updated layouts
-        if layoutNeeded:
-            redrawRegion.add(layoutNeeded)
-            self.refresh(redrawRegion.get())
-        else:
-            if self.cursor.type == "text":
-                self.cursor.icon.draw()
-        self.undo.addBoundary()
 
     def watchTypeover(self, ic):
         """Register an icon with active typeover for cancellation when it's no longer
@@ -808,6 +792,16 @@ class Window:
                 else:
                     break
         self._removeTypeovers(self.activeTypeovers - keepAlive)
+        # If the cursor is on an icon site, check the typeover list and reset any typeover
+        # that thinks it's still in the middle of the text.  (this can happen when the
+        # user clicks back to a legal typeover position, rather than cursor-traversing).
+        if self.cursor.type == 'icon':
+            for ic in self.activeTypeovers:
+                for siteBefore, siteAfter, text, idx in ic.typeoverSites(allRegions=True):
+                    if idx is not None and idx != 0:
+                        ic.setTypeover(0, siteAfter)
+                        ic.draw()
+                        self.refresh(ic.rect, redraw=False, clear=False)
 
     def _removeTypeovers(self, toRemove):
         for ic in toRemove:
@@ -912,6 +906,8 @@ class Window:
         ic = self.findIconAt(x, y)
         if hasattr(ic, "pointInTextArea") and ic.pointInTextArea(x, y):
             ic.click(evt)
+            self.refreshDirty(addUndoBoundary=True)
+            self.cursor.draw()
             return
         self.buttonDownTime = msTime()
         self.buttonDownLoc = x, y
@@ -951,6 +947,7 @@ class Window:
                         self._delayedBtnUpActions(evt)
                         return
                     self._execute(iconToExecute)
+                self.refreshDirty(addUndoBoundary=True)
             self.buttonDownTime = None
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
             # In order to handle double-click, button release actions are run not done
@@ -1046,7 +1043,7 @@ class Window:
     def _cutCb(self, _evt=None):
         self._copyCb()
         self.removeIcons(self.selectedIcons())
-        self.undo.addBoundary()
+        self.refreshDirty(addUndoBoundary=True)
 
     def _copyCb(self, evt=None):
         selectedIcons = self.selectedIcons()
@@ -1071,9 +1068,9 @@ class Window:
                 text = self.top.clipboard_get(type="STRING")
             except:
                 return
-            oldLoc = self.cursor.icon.hierRect()
+            self.requestRedraw(self.cursor.icon.hierRect())
             self.cursor.icon.addText(text)
-            self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
+            self.refreshDirty(addUndoBoundary=True)
             return
         # Look at what is on the clipboard and make the best possible conversion to icons
         try:
@@ -1140,13 +1137,9 @@ class Window:
         # window at position given by pastePos
         if replaceParent is not None:
             topIcon = replaceParent.topLevelParent()
-            redrawRegion = comn.AccumRects(topIcon.hierRect())
+            self.requestRedraw(topIcon.hierRect())
             replaceParent.replaceChild(pastedIcons[0], replaceSite)
             self.cursor.setToIconSite(replaceParent, replaceSite)
-            print('start layout', time.monotonic())
-            redrawRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
-            print('finish layout', time.monotonic())
-            self.refresh(redrawRegion.get())
         else:  # Place at top level
             x, y = pastePos
             for topIcon in pastedIcons:
@@ -1157,11 +1150,14 @@ class Window:
                 self.cursor.removeCursor()
             else:
                 self.cursor.setToBestCoincidentSite(pastedIcons[0], "output")
-            print('start layout', time.monotonic())
-            redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
-            print('finish layout', time.monotonic())
-            if redrawRect is not None:
-                self.refresh(redrawRect, clear=False)
+        print('start layout', time.monotonic())
+        self.requestRedraw(self.layoutDirtyIcons(filterRedundantParens=False))
+        print('finish layout', time.monotonic())
+        if self.refreshRequests.get() is not None:
+            print('start redraw/refresh', time.monotonic())
+            self.refresh(self.refreshRequests.get(), redraw=True)
+            print('end redraw/refresh', time.monotonic())
+            self.refreshRequests.clear()
         self.undo.addBoundary()
 
     def _deleteCb(self, _evt=None):
@@ -1171,9 +1167,10 @@ class Window:
         elif self.cursor.type == "icon":
             # Not using removeIcons here, to take advantage or replaceChild operation
             # on listType icons and remove an empty argument spot.
+            self.requestRedraw(self.cursor.icon.topLevelParent().hierRect(),
+                filterRedundantParens=True)
             self.cursor.icon.replaceChild(None, self.cursor.site)
-            self.redoLayout(self.cursor.icon.topLevelParent())
-        self.undo.addBoundary()
+        self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceCb(self, evt=None):
         if self.cursor.type != "text":
@@ -1194,14 +1191,10 @@ class Window:
                 siteBefore, siteAfter, text, idx = ic.typeoverSites()
                 ic.setTypeover(0, siteAfter)
                 ic.draw()
-                self.refresh(ic.rect, redraw=False, clear=False)
                 self.cursor.setToIconSite(*icon.rightmostFromSite(ic, siteBefore))
-            self.refreshDirty()  # Just changing cursor position can require redraw
         else:
-            topIcon = self.cursor.icon.topLevelParent()
-            redrawRect = topIcon.hierRect()
             self.cursor.icon.backspaceInText(evt)
-            self.redisplayChangedEntryIcon(evt, redrawRect)
+        self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceIcon(self, evt):
         if self.cursor.type != 'icon' or self.cursor.site in ('output', 'attrOut',
@@ -1228,7 +1221,7 @@ class Window:
     def backspaceIconToEntry(self, evt, ic, entryText, pendingArgSite=None):
         """Replace the icon holding the cursor with the entry icon, pre-loaded with text,
         entryText"""
-        redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
+        self.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
         parent = ic.parent()
         if parent is None:
             entryIcon = entryicon.EntryIcon(initialString=entryText, window=self,
@@ -1247,7 +1240,6 @@ class Window:
                 elif siteType == "attrIn":
                     entryIcon.appendPendingArgs([child])
         self.cursor.setToText(entryIcon, drawNew=False)
-        self.redisplayChangedEntryIcon(evt, redrawRegion.get())
 
     def _listPopupCb(self):
         char = self.listPopupVal.get()
@@ -1259,7 +1251,7 @@ class Window:
         else:
             return
         topIcon = fromIcon.topLevelParent()
-        redrawRegion = comn.AccumRects(topIcon.hierRect())
+        self.requestRedraw(topIcon.hierRect(), filterRedundantParens=True)
         argIcons = fromIcon.argIcons()
         for i, arg in enumerate(argIcons):
             fromIcon.replaceChild(None, fromIcon.siteOf(arg))
@@ -1274,8 +1266,7 @@ class Window:
             parentSite = parent.siteOf(fromIcon)
             parent.replaceChild(ic, parentSite)
         self.cursor.setToIconSite(ic, self.cursor.site)
-        redrawRegion.add(self.layoutDirtyIcons())
-        self.refresh(redrawRegion.get())
+        self.refreshDirty(addUndoBoundary=True)
 
     def _arrowCb(self, evt):
         if self.cursor.type is None:
@@ -1286,17 +1277,17 @@ class Window:
         if not evt.state & SHIFT_MASK:
             self.unselectAll()
         self.cursor.processArrowKey(evt)
+        self.refreshDirty()
 
     def _cancelCb(self, evt=None):
         if self.cursor.type == "text" and \
                 isinstance(self.cursor.icon, entryicon.EntryIcon):
-            oldLoc = self.cursor.icon.hierRect()
+            self.requestRedraw(self.cursor.icon.hierRect())
             self.cursor.icon.remove(forceDelete=True)
-            self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
         else:
             self.cursor.removeCursor()
-            self.refreshDirty()
         self._cancelDrag()
+        self.refreshDirty(addUndoBoundary=True)
 
     def _enterCb(self, evt):
         """Move Entry icon after the top-level icon where the cursor is found."""
@@ -1316,6 +1307,7 @@ class Window:
                 topIcon = blockOwnerIcon.blockEnd
         self.cursor.setToIconSite(topIcon, 'seqOut')
         self._insertEntryIconAtCursor("")
+        self.refreshDirty(addUndoBoundary=True)
 
     def _execCb(self, evt=None):
         """Execute the top level icon at the entry or icon cursor"""
@@ -1333,6 +1325,7 @@ class Window:
             print("Could not find top level icon to execute")
             return
         self._execute(iconToExecute)
+        self.refreshDirty(addUndoBoundary=True)
 
     def _execMutablesCb(self, evt=None):
         """Execute and update the content of mutable icons below the top level icon
@@ -1368,7 +1361,7 @@ class Window:
             self._executeMutable(ic)
         # Update displayed mutable icons that might have been affected by execution
         self.updateMutableIcons([topIcon])
-        self.undo.addBoundary()
+        self.refreshDirty(addUndoBoundary=True)
 
     def _resyncMutablesCb(self, evt=None):
         """Abandon edits to all mutable icon parents to the current cursor position.
@@ -1388,34 +1381,19 @@ class Window:
                 iconToSync = ic
         if iconToSync is None:
             return  # No mutable icons
-        redrawRegion = comn.AccumRects(iconToSync.hierRect())
+        self.requestRedraw(iconToSync.hierRect(), filterRedundantParens=True)
         # Update the icon.  See comments in updateMutableIcons from which this is copied.
         cursorPath = self.recordCursorPositionInData(iconToSync)
         newIcon = self.objectToIcons(iconToSync.object, updateMutable=iconToSync)
         self.restoreCursorPositionInData(newIcon, cursorPath)
         # Redraw the areas affected by the updated layouts
-        redrawRegion.add(self.layoutDirtyIcons())
-        self.refresh(redrawRegion.get())
+        self.refreshDirty(addUndoBoundary=True)
 
     def _completeEntry(self, evt):
         """Attempt to finish any text entry in progress.  Returns True if successful,
         false if text remains unprocessed in the entry icon."""
-        if self.cursor.type != "text":
-            return True
-        # Add a delimiter character to force completion
-        entryIcon = self.cursor.icon
-        oldLoc = entryIcon.rect
-        entryIcon.addText(" ")
-        self.redisplayChangedEntryIcon(evt, oldLoc=oldLoc)
-        # If the entry icon is still there, check if it's empty and attached to an icon.
-        # If so, remove.  Otherwise, give up and fail out
-        if entryIcon is not None and entryIcon.attachedIcon() is not None:
-            if len(entryIcon.text) == 0 and not entryIcon.hasPendingArgs():
-                self.cursor.setToIconSite(entryIcon.attachedIcon(),
-                    entryIcon.attachedSite)
-                self.removeIcons([entryIcon])
-            else:
-                return False
+        if self.cursor.type == "text":
+            return self.cursor.icon.focusOut()
         return True
 
     def _startDrag(self, evt, icons, needRemove=True):
@@ -1424,9 +1402,11 @@ class Window:
         # re-layouts, and redrawing.
         sequences = findSeries(icons)
         if needRemove:
-            self.removeIcons(self.dragging, refresh=False)
+            self.removeIcons(self.dragging)
         # Refresh the whole display with icon outlines turned on
+        self.layoutDirtyIcons()
         self.refresh(redraw=True, showOutlines=True)
+        self.refreshRequests.clear()
         # Dragging parent icons away from their children may require re-layout of the
         # (moving) parent icons, and in some cases adding icons to keep lists intact
         self.dragging += restoreSeries(sequences)
@@ -1613,23 +1593,21 @@ class Window:
             elif siteType == 'seqIn':
                 icon.insertSeq(movIcon, statIcon, before=True)
         self.addTop(topDraggedIcons)
-        # Redo layouts for all affected icons
-        self.layoutDirtyIcons()
         self.dragging = None
         self.snapped = None
         self.snapList = None
         self.buttonDownTime = None
-        # Refresh the entire display.  While refreshing a smaller area is technically
-        # possible, after all the dragging and drawing, it's prudent to ensure that the
-        # display remains in sync with the image pixmap
-        self.refresh(redraw=True)
-        self.undo.addBoundary()
+        # Layout icons and refresh the entire display.  While refreshing a smaller area
+        # is technically possible, after all the dragging and drawing, it's prudent to
+        # ensure that the display remains in sync with the image pixmap
+        self.requestRedraw("all")
+        self.refreshDirty(addUndoBoundary=True)
 
     def _cancelDrag(self):
         # Not properly cancelling drag, yet, just dropping the icons being dragged
         if self.dragging is None:
             return
-        self.refresh(self.lastDragImageRegion)
+        self.refresh(self.lastDragImageRegion, redraw=True)
         self.dragging = None
         self.snapped = None
         self.snapList = None
@@ -1660,7 +1638,7 @@ class Window:
             if ic.isSelected() != newSelect:
                 ic.select(newSelect)
                 redrawRegion.add(ic.rect)
-        self.refresh(redrawRegion.get(), clear=False)
+        self.refresh(redrawRegion.get(), clear=False, redraw=True)
         l, t, r, b = self.contentToImageRect(newRect)
         hLineImg = Image.new('RGB', (r - l, 1), color=RECT_SELECT_COLOR)
         vLineImg = Image.new('RGB', (1, b - t), color=RECT_SELECT_COLOR)
@@ -1745,7 +1723,7 @@ class Window:
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
                 redrawRegion.add(eraseRect)
-        self.refresh(redrawRegion.get(), clear=False)
+        self.refresh(redrawRegion.get(), clear=False, redraw=True)
         # Draw the selection shading
         for drawRect in drawRects:
             drawImgRect = self.contentToImageRect(drawRect)
@@ -1762,7 +1740,7 @@ class Window:
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
                 redrawRegion.add(eraseRect)
-        self.refresh(redrawRegion.get(), clear=False)
+        self.refresh(redrawRegion.get(), clear=False, redraw=True)
         self.lastStmtHighlightRects = None
 
     def recordCursorPositionInData(self, topIcon):
@@ -1884,16 +1862,7 @@ class Window:
         resultY = outSiteY - resultOutSiteY - resultIcon.rect[1]
         resultIcon.rect = comn.offsetRect(resultIcon.rect, resultX, resultY)
         self.addTopSingle(resultIcon, newSeq=True)
-        layoutRect = self.layoutDirtyIcons()
-        resultRect = resultIcon.hierRect()
-        # There is a mystery here.  Attribute icons in the expression being executed are
-        # marked dirty, so where, previously, the commented-out code below could redraw
-        # just the result, it is now necessary to also redraw bits of the expression.
-        # for ic in resultIcon.traverse():
-        #    ic.select()
-        #    ic.draw(clip=resultRect)
-        # self.refresh(resultRect)
-        self.refresh(comn.combineRects(layoutRect, resultRect))
+        self.requestRedraw(resultIcon.hierRect())
         # For expressions that yield "None", show it, then automatically erase
         if result is None:
             time.sleep(0.4)
@@ -1902,7 +1871,6 @@ class Window:
             # Remember where the last result was drawn, so it can be erased if it is still
             # there the next time the same icon is executed
             self.execResultPositions[outSitePos] = resultIcon, resultIcon.rect[:2]
-        self.undo.addBoundary()
         return True
 
     def _executeMutable(self, ic):
@@ -2004,7 +1972,6 @@ class Window:
             self.unselectAll()
         if ic is None or self.cursor.type == "text" and ic is self.cursor.icon:
             return
-        refreshRegion = comn.AccumRects()
         if op == 'hier':
             changedIcons = list(ic.traverse())
         elif op == 'block':
@@ -2024,14 +1991,13 @@ class Window:
         else:
             changedIcons = [ic]
         for ic in changedIcons:
-            refreshRegion.add(ic.rect)
+            self.requestRedraw(ic.rect)
             if op == 'toggle':
                 ic.select(not ic.isSelected())
             else:
                 ic.select()
         self.cursor.removeCursor()
-        refreshRegion.add(self.layoutDirtyIcons(filterRedundantParens=False))
-        self.refresh(refreshRegion.get(), clear=False)
+        self.refreshDirty()
 
     def unselectAll(self):
         refreshRegion = comn.AccumRects()
@@ -2041,7 +2007,8 @@ class Window:
         for ic in selectedIcons:
             refreshRegion.add(ic.rect)
         self.clearSelection()
-        self.refresh(refreshRegion.get(), clear=False)
+        if refreshRegion.get() is not None:
+            self.refresh(refreshRegion.get(), clear=False, redraw=True)
 
     def redraw(self, region=None, clear=True, showOutlines=False):
         """Cause all icons to redraw to the pseudo-framebuffer (call refresh to transfer
@@ -2094,22 +2061,25 @@ class Window:
             else:
                 ic.debugLayoutFilterIdx = 0
             ic.markLayoutDirty()
-        self.refresh(self.layoutDirtyIcons(), redraw=True)
+        self.refreshDirty(addUndoBoundary=True)
 
     def _undebugLayoutCb(self, evt):
-        print('undebug')
         for ic in self.selectedIcons():
             if hasattr(ic, 'debugLayoutFilterIdx'):
                 delattr(ic, 'debugLayoutFilterIdx')
                 ic.markLayoutDirty()
-        self.refresh(self.layoutDirtyIcons(), redraw=True)
+        self.refreshDirty(addUndoBoundary=True)
 
     def refresh(self, region=None, redraw=True, clear=True, showOutlines=False):
         """Redraw any rectangle (region) of the window.  If redraw is set to False, the
          window will be refreshed from the pseudo-framebuffer (self.image).  If redraw
          is True, the framebuffer is first refreshed from the underlying icon structures.
          If no region is specified (region==None), redraw the whole window.  Setting
-         clear to False will not clear the background area before redrawing."""
+         clear to False will not clear the background area before redrawing.  Note that
+         this does *not* process pending refresh requests in self.refreshRequests, which
+         will still be pending after the call.  Also be careful about passing regions
+         from comn.AccumRects, which use None to indicate an empty region, whereas this
+         call, conversely, uses None to indicate that the *entire window* be redrawn."""
         if redraw:
             self.redraw(region, clear, showOutlines)
         if region is None:
@@ -2118,14 +2088,33 @@ class Window:
             region = self.contentToImageRect(region)
             self.drawImage(self.image, (region[0], region[1]), region)
 
-    def refreshDirty(self):
-        """Refresh any icons marked as dirty.  If nothing is marked as dirty, do nothing.
-        Because refresh will redraw the entire window if the region parameter is None,
-        refresh(layoutDirtyIcons()) can be wasteful when there is a possibility that
-        nothing is dirty, so you should almost always use this call, instead."""
-        dirty = self.layoutDirtyIcons(filterRedundantParens=False)
-        if dirty is not None:
-            self.refresh()
+    def requestRedraw(self, redrawArea, filterRedundantParens=False):
+        """Add a rectangle (redrawArea) to the requested area to be redrawn on the next
+        call to refreshDirty.  Setting filterRedundantParens to True will additionally
+        request refreshDirty to apply redundant parenthesis removal to to icons whose
+        layouts are marked as dirty."""
+        if redrawArea == "all":
+            redrawArea = (*self.imageToContentCoord(0, 0), *self.image.size)
+        self.refreshRequests.add(redrawArea)
+        if filterRedundantParens:
+            self.redundantParenFilterRequested = True
+
+    def refreshDirty(self, addUndoBoundary=False):
+        """Refresh any icons whose layout is marked as dirty (via the markLayoutDirty
+        method of the icon), and redraw and refresh any window areas marked as needing
+        redraw (via window method requestRedraw).  If nothing is marked as dirty, no
+        redrawing will be done.  If addUndoBoundary is True, also add an undo boundary
+        (even if nothing is dirty).  While undo boundaries have nothing to do with window
+        redrawing, both need doing after almost every user operation, so combining the
+        two shortens the code and serves as a reminder to do them both."""
+        self.refreshRequests.add(self.layoutDirtyIcons(
+            filterRedundantParens=self.redundantParenFilterRequested))
+        if self.refreshRequests.get() is not None:
+            self.refresh(self.refreshRequests.get(), redraw=True)
+        if addUndoBoundary:
+            self.undo.addBoundary()
+        self.refreshRequests.clear()
+        self.redundantParenFilterRequested = False
 
     def drawImage(self, image, location, subImage=None):
         """Draw an arbitrary image anywhere in the window, ignoring the window image.
@@ -2238,8 +2227,9 @@ class Window:
                                 return ic  # Point is adjacent to connector to next icon
         return None
 
-    def removeIcons(self, icons, refresh=True):
-        """Remove icons from window icon list redraw affected areas of the display"""
+    def removeIcons(self, icons):
+        """Remove icons from window icon list, request redraw of affected areas of the
+        display (does not perform redraw, call refreshDirty() to draw marked changes)."""
         if len(icons) == 0:
             return
         # Note that order is important, here. .removeTop() must be called before
@@ -2253,19 +2243,19 @@ class Window:
         seqReconnectList = []
         reconnectList = {}
         # Find region needing erase, including following sequence connectors
-        redrawRegion = comn.AccumRects()
+        self.requestRedraw(None, filterRedundantParens=True)
         for ic in icons:
-            redrawRegion.add(ic.rect)
+            self.requestRedraw(ic.rect)
             nextIc = ic.nextInSeq()
             if nextIc is not None:
                 tx, ty = ic.posOfSite('seqOut')
                 bx, by = nextIc.posOfSite('seqIn')
-                redrawRegion.add((tx-1, ty-1, tx+1, by+1))
+                self.requestRedraw((tx-1, ty-1, tx+1, by+1))
             prevIc = ic.prevInSeq()
             if prevIc is not None:
                 tx, ty = prevIc.posOfSite('seqOut')
                 bx, by = ic.posOfSite('seqIn')
-                redrawRegion.add((tx-1, ty-1, tx+1, by+1))
+                self.requestRedraw((tx-1, ty-1, tx+1, by+1))
         # Find and unlink child icons from parents at deletion boundary.  Note use of
         # child icon rather than siteId in detachList because site names change as icons
         # are removed from variable-length sequences.
@@ -2303,7 +2293,7 @@ class Window:
                         detachList.add((ic, child))
                         if child not in reconnectList:
                             addTopIcons.add(child)
-                        redrawRegion.add(child.hierRect())
+                        self.requestRedraw(child.hierRect())
                     elif ic not in deletedSet and child in deletedSet:
                         detachList.add((ic, child))
                         if ic.siteOf(child) == 'attrIcon':
@@ -2326,7 +2316,7 @@ class Window:
             if child in deletedSet and isinstance(ic, listicons.TupleIcon) and \
              ic.noParens and len(ic.sites.argIcons) <= 1 and ic.parent() is None and \
              ic in self.topIcons:
-                redrawRegion.add(ic.rect)
+                self.requestRedraw(ic.rect)
                 argIcon = ic.sites.argIcons[0].att
                 if argIcon is None:  #... Not sure what happens here when no icons are left
                     nextIc = ic.nextInSeq()
@@ -2338,12 +2328,6 @@ class Window:
                         prevIc.replaceChild(nextIc, 'seqOut')
                 else:
                     self.replaceTop(ic, argIcon)
-        # Redo layouts of icons affected by detachment of children
-        redrawRegion.add(self.layoutDirtyIcons())
-        # Redraw the area affected by the deletion
-        if refresh:
-            self.refresh(redrawRegion.get())
-        return redrawRegion.get()
 
     def saveFile(self, filename, exportPython=False):
         tabSize = 4
@@ -2660,6 +2644,9 @@ class Window:
             if lingeringParent:
                 print("Removing lingering parent link to icon added to top")
                 lingeringParent.replaceChild(None, lingeringParent.siteOf(ic))
+        # Even if the icon was properly laid out in its former context, the margin at
+        # this location and indent level is probably different.
+        ic.markLayoutDirty()
         ic.becomeTopLevel(True)
 
     def findSequences(self, topIcons):
@@ -2894,12 +2881,6 @@ class Window:
          self.cursor.siteType == "attrIn":
             self.cursor.setToIconSite(argIcon, "attrIcon")
         self.filterRedundantParens(argIcon)
-
-    def redoLayout(self, topIcon, filterRedundantParens=True):
-        """Recompute layout for a top-level icon and redraw all affected icons"""
-        redrawRect = self.layoutIconsInPage(self.topIcons[topIcon], filterRedundantParens,
-         checkAllForDirty=False)
-        self.refresh(redrawRect)
 
     def imageToContentCoord(self, imageX, imageY):
         """Convert a coordinate from the screen image of the window to the underlying

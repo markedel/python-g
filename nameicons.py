@@ -1156,7 +1156,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
         else:
             # Multiple remaining arguments: convert to entry icon with pending args in
             # a list (entry icon's minimizePendingArgs will unload to parent if possible)
-            redrawRegion = comn.AccumRects(ic.topLevelParent().hierRect())
+            win.requestRedraw(ic.topLevelParent().hierRect())
             valueIcons = [s.att for s in ic.sites.values]
             entryIcon = entryicon.EntryIcon(initialString=text, window=win)
             for arg in valueIcons:
@@ -1170,7 +1170,6 @@ def backspaceSeriesStmt(ic, site, evt, text):
                 parentSite = parent.siteOf(ic)
                 parent.replaceChild(entryIcon, parentSite)
             win.cursor.setToText(entryIcon, drawNew=False)
-            win.redisplayChangedEntryIcon(evt, redrawRegion.get())
     elif siteName == "values":
         # Cursor is on comma input.  Delete if empty or previous site is empty, merge
         # surrounding sites if not

@@ -252,7 +252,8 @@ class Cursor:
         for i in select:
             redrawRect.add(i.hierRect())
             i.select()
-        self.window.refresh(redrawRect.get())
+        if redrawRect.get() is not None:
+            self.window.refresh(redrawRect.get(), redraw=True, clear=False)
         self.setToIconSite(ic, site)
         self.lastSelIc = ic
         self.lastSelSite = site
@@ -545,7 +546,7 @@ class Cursor:
                             highestIc.hasCoincidentSite())
                     return highestIc, self._topSite(highestIc, seqDown=False)
                 parentSite = parent.siteOf(highestIc)
-                if highestIc == fromIcon and fromIcon.hasCoincidentSite():
+                if fromIcon.hasCoincidentSite():
                     return self._lexicalTraverse(parent, parentSite, direction)
                 return iconsites.lowestCoincidentSite(parent, parentSite)
             iconAtPrevSite = fromIcon.childAt(prevSite)

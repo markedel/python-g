@@ -153,13 +153,11 @@ class CursorParenIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         win = self.window
-        redrawRegion = comn.AccumRects(self.topLevelParent().hierRect())
+        win.requestRedraw(self.topLevelParent().hierRect())
         if siteId == 'attrIcon':
             # Cursor is on attribute site of right paren.  Re-open the paren
             # On backspace from the outside right paren, reopen the list
             entryicon.reopenParen(self)
-            redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=False))
-            win.refresh(redrawRegion.get())
             return
         else:
             # Cursor is on the argument site: remove the parens unless an attribute is
@@ -172,7 +170,6 @@ class CursorParenIcon(icon.Icon):
                     toSelect.append(self)
                 for i in toSelect:
                     win.select(i)
-                win.refresh(redrawRegion.get())
                 return
             parent = self.parent()
             content = self.childAt('argIcon')
@@ -209,5 +206,4 @@ class CursorParenIcon(icon.Icon):
                     parent.replaceChild(content, parentSite)
                     win.cursor.setToIconSite(parent, parentSite)
                     reorderexpr.reorderArithExpr(content)
-        redrawRegion.add(win.layoutDirtyIcons(filterRedundantParens=True))
-        win.refresh(redrawRegion.get())
+        win.requestRedraw(None, filterRedundantParens=True)
