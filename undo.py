@@ -42,16 +42,23 @@ class UndoRedoList:
         self._addUndoRedoEntry(Callback(callback, args))
 
     def addBoundary(self):
+        """Undo boundaries mark the completion of a command and therefore define the
+        granularity of the corresponding undo operation.  While boundaries usually
+        correspond to the the end of a user command, they can also be tweaked to provide
+        better flow.  For example, when a command ends with the insertion of an entry
+        icon, the boundary can be shifted to between the end of the structural change
+        and the entry icon insertion to keep the undo stream clean of unnecessary entry
+        icons popping up and making it harder to see the actual code changes."""
+        # Undo and redo processing inserts its own boundaries.  While callbacks don't
+        # usually insert boundaries, better to ignore them if they do.
+        if self._inRedo or self._inUndo:
+            return
+        # If this is a repeated boundary, give priority to the earlier boundary data.
+        # (Prior code did the opposite but for reasons that are now obsolete.  As far as
+        # I know, no upstream code actively depends on this ordering)
         if len(self.undoList) > 0 and self.undoList[-1].__class__ is Boundary:
-            # Don't record every keystroke, but rather capture the entry icon and cursor
-            # on the brink of the operation to best allow user to correct a mistaken entry
-            self.undoList[-1] = (Boundary(self.window))
-        else:
-            self.undoList.append(Boundary(self.window))
-        # Typing (which is reflected only in addBoundary) is sufficient reason to
-        # invalidate the redo list
-        if not self._inRedo and not self._inUndo:
-            self.redoList = []
+            return
+        self.undoList.append(Boundary(self.window))
 
     def undo(self):
         """Perform operations on the undo list until the next undo boundary"""
@@ -67,30 +74,36 @@ class UndoRedoList:
 
     def _undoOrRedoToBoundary(self, isRedo):
         undoList = self.redoList if isRedo else self.undoList
+        redoList = self.undoList if isRedo else self.redoList
         if len(undoList) == 0:
             cursors.beep()
             return
-        #... I don't understand why I put the boundary before the operation, here.
-        #    Normally, the convention is to put it at the end of an operation,
-        #    particularly since the boundary caries cursor positioning information.
-        if isRedo:
-            self.undoList.append(Boundary(self.window))
-        else:
-            self.redoList.append(Boundary(self.window))
-        if undoList[-1].__class__ is Boundary:
+        # Strip off any boundary or boundaries at the end of the undo list
+        while len(undoList) > 0 and isinstance(undoList[-1], Boundary):
+            if len(undoList) == 1:
+                cursors.beep()
+                return  # List is empty except for a boundary, so leave it
             undoList.pop(-1)
+        # When the redo list is cleared, it will have no boundary at the beginning, and
+        # we need to provide one to establish cursor data for the end of the last redo
+        if len(redoList) == 0:
+            redoList.append(Boundary(self.window))
+        # Perform the undo operations on the list until the next boundary.  Do not remove
+        # the boundary, however, as it's still needed to separate subsequent operations.
         while len(undoList) > 0:
-            u = undoList.pop(-1)
-            if u.__class__ is Boundary:
-                u.restoreCursorAndEntryIcon(self.window)
+            if isinstance(undoList[-1], Boundary):
+                undoList[-1].restoreCursorAndEntryIcon(self.window)
                 break
+            u = undoList.pop(-1)
             redrawRect = u.undo(self)
             self.window.requestRedraw(redrawRect)
         else:
             listType = "Undo" if undoList is self.undoList else "Redo"
-            #... I don't think the redo list is supposed to end in a boundary
             print("Warning:", listType, "list does not end in boundary")
             self.window.cursor.removeCursor()
+        # While we were undoing, the opposite list was accumulating the records for
+        # undoing/redoing the undo operation.  Top it off with a boundary
+        redoList.append(Boundary(self.window))
         # Update dirty layouts and redraw the areas affected
         self.window.refreshDirty()
 
@@ -126,7 +139,7 @@ class Boundary:
             self.cursorPos = cursor.pos
             self.cursorIcon = cursor.icon
             self.cursorSite = cursor.site
-            if window.cursor.type == "text":
+            if cursor.type == "text":
                 self.entryText = window.cursor.icon.text
             else:
                 self.entryText = None
@@ -236,18 +249,3 @@ class Callback(UndoListEntry):
 
     def undo(self, undoData):
         self.callback(*self.args)
-
-class AccumRect:
-    """Make one big rectangle out of all rectangles added."""
-    def __init__(self, initRect=None):
-        self.rect = initRect
-
-    def add(self, rect):
-        if rect is None:
-            return
-        if self.rect is None:
-            self.rect = rect
-        else:
-            l1, t1, r1, b1 = rect
-            l2, t2, r2, b2 = self.rect
-            self.rect =  min(l1, l2), min(t1, t2), max(r1, r2), max(b1, b2)

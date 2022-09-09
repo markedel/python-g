@@ -636,7 +636,8 @@ class Window:
             self.cursor.icon.addText(char)
         elif self.cursor.type == "icon":
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
-            self._insertEntryIconAtCursor(char)
+            self._insertEntryIconAtCursor()
+            self.cursor.icon.addText(char)
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
             entryIcon = entryicon.EntryIcon(window=self)
@@ -685,9 +686,9 @@ class Window:
                 # we don't know what to replace).
                 cursors.beep()
                 return
-        self.refreshDirty(addUndoBoundary=True)
+        self.refreshDirty()  # Undo boundary added within entryIcon.addText
 
-    def _insertEntryIconAtCursor(self, initialText):
+    def _insertEntryIconAtCursor(self):
         # Note that location is set in the entry icon for the single case where it
         # becomes the beginning of a sequence.  All others are overwritten by layout
         self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
@@ -722,7 +723,6 @@ class Window:
             cursorIc.replaceChild(entryIcon, cursorSite)
             entryIcon.appendPendingArgs([pendingArg])
         self.cursor.setToText(entryIcon, drawNew=False)
-        entryIcon.addText(initialText)
 
     def watchTypeover(self, ic):
         """Register an icon with active typeover for cancellation when it's no longer
@@ -1070,7 +1070,7 @@ class Window:
                 return
             self.requestRedraw(self.cursor.icon.hierRect())
             self.cursor.icon.addText(text)
-            self.refreshDirty(addUndoBoundary=True)
+            self.refreshDirty()  # Undo boundary added by addText
             return
         # Look at what is on the clipboard and make the best possible conversion to icons
         try:
@@ -1306,8 +1306,8 @@ class Window:
             if blockOwnerIcon is not None:
                 topIcon = blockOwnerIcon.blockEnd
         self.cursor.setToIconSite(topIcon, 'seqOut')
-        self._insertEntryIconAtCursor("")
-        self.refreshDirty(addUndoBoundary=True)
+        self._insertEntryIconAtCursor()
+        self.refreshDirty()  # No undo boundary, as this is just an entry icon
 
     def _execCb(self, evt=None):
         """Execute the top level icon at the entry or icon cursor"""

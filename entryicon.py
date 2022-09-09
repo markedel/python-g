@@ -481,6 +481,12 @@ class EntryIcon(icon.Icon):
         return attIcon.typeOf(attIcon.siteOf(self))
 
     def addText(self, char):
+        """Add a character at the cursor.  If that resulted in changes to the icon
+        structure in the window, also adds an undo boundary.  Note that while most
+        commands add an undo boundary after all icon manipulation is finished, addText
+        only adds one if it modified the icon structure, and may make changes to the
+        icon structure *after* adding the boundary, leaving the undo stack
+        "unterminated"."""
         newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
         if self.window.cursor.type == "text" and self.window.cursor.icon is self:
@@ -492,15 +498,12 @@ class EntryIcon(icon.Icon):
             # Erase the character before the text cursor
             self.text = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
             self.cursorPos -= 1
-            # self._setText(newText, self.cursorPos-1)
-            # if self.window.cursor.type == "text" and self.window.cursor.icon is self:
-            #     # Currently not coloring based on text, but may want to restore later
-            #     self._recolorPending()
             self.markLayoutDirty()
             return
-        if self.text == '' and not self.hasPendingArgs():
-            self.remove()
-            return
+        if self.text == '':
+            # Icon has no text.  Try to place pending args and remove
+            if self.remove():
+                return
         if self.attachedIcon() is None:
             cursors.beep()
             return
@@ -732,6 +735,8 @@ class EntryIcon(icon.Icon):
         return parseResult, handlerIc, False
 
     def _setText(self, newText, newCursorPos):
+        """Process the text in the icon, possibly creating or rearranging the icon
+        structure around it."""
         parseResult, handlerIc, prepend = self.parseEntryText(newText)
         # print('parse result', parseResult)
         if parseResult == "reject":
@@ -761,40 +766,55 @@ class EntryIcon(icon.Icon):
         elif parseResult == "comma":
             if not self.insertComma():
                 cursors.beep()
+            else:
+                self.window.undo.addBoundary()
             return
         elif parseResult == "colon":
             if not self.insertColon():
                 cursors.beep()
+            else:
+                self.window.undo.addBoundary()
             return
         elif parseResult == "openBracket":
             self.insertOpenParen(listicons.ListIcon)
+            self.window.undo.addBoundary()
             return
         elif parseResult == "endBracket":
             if not self.insertEndParen(parseResult):
                 cursors.beep()
+            else:
+                self.window.undo.addBoundary()
             return
         elif parseResult == "openBrace":
             self.insertOpenParen(listicons.DictIcon)
+            self.window.undo.addBoundary()
             return
         elif parseResult == "endBrace":
             if not self.insertEndParen(parseResult):
                 cursors.beep()
+            else:
+                self.window.undo.addBoundary()
             return
         elif parseResult == "openParen":
             self.insertOpenParen(parenicon.CursorParenIcon)
+            self.window.undo.addBoundary()
             return
         elif parseResult == "endParen":
             if not self.insertEndParen(parseResult):
                 cursors.beep()
+            else:
+                self.window.undo.addBoundary()
             return
         elif parseResult == "makeFunction":
             if self.attachedIcon().isCursorOnlySite(self.attachedSite()):
                 cursors.beep()
             else:
                 self.insertOpenParen(listicons.CallIcon)
+                self.window.undo.addBoundary()
             return
         elif parseResult == "makeSubscript":
             self.insertOpenParen(subscripticon.SubscriptIcon)
+            self.window.undo.addBoundary()
             return
         # Parser emitted an icon.  Splice it in to the hierarchy in place of the entry
         # icon (ignoring, for now, that the entry icon may have to be reinstated if there
@@ -888,21 +908,37 @@ class EntryIcon(icon.Icon):
                 if self.attachedIcon() is not None:
                     self.attachedIcon().replaceChild(None, self.attachedSite())
                 self.window.cursor.setToIconSite(cursorIcon, cursorSite)
+                self.window.undo.addBoundary()
                 return
         # There is remaining text or pending arguments.  Restore the entry icon.  Note
-        # that the code above is guaranteed to put the cursor in the right place, but
-        # (I think) is allowed to leave the entry icon in the wrong place.  If the print
-        # statement diagnostic below never shows up, the relocation code is not necessary
-        # and can be safely removed.
+        # that the code above is guaranteed to put the cursor in the right place, and
+        # either leave or remove the entry icon (I don't think any of the code will leave
+        # the entry icon in the wrong place, but the code below will handle it and print
+        # a diagnostic if it does).  If the prior code has removed the entry icon, that
+        # means it's safe to place the undo boundary before reestablishing the entry icon
+        # (to keep the undo stream neater).
         if self.attachedIcon() is not None and self.attachedIcon() is not cursorIcon:
             print('relocating entry icon... code is necessary, remove this diagnostic')
             self.attachedIcon().replaceChild(None, self.attachedSite())
+        if self.attachedIcon() is None and not self.hasPendingArgs():
+            # The entry icon has been removed and it's not carrying pending arguments
+            # whose dissappearance would disturb the user. Set a temporary cursor and put
+            # the undo boundary here, before we restore the entry icon.
+            self.window.cursor.setToIconSite(cursorIcon, cursorSite)
+            self.window.undo.addBoundary()
+            earlyBoundaryAdded = True
+        else:
+            if not self.hasPendingArgs():
+                print('Did I add ugly entry icon to undo? ...code improvement possible?')
+            earlyBoundaryAdded = False
         if self.attachedIcon() is None:
             cursorIcon.replaceChild(self, cursorSite)
+        self.text = remainingText
+        self.cursorPos = len(remainingText)
         self.window.cursor.setToText(self)
+        if not earlyBoundaryAdded:
+            self.window.undo.addBoundary()
         self.markLayoutDirty()
-        self.text = ""
-        self.cursorPos = 0
         if remainingText == "":
             self.window.cursor.draw()
             return
