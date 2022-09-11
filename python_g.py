@@ -1259,12 +1259,7 @@ class Window:
         attrIcon = fromIcon.sites.attrIcon.att
         fromIcon.replaceChild(None, 'attrIcon')
         ic.replaceChild(attrIcon, 'attrIcon')
-        parent = fromIcon.parent()
-        if parent is None:
-            self.replaceTop(fromIcon, ic)
-        else:
-            parentSite = parent.siteOf(fromIcon)
-            parent.replaceChild(ic, parentSite)
+        fromIcon.replaceWith(ic)
         self.cursor.setToIconSite(ic, self.cursor.site)
         self.refreshDirty(addUndoBoundary=True)
 
@@ -2099,14 +2094,20 @@ class Window:
         if filterRedundantParens:
             self.redundantParenFilterRequested = True
 
-    def refreshDirty(self, addUndoBoundary=False):
+    def refreshDirty(self, addUndoBoundary=False, minimizePendingArgs=True):
         """Refresh any icons whose layout is marked as dirty (via the markLayoutDirty
         method of the icon), and redraw and refresh any window areas marked as needing
         redraw (via window method requestRedraw).  If nothing is marked as dirty, no
         redrawing will be done.  If addUndoBoundary is True, also add an undo boundary
         (even if nothing is dirty).  While undo boundaries have nothing to do with window
         redrawing, both need doing after almost every user operation, so combining the
-        two shortens the code and serves as a reminder to do them both."""
+        two shortens the code and serves as a reminder to do them both.  By default, if
+        the cursor is set to an entry icon, this will also call the entry icon's method
+        for optimizing pending arguments.  To suppress this call, set minimizePendingArgs
+        to False."""
+        if minimizePendingArgs and self.cursor.type == "text" and \
+                isinstance(self.cursor.icon, entryicon.EntryIcon):
+            self.cursor.icon.minimizePendingArgs()
         self.refreshRequests.add(self.layoutDirtyIcons(
             filterRedundantParens=self.redundantParenFilterRequested))
         if self.refreshRequests.get() is not None:

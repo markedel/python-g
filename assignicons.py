@@ -352,14 +352,7 @@ class AssignIcon(icon.Icon):
                     if arg is not None:
                         self.replaceChild(None, self.siteOf(arg))
                     newTuple.insertChild(arg, "argIcons", i)
-                parent = self.parent()
-                if parent is None:
-                    win.replaceTop(self, newTuple)
-                else:
-                    # I don't think this is possible, remove if print never appears
-                    print("Assign icon has parent?????")
-                    parentSite = parent.siteOf(self)
-                    parent.replaceChild(newTuple, parentSite)
+                self.replaceWith(newTuple)
                 cursorSite = iconsites.makeSeriesSiteId('argIcons', numTargets)
                 win.cursor.setToIconSite(newTuple, cursorSite)
             else:
@@ -558,11 +551,10 @@ class AugmentedAssignIcon(icon.Icon):
                 if self.parent() is not None:
                     print('AugmentedAssign has parent?????')
                     return
+                entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                 if targetIcon is None:
-                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                     win.replaceTop(self, entryIcon)
                 else:
-                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
                     win.replaceTop(self, targetIcon)
                     targetIcon.replaceChild(entryIcon, 'attrIcon')
                 if len(valueIcons) == 1:

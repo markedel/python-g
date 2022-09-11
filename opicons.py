@@ -1103,17 +1103,8 @@ class IfExpIcon(icon.Icon):
                 for i in attrIcon.traverse():
                     win.select(i)
                 return
-            parent = self.parent()
             cursorParen = parenicon.CursorParenIcon(window=win)
-            if parent is None:
-                # Insert cursor paren at top level with ic as its child
-                cursorParen.replaceChild(self, 'argIcon')
-                win.replaceTop(self, cursorParen)
-            else:
-                # Insert cursor paren between parent and ic
-                parentSite = parent.siteOf(self)
-                cursorParen.replaceChild(self, 'argIcon')
-                parent.replaceChild(cursorParen, parentSite)
+            self.insertParent(cursorParen, 'argIcon')
             # Manually change status of icon to no-parens so it will be treated
             # as not parenthesised as icons are rearranged
             self.hasParens = False
@@ -1176,16 +1167,11 @@ class IfExpIcon(icon.Icon):
             win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
             return
         # Cursor was on the if itself
-        win.requestRedraw(self.topLevelParent().hierRect())
+        win.requestRedraw(self.topLevelParent().hierRect(), filterRedundantParens=True)
         if self.hasParens:
             # If the operation had parens, place temporary parens for continuity
             cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
-            cpParent = self.parent()
-            if cpParent is None:
-                win.replaceTop(self, cursorParen)
-            else:
-                cpParent.replaceChild(cursorParen, cpParent.siteOf(ic))
-                cursorParen.replaceChild(self, 'argIcon')
+            self.insertParent(cursorParen, 'argIcon')
         parent = self.parent()
         leftArg = self.leftArg()
         rightArg = self.rightArg()
@@ -1199,6 +1185,10 @@ class IfExpIcon(icon.Icon):
             entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
                 icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
         entryIcon = entryicon.EntryIcon(initialString="if", window=win)
+        testExpr = self.childAt('testExpr')
+        if testExpr:
+            self.replaceChild(None, 'testExpr')
+            entryIcon.appendPendingArgs([testExpr])
         if leftArg is not None:
             leftArg.replaceChild(None, 'output')
         if rightArg is not None:
@@ -1310,17 +1300,8 @@ def backspaceBinOpIcon(ic, site, evt):
                 for i in attrIcon.traverse():
                     win.select(i)
                 return
-            parent = ic.parent()
             cursorParen = parenicon.CursorParenIcon(window=win)
-            if parent is None:
-                # Insert cursor paren at top level with ic as its child
-                cursorParen.replaceChild(ic, 'argIcon')
-                win.replaceTop(ic, cursorParen)
-            else:
-                # Insert cursor paren between parent and ic
-                parentSite = parent.siteOf(ic)
-                cursorParen.replaceChild(ic, 'argIcon')
-                parent.replaceChild(cursorParen, parentSite)
+            ic.insertParent(cursorParen, 'argIcon')
             # Manually change status of icon to no-parens so it will be treated
             # as not parenthesised as icons are rearranged
             ic.hasParens = False
@@ -1379,13 +1360,7 @@ def backspaceBinOpIcon(ic, site, evt):
     win.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
     if not isinstance(ic, DivideIcon) and ic.hasParens:
         # If the operation had parens, place temporary parens for continuity
-        cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
-        cpParent = ic.parent()
-        if cpParent is None:
-            win.replaceTop(ic, cursorParen)
-        else:
-            cpParent.replaceChild(cursorParen, cpParent.siteOf(ic))
-            cursorParen.replaceChild(ic, 'argIcon')
+        ic.insertParent(parenicon.CursorParenIcon(window=win, closed=True), 'argIcon')
     parent = ic.parent()
     if isinstance(ic, DivideIcon):
         leftArg = ic.sites.topArg.att

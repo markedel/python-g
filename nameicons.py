@@ -1163,12 +1163,7 @@ def backspaceSeriesStmt(ic, site, evt, text):
                 if arg is not None:
                     ic.replaceChild(None, ic.siteOf(arg))
             entryIcon.appendPendingArgs([valueIcons])
-            parent = ic.parent()
-            if parent is None:
-                win.replaceTop(ic, entryIcon)
-            else:
-                parentSite = parent.siteOf(ic)
-                parent.replaceChild(entryIcon, parentSite)
+            ic.replaceWith(entryIcon)
             win.cursor.setToText(entryIcon, drawNew=False)
     elif siteName == "values":
         # Cursor is on comma input.  Delete if empty or previous site is empty, merge

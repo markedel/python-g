@@ -902,8 +902,11 @@ class TupleIcon(ListTypeIcon):
         if self.sites.argIcons[0].att is not None and len(self.sites.argIcons) <= 1 and \
                 not self.noParens:
             self.sites.argIcons.insertSite(1)
-            self.commaTypeover = 1
-            self.window.watchTypeover(self)
+            cursor = self.window.cursor
+            if cursor.type == 'icon' and cursor.icon is self and \
+                    cursor.site == 'argIcons_1':
+                self.commaTypeover = 1
+                self.window.watchTypeover(self)
         elif len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is None and \
                 self.sites.argIcons[1].att is None and not self.noParens:
             curs = self.window.cursor
@@ -1827,14 +1830,9 @@ def backspaceListIcon(ic, site, evt):
                 ic.sites.argIcons[0].att is None:
             # Special case of removing the right paren of an empty tuple, change it to
             # a paren icon before opening so we don't get lingering comma
-            parent = ic.parent()
             attr = ic.childAt('attrIcon')
             parenIcon = parenicon.CursorParenIcon(window=ic.window, closed=True)
-            if parent is None:
-                ic.window.replaceTop(ic, parenIcon)
-                parenIcon.markLayoutDirty()
-            else:
-                parent.replaceChild(parenIcon, parent.siteOf(ic))
+            ic.replaceWith(parenIcon)
             if attr:
                 ic.replaceChild(None, 'attrIcon')
                 parenIcon.replaceChild(attr, 'attrIcon')
@@ -2003,12 +2001,7 @@ def backspaceListIcon(ic, site, evt):
                     newTuple = TupleIcon(window=ic.window)
                     arg = recipient.childAt('argIcon')
                     recipient.replaceChild(None, 'argIcon')
-                    recipientParent = recipient.parent()
-                    if recipientParent is None:
-                        ic.window.replaceTop(recipient, newTuple)
-                    else:
-                        recipientParent.replaceChild(newTuple,
-                            recipientParent.siteOf(recipient))
+                    recipient.replaceWith(newTuple)
                     newTuple.replaceChild(arg, 'argIcons_0')
                     recipient = newTuple
                     recipientSite = 'argIcons_0'
@@ -2119,11 +2112,7 @@ def backspaceListIcon(ic, site, evt):
             ic.replaceChild(None, 'argIcons_0')
             newParen = parenicon.CursorParenIcon(window=win, closed=True)
             newParen.replaceChild(arg, 'argIcon')
-            parent = ic.parent()
-            if parent is None:
-                win.replaceTop(ic, newParen)
-            else:
-                parent.replaceChild(newParen, parent.siteOf(ic))
+            ic.replaceWith(newParen)
             if attr:
                 newParen.replaceChild(attr, 'attrIcon')
             win.cursor.setToIconSite(*icon.rightmostSite(arg))

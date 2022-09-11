@@ -642,6 +642,30 @@ class Icon:
             self.sites.lookup(siteId).attach(self, newChild, childSite)
         self.markLayoutDirty()
 
+    def replaceWith(self, replacementIcon):
+        """Replace this icon (self) with another icon in the parent site to which it
+        is currently attached, or on the top level of the window"""
+        parent = self.parent()
+        if parent is None:
+            if replacementIcon is None:
+                self.window.removeTop([self])
+            else:
+                self.window.replaceTop(self, replacementIcon)
+        else:
+            parent.replaceChild(replacementIcon, parent.siteOf(self))
+
+    def insertParent(self, parentToWrap, parentSite):
+        """Add an icon between this icon and its parent (or this icon and the top level
+        if the icon has no parent)."""
+        parent = self.parent()
+        parentToWrap.replaceChild(self, parentSite)
+        if parent is None:
+            # Insert new parent at top level with ic as its child
+            self.window.replaceTop(self, parentToWrap)
+        else:
+            # Insert new parent between parent and ic old parent
+            parent.replaceChild(parentToWrap, parent.siteOf(self))
+
     def removeEmptySeriesSite(self, siteId):
         if self.childAt(siteId):
             return

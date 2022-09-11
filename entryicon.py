@@ -421,11 +421,7 @@ class EntryIcon(icon.Icon):
             outIc = icon.findAttrOutputSite(self.attachedIcon())
         else:
             outIc = self
-        outIcParent = outIc.parent()
-        if outIcParent is None:
-            self.window.replaceTop(outIc, pendingArg)
-        else:
-            outIcParent.replaceChild(pendingArg, outIcParent.siteOf(outIc))
+        outIc.replaceWith(pendingArg)
         lowestIc.replaceChild(outIc, lowestSite)
         reorderexpr.reorderArithExpr(pendingArg)
         self._recolorPending()
@@ -565,11 +561,7 @@ class EntryIcon(icon.Icon):
             # The existing entry icon is embedded in an expression.  Use it so it can
             # retain its position within the the expression and not leave a hole.
             self.appendPendingArgs(newPendingArgs)
-            if newEntryIcon.attachedIcon() is None:
-                self.window.replaceTop(newEntryIcon, highestIcon)
-            else:
-                newEntryIcon.attachedIcon().replaceChild(highestIcon,
-                    newEntryIcon.attachedSite())
+            newEntryIcon.replaceWith(highestIcon)
             self.text = newText
             self.cursorPos = len(newEntryIcon.text)
             self.window.cursor.setToText(self)
@@ -1034,11 +1026,7 @@ class EntryIcon(icon.Icon):
                     typeover=closed and not ic.closed)
                 arg = ic.childAt('argIcon')
                 ic.replaceChild(None, 'argIcon')
-                parent = ic.parent()
-                if parent is None:
-                    self.window.replaceTop(ic, tupleIcon)
-                else:
-                    parent.replaceChild(tupleIcon, parent.siteOf(ic))
+                ic.replaceWith(tupleIcon)
                 tupleIcon.replaceChild(arg, 'argIcons_0')
                 if ic.closed:
                     attrIcon = ic.sites.attrIcon.att
@@ -1051,11 +1039,7 @@ class EntryIcon(icon.Icon):
                         splitSite != 'testExpr':
                 # Convert  binary operator with parens to a tuple
                 tupleIcon = listicons.TupleIcon(window=self.window, closed=True)
-                parent = ic.parent()
-                if parent is None:
-                    self.window.replaceTop(ic, tupleIcon)
-                else:
-                    parent.replaceChild(tupleIcon, parent.siteOf(ic))
+                ic.replaceWith(tupleIcon)
                 tupleIcon.replaceChild(ic, 'argIcons_0')
                 attrIcon = ic.sites.attrIcon.att
                 ic.replaceChild(None, 'attrIcon')
@@ -1147,12 +1131,23 @@ class EntryIcon(icon.Icon):
                 rightOfIc.replaceChild(None, iconsites.makeSeriesSiteId(name, idx))
             insertIdx = len(newParenIcon.sites.argIcons)
             newParenIcon.insertChildren(args, 'argIcons', insertIdx)
-            # If the parent was a naked tuple, which is now down to 1 arg, remove it
-            if rightOfIc.parent() is None and idx == 1 and \
-                    isinstance(rightOfIc, listicons.TupleIcon) and rightOfIc.noParens:
-                newTopIcon = rightOfIc.childAt('argIcons_0')
-                rightOfIc.replaceChild(None, 'argIcons_0')
-                self.window.replaceTop(rightOfIc, newTopIcon)
+            # If boundingParent was a tuple which is now down to 1 arg, remove it if it
+            # was a naked tuple on the top level, or replace it with a cursor paren if it
+            # was an ordinary tuple (Python's single-arg tuple syntax requires a trailing
+            # comma (a,), which clashes with the python-g convention of unclosed parens
+            # owning the clauses that follow them).
+            if isinstance(rightOfIc, listicons.TupleIcon) and idx == 1:
+                if rightOfIc.noParens:
+                    newTopIcon = rightOfIc.childAt('argIcons_0')
+                    rightOfIc.replaceChild(None, 'argIcons_0')
+                    self.window.replaceTop(rightOfIc, newTopIcon)
+                else:
+                    newParen = parenicon.CursorParenIcon(closed=rightOfIc.closed,
+                        window=self.window)
+                    arg = rightOfIc.childAt('argIcons_0')
+                    rightOfIc.replaceChild(None, 'argIcons_0')
+                    newParen.replaceChild(arg, 'argIcon')
+                    rightOfIc.replaceWith(newParen)
 
     def insertEndParen(self, token):
         """Find a matching open paren/bracket/brace or paren-less tuple that could be
@@ -1169,13 +1164,8 @@ class EntryIcon(icon.Icon):
         if isinstance(fromIcon, parenicon.CursorParenIcon) and token == "endParen" and (
                 fromSite == 'argIcon' or
                 fromSite == 'attrIcon' and fromIcon.childAt('argIcon') is None):
-            parent = fromIcon.parent()
             tupleIcon = listicons.TupleIcon(window=self.window)
-            if parent is None:
-                self.window.replaceTop(fromIcon, tupleIcon)
-                tupleIcon.markLayoutDirty()
-            else:
-                parent.replaceChild(tupleIcon, parent.siteOf(fromIcon))
+            fromIcon.replaceWith(tupleIcon)
             # If there are pending args, they need to go *after* the newly-closed paren,
             # so move the entry icon before calling .remove(), which will place them
             # (if possible) or leave the entry icon (if not).
@@ -1213,11 +1203,7 @@ class EntryIcon(icon.Icon):
                     transferArgsFrom.replaceChild(None, 'argIcons_0')
                     newParen = parenicon.CursorParenIcon(window=self.window, closed=False)
                     newParen.replaceChild(arg, 'argIcon')
-                    parent = transferArgsFrom.parent()
-                    if parent is None:
-                        self.window.replaceTop(transferArgsFrom, newParen)
-                    else:
-                        parent.replaceChild(newParen, parent.siteOf(transferArgsFrom))
+                    transferArgsFrom.replaceWith(newParen)
                     if transferArgsFrom is matchingParen:
                         matchingParen = newParen
         # Rearrange the hierarchy so the paren/bracket/brace is above all the icons it
@@ -2083,11 +2069,7 @@ def reopenParen(ic):
         arg = recipient.childAt('argIcon')
         recipient.replaceChild(None, 'argIcon')
         tupleIcon.replaceChild(arg, "argIcons_0")
-        parent = recipient.parent()
-        if parent is None:
-            recipient.window.replaceTop(recipient, tupleIcon)
-        else:
-            parent.replaceChild(tupleIcon, parent.siteOf(recipient))
+        recipient.replaceWith(tupleIcon)
         recipient = tupleIcon
     # Transfer sequence clauses following the newly-opened paren/bracket/brace from
     # boundingParent to recipient, after the current last element of recipient
@@ -2098,12 +2080,26 @@ def reopenParen(ic):
         boundingParent.replaceChild(None, iconsites.makeSeriesSiteId(name, idx))
     insertIdx = len(recipient.sites.argIcons)
     recipient.insertChildren(args, 'argIcons', insertIdx)
-    # If boundingParent was a naked tuple, which is now down to 1 arg, remove it
-    if boundingParent.parent() is None and idx == 1 and \
-            isinstance(boundingParent, listicons.TupleIcon) and boundingParent.noParens:
-        newTopIcon = boundingParent.childAt('argIcons_0')
-        boundingParent.replaceChild(None, 'argIcons_0')
-        recipient.window.replaceTop(boundingParent, newTopIcon)
+    # If boundingParent was a tuple which is now down to 1 arg, remove it if it was a
+    # naked tuple on the top level, or replace it with a cursor paren if it was an
+    # ordinary tuple.  The reason that the ordinary tuple needs to be converted back to
+    # a cursor paren has to do with the clash between the python syntax for a single-
+    # element tuple (a,) and the python-g convention that an unclosed paren owns all of
+    # the clauses that follow it: if the tuple owns the last comma it violates the
+    # python-g convention, and if the open paren/bracket/brace owns it, it violates the
+    # python syntax convention.
+    if isinstance(boundingParent, listicons.TupleIcon) and idx == 1:
+        if boundingParent.noParens:
+            newTopIcon = boundingParent.childAt('argIcons_0')
+            boundingParent.replaceChild(None, 'argIcons_0')
+            recipient.window.replaceTop(boundingParent, newTopIcon)
+        else:
+            newParen = parenicon.CursorParenIcon(closed=boundingParent.closed,
+                    window=boundingParent.window)
+            arg = boundingParent.childAt('argIcons_0')
+            boundingParent.replaceChild(None, 'argIcons_0')
+            newParen.replaceChild(arg, 'argIcon')
+            boundingParent.replaceWith(newParen)
 
 def transferToParentList(fromIc, startIdx, aboveIc, seriesSiteName='argIcons'):
     """Find a suitable parent to receive remaining arguments from a site series that
@@ -2137,11 +2133,7 @@ def transferToParentList(fromIc, startIdx, aboveIc, seriesSiteName='argIcons'):
         newTuple = listicons.TupleIcon(window=fromIc.window)
         arg = recipient.childAt('argIcon')
         recipient.replaceChild(None, 'argIcon')
-        parent = recipient.parent()
-        if parent is None:
-            fromIc.window.replaceTop(recipient, newTuple)
-        else:
-            parent.replaceChild(newTuple, parent.siteOf(recipient))
+        recipient.replaceWith(newTuple)
         newTuple.replaceChild(arg, 'argIcons_0')
         recipient = newTuple
         siteName = 'argIcons'

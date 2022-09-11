@@ -261,12 +261,7 @@ class WithIcon(icon.Icon):
                     if arg is not None:
                         self.replaceChild(None, self.siteOf(arg))
                 entryIcon.appendPendingArgs([valueIcons])
-                parent = self.parent()
-                if parent is None:
-                    win.replaceTop(self, entryIcon)
-                else:
-                    parentSite = parent.siteOf(self)
-                    parent.replaceChild(entryIcon, parentSite)
+                self.replaceWith(entryIcon)
                 win.cursor.setToText(entryIcon, drawNew=False)
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty, merge
