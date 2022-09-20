@@ -105,7 +105,7 @@ class UndoRedoList:
         # undoing/redoing the undo operation.  Top it off with a boundary
         redoList.append(Boundary(self.window))
         # Update dirty layouts and redraw the areas affected
-        self.window.refreshDirty()
+        self.window.refreshDirty(addUndoBoundary=False, minimizePendingArgs=False)
 
     def _addUndoRedoEntry(self, undoEntry):
         """Add undo entry to the appropriate list (undo or redo) based upon whether
@@ -165,8 +165,12 @@ class Attach(UndoListEntry):
 
     def undo(self, undoData):
         redrawRect = self.parentIcon.hierRect()
-        self.parentIcon.sites.lookup(self.siteId).attach(self.parentIcon, self.origChild,
-         self.childSite)
+        site = self.parentIcon.sites.lookup(self.siteId)
+        if site is None:
+            print(f"Undo holding non-existant site {self.siteId}, for icon "
+                    f"{self.parentIcon.dumpName()}")
+            return redrawRect
+        site.attach(self.parentIcon, self.origChild, self.childSite)
         self.parentIcon.markLayoutDirty()
         return redrawRect
 

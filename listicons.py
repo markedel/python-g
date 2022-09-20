@@ -665,19 +665,22 @@ class ListTypeIcon(icon.Icon):
             return StarIcon(self.window), None
         return None
 
-    def setTypeover(self, idx, site):
+    def setTypeover(self, idx, site=None):
         self.drawList = None
         if idx is None or idx > 0:
             self.endParenTypeover = False
             self.commaTypeover = None
             return False
-        if (site is None or site == "attrIcon"):
+        if site is None or site == "attrIcon":
             self.endParenTypeover = True
             return True
         name, idx = iconsites.splitSeriesSiteId(site)
         if name == 'argIcons' and idx >= 1:
             self.commaTypeover = idx
-            self.window.watchTypeover(self)
+            #... It's not normal to call watchTypeover from a setTypeover call.  I've
+            #    removed, but temporarily added reminder to check if anything's amiss.
+            # self.window.watchTypeover(self)
+            print('Removed call to watchTypeover.  Any problems with typeover?')
             return True
         return False
 
@@ -902,11 +905,9 @@ class TupleIcon(ListTypeIcon):
         if self.sites.argIcons[0].att is not None and len(self.sites.argIcons) <= 1 and \
                 not self.noParens:
             self.sites.argIcons.insertSite(1)
-            cursor = self.window.cursor
-            if cursor.type == 'icon' and cursor.icon is self and \
-                    cursor.site == 'argIcons_1':
-                self.commaTypeover = 1
-                self.window.watchTypeover(self)
+            self.commaTypeover = 1
+            self.window.watchTypeover(self)
+            self.window.updateTypeoverStates(draw=False)
         elif len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is None and \
                 self.sites.argIcons[1].att is None and not self.noParens:
             curs = self.window.cursor
@@ -1417,7 +1418,7 @@ class CallIcon(icon.Icon):
         # closing of matching open parens/brackets/braces needs to take precedence
         return None
 
-    def setTypeover(self, idx, site):
+    def setTypeover(self, idx, site=None):
         self.drawList = None
         if idx is None or idx > 0:
             self.endParenTypeover = False

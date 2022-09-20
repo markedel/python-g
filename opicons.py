@@ -1070,7 +1070,7 @@ class IfExpIcon(icon.Icon):
             return "typeover"
         return None
 
-    def setTypeover(self, idx, site):
+    def setTypeover(self, idx, site=None):
         self.drawList = None  # Force redraw
         if idx is None or idx > 3:
             self.typeoverIdx = None

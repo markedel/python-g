@@ -726,10 +726,12 @@ class Window:
 
     def watchTypeover(self, ic):
         """Register an icon with active typeover for cancellation when it's no longer
-        directly ahead of the cursor or entry icon in the text-traversal path."""
+        directly ahead of the cursor or entry icon in the text-traversal path (The
+        typeover state itself is maintained in the icon structure. The watch list simply
+        makes those icons with active typeover, findable)."""
         self.activeTypeovers.add(ic)
 
-    def updateTypeoverStates(self):
+    def updateTypeoverStates(self, draw=True):
         """Typeover is only allowed directly in front of the cursor, and goes away if
         the user would need to navigate somehow to reach it (in which case they can
         just as well navigate over it as type over it)"""
@@ -745,10 +747,16 @@ class Window:
         elif self.cursor.type == "typeover":
             cursorIcon = self.cursor.icon
             cursorSite = icon.rightmostSite(cursorIcon)[1]
-            keepAlive.add(cursorIcon)
+            for _, siteAfter, _, idx in cursorIcon.typeoverSites(allRegions=True):
+                if idx > 0:
+                    keepAlive.add((cursorIcon, siteAfter))
+                    break
+            else:
+                print(f'updateTypeoverStates could not find typeover cursor data')
+                return
             includeCursorIcon = False
         else: # cursor type is window, cancel all typeovers
-            self._removeTypeovers(list(self.activeTypeovers))
+            self._refreshTypeovers([], draw)
             return
         # March up the hierarchy from the cursor or entry icon, finding entries in
         # self.activeTypeovers that are either directly to the right of it, or have only
@@ -771,6 +779,7 @@ class Window:
                 if ic not in self.activeTypeovers:
                     break
                 typeoverSiteData = ic.typeoverSites(allRegions=True)
+                foundTypeover = False
                 for siteBefore, siteAfter, text, idx in typeoverSiteData:
                     activeSiteIcon = ic.childAt(siteBefore)
                     if activeSiteIcon is None:
@@ -778,20 +787,12 @@ class Window:
                     else:
                         rightmostIcon, rightmostSite = icon.rightmostSite(activeSiteIcon)
                     if rightmostIcon == cursorIcon and rightmostSite == cursorSite:
-                        keepAlive.add(ic)
-                        cursorIcon, cursorSite = icon.rightmostSite(ic)
-                        break
-                    else:
-                        if len(typeoverSiteData) > 1:
-                            # Icons with more than one typeover region are not removed
-                            # from the active list (which is normally how typeover gets
-                            # disabled and the redraw done), so do it here
-                            ic.setTypeover(None, siteAfter)
-                            ic.draw()
-                            self.refresh(ic.rect, redraw=False, clear=False)
-                else:
+                        keepAlive.add((ic, siteAfter))
+                        cursorIcon, cursorSite = ic, siteAfter
+                        foundTypeover = True
+                if not foundTypeover:
                     break
-        self._removeTypeovers(self.activeTypeovers - keepAlive)
+        self._refreshTypeovers(keepAlive, draw)
         # If the cursor is on an icon site, check the typeover list and reset any typeover
         # that thinks it's still in the middle of the text.  (this can happen when the
         # user clicks back to a legal typeover position, rather than cursor-traversing).
@@ -800,16 +801,31 @@ class Window:
                 for siteBefore, siteAfter, text, idx in ic.typeoverSites(allRegions=True):
                     if idx is not None and idx != 0:
                         ic.setTypeover(0, siteAfter)
-                        ic.draw()
-                        self.refresh(ic.rect, redraw=False, clear=False)
+                        if draw:
+                            ic.draw()
+                            self.refresh(ic.rect, redraw=False, clear=False)
 
-    def _removeTypeovers(self, toRemove):
-        for ic in toRemove:
+    def _refreshTypeovers(self, toPreserve, draw=True):
+        """Clears all typeovers except those represented by an (icon, siteAfter) pair in
+        toPreserve, then remove any icon from the typeover watch list that doesn't still
+        have an active typeover.  Redraw icons whose typeovers have been removed, unless
+        draw=False."""
+        iconsToRemove = set(self.activeTypeovers)
+        sitesToRemove = []
+        for ic in self.activeTypeovers:
+            for siteBefore, siteAfter, text, idx in ic.typeoverSites(allRegions=True):
+                if (ic, siteAfter) in toPreserve:
+                    iconsToRemove.discard(ic)
+                else:
+                    sitesToRemove.append((ic, siteAfter))
+        for ic, siteAfter in sitesToRemove:
             topParent = ic.topLevelParent()
             if topParent is not None and topParent in self.topIcons:
-                ic.setTypeover(None, None)
-                ic.draw()
-                self.refresh(ic.rect, redraw=False, clear=False)
+                ic.setTypeover(None, siteAfter)
+                if draw:
+                    ic.draw()
+                    self.refresh(ic.rect, redraw=False, clear=False)
+        for ic in iconsToRemove:
             self.activeTypeovers.remove(ic)
 
     def _motionCb(self, evt):

@@ -799,7 +799,7 @@ class ImportFromIcon(icon.Icon):
                     return infixicon.AsIcon(self.window), None
                 return "reject"
 
-    def setTypeover(self, idx, site):
+    def setTypeover(self, idx, site=None):
         self.drawList = None  # Force redraw
         if idx is None or idx > 5:
             self.typeoverIdx = None

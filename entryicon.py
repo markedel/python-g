@@ -39,13 +39,6 @@ keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
  'return', 'try', 'while', 'with', 'yield', 'await'}
 
-# Statements that can be typed into the first element of a top-level naked tuple (to
-# allow the user to prepend them to the existing list)
-listPrependableStmts = {nameicons.ReturnIcon:'values',
- nameicons.DelIcon:'values', nameicons.GlobalIcon:'values',
- nameicons.NonlocalIcon:'values', nameicons.ImportIcon:'values',
- blockicons.WithIcon:'values', blockicons.ForIcon:'targets'}
-
 identPattern = re.compile('^[a-zA-z_][a-zA-Z_\\d]*$')
 numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
  '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
@@ -297,7 +290,7 @@ class EntryIcon(icon.Icon):
                         _removeHighlights(self.childAt(removeSiteId))
                         self.replaceChild(None, removeSiteId, leavePlace=True)
             else:
-                removeSiteId = f'pendingArg{argIdx}'
+                removeSiteId = f'pendingArg{siteOrSeries.order}'
                 _removeHighlights(self.childAt(removeSiteId))
                 self.replaceChild(None, removeSiteId)
             sitesToRemove.append(siteOrSeries)
@@ -345,12 +338,18 @@ class EntryIcon(icon.Icon):
         if site is None:
             print(f'removePendingArgSite called to remove non-existant site {siteName}')
             return
-        firstSiteIdx = self.minPendingArgIdx()
         if isinstance(site, iconsites.IconSite):
             isSeries = False
             self.sites.remove(siteName)
         else:
             isSeries = True
+            seriesLen = len(site)
+            if seriesLen > 1:
+                # While callers are accustomed to removing arguments, they won't
+                # necessarily remove the empty sites, and we need them gone, because our
+                # undo callback, addPendingArgSite, does not restore sites.
+                for _ in range(seriesLen):
+                    self.replaceChild(None, siteName + '_0')
             self.sites.removeSeries(siteName)
             del self.pendingArgListMgrs[siteName]
         # If this is the last pending argument, restore the 'forCursor' site (note that
@@ -381,8 +380,9 @@ class EntryIcon(icon.Icon):
         self.window.undo.registerCallback(self.renamePendingArgSite, newIdx, oldIdx)
 
     def minimizePendingArgs(self):
-        """Unload as much data as possible from pendingArgs as possible by moving the
-        entry icon down in the hierarchy (may also involve arithmetic reordering)."""
+        """Unload as much data as possible from pendingArgs by moving the entry icon down
+        in the hierarchy (possibly resulting in arithmetic reordering), and offloading
+        series elements to an accepting parent."""
         pendingArgs = self.listPendingArgs()
         if len(pendingArgs) != 1 or not hasattr(self.sites, 'pendingArg0'):
             return
@@ -401,8 +401,8 @@ class EntryIcon(icon.Icon):
                 self.appendPendingArgs([firstArg])
         # Check if the entry icon can be moved lower in the expression hierarchy.  If so,
         # rearrange expression to make that happen
-        if isinstance(self.sites.pendingArg0, iconsites.IconSiteSeries) or \
-                self.sites.pendingArg0.type != 'input':
+        if not self.hasSite('pendingArg0') or isinstance(self.sites.pendingArg0,
+                iconsites.IconSiteSeries) or self.sites.pendingArg0.type != 'input':
             return
         pendingArg = self.childAt('pendingArg0')
         if pendingArg is None:
@@ -443,16 +443,24 @@ class EntryIcon(icon.Icon):
             if site is None:
                 return
 
-    def listPendingArgs(self):
+    def listPendingArgs(self, compress=False):
         """Create a list of pending arg icons in the form accepted by the icon methods
-        placeArgs and canPlaceArgs."""
+        placeArgs and canPlaceArgs.  If compress is set to True, empty (non-series)
+        sites, which would have been set to None in the list, are skipped"""
         argList = []
+        currentIdx = 0
         for siteOrSeries in self.iteratePendingSiteList():
+            if not compress:
+                # Empty sites are denoted by gaps in site naming
+                while siteOrSeries.order > currentIdx:
+                    argList.append(None)
+                    currentIdx += 1
             if isinstance(siteOrSeries, iconsites.IconSiteSeries):
                 listArgs = [site.att for site in siteOrSeries]
                 argList.append(listArgs)
             else:
                 argList.append(siteOrSeries.att)
+            currentIdx += 1
         return argList
 
     def attachedIcon(self):
@@ -492,6 +500,7 @@ class EntryIcon(icon.Icon):
     def backspaceInText(self, evt=None):
         if self.text != "" and self.cursorPos != 0:
             # Erase the character before the text cursor
+            self.window.requestRedraw(self.topLevelParent().hierRect())
             self.text = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
             self.cursorPos -= 1
             self.markLayoutDirty()
@@ -722,7 +731,7 @@ class EntryIcon(icon.Icon):
                 # prepend a top-level statement
                 altParseResult = parseTopLevelText(newText, self.window)
                 if len(altParseResult) == 2 and \
-                        altParseResult[0].__class__ in listPrependableStmts:
+                        altParseResult[0].__class__ in cursors.stmtIcons:
                     return altParseResult, handlerIc, True
         return parseResult, handlerIc, False
 
@@ -855,7 +864,7 @@ class EntryIcon(icon.Icon):
                 # top-level statement, such as the first element of a naked tuple or the
                 # left operand of a boolean operator, the user is allowed to prepend a
                 # top-level statement (if it can accept an input argument).
-                stmtSiteSeries = listPrependableStmts[ic.__class__]
+                stmtSite = ic.sites.firstCursorSite()
                 if isinstance(self.attachedIcon(), listicons.TupleIcon):
                     # The entry icon is the first element of a naked tuple.  Replace the
                     # naked tuple with the ic and make the entry icon its first argument
@@ -864,12 +873,26 @@ class EntryIcon(icon.Icon):
                     parentTuple.replaceChild(None, self.attachedSite(), leavePlace=True)
                     placeList = parentTuple.argIcons()[1:]
                     for icn in placeList:
-                        parentTuple.replaceChild(None, parentTuple.siteOf(icn))
+                        if icn is not None:
+                            parentTuple.replaceChild(None, parentTuple.siteOf(icn))
                     self.window.replaceTop(parentTuple, ic)
-                    ic.replaceChild(self, iconsites.makeSeriesSiteId(stmtSiteSeries, 0))
-                    ic.insertChildren(placeList, stmtSiteSeries, 1)
+                    ic.replaceChild(self, stmtSite)
+                    if iconsites.isSeriesSiteId(stmtSite):
+                        # Series statements, can just take the whole list
+                        siteName, _ = iconsites.splitSeriesSiteId(stmtSite)
+                        ic.insertChildren(placeList, siteName, 1)
+                    else:
+                        nextSiteId = ic.sites.nextCursorSite(stmtSite)
+                        if nextSiteId is None:
+                            # Single-argument statements, can only accept first element
+                            # of the tuple.  The rest get loaded in pending args
+                            self.appendPendingArgs([placeList])
+                        else:
+                            # Statements def and class start with a non-series site, but
+                            # still take more arguments
+                            ic.placeArgs([placeList], nextSiteId)
                     cursorIcon = ic
-                    cursorSite = iconsites.makeSeriesSiteId(stmtSiteSeries, 0)
+                    cursorSite = stmtSite
                 else:
                     # The entry icon is attached to some sort of binary operator on a site
                     # coincident with the left of the statement.  Leave the entry icon
@@ -877,7 +900,11 @@ class EntryIcon(icon.Icon):
                     # the entire expression
                     topIcon = self.attachedIcon().topLevelParent()
                     self.window.replaceTop(topIcon, ic)
-                    ic.insertChild(topIcon, stmtSiteSeries, 0)
+                    if ic.isCursorOnlySite(stmtSite):
+                        icon.insertSeq(topIcon, ic)
+                        self.window.addTopSingle(topIcon)
+                    else:
+                        ic.replaceChild(topIcon, stmtSite)
                     cursorIcon = self.attachedIcon()
                     cursorSite = self.attachedSite()
             else:
@@ -928,6 +955,18 @@ class EntryIcon(icon.Icon):
         self.text = remainingText
         self.cursorPos = len(remainingText)
         self.window.cursor.setToText(self)
+        if self.attachedIcon().isCursorOnlySite(self.attachedSite()):
+            # We've attached the entry icon to a cursor-only site.  Insert the entry icon
+            # as a new statement following the one to which it was formerly attached.
+            topIcon = self.attachedIcon().topLevelParent()
+            if topIcon is self.attachedIcon() and topIcon.hasSite('seqOut'):
+                topIcon.replaceChild(None, self.attachedSite())
+                icon.insertSeq(self, topIcon)
+                self.window.addTopSingle(self)
+                if len(remainingText) == 0:
+                    self.remove()
+            else:
+                print("Entry attached to cursor-only site")
         if not earlyBoundaryAdded:
             self.window.undo.addBoundary()
         self.markLayoutDirty()
@@ -1554,7 +1593,6 @@ class EntryIcon(icon.Icon):
         for siteOrSeries in self.iteratePendingSiteList():
             if isinstance(siteOrSeries, iconsites.IconSiteSeries):
                 self.pendingArgListMgrs[siteOrSeries.name].doLayout(layout)
-        width = self._width() + icon.outSiteImage.width - 1
         if self.attachedSite() == "attrIcon":
             outSiteY = siteY - icon.ATTR_SITE_OFFSET
             outSiteX = siteX - 1
@@ -1564,7 +1602,7 @@ class EntryIcon(icon.Icon):
             outSiteX = siteX
             self.textOffset = penImage.width + icon.TEXT_MARGIN
         top = outSiteY - self.height//2
-        self.rect = (outSiteX, top, outSiteX + width, top + self.height)
+        self.rect = (outSiteX, top, outSiteX + layout.width, top + self.height)
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         self.layoutDirty = False
@@ -1646,11 +1684,19 @@ class EntryIcon(icon.Icon):
         pendIdx, pendSeriesIdx = onIcon.canPlaceArgs(pendingArgList, onSite,
             ignoreOccupiedStart=ignoreOccupiedStart)
         if pendIdx is None:
-            return False  # No args used
+            return False  # No arguments can be placed
+        if icon.placeListAtEnd(pendingArgList, pendIdx, pendSeriesIdx):
+            return True  # All arguments can be placed
+        if icon.placeListEmpty(pendingArgList, pendIdx, pendSeriesIdx):
+            # The only args that could be placed were empty.  This is allowed when the
+            # whole pending arg list can be placed, as it could be restoring a statement
+            # being text edited ("return ,,,"), but if the empty args are followed by a
+            # rejected argument, it's better not to dislocate the entry icon for that.
+            return False
         if not useAllArgs:
             return True  # Some args used and not required to use all
         if pendIdx != len(pendingArgList) - 1:
-            return False  # Did not reach last arg site/series
+            return False  # Required to use all and did not reach last arg site/series
         if pendSeriesIdx is None:
             return True  # Last arg site either not a series, or is a fully-used series
         # If we get here, the last site is a series, but some elements were not used.
@@ -1676,24 +1722,38 @@ class EntryIcon(icon.Icon):
             ignoreOccupiedStart=ignoreOccupiedStart)
         if pendIdx is None:
             return False
-        self.popPendingArgs(pendIdx, pendSeriesIdx)
-        pendIdx, pendSeriesIdx = onIcon.placeArgs(pendingArgList, onSite,
-            ignoreOccupiedStart=ignoreOccupiedStart)
-        if not self.hasPendingArgs():
+        if icon.placeListAtEnd(pendingArgList, pendIdx, pendSeriesIdx):
+            # All args can be placed.  Place them and we're done
+            self.popPendingArgs(pendIdx, pendSeriesIdx)
+            onIcon.placeArgs(pendingArgList, onSite,
+                ignoreOccupiedStart=ignoreOccupiedStart)
             return True
-        # Some but not all of the pending args were placed, leaving the remaining ones
+        if icon.placeListEmpty(pendingArgList, pendIdx, pendSeriesIdx):
+            # The only args we were able to place were empty: don't add/move entry icon
+            return False
+        # Some but not all of the pending args can be placed, leaving the remaining ones
         # disjoint from the original entry icon.  Create a new entry icon to hold the
-        # remaining args, and attach it to the rightmost site of the placed args.
+        # remaining args, and attach it to the rightmost site of the rightmost placed
+        # arg (if that arg is None (empty), then place the entry icon in its place).
         if pendSeriesIdx is None:
             rightmostArg = pendingArgList[pendIdx]
         else:
             rightmostArg = pendingArgList[pendIdx][pendSeriesIdx]
+        self.popPendingArgs(pendIdx, pendSeriesIdx)
         remainingArgs = self.listPendingArgs()
         self.popPendingArgs("all")
-        entryIcon = EntryIcon(window=self.window)
-        entryIcon.appendPendingArgs(remainingArgs)
-        rightmostIcon, rightmostSite = icon.rightmostSite(rightmostArg)
-        rightmostIcon.replaceChild(entryIcon, rightmostSite)
+        if not icon.placeListEmpty(remainingArgs):
+            entryIcon = EntryIcon(window=self.window)
+            entryIcon.appendPendingArgs(remainingArgs)
+            if rightmostArg is None:
+                if pendSeriesIdx is None:
+                    pendingArgList[pendIdx] = entryIcon
+                else:
+                    pendingArgList[pendIdx][pendSeriesIdx] = entryIcon
+            else:
+                rightmostIcon, rightmostSite = icon.rightmostSite(rightmostArg)
+                rightmostIcon.replaceChild(entryIcon, rightmostSite)
+        onIcon.placeArgs(pendingArgList, onSite, ignoreOccupiedStart=ignoreOccupiedStart)
         return True
 
 def parseAttrText(text, window):

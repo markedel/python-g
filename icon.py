@@ -1663,6 +1663,25 @@ def firstPlaceListIcon(placeList):
             return ic, placeListIdx, seriesIdx
     return None, None, None
 
+def placeListAtEnd(argList, thruIdx, thruSeriesIdx):
+    """Return True if placement list indices, thruIdx and thruSeriesIdx, point to the
+    last element of placement list, argList."""
+    if thruIdx == len(argList) - 1:
+        if thruSeriesIdx is None:
+            return True
+        if isinstance(argList[-1], (list, tuple)):
+            if thruSeriesIdx == len(argList[-1]) - 1:
+                return True
+    return False
+
+def placeListEmpty(argList, thruIdx=None, thruSeriesIdx=None):
+    """"Return True if placement, argList, through indices thruIdx and thruSeriesIdx,
+    consists only of empty sites/series."""
+    for _ in placementListIter(argList, stopAfterIdx=thruIdx, includeEmptySites=False,
+            includeEmptySeriesSites=False, stopAfterSeriesIdx=thruSeriesIdx):
+        return False
+    return True  # Only empty sites used
+
 def validateCompatibleChild(child, parent, siteOrSeriesName):
     if child is None:
         return True  # Anything can have an empty site
