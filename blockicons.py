@@ -1327,15 +1327,17 @@ class DefOrClassIcon(icon.Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX + comn.BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        self.nameWidth = icon.EMPTY_ARG_WIDTH
         if hasArgs:
             lParenWidth = defLParenImage.width
-            self.nameWidth = icon.EMPTY_ARG_WIDTH
             argX = icon.dragSeqImage.width + bodyWidth + self.nameWidth + lParenWidth
-            self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, siteYOffset)
+            self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, siteYOffset,
+                cursorTraverseOrder=1)
             rParenWidth = defRParenImage.width
             totalWidth = argX + self.argList.width + rParenWidth - 3
             self.sites.add('attrIcon', 'attrIn', totalWidth,
-                bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
+                bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True,
+                cursorTraverseOrder=2)
         else:
             totalWidth = max(bodyWidth, comn.BLOCK_INDENT+2) + icon.dragSeqImage.width
             self.argList = None
@@ -1503,7 +1505,8 @@ class DefOrClassIcon(icon.Icon):
         self.hasArgs = True
         argX = comn.rectWidth(self.rect)
         argY = self.sites.nameIcon.yOffset
-        self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, argY)
+        self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, argY,
+            cursorTraverseOrder=1)
         self.sites.add('attrIcon', 'attrIn', cursorOnly=True, cursorTraverseOrder=2)
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.removeArgs)
@@ -1515,7 +1518,15 @@ class DefOrClassIcon(icon.Icon):
         if len(self.argIcons()) > 0:
             print("trying to remove non-empty argument list")
             return
+        seriesLen = len(self.sites.argIcons)
+        if seriesLen > 1:
+            # While callers are accustomed to removing arguments, they won't
+            # necessarily remove the empty sites, and we need them gone, because our
+            # undo callback, addArgs, does not restore sites.
+            for _ in range(seriesLen):
+                self.replaceChild(None, 'argIcons_0')
         self.argList = None
+        self.sites.removeSeries('argIcons')
         self.sites.remove('attrIcon')
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.addArgs)
@@ -1578,9 +1589,9 @@ class DefOrClassIcon(icon.Icon):
 
     def typeoverSites(self, allRegions=False):
         lParenTo = rParenTo = None
-        if self.lParenTypeover:
+        if self.hasArgs and self.lParenTypeover:
             lParenTo = 'nameIcon', 'argIcons_0', '(', 0
-        if self.rParenTypeover:
+        if self.hasArgs and self.rParenTypeover:
             rParenTo = iconsites.makeSeriesSiteId('argIcons',
                 len(self.sites.argIcons) - 1), 'attrIcon', ')', 0
         if allRegions:
@@ -1590,6 +1601,80 @@ class DefOrClassIcon(icon.Icon):
         if rParenTo:
             return rParenTo
         return None, None, None, None
+
+    def backspace(self, siteId, evt):
+        win = self.window
+        if siteId == "nameIcon":
+            # Cursor is directly on def, open for editing
+            self.window.requestRedraw(self.topLevelParent().hierRect())
+            nameIcon = self.childAt('nameIcon')
+            if self.argList is None:
+                argIcons = None
+            else:
+                argIcons = [site.att for site in self.sites.argIcons]
+            entryIcon = entryicon.EntryIcon(window=self.window, initialString=self.text,
+                    willOwnBlock=self.nextInSeq() is not self.blockEnd)
+            self.replaceWith(entryIcon)
+            self.replaceChild(None, 'nameIcon')
+            if argIcons is not None:
+                for arg in argIcons:
+                    if arg is not None:
+                        self.replaceChild(None, self.siteOf(arg))
+            if self.hasArgs and isinstance(nameIcon, nameicons.IdentifierIcon) and \
+                    nameIcon.childAt('attrIcon') is None:
+                # Dissolving in to a function call is weird, but it's slightly closer
+                # to what the user originally typed (this may be a dumb idea, but I'm
+                # going with it)
+                callIcon = listicons.CallIcon(window=self.window, closed=True)
+                callIcon.insertChildren(argIcons, 'argIcons', 0)
+                nameIcon.replaceChild(callIcon, 'attrIcon')
+                entryIcon.appendPendingArgs([nameIcon])
+            else:
+                # If we can't dissolve in to a function call, put the name and args
+                # in to separate pending arguments on the entry icon
+                if argIcons is None:
+                    entryIcon.appendPendingArgs([nameIcon])
+                else:
+                    entryIcon.appendPendingArgs([nameIcon, argIcons])
+            self.window.cursor.setToText(entryIcon)
+        elif siteId[:8] == 'argIcons':
+            siteName, index = iconsites.splitSeriesSiteId(siteId)
+            if index == 0:
+                if isinstance(self, ClassDefIcon):
+                    # Remove parens if that won't cause argument deletion, otherwise
+                    # select remaining args that will need to be deleted to make
+                    # deleting the parens possible
+                    if self.argList is not None:
+                        argIcons = [site.att for site in self.sites.argIcons \
+                            if site.att is not None]
+                        if len(argIcons) > 0:
+                            self.window.unselectAll()
+                            for arg in argIcons:
+                                for i in arg.traverse():
+                                    self.window.requestRedraw(i.rect)
+                                    win.select(i)
+                            return
+                    self.removeArgs()
+                # Move cursor (in the case of a function def, that's all we ever do)
+                nameIcon = self.childAt('nameIcon')
+                if nameIcon is None:
+                    self.window.cursor.setToIconSite(self, 'nameIcon')
+                else:
+                    rightmostIc, rightmostSite = icon.rightmostSite(nameIcon)
+                    self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
+            else:
+                # Cursor is on a comma input
+                listicons.backspaceComma(self, siteId, evt)
+        elif siteId == 'attrIcon':
+            # Cursor is on the right paren.  Mo reason to ever remove closing paren,
+            # so just move the cursor inside.
+            lastArgSite = self.sites.argIcons[-1].name
+            lastArg = self.childAt(lastArgSite)
+            if lastArg is None:
+                self.window.cursor.setToIconSite(self, lastArgSite)
+            else:
+                rightmostIc, rightmostSite = icon.rightmostSite(lastArg)
+                self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
 
 class ClassDefIcon(DefOrClassIcon):
     def __init__(self, hasArgs=False, createBlockEnd=True, window=None, typeover=False,
@@ -1638,7 +1723,6 @@ class ClassDefIcon(DefOrClassIcon):
             # The class def is drawn initially without parent-class parens.  When the
             # user types a paren in the appropriate place, have to turn those on
             if text == '(':
-                print("turning on parens")
                 self.addArgs()
                 self.setTypeover(0, None)
                 self.window.watchTypeover(self)
@@ -1654,6 +1738,48 @@ class ClassDefIcon(DefOrClassIcon):
             # Typeover for end-paren is handled by the general code
             return None
         return None
+
+    def canPlaceArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        # Sleazy hack: temporarily add argIcons site and then the method used for DefIcon
+        # does exactly what we want for ClassDef.  Note that this is slightly different
+        # from the placeArgs call which fully commits by calling addArgs to create a list
+        # manager and an undo record, and then removes them based on the result of the
+        # placement call.  Instead, this adds a site only (which has less overhead), and
+        # then removes it afterward.  This is still sleazy due to the odd state we're
+        # putting the icon in (weird temporary site) and use of the DefIcon method.
+        siteAdded = False
+        if not self.hasArgs:
+            self.sites.addSeries('argIcons', 'input')
+            siteAdded = True
+        rv = _defPlaceArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart, False)
+        if siteAdded:
+            self.sites.removeSeries('argIcons')
+        return rv
+
+    def placeArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        # Sleazy hack: if placeList is longer than one entry or starts beyond the name
+        # field, assume we're going to require a superclass list and add it, then use
+        # the function-def method to place arguments.  The sleazy part is that 1) we're
+        # using a method meant for something else, and 2) we may be wrong about needing
+        # to create the superclass list parens, in which case we have to pull them back
+        # off, unnecessarily bloating the undo list and generally wasting cycles.
+        if len(placeList) == 0:
+            return None, None
+        siteAdded = False
+        startAtName = startSiteId is None or startSiteId[:8] == 'nameIcon'
+        if not self.hasArgs and (len(placeList) > 1 or not startAtName or
+                isinstance(placeList[0], nameicons.IdentifierIcon) and
+                isinstance(placeList[0].childAt('attrIcon'), listicons.CallIcon)):
+            self.addArgs()
+            siteAdded = True
+        rv = _defPlaceArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart, True)
+        if siteAdded:
+            for site in self.sites.argIcons:
+                if site.att is not None:
+                    break
+            else:
+                self.removeArgs()
+        return rv
 
 class DefIcon(DefOrClassIcon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, typeover=False,
@@ -1736,97 +1862,50 @@ class DefIcon(DefOrClassIcon):
         return ast.FunctionDef(nameIcon.name, argumentAsts, **bodyAsts,
          decorator_list=[], returns=None, lineno=self.id, col_offset=0)
 
-    def backspace(self, siteId, evt):
-        win = self.window
-        if siteId == "nameIcon":
-            # Cursor is directly on def, open for editing
-            self.window.requestRedraw(self.topLevelParent().hierRect())
-            nameIcon = self.childAt('nameIcon')
-            if self.argList is None:
-                argIcons = None
-            else:
-                argIcons = [site.att for site in self.sites.argIcons]
-            entryIcon = entryicon.EntryIcon(window=self.window, initialString='def',
-                    willOwnBlock=self.nextInSeq() is not self.blockEnd)
-            self.replaceWith(entryIcon)
-            self.replaceChild(None, 'nameIcon')
-            for arg in argIcons:
-                if arg is not None:
-                    self.replaceChild(None, self.siteOf(arg))
-            if isinstance(nameIcon, nameicons.IdentifierIcon) and \
-                    nameIcon.childAt('attrIcon') is None:
-                # Dissolving in to a function call is weird, but it's slightly closer
-                # to what the user originally typed (this may be a dumb idea, but I'm
-                # going with it)
-                callIcon = listicons.CallIcon(window=self.window, closed=True)
-                callIcon.insertChildren(argIcons, 'argIcons', 0)
-                nameIcon.replaceChild(callIcon, 'attrIcon')
-                entryIcon.appendPendingArgs([nameIcon])
-            else:
-                # If we can't dissolve in to a function call, put the name and args
-                # in to separate pending arguments on the entry icon
-                if argIcons is None:
-                    entryIcon.appendPendingArgs([nameIcon])
-                else:
-                    entryIcon.appendPendingArgs([nameIcon, argIcons])
-            self.window.cursor.setToText(entryIcon)
-        elif siteId[:8] == 'argIcons':
-            siteName, index = iconsites.splitSeriesSiteId(siteId)
-            if index == 0:
-                # Cursor is on first argument site.  Nothing to do here but move cursor
-                nameIcon = self.childAt('nameIcon')
-                if nameIcon is None:
-                    self.window.cursor.setToIconSite(self, 'nameIcon')
-                else:
-                    rightmostIc, rightmostSite = icon.rightmostSite(nameIcon)
-                    self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
-            else:
-                # Cursor is on a comma input
-                listicons.backspaceComma(self, siteId, evt)
-
     def placeArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
-        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, True)
+        return _defPlaceArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart,
+            True)
 
     def canPlaceArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
-        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, False)
+        return _defPlaceArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart,
+            False)
 
-    def _placeArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart, doPlacement):
-        # DefIcon has a name and an argument list.  The backspace method uses two
-        # different methods to produce pending arguments for faithful reassembly: 1) the
-        # name and arguments become a function call, 2) the name becomes the first
-        # pending arg, followed by a series containing the parameter list.  As a fallback
-        # we use the base-class method which blindly throws the first input in to the
-        # name field and everything else in to the parameter list.
-        if len(placeList) == 0:
-            return None, None
-        print(f'****** def placeArgs {placeList=}')
-        placeArgsCall = icon.Icon.placeArgs if doPlacement else icon.Icon.canPlaceArgs
-        startAtName = startSiteId is None or startSiteId[:8] == 'nameIcon'
-        if startAtName and placeList[0] is None:
-            # The base class code can almost do everything we need, but if the first site
-            # is empty, it would skip ahead through the placement list and fill the name
-            # from the first non-empty argument (so editing a def icon with an empty name
-            # field, then focusing out, would mess up what was originally there).
-            argIdx, argSeriesIdx = placeArgsCall(self, placeList[1:], 'argIcons_0',
-                ignoreOccupiedStart=ignoreOccupiedStart)
-            return argIdx + 1, argSeriesIdx
-        elif startAtName and isinstance(placeList[0], nameicons.IdentifierIcon) and \
-                isinstance(placeList[0].childAt('attrIcon'), listicons.CallIcon):
-            # The first pending arg is a function call.  Make it in to a def
-            if doPlacement:
-                callIcon = placeList[0].childAt('attrIcon')
-                args = callIcon.argIcons()
-                for arg in args:
-                    if arg is not None:
-                        callIcon.replaceChild(None, callIcon.siteOf(arg))
-                placeList[0].replaceChild(None, 'attrIcon')
-                self.replaceChild(placeList[0], 'nameIcon')
-                self.insertChildren(args, 'argIcons', 0)
-            return 0, None
-        # None of the special cases applied, so use the base class method to fill in the
-        # name and argument list.
-        return placeArgsCall(self, placeList, startSiteId,
-                ignoreOccupiedStart=ignoreOccupiedStart)
+def _defPlaceArgsCommon(ic, placeList, startSiteId, ignoreOccupiedStart, doPlacement):
+    # DefIcon has a name and an argument list.  The backspace method uses two
+    # different methods to produce pending arguments for faithful reassembly: 1) the
+    # name and arguments become a function call, 2) the name becomes the first
+    # pending arg, followed by a series containing the parameter list.  As a fallback
+    # we use the base-class method which blindly throws the first input in to the
+    # name field and everything else in to the parameter list.
+    if len(placeList) == 0:
+        return None, None
+    placeArgsCall = icon.Icon.placeArgs if doPlacement else icon.Icon.canPlaceArgs
+    startAtName = startSiteId is None or startSiteId[:8] == 'nameIcon'
+    if startAtName and placeList[0] is None:
+        # The base class code can almost do everything we need, but if the first site
+        # is empty, it would skip ahead through the placement list and fill the name
+        # from the first non-empty argument (so editing a def icon with an empty name
+        # field, then focusing out, would mess up what was originally there).
+        argIdx, argSeriesIdx = placeArgsCall(ic, placeList[1:], 'argIcons_0',
+            ignoreOccupiedStart=ignoreOccupiedStart)
+        return argIdx + 1, argSeriesIdx
+    elif startAtName and isinstance(placeList[0], nameicons.IdentifierIcon) and \
+            isinstance(placeList[0].childAt('attrIcon'), listicons.CallIcon):
+        # The first pending arg is a function call.
+        if doPlacement:
+            callIcon = placeList[0].childAt('attrIcon')
+            args = callIcon.argIcons()
+            for arg in args:
+                if arg is not None:
+                    callIcon.replaceChild(None, callIcon.siteOf(arg))
+            placeList[0].replaceChild(None, 'attrIcon')
+            ic.replaceChild(placeList[0], 'nameIcon')
+            ic.insertChildren(args, 'argIcons', 0)
+        return 0, None
+    # None of the special cases applied, so use the base class method to fill in the
+    # name and argument list.
+    return placeArgsCall(ic, placeList, startSiteId,
+        ignoreOccupiedStart=ignoreOccupiedStart)
 
 def createBlockAsts(ic):
     """Create ASTs for icons in the block belonging to ic.  Returns a dictionary mapping
