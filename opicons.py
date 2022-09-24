@@ -933,7 +933,7 @@ class IfExpIcon(icon.Icon):
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.hasParens = layout.hasParens
-        self.sites.attrIcon.order = 2 if self.hasParens else None
+        self.sites.attrIcon.order = 3 if self.hasParens else None
         self.coincidentSite = None if self.hasParens else "trueExpr"
         self.trueExprWidth = layout.lArgWidth
         self.falseExprWidth = layout.rArgWidth
@@ -1090,6 +1090,60 @@ class IfExpIcon(icon.Icon):
         retVal = 'testExpr', 'falseExpr', 'else', self.typeoverIdx
         return [retVal] if allRegions else retVal
 
+    def placeArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, False)
+
+    def _placeArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart, doPlacement):
+        # Inline-if has a left, a center, and a right argument, none of which can be a
+        # series.  Given that placeArgs methods are currently only by the entry icon,
+        # there are not yet any contexts in which operators like inline-if and binary
+        # operators with an argument to the left of the icon body are asked to place
+        # their left arguments, though this code is provided for completeness.
+        if len(placeList) == 0:
+            return None, None
+        if startSiteId in (None, 'trueExpr'):
+            placeSites = ('trueExpr', 'testExpr', 'falseExpr')
+        elif startSiteId == 'testExpr':
+            placeSites = ('testExpr', 'falseExpr')
+        elif startSiteId == 'falseExpr':
+            placeSites = ('falseExpr', )
+        elif startSiteId == 'attrIcon':
+            if placeList[0] is not None and self.hasParens and \
+                    'attrOut' in placeList[0].parentSites():
+                if doPlacement:
+                    self.replaceChild(placeList[0], 'attrIcon')
+                return 0, None
+            return None, None
+        for i in range(len(placeSites)):
+            if i >= len(placeList):
+                break
+            if isinstance(placeList[i], (tuple, list)):
+                # If all of the requested arguments are not individual values, we know
+                # we're not reconstituting a dissolved if, so there's no reason to
+                # respect the original packing, and we can just use the base-class method
+                # which will deal with series.
+                if doPlacement:
+                    return icon.Icon.placeArgs(self, placeList, startSiteId)
+                else:
+                    return icon.Icon.canPlaceArgs(self, placeList, startSiteId)
+        # At this point, we know that the placement list contains only individual icons
+        # (and/or Nones for empty sites).  Pair place list entries with sites, and test
+        # for compatible site types and already-occupied sites, and place if requested
+        nPlaced = min(len(placeList), len(placeSites))
+        for i in range(nPlaced):
+            placedIc = placeList[i]
+            if placedIc is not None:
+                if not placedIc.hasSite('output') or \
+                        not (ignoreOccupiedStart and i == 0) and \
+                        self.childAt(placeSites[i]) is not None:
+                    return None if i == 0 else i-1, None
+            if doPlacement:
+                self.replaceChild(placedIc, placeSites[i])
+        return nPlaced-1, None
+
     def backspace(self, siteId, evt):
         win = self.window
         if siteId == 'attrIcon':
@@ -1097,33 +1151,61 @@ class IfExpIcon(icon.Icon):
             # (unclosed) cursor paren
             win.requestRedraw(self.topLevelParent().hierRect())
             attrIcon = self.childAt('attrIcon')
-            if attrIcon:
-                # If an attribute is attached to the parens, just select
-                win.unselectAll()
-                for i in attrIcon.traverse():
-                    win.select(i)
-                return
+            entryIcon = None
+            if attrIcon is not None:
+                # If an attribute is attached to the parens, try to attach it to the
+                # else clause.  If that's not possible, create an entry icon
+                self.replaceChild(None, 'attrIcon')
+                elseChild = self.childAt('falseExpr')
+                if elseChild is None:
+                    attrDestIcon, attrDestSite = self, 'falseExpr'
+                else:
+                    attrDestIcon, attrDestSite  = icon.rightmostSite(elseChild)
+                if attrDestSite != 'attrIcon' or hasattr(attrDestIcon.sites.attrIcon,
+                        'cursorOnly'):
+                    # Can't place attribute icon from paren, create an entry icon
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    attrDestIcon.replaceChild(entryIcon, 'attrIcon')
+                    entryIcon.appendPendingArgs([attrIcon])
+                else:
+                    attrDestIcon.replaceChild(attrIcon, attrDestSite)
+                cursIc, cursSite = attrDestIcon, attrDestSite
+            else:
+                cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(self))
             cursorParen = parenicon.CursorParenIcon(window=win)
             self.insertParent(cursorParen, 'argIcon')
             # Manually change status of icon to no-parens so it will be treated
             # as not parenthesised as icons are rearranged
             self.hasParens = False
-            cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(self))
             # Expand the scope of the paren to its max, by rearranging the icon
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
-            win.cursor.setToIconSite(cursIc, cursSite)
+            if entryIcon:
+                win.cursor.setToText(entryIcon)
+            else:
+                win.cursor.setToIconSite(cursIc, cursSite)
             return
         if siteId == 'trueExpr' and self.hasParens:
             # Cursor is on left paren: User wants to remove parens
             win.requestRedraw(self.topLevelParent().hierRect())
             attrIcon = self.childAt('attrIcon')
             if attrIcon:
-                # If an attribute is attached to the parens, don't delete, just select
-                win.unselectAll()
-                for i in attrIcon.traverse():
-                    win.select(i)
-                return
+                # If an attribute is attached to the right paren, try to attach it to the
+                # else clause.  If that's not possible, create a placeholder entry icon
+                self.replaceChild(None, 'attrIcon')
+                elseChild = self.childAt('falseExpr')
+                if elseChild is None:
+                    attrDestIcon, attrDestSite = self, 'falseExpr'
+                else:
+                    attrDestIcon, attrDestSite  = icon.rightmostSite(elseChild)
+                if attrDestSite != 'attrIcon' or hasattr(attrDestIcon.sites.attrIcon,
+                        'cursorOnly'):
+                    # Can't place attribute from paren, create placeholder entry icon
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    attrDestIcon.replaceChild(entryIcon, 'attrIcon')
+                    entryIcon.appendPendingArgs([attrIcon])
+                else:
+                    attrDestIcon.replaceChild(attrIcon, attrDestSite)
             # Finding the correct position for the cursor after reorderArithExpr is
             # surprisingly difficult.  It is done by temporarily setting the cursor
             # to the output site of the icon at the lowest coincident site and then
@@ -1166,12 +1248,19 @@ class IfExpIcon(icon.Icon):
                     icon.findLastAttrIcon(self.sites.testExpr.att), ignoreAutoParens=True)
             win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
             return
-        # Cursor was on the if itself
+        # Cursor was on the if itself.  Create an entry icon loaded with text "if" and
+        # pending args for testExpr and falseExpr icons (the goal being that placeArgs
+        # can faithfully reconstitute the if regardless of empty sites).  Attach the
+        # entry icon to the rightmost site of the trueExpr if it exists, or to the parent
+        # if it does not.
         win.requestRedraw(self.topLevelParent().hierRect(), filterRedundantParens=True)
         if self.hasParens:
             # If the operation had parens, place temporary parens for continuity
+            attrIcon = self.childAt('attrIcon')
             cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
             self.insertParent(cursorParen, 'argIcon')
+            if attrIcon is not None:
+                cursorParen.replaceChild(attrIcon, 'attrIcon')
         parent = self.parent()
         leftArg = self.leftArg()
         rightArg = self.rightArg()
@@ -1181,19 +1270,21 @@ class IfExpIcon(icon.Icon):
             entryAttachedIcon = parent
             entryAttachedSite = parent.siteOf(self)
         else:  # leftArg is not None, attach to that
-            # Ignore auto parens because we are removing the supporting operator
             entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
-                icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
+                icon.findLastAttrIcon(leftArg))
         entryIcon = entryicon.EntryIcon(initialString="if", window=win)
         testExpr = self.childAt('testExpr')
-        if testExpr:
+        if testExpr is not None:
             self.replaceChild(None, 'testExpr')
             entryIcon.appendPendingArgs([testExpr])
         if leftArg is not None:
             leftArg.replaceChild(None, 'output')
         if rightArg is not None:
             rightArg.replaceChild(None, 'output')
-            entryIcon.appendPendingArgs([rightArg])
+            if testExpr is None:
+                entryIcon.appendPendingArgs([None, rightArg])
+            else:
+                entryIcon.appendPendingArgs([rightArg])
         if parent is None:
             if leftArg is None:
                 win.replaceTop(self, entryIcon)
@@ -1294,22 +1385,39 @@ def backspaceBinOpIcon(ic, site, evt):
             # (unclosed) cursor paren
             win.requestRedraw(ic.topLevelParent().hierRect())
             attrIcon = ic.childAt('attrIcon')
+            entryIcon = None
             if attrIcon:
-                # If an attribute is attached to the parens, just select
-                win.unselectAll()
-                for i in attrIcon.traverse():
-                    win.select(i)
-                return
+                # If an attribute is attached to the parens, try to attach it to the
+                # right argument.  If that's not possible, create an entry icon
+                ic.replaceChild(None, 'attrIcon')
+                rightChild = ic.childAt('rightArg')
+                if rightChild is None:
+                    attrDestIcon, attrDestSite = ic, 'rightArg'
+                else:
+                    attrDestIcon, attrDestSite  = icon.rightmostSite(rightChild)
+                if attrDestSite != 'attrIcon' or hasattr(attrDestIcon.sites.attrIcon,
+                        'cursorOnly'):
+                    # Can't place attribute icon from paren, create an entry icon
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    attrDestIcon.replaceChild(entryIcon, 'attrIcon')
+                    entryIcon.appendPendingArgs([attrIcon])
+                else:
+                    attrDestIcon.replaceChild(attrIcon, attrDestSite)
+                cursIc, cursSite = attrDestIcon, attrDestSite
+            else:
+                cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(ic))
             cursorParen = parenicon.CursorParenIcon(window=win)
             ic.insertParent(cursorParen, 'argIcon')
             # Manually change status of icon to no-parens so it will be treated
             # as not parenthesised as icons are rearranged
             ic.hasParens = False
-            cursIc, cursSite = icon.rightmostSite(icon.findLastAttrIcon(ic))
             # Expand the scope of the paren to its max, by rearranging the icon
             # hierarchy around it
             reorderexpr.reorderArithExpr(cursorParen)
-            win.cursor.setToIconSite(cursIc, cursSite)
+            if entryIcon is not None:
+                win.cursor.setToText(entryIcon)
+            else:
+                win.cursor.setToIconSite(cursIc, cursSite)
         return
     if site == leftSiteOf(ic):
         if not ic.hasParens:
@@ -1320,11 +1428,22 @@ def backspaceBinOpIcon(ic, site, evt):
         win.requestRedraw(ic.topLevelParent().hierRect())
         attrIcon = ic.childAt('attrIcon')
         if attrIcon:
-            # If an attribute is attached to the parens, don't delete, just select
-            win.unselectAll()
-            for i in attrIcon.traverse():
-                win.select(i)
-            return
+            # If an attribute is attached to the right paren, try to attach it to the
+            # right argument.  If that's not possible, create a placeholder entry icon
+            ic.replaceChild(None, 'attrIcon')
+            rightChild = ic.childAt('rightExpr')
+            if rightChild is None:
+                attrDestIcon, attrDestSite = ic, 'rightExpr'
+            else:
+                attrDestIcon, attrDestSite = icon.rightmostSite(rightChild)
+            if attrDestSite != 'attrIcon' or hasattr(attrDestIcon.sites.attrIcon,
+                    'cursorOnly'):
+                # Can't place attribute from paren, create placeholder entry icon
+                entryIcon = entryicon.EntryIcon(window=win)
+                attrDestIcon.replaceChild(entryIcon, 'attrIcon')
+                entryIcon.appendPendingArgs([attrIcon])
+            else:
+                attrDestIcon.replaceChild(attrIcon, attrDestSite)
         # Finding the correct position for the cursor after reorderArithExpr is
         # surprisingly difficult.  It is done by temporarily setting the cursor
         # to the output site of the icon at the lowest coincident site and then
@@ -1360,7 +1479,11 @@ def backspaceBinOpIcon(ic, site, evt):
     win.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
     if not isinstance(ic, DivideIcon) and ic.hasParens:
         # If the operation had parens, place temporary parens for continuity
-        ic.insertParent(parenicon.CursorParenIcon(window=win, closed=True), 'argIcon')
+        attrIcon = ic.childAt('attrIcon')
+        cursorParen = parenicon.CursorParenIcon(window=win, closed=True)
+        ic.insertParent(cursorParen, 'argIcon')
+        if attrIcon is not None:
+            cursorParen.replaceChild(attrIcon, 'attrIcon')
     parent = ic.parent()
     if isinstance(ic, DivideIcon):
         leftArg = ic.sites.topArg.att
@@ -1376,9 +1499,12 @@ def backspaceBinOpIcon(ic, site, evt):
         entryAttachedIcon = parent
         entryAttachedSite = parent.siteOf(ic)
     else:  # leftArg is not None, attach to that
-        # Ignore auto parens because we are removing the supporting operator
+        #... This had ignoreAutoParens=True in earlier versions, with the comment:
+        #    "Ignore auto parens because we are removing the supporting operator",
+        #    however we are not removing the operator of the left arg, and this resulted
+        #    in weird behavior in the following case: a*(b+c)*d (backspace second *)
         entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
-            icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
+            icon.findLastAttrIcon(leftArg))
     entryIcon = entryicon.EntryIcon(initialString=op, window=win)
     if leftArg is not None:
         leftArg.replaceChild(None, 'output')

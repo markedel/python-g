@@ -1794,6 +1794,8 @@ def parseAttrText(text, window):
     if attrPattern.fullmatch(op):
         return nameicons.AttrIcon(op[1:], window), delim
     if opDelimPattern.match(delim):
+        if op == "if":  # In-line if
+            return opicons.IfExpIcon(window, typeover=True), delim
         if op in compareOperators:
             return opicons.BinOpIcon(op, window), delim
         if op in binaryOperators:
