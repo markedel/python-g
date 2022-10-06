@@ -740,7 +740,7 @@ class Window:
             cursorIcon = self.cursor.icon
             cursorIcon, cursorSite = icon.rightmostSite(cursorIcon)
             includeCursorIcon = True
-        elif self.cursor.type  == "icon":
+        elif self.cursor.type  == "icon" and self.cursor.site not in ('seqIn', 'seqOut'):
             cursorIcon = self.cursor.icon
             cursorSite = self.cursor.site
             includeCursorIcon = True
@@ -755,7 +755,7 @@ class Window:
                 print(f'updateTypeoverStates could not find typeover cursor data')
                 return
             includeCursorIcon = False
-        else: # cursor type is window, cancel all typeovers
+        else: # cursor type is window or on sequence site: cancel all typeovers
             self._refreshTypeovers([], draw)
             return
         # March up the hierarchy from the cursor or entry icon, finding entries in
@@ -1198,7 +1198,10 @@ class Window:
                     ic, site = icon.rightmostSite(self.cursor.icon.prevInSeq())
                     self.cursor.setToIconSite(ic, site)
                 if self.cursor.siteType == 'seqOut':
-                    ic, site = icon.rightmostSite(self.cursor.icon)
+                    if isinstance(self.cursor.icon, icon.BlockEnd):
+                        ic, site = self.cursor.icon, 'seqIn'
+                    else:
+                        ic, site = icon.rightmostSite(self.cursor.icon)
                     self.cursor.setToIconSite(ic, site)
                 else:
                     self._backspaceIcon(evt)
@@ -1250,11 +1253,8 @@ class Window:
         if pendingArgSite is not None:
             child = ic.childAt(pendingArgSite)
             if child is not None:
-                siteType = ic.typeOf(pendingArgSite)
-                if siteType == "input":
-                    entryIcon.appendPendingArgs([child])
-                elif siteType == "attrIn":
-                    entryIcon.appendPendingArgs([child])
+                ic.replaceChild(None, pendingArgSite)
+                entryIcon.appendPendingArgs([child])
         self.cursor.setToText(entryIcon, drawNew=False)
 
     def _listPopupCb(self):
@@ -1876,6 +1876,7 @@ class Window:
         self.requestRedraw(resultIcon.hierRect())
         # For expressions that yield "None", show it, then automatically erase
         if result is None:
+            self.refreshDirty(addUndoBoundary=True)
             time.sleep(0.4)
             self.removeIcons([resultIcon])
         else:
@@ -2483,17 +2484,16 @@ class Window:
         # called before tearing down the sequence connections, and .addTop should always
         # be called after building them up.  This is important for undo, as well which
         # separately tracks icon attachments and add/remove from the window structures.
-        self.removeTop(old)
         nextInSeq = old.nextInSeq()
         if hasattr(old, 'blockEnd'):
             beforeBlockEnd = old.blockEnd.prevInSeq()
             if beforeBlockEnd is old:
                 beforeBlockEnd = new
             afterBlockEnd = old.blockEnd.nextInSeq()
+            self.removeTop([old, old.blockEnd])
             old.replaceChild(None, 'seqOut')
             old.blockEnd.replaceChild(None, 'seqIn')
             old.blockEnd.replaceChild(None, 'seqOut')
-            self.removeTop(old.blockEnd)
             if not isinstance(nextInSeq, icon.BlockEnd):
                 new.replaceChild(nextInSeq, 'seqOut')
             if hasattr(new, 'blockEnd'):
@@ -2505,14 +2505,16 @@ class Window:
             else:
                 # Icons in old block are dedented back to parent sequence
                 beforeBlockEnd.replaceChild(afterBlockEnd, 'seqOut')
-        elif nextInSeq is not None:
-            old.replaceChild(None, 'seqOut')
-            if hasattr(new, 'blockEnd'):
-                # BlockEnd (which is already attached to new icon's seqOut) linked in
-                new.blockEnd.replaceChild(nextInSeq, 'seqOut')
-            else:
-                # Neither icon can own a code block
-                new.replaceChild(nextInSeq, 'seqOut')
+        else:
+            self.removeTop(old)
+            if nextInSeq is not None:
+                old.replaceChild(None, 'seqOut')
+                if hasattr(new, 'blockEnd'):
+                    # BlockEnd (which is already attached to new icon's seqOut) linked in
+                    new.blockEnd.replaceChild(nextInSeq, 'seqOut')
+                else:
+                    # Neither icon can own a code block
+                    new.replaceChild(nextInSeq, 'seqOut')
         prevInSeq = old.prevInSeq()
         if prevInSeq:
             old.replaceChild(None, 'seqIn')

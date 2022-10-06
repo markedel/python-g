@@ -1739,6 +1739,9 @@ class StarIcon(opicons.UnaryOpIcon):
         # Parent UnaryOp specifies op keyword, which this does not have
         return self._serialize(offset, iconsToCopy)
 
+    def dumpName(self):
+        return "star"
+
 class StarStarIcon(opicons.UnaryOpIcon):
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '**', window, location)
@@ -1762,6 +1765,9 @@ class StarStarIcon(opicons.UnaryOpIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         # Superclass UnaryOp specifies op keyword, which this does not have
         return self._serialize(offset, iconsToCopy)
+
+    def dumpName(self):
+        return "star star"
 
 def createComprehensionAst(ic):
     eltIcon = ic.childAt('argIcons_0')
@@ -1918,6 +1924,7 @@ def backspaceListIcon(ic, site, evt):
             # from around the content
             parent = ic.parent()
             content = nonEmptyArgs[0]
+            ic.replaceChild(None, ic.siteOf(content))
             if attrIcon and not attrPlaceFail:
                 # Place attribute on the content icon
                 content.replaceChild(attrIcon, 'attrIcon')
@@ -1930,7 +1937,6 @@ def backspaceListIcon(ic, site, evt):
                 entryIcon.appendPendingArgs([attrIcon])
             if parent is None:
                 # List was on top level
-                ic.replaceChild(None, ic.siteOf(content))
                 win.replaceTop(ic, content)
                 topNode = reorderexpr.reorderArithExpr(content)
                 coincSite = topNode.hasCoincidentSite()
@@ -2046,22 +2052,19 @@ def backspaceListIcon(ic, site, evt):
                     # The list is part of an arithmetic expression that must be split
                     # around it.  The splitExprAtIcon function will return a left
                     # side and a right side with firstArg integrated in to the left
-                    # expression, but ic still attached to the right expression.  We
-                    # then reorder everything so recipient holds ic directly and ic
-                    # ic integrates the left side of the containing expression in its
-                    # first argument and the right side of the containing expression
-                    # in its last argument.
-                    print('pre-split...')
-                    ic.window._dumpCb()
+                    # expression and lastArg integrated into the right expression.  We
+                    # then replace the first and last elements of the list with those
+                    # results, replace the expression in recipient with ic itself, and
+                    # then reorder the left and right expressions.  This leaves recipient
+                    # directly holding ic, whose first and last elements now incorporate
+                    # the left and right portions of the expression that formerly held ic.
                     firstArg = ic.childAt('argIcons_0')
-                    left, right = entryicon.splitExprAtIcon(ic, recipient, firstArg)
-                    lastArg = ic.sites.argIcons[-1].att
                     lastArgSite = ic.sites.argIcons[-1].name
-                    icParent = ic.parent()
-                    if icParent is not None:
-                        icParent.replaceChild(lastArg, icParent.siteOf(ic))
-                        ic.replaceChild(right, lastArgSite)
+                    lastArg = ic.sites.argIcons[-1].att
+                    left, right = entryicon.splitExprAtIcon(ic, recipient, firstArg,
+                        lastArg)
                     ic.replaceChild(left, 'argIcons_0')
+                    ic.replaceChild(right, lastArgSite)
                     recipient.replaceChild(ic, recipientSite)
                     reorderexpr.reorderArithExpr(left)
                     reorderexpr.reorderArithExpr(right)
@@ -2093,7 +2096,10 @@ def backspaceListIcon(ic, site, evt):
         attrIcon = ic.childAt('attrIcon')
         if attrIcon is not None:
             ic.replaceChild(None, 'attrIcon')
-            entryIcon.appendPendingArgs([attrIcon])
+            if attrPlaceFail or attrDestination is None:
+                entryIcon.appendPendingArgs([attrIcon])
+            else:
+                attrDestination.replaceChild(attrIcon, 'attrIcon')
         parent = ic.parent()
         parentSite = parent.siteOf(ic)
         parent.replaceChild(entryIcon, parentSite)
@@ -2139,7 +2145,7 @@ def backspaceListIcon(ic, site, evt):
                     elif nextIc is not None:
                         win.cursor.setToIconSite(nextIc, 'seqIn')
                     else:
-                        win.cursor.setToWindowPos(ic.rect[:2])
+                        win.cursor.setToWindowPos(ic.pos())
                 else:
                     cursorOnIcon = win.cursor.type == "icon" and win.cursor.icon is ic
                     ic.replaceChild(None, 'argIcons_0')

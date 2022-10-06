@@ -161,16 +161,24 @@ class CursorParenIcon(icon.Icon):
             return
         else:
             # Cursor is on the argument site: remove the parens unless an attribute is
-            # attached to the parens, in which case, don't delete, just select
+            # attached to the parens, in which case, add a placeholder entry icon.
             attrIcon = self.childAt('attrIcon')
             if attrIcon:
-                win.unselectAll()
-                toSelect = list(attrIcon.traverse())
-                if siteId == 'argIcon':
-                    toSelect.append(self)
-                for i in toSelect:
-                    win.select(i)
-                return
+                # If an attribute is attached to the right paren
+                self.replaceChild(None, 'attrIcon')
+                argChild = self.childAt('argIcon')
+                if argChild is None:
+                    attrDestIcon, attrDestSite = self, 'argIcon'
+                else:
+                    attrDestIcon, attrDestSite = icon.rightmostSite(argChild)
+                if attrDestSite != 'attrIcon' or hasattr(attrDestIcon.sites.attrIcon,
+                        'cursorOnly'):
+                    # Can't place attribute from paren, create placeholder entry icon
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    attrDestIcon.replaceChild(entryIcon, 'attrIcon')
+                    entryIcon.appendPendingArgs([attrIcon])
+                else:
+                    attrDestIcon.replaceChild(attrIcon, attrDestSite)
             parent = self.parent()
             content = self.childAt('argIcon')
             if parent is None:

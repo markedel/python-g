@@ -573,6 +573,31 @@ class ImportIcon(SeriesStmtIcon):
                     col_offset=0))
         return ast.Import(imports, level=0, lineno=self.id, col_offset=0)
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId[:6] == 'values':
+            parent = entryIc.parent()
+            if isinstance(parent, infixicon.AsIcon):
+                # Enforce identifiers-only on right argument of "as"
+                name = text.rstrip(' ')
+                if name == ',':
+                    return "comma"
+                name = name.rstrip(',')
+                if not name.isidentifier():
+                    return "reject"
+                if text[-1] in (' ', ','):
+                    return IdentifierIcon(name, self.window), text[-1]
+                return "accept"
+            elif text == ',':
+                return "comma"
+            elif onAttr:
+                # Allow "as" to be typed
+                if text == 'a':
+                    return "accept"
+                elif text in ('as', 'as '):
+                    return infixicon.AsIcon(self.window), None
+        return None
+
 class ImportFromIcon(icon.Icon):
     hasTypeover = True
 

@@ -6,7 +6,7 @@ import iconsites
 import icon
 import filefmt
 import nameicons
-import cursors
+import listicons
 import entryicon
 import reorderexpr
 
@@ -399,42 +399,116 @@ class SubscriptIcon(icon.Icon):
         result = siteBefore, 'attrIcon', ']', 0
         return [result] if allRegions else result
 
+    def placeArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, False)
+
+    def _placeArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart, doPlacement):
+        # The subscript icon is the only one where empty arguments are not just
+        # placeholders, so they are never skipped-over in placement.  Note that this code
+        # is overkill and will rarely ever encounter an appropriate placement list,
+        # because the backspace method, which was originally tuned to produce a pending
+        # arg list for perfect-recreation, is now tuned to minimize pending args.
+        # Perfect reproduction is needed for icons that users can backspace in to or
+        # click to text-edit with an entry icon, but subscript is not such an icon.
+        siteOrder = ('indexIcon', 'upperIcon', 'stepIcon', 'attrIcon')
+        startIdIdx = siteOrder.index(startSiteId)
+        siteIds = siteOrder[startIdIdx:]
+        siteTypes = ('output', 'output', 'output', 'attrOut')[startIdIdx:]
+        placed = []
+        for i, (ic, idx, seriesIdx) in enumerate(icon.placementListIter(placeList,
+                includeEmptySites=True)):
+            if ic is None:
+                if siteTypes[i] == 'output':
+                    placed.append((None, siteIds[i], idx, seriesIdx))
+                else:
+                    break
+            elif siteTypes[i] in ic.parentSites():
+                placed.append((ic, siteIds[i], idx, seriesIdx))
+            else:
+                break
+        if len(placed) == 0:
+            return None, None
+        if doPlacement:
+            for ic, siteId, _, _ in placed:
+                if not self.hasSite(siteId):
+                    if siteId == 'upperIcon':
+                        self.changeNumSubscripts(2)
+                    elif siteId == 'stepIcon':
+                        self.changeNumSubscripts(3)
+                    elif siteId == 'attrIcon':
+                        self.close()
+                self.replaceChild(ic, siteId)
+        _, _, idx, seriesIdx = placed[-1]
+        return idx, seriesIdx
+
     def backspace(self, siteId, evt):
         win = self.window
         entryIcon = None
         if siteId == 'indexIcon':
-            # Cursor is on the index site.  Try to remove brackets
-            if self.hasSite('upperIcon') and self.childAt('upperIcon') or \
-                    self.hasSite('stepIcon') and self.childAt('stepIcon') or \
-                    self.hasSite('attrIcon') and self.childAt('attrIcon'):
-                # Can't remove brackets: select the icon and its children
-                win._select(self, op='hier')
-            elif not self.childAt('indexIcon'):
+            # Cursor is on the index site.  Remove the brackets
+            win.requestRedraw(self.topLevelParent().hierRect())
+            argSites = ('indexIcon', 'upperIcon', 'stepIcon')
+            nonEmptySites = [s for s in argSites if self.hasSite(s) and self.childAt(s)]
+            nonEmptyChildren = [self.childAt(s) for s in nonEmptySites]
+            attrIcon = self.childAt('attrIcon')
+            if attrIcon:
+                self.replaceChild(None, 'attrIcon')
+            for s in nonEmptySites:
+                self.replaceChild(None, s)
+            if len(nonEmptySites) == 0:
                 # Icon is empty, remove
                 parent = self.parent()
-                win.removeIcons([self])
-                if parent is not None:
-                    win.cursor.setToIconSite(parent, 'attrIcon')
-            else:
-                # Icon has a single argument and it's in the first slot: unwrap
-                # the bracket from around it.
-                win.requestRedraw(self.topLevelParent().hierRect())
-                parent = self.parent()
-                content = self.childAt('indexIcon')
                 if parent is None:
-                    # The icon was on the top level: replace it with its content
-                    self.replaceChild(None, 'indexIcon')
-                    win.replaceTop(self, content)
-                    win.cursor.setToBestCoincidentSite(content, 'output')
+                    if attrIcon:
+                        win.replaceTop(self, attrIcon)
+                        win.cursor.setToBestCoincidentSite(attrIcon, 'attrOut')
+                    else:
+                        win.removeTop(self)
+                        x, y = self.posOfSite('attrOut')
+                        win.cursor.setToWindowPos((x, y-icon.ATTR_SITE_OFFSET))
                 else:
-                    # The icon has a parent, but since the subscript icon sits on
-                    # an attribute site we can't attach, so create an entry icon
-                    # and make the content a pending argument to it.
-                    parentSite = parent.siteOf(self)
-                    entryIcon = entryicon.EntryIcon(window=win)
-                    parent.replaceChild(entryIcon, parentSite)
-                    entryIcon.appendPendingArgs([content])
-                    win.cursor.setToText(entryIcon, drawNew=False)
+                    parent.replaceChild(attrIcon, parent.siteOf(self))
+                    win.cursor.setToIconSite(parent, 'attrIcon')
+                return
+            # The icon had one or more arguments
+            parent = self.parent()
+            if parent is None:
+                # The icon was on the top level (while a subscript can't be typed on the
+                # top level, it can be dragged there).
+                if len(nonEmptySites) == 1:
+                    win.replaceTop(self, nonEmptyChildren[0])
+                    win.cursor.setToBestCoincidentSite(nonEmptyChildren[0], 'output')
+                else:
+                    newTuple = listicons.TupleIcon(window=win, noParens=True)
+                    newTuple.insertChildren(nonEmptyChildren, 'argIcons', 0)
+                    win.replaceTop(self, newTuple)
+                    win.cursor.setToIconSite(newTuple, 'argIcons_0')
+            else:
+                # The icon has a parent, but since the subscript icon sits on
+                # an attribute site we can't attach, so create an entry icon
+                # and make the content into pending arguments for it.
+                entryIcon = entryicon.EntryIcon(window=win)
+                parent.replaceChild(entryIcon, parent.siteOf(self))
+                entryIcon.appendPendingArgs([nonEmptyChildren])
+                win.cursor.setToText(entryIcon)
+            if attrIcon:
+                # If an attribute is attached to the right bracket, try to attach it
+                # to the rightmost argument.  If that's not possible, create a
+                # placeholder entry icon or append it to the existing one
+                attrDestIcon, attrDestSite = icon.rightmostSite(nonEmptyChildren[-1])
+                if attrDestSite != 'attrIcon' or hasattr(attrDestIcon.sites.attrIcon,
+                        'cursorOnly'):
+                    # Can't place attribute from paren, append to pending args
+                    if entryIcon is None:
+                        entryIcon = entryicon.EntryIcon(window=win)
+                        attrDestIcon.replaceChild(entryIcon, attrDestSite)
+                    entryIcon.appendPendingArgs([attrIcon])
+                else:
+                    attrDestIcon.replaceChild(attrIcon, attrDestSite)
+                    entryIcon.recolorPending()  # attrDestIcon already appended to args
             return
         elif siteId == 'attrIcon':
             # The cursor is on the attr site, remove the end bracket

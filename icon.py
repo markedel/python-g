@@ -969,8 +969,9 @@ class Icon:
         return self._placeArgs(placementList, startSiteId, ignoreOccupiedStart, True)
 
     def canPlaceArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
-        """Determine if placeArgs would succeed if called.  Returns the number of icons
-        that would be placed, 0 if none would be placed.  See placeArgs for details."""
+        """Determine which arguments from placementList would be placed if the placeArgs
+        method were called.  Arguments and return values are the same as for placeArgs
+        method (see placeArgs for descriptions)."""
         return self._placeArgs(placementList, startSiteId, ignoreOccupiedStart, False)
 
     def _placeArgs(self, placementList, startSiteId, ignoreOccupiedStart, doPlacement):
