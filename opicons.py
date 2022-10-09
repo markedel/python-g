@@ -1240,7 +1240,7 @@ class IfExpIcon(icon.Icon):
         if siteId == 'falseExpr':
             # Cursor was on else, just move the cursor to the test
             win.requestRedraw(self.topLevelParent().hierRect())
-            if self.sites.trueExpr.att is None:
+            if self.sites.testExpr.att is None:
                 updatedCursorIc = self
                 updatedCursorSite = 'testExpr'
             else:

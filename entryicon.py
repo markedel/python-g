@@ -434,12 +434,25 @@ class EntryIcon(icon.Icon):
         if coincSite is None:
             return
         lowestIc, lowestSite = iconsites.lowestCoincidentSite(pendingArg, coincSite)
-        if lowestIc is pendingArg:
-            return
-        _removeHighlights(pendingArg)
         lowestArg = lowestIc.childAt(lowestSite)
-        lowestIc.replaceChild(None, lowestSite)
-        self.replaceChild(lowestArg, 'pendingArg0')
+        # If the leftmost site in pendingArg is empty and we're attached to an icon that
+        # we could put directly in to that site, replace the attached icon with
+        # pendingArg and put our attached icon (and us with it) into the empty site that
+        # was on our pending argument, but is now above us.  If the leftmost pending arg
+        # site is occupied or not compatible, replace pending arg 0 with the content of
+        # the site (lowestArg) and move the rest of the expression above us in to the
+        # expression to which we are attached.
+        if lowestArg is None and (self.attachedIcon() is None or
+                self.attachedToAttribute()):
+            # Empty site is available, can move the entire pending arg above us
+            self.popPendingArgs(0)
+        else:
+            # lowestSite is not empty, can move just the expression above it
+            if lowestIc is pendingArg:
+                return
+            _removeHighlights(pendingArg)
+            lowestIc.replaceChild(None, lowestSite)
+            self.replaceChild(lowestArg, 'pendingArg0')
         if self.attachedSiteType() == 'attrIn':
             outIc = icon.findAttrOutputSite(self.attachedIcon())
         else:
@@ -911,6 +924,8 @@ class EntryIcon(icon.Icon):
                 # Attribute
                 self.attachedIcon().replaceChild(ic, "attrIcon")
                 cursorIcon, cursorSite = ic, "attrIcon"
+            elif ic.__class__ is opicons.IfExpIcon:
+                cursorIcon, cursorSite = self.insertIfExpr(ic)
             else:
                 # Operator
                 argIcon = icon.findAttrOutputSite(self.attachedIcon())
@@ -952,14 +967,15 @@ class EntryIcon(icon.Icon):
                         nextSiteId = ic.sites.nextCursorSite(stmtSite)
                         if nextSiteId is None:
                             # Single-argument statements, can only accept first element
-                            # of the tuple.  The rest get loaded in pending args
-                            self.appendPendingArgs([placeList])
+                            # of the tuple.  Load the rest get into a placeholder icon
+                            entryIc = EntryIcon(window=self.window)
+                            entryParent, entrySite = icon.rightmostSite(exprTop)
+                            entryParent.replaceChild(entryIc, entrySite)
+                            entryIc.appendPendingArgs([placeList])
                         else:
                             # Statements def and class start with a non-series site, but
                             # still take more arguments
                             ic.placeArgs([placeList], nextSiteId)
-                    cursorIcon = ic
-                    cursorSite = stmtSite
                 else:
                     # The entry icon is attached to some sort of binary operator on a site
                     # coincident with the left of the statement.  Leave the entry icon
@@ -972,8 +988,8 @@ class EntryIcon(icon.Icon):
                         self.window.addTopSingle(topIcon)
                     else:
                         ic.replaceChild(topIcon, stmtSite)
-                    cursorIcon = self.attachedIcon()
-                    cursorSite = self.attachedSite()
+                cursorIcon = self.attachedIcon()
+                cursorSite = self.attachedSite()
             else:
                 # Entry icon is on an input site that does not require special treatment
                 self.attachedIcon().replaceChild(ic, self.attachedSite())
@@ -1515,6 +1531,34 @@ class EntryIcon(icon.Icon):
             attIcon.replaceChild(None, 'argIcons_0')
             ic.window.replaceTop(attIcon, ic)
         return ic, 'values_0'
+
+    def insertIfExpr(self, ifExpr):
+        """Integrate a newly-entered inline if expression.  While _appendOperator can
+        almost do this, the additional site made the combined code unwieldy enough that
+        this code is better off on its own to keep the common code simpler."""
+        # When this is called, the entry icon will be attached to an attribute site.  The
+        # icon to which the entry icon is attached (or the root of its attribute chain)
+        # may be embedded in an expression.  If so, split the expression around it,
+        # putting it and the part of the expression that precedes it in the trueExpr site
+        # of the new icon and the entry icon and any part o the expression that follows
+        # it in the testExpr site.  No reordering is necessary because inline-if has the
+        # lowest expression precedence.
+        splitAt = icon.findAttrOutputSite(self)
+        splitTo, splitToSite = findEnclosingSite(splitAt)
+        if splitTo is None:
+            topExprParentSite = None
+            topExpr = splitAt.topLevelParent()
+        else:
+            topExprParentSite = splitTo.siteOf(splitAt, recursive=True)
+            topExpr = splitTo.childAt(topExprParentSite)
+        left, right = splitExprAtIcon(splitAt, splitTo, splitAt, self)
+        if splitTo is None:
+            self.window.replaceTop(topExpr, ifExpr)
+        else:
+            splitTo.replaceChild(ifExpr, topExprParentSite)
+        ifExpr.replaceChild(left, 'trueExpr')
+        ifExpr.replaceChild(right, 'testExpr')
+        return self.attachedIcon(), self.attachedSite()
 
     def insertDictColon(self, onIcon):
         onSite = onIcon.siteOf(self, recursive=True)
@@ -2355,9 +2399,11 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
     """Split a (paren-less) arithmetic expression in two parts at splitAt, up to splitTo.
     Returns everything lexically left of split at in the first returned value and
     everything right of it in the second.  The call replaces splitAt with two values, one
-    for the left expression, replaceLeft, and one for the right, replaceRight. Note that
-    this expects that splitTo has already been vetted as holding the root of the
-    expression (probably by findEnclosingSite), and will fail badly if it does not."""
+    for the left expression, replaceLeft, and one for the right, replaceRight. It is safe
+    to pass None as splitTo, provided that the top level is the appropriate stopping
+    point.  It is important to note that this call expects that splitTo has already been
+    vetted as holding the root of the expression (probably by findEnclosingSite), and
+    will fail badly if it does not."""
     if splitAt.parent() is None:
         return None, splitAt
     leftArg = replaceLeft
@@ -2394,8 +2440,9 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
             parent.replaceChild(None, childSite)
         child = parent
     else:
-        print('"splitExprAtIcon" function reached top without finding splitTo')
-        return None, None
+        if splitTo is not None:
+            print('"splitExprAtIcon" function reached top without finding splitTo')
+            return None, None
     return leftArg, rightArg
 
 def _canCloseParen(entryIc):
