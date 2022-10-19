@@ -3,7 +3,6 @@ from PIL import Image, ImageDraw
 import re
 import ast
 import numbers
-import itertools
 import comn
 import iconlayout
 import iconsites
@@ -38,13 +37,14 @@ keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
  'return', 'try', 'while', 'with', 'yield', 'await'}
+noArgStmts = {'pass', 'continue', 'break', 'else', 'finally'}
 
-identPattern = re.compile('^[a-zA-z_][a-zA-Z_\\d]*$')
+identPattern = re.compile('^[a-zA-Z_][a-zA-Z_\\d]*$')
 numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
  '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
-attrPattern = re.compile('^\\.[a-zA-z_][a-zA-Z_\\d]*$')
+attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
-opDelimPattern = re.compile('[a-zA-z\\d_.\\(\\[\\{\\s+-~]')
+opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~]')
 
 penImage = comn.asciiToImage((
     "....oooo    ",
@@ -762,10 +762,10 @@ class EntryIcon(icon.Icon):
             # to check and place the pending args (so this code can be shared with
             # _setText which needs to do the exact same thing).
             if not self._canPlacePendingArgs(attachedIcon, attachedSite,
-                    ignoreOccupiedStart=True, useAllArgs=True):
+                    overwriteStart=True, useAllArgs=True):
                 if not forceDelete:
                     return False
-            self._placePendingArgs(attachedIcon, attachedSite, ignoreOccupiedStart=True)
+            self._placePendingArgs(attachedIcon, attachedSite, overwriteStart=True)
             # If the entry icon is still attached somewhere, remove it
             if self.attachedIcon() is not None:
                 self.attachedIcon().replaceChild(None, self.attachedSite(),
@@ -944,50 +944,64 @@ class EntryIcon(icon.Icon):
                 # top-level statement (if it can accept an input argument).
                 stmtSite = ic.sites.firstCursorSite()
                 topIcon = self.attachedIcon().topLevelParent()
-                if isinstance(topIcon, listicons.TupleIcon):
+                if ic.isCursorOnlySite(stmtSite):
+                    # The statement takes no arguments.  Insert it on its own and leave
+                    # the expression containing the entry icon as the next statement
+                    self.window.replaceTop(topIcon, ic)
+                    icon.insertSeq(topIcon, ic)
+                    self.window.addTopSingle(topIcon)
+                elif isinstance(topIcon, listicons.TupleIcon):
                     # The entry icon is at the start of a naked tuple.  Replace the naked
                     # tuple with the ic and make the entry icon (or the expression
                     # holding it) its first argument and the remaining tuple elements as
                     # its 2nd-nth.
-                    parentTuple = topIcon
-                    parentSite = topIcon.siteOf(self, recursive=True)
-                    exprTop = topIcon.childAt(parentSite)
-                    parentTuple.replaceChild(None, parentSite, leavePlace=True)
-                    placeList = parentTuple.argIcons()[1:]
-                    for icn in placeList:
+                    exprTop = topIcon.childAt('argIcons_0')
+                    tupleArgs = topIcon.argIcons()
+                    for icn in tupleArgs:
                         if icn is not None:
-                            parentTuple.replaceChild(None, parentTuple.siteOf(icn))
-                    self.window.replaceTop(parentTuple, ic)
-                    ic.replaceChild(exprTop, stmtSite)
-                    if iconsites.isSeriesSiteId(stmtSite):
-                        # Series statements, can just take the whole list
-                        siteName, _ = iconsites.splitSeriesSiteId(stmtSite)
-                        ic.insertChildren(placeList, siteName, 1)
-                    else:
-                        nextSiteId = ic.sites.nextCursorSite(stmtSite)
-                        if nextSiteId is None:
-                            # Single-argument statements, can only accept first element
-                            # of the tuple.  Load the rest get into a placeholder icon
-                            entryIc = EntryIcon(window=self.window)
-                            entryParent, entrySite = icon.rightmostSite(exprTop)
-                            entryParent.replaceChild(entryIc, entrySite)
-                            entryIc.appendPendingArgs([placeList])
+                            topIcon.replaceChild(None, topIcon.siteOf(icn))
+                    self.window.replaceTop(topIcon, ic)
+                    # Use the prepended statement's placeArgs method to transfer the
+                    # tuple content.  This is mostly for ClassDefIcon, which won't yet
+                    # have sites for its superclass list
+                    placeList = [tupleArgs]
+                    if isinstance(ic, (blockicons.ClassDefIcon, blockicons.DefIcon)):
+                        # If we're placing on a class or def icon, and the first site
+                        # after the one containing the entry icon is None, insert an
+                        # additional field to preserve the comma
+                        if tupleArgs[1] is None:
+                            placeList[0].insert(1, None)
+                    elif not self.hasPendingArgs() and exprTop is self:
+                        # If entry icon has no args and is not part of an expression,
+                        # it will get removed later without keepPlace=True, removing
+                        # a visible comma.  To compensate, add an empty clause.
+                        placeList[0].insert(1, None)
+                    placeIdx, seriesIdx = ic.placeArgs(placeList, stmtSite)
+                    # If not all of the tuple arguments were placed, load the rest into a
+                    # placeholder icon (if pending args or expression parts make them
+                    # disjoint), or into our pending args (if they are adjacent to the
+                    # text entry field).  (Some minor overkill here, since no-arg stmts
+                    # are handled above and all the multi-arg statements can consume the
+                    # entire tuple, so this should always be a single-arg statement).
+                    if not icon.placeListAtEnd(placeList, placeIdx, seriesIdx):
+                        if placeIdx == 0:
+                            if self.hasPendingArgs() or exprTop is not self:
+                                entryIc = EntryIcon(window=self.window)
+                                entryParent, entrySite = icon.rightmostSite(exprTop)
+                                entryParent.replaceChild(entryIc, entrySite)
+                                entryIc.appendPendingArgs([tupleArgs[seriesIdx + 1:]])
+                            else:
+                                self.appendPendingArgs(
+                                    [[None] + tupleArgs[seriesIdx + 1:]])
                         else:
-                            # Statements def and class start with a non-series site, but
-                            # still take more arguments
-                            ic.placeArgs([placeList], nextSiteId)
+                            print('_setText prepend failed placement')
                 else:
                     # The entry icon is attached to some sort of binary operator on a site
                     # coincident with the left of the statement.  Leave the entry icon
                     # where it is in the expression, and wrap the statement icon around
                     # the entire expression
                     self.window.replaceTop(topIcon, ic)
-                    if ic.isCursorOnlySite(stmtSite):
-                        # If it's a stmt icon with cursor only site, we can't wrap it
-                        icon.insertSeq(topIcon, ic)
-                        self.window.addTopSingle(topIcon)
-                    else:
-                        ic.replaceChild(topIcon, stmtSite)
+                    ic.replaceChild(topIcon, stmtSite)
                 cursorIcon = self.attachedIcon()
                 cursorSite = self.attachedSite()
             else:
@@ -1003,7 +1017,7 @@ class EntryIcon(icon.Icon):
             # If entry icon has pending arguments, try to place them at the cursor site.
             # If we have more than one pending arg and _placePendingArgs can't place them
             # all, it will create a new placeholder entry icon to hold the remaining ones.
-            if self._placePendingArgs(cursorIcon, cursorSite, ignoreOccupiedStart=
+            if self._placePendingArgs(cursorIcon, cursorSite, overwriteStart=
                     cursorIcon==self.attachedIcon() and cursorSite==self.attachedSite()):
                 # Args were placed, and there is no remaining text, so we can remove
                 # the entry icon (if still attached), and be done
@@ -1039,7 +1053,7 @@ class EntryIcon(icon.Icon):
         self.cursorPos = len(remainingText)
         self.window.cursor.setToText(self)
         if self.attachedIcon().isCursorOnlySite(self.attachedSite()) and \
-                self.attachedIcon() in cursors.stmtIcons and \
+                self.attachedIcon().__class__ in cursors.stmtIcons and \
                 self.attachedSiteType() == 'attrIn':
             # We've attached the entry icon to a statement's cursor-only attribute site
             # Insert the entry icon as a new statement following the one to which it was
@@ -1062,7 +1076,11 @@ class EntryIcon(icon.Icon):
             self.window.cursor.draw()
             return
         # There is still text that might be processable.  Recursively go around again
-        # (we only get here if something was processed, so this won't loop forever)
+        # (we only get here if something was processed, so this won't loop forever).
+        # self.text still contains the content that was processed, above, and (while
+        # unlikely) _setText can reject, and not overwrite it, so we must clear.
+        self.text = ''  # In unlikely event _setText rejects, self.text needs to be right
+        self.cursorPos = 0
         self._setText(remainingText, len(remainingText))
 
     def canPlaceEntryText(self, requireArgPlacement=False):
@@ -1240,9 +1258,9 @@ class EntryIcon(icon.Icon):
         # Attempt to get rid of the entry icon and place pending args in its place
         if not self.remove():
             if self._canPlacePendingArgs(self.attachedIcon(), self.attachedSite(),
-                    ignoreOccupiedStart=True, useAllArgs=False):
+                    overwriteStart=True, useAllArgs=False):
                 self._placePendingArgs(self.attachedIcon(), self.attachedSite(),
-                    ignoreOccupiedStart=True)
+                    overwriteStart=True)
                 self.window.cursor.setToIconSite(newParenIcon, inputSite)
         # Reorder the expression with the new open paren in place (skip some work if the
         # entry icon was at the top level, since no reordering is necessary, there)
@@ -1524,6 +1542,7 @@ class EntryIcon(icon.Icon):
             attIcon.replaceChild(None, iconsites.makeSeriesSiteId(attSeriesName,
                 attSeriesIdx+1))
         insertIdx = len(ic.sites.values)
+        insertIdx -= 1 if insertIdx == 1 and ic.sites.values[0].att is None else 0
         ic.insertChildren(args, 'values', insertIdx)
         # If attIcon was a naked tuple, which is now down to 1 arg, remove it
         if attIcon.parent() is None and attSeriesIdx == 0 and \
@@ -1658,7 +1677,8 @@ class EntryIcon(icon.Icon):
 
     def click(self, evt):
         self.window.cursor.erase()
-        self.cursorPos = findTextOffset(self.text, evt.x - self.rect[0] - self.textOffset)
+        self.cursorPos = comn.findTextOffset(icon.globalFont, self.text,
+            evt.x - self.rect[0] - self.textOffset)
         self.window.cursor.setToText(self, drawNew=False)
 
     def pointInTextArea(self, x, y):
@@ -1788,7 +1808,13 @@ class EntryIcon(icon.Icon):
             _addHighlights(ic, highlight)
         self.markLayoutDirty()
 
-    def _canPlacePendingArgs(self, onIcon, onSite, ignoreOccupiedStart=False,
+    def cursorWindowPos(self):
+        x, y = self.rect[:2]
+        x += self.textOffset + icon.globalFont.getsize(self.text[:self.cursorPos])[0]
+        y += self.sites.output.yOffset
+        return x, y
+
+    def _canPlacePendingArgs(self, onIcon, onSite, overwriteStart=False,
             useAllArgs=False):
         """Returns True if _placePendingArgs will be able to place the entry icon's
         pending args on a given icon (onIcon), starting at a given site (onsite).  If
@@ -1798,7 +1824,7 @@ class EntryIcon(icon.Icon):
             return True
         pendingArgList = self.listPendingArgs()
         pendIdx, pendSeriesIdx = onIcon.canPlaceArgs(pendingArgList, onSite,
-            ignoreOccupiedStart=ignoreOccupiedStart)
+            overwriteStart=overwriteStart)
         if pendIdx is None:
             return False  # No arguments can be placed
         if icon.placeListAtEnd(pendingArgList, pendIdx, pendSeriesIdx):
@@ -1822,7 +1848,7 @@ class EntryIcon(icon.Icon):
                 return False
         return True
 
-    def _placePendingArgs(self, onIcon, onSite, ignoreOccupiedStart=False):
+    def _placePendingArgs(self, onIcon, onSite, overwriteStart=False):
         """Note that this is not a fully-general function for placing entry icon pending
         args and attributes, but just for the specific case (shared between _setText
         and remove()) of checking whether pending args/attrs are compatible with a given
@@ -1835,14 +1861,13 @@ class EntryIcon(icon.Icon):
             return True
         pendingArgList = self.listPendingArgs()
         pendIdx, pendSeriesIdx = onIcon.canPlaceArgs(pendingArgList, onSite,
-            ignoreOccupiedStart=ignoreOccupiedStart)
+            overwriteStart=overwriteStart)
         if pendIdx is None:
             return False
         if icon.placeListAtEnd(pendingArgList, pendIdx, pendSeriesIdx):
             # All args can be placed.  Place them and we're done
             self.popPendingArgs(pendIdx, pendSeriesIdx)
-            onIcon.placeArgs(pendingArgList, onSite,
-                ignoreOccupiedStart=ignoreOccupiedStart)
+            onIcon.placeArgs(pendingArgList, onSite, overwriteStart=overwriteStart)
             return True
         if icon.placeListEmpty(pendingArgList, pendIdx, pendSeriesIdx):
             # The only args we were able to place were empty: don't add/move entry icon
@@ -1869,7 +1894,7 @@ class EntryIcon(icon.Icon):
             else:
                 rightmostIcon, rightmostSite = icon.rightmostSite(rightmostArg)
                 rightmostIcon.replaceChild(entryIcon, rightmostSite)
-        onIcon.placeArgs(pendingArgList, onSite, ignoreOccupiedStart=ignoreOccupiedStart)
+        onIcon.placeArgs(pendingArgList, onSite, overwriteStart=overwriteStart)
         return True
 
 def parseAttrText(text, window):
@@ -1909,9 +1934,14 @@ def parseAttrText(text, window):
     delim = text[-1]
     if attrPattern.fullmatch(op):
         return nameicons.AttrIcon(op[1:], window), delim
-    if opDelimPattern.match(delim):
-        if op == "if":  # In-line if
+    if delim in delimitChars:
+        # While these trigger, above, without delimiters, backspacing or alt+clicking
+        # puts them in an entry icon that requires the user to type a delimiter
+        if op == "if":
             return opicons.IfExpIcon(window, typeover=True), delim
+        if op in ("and", "is", "in", "or"):
+            return opicons.BinOpIcon(op, window), None  # Binary keyword operation
+    if opDelimPattern.match(delim):
         if op in compareOperators:
             return opicons.BinOpIcon(op, window), delim
         if op in binaryOperators:
@@ -1958,15 +1988,15 @@ def parseExprText(text, window):
     if opDelimPattern.match(delim):
         if text in unaryOperators:
             return opicons.UnaryOpIcon(text, window), delim
-    if text == 'yield':
-        return nameicons.YieldIcon(window), None
-    if text == 'await':
-        return nameicons.AwaitIcon(window), None
     if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
         return "reject"  # Precursor characters do not form valid identifier or number
     if len(text) == 0 or delim not in delimitChars:
         return "reject"  # No legal text or not followed by a legal delimiter
     # All but the last character is ok and the last character is a valid delimiter
+    if text == 'yield':
+        return nameicons.YieldIcon(window), delim
+    if text == 'await':
+        return nameicons.AwaitIcon(window), delim
     if text in ('False', 'None', 'True'):
         return nameicons.IdentifierIcon(text, window), delim
     if text in keywords:
@@ -1990,6 +2020,8 @@ def parseTopLevelText(text, window):
             return "accept"
         delim = text[-1]
         if text[:-1] == stmt and delim in delimitChars:
+            if stmt in noArgStmts and delim not in emptyDelimiters:
+                return "reject"  # Accepting unusable delimiters would cause trouble later
             kwds = {}
             if stmt[:5] == "async":
                 kwds['isAsync'] = True
@@ -2014,44 +2046,6 @@ def runIconTextEntryHandlers(entryIc, text, onAttr):
         if result is not None:
             return result, ic
     return None, None
-
-def findTextOffset(text, pixelOffset):
-    # We use a proportionally-spaced font, but don't have full access to the font
-    # rendering code, so the only tool we have to see how it got laid out is the
-    # font.getsize method, which can only answer the question: "how many pixels long is
-    # this entire string".  Rather than try to measure individual characters and adjust
-    # for kerning and other oddness, this code makes a statistical starting guess and
-    # brutally iterates until it finds the right place.
-    nChars = len(text)
-    if nChars == 0:
-        return 0
-    textLength = icon.globalFont.getsize(text)[0]
-    guessedPos = (nChars * pixelOffset) // textLength
-    lastGuess = None
-    lastGuessDist = textLength
-    while True:
-        pixelOfGuess = icon.globalFont.getsize(text[:guessedPos])[0]
-        guessDist = abs(pixelOfGuess - pixelOffset)
-        if pixelOfGuess > pixelOffset:
-            if lastGuess == '<':
-                return guessedPos if guessDist < lastGuessDist else lastGuessedPos
-            lastGuess = '>'
-            lastGuessDist = guessDist
-            lastGuessedPos = guessedPos
-            guessedPos -= 1
-            if guessedPos <= 0:
-                return 0 if pixelOffset < guessDist else lastGuessedPos
-        elif pixelOfGuess < pixelOffset:
-            if lastGuess == '>':
-                return guessedPos if guessDist < lastGuessDist else lastGuessedPos
-            lastGuess = '<'
-            lastGuessDist = guessDist
-            lastGuessedPos = guessedPos
-            guessedPos += 1
-            if guessedPos >= nChars:
-                return nChars if textLength - pixelOffset < guessDist else lastGuessedPos
-        else:
-            return guessedPos
 
 def binOpLeftArgSite(ic):
     return 'trueExpr' if ic.__class__ == opicons.IfExpIcon else 'leftArg'

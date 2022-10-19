@@ -20,6 +20,7 @@ import filefmt
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import tkinter.messagebox
+import ctypes
 
 WINDOW_BG_COLOR = (255, 255, 255)
 #WINDOW_BG_COLOR = (128, 128, 128)
@@ -157,7 +158,7 @@ class Window:
         self.frame = tk.Frame(self.top)
         self.menubar = tk.Menu(self.frame)
         menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="File", menu=menu)
+        self.menubar.add_cascade(label="File", menu=menu, underline=0)
         menu.add_command(label="New File", accelerator="Ctrl+N", command=self._newCb)
         menu.add_command(label="Open...", accelerator="Ctrl+O", command=self._openCb)
         menu.add_separator()
@@ -167,7 +168,7 @@ class Window:
         menu.add_separator()
         menu.add_command(label="Close", command=self.top.destroy)
         menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="Edit", menu=menu)
+        self.menubar.add_cascade(label="Edit", menu=menu, underline=0)
         menu.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
         menu.add_command(label="Redo", command=self._redoCb, accelerator="Ctrl+Y")
         menu.add_separator()
@@ -177,7 +178,7 @@ class Window:
         menu.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
 
         menu = tk.Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="Run", menu=menu)
+        self.menubar.add_cascade(label="Run", menu=menu, underline=0)
         menu.add_command(label="Execute", command=self._execCb,
                 accelerator="Ctrl+Enter")
         menu.add_command(label="Update Mutables", command=self._execMutablesCb,
@@ -224,6 +225,7 @@ class Window:
         self.top.bind("<Control-d>", self._dumpCb)
         self.top.bind("<Control-l>", self._debugLayoutCb)
         self.top.bind("<Alt-l>", self._undebugLayoutCb)
+        self.top.bind("<KeyRelease-Alt_L>", self._altReleaseCb)
         self.imgFrame.grid(row=0, column=0, sticky=tk.NSEW)
         self.xScrollbar = tk.Scrollbar(self.frame, orient=tk.HORIZONTAL,
          width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
@@ -314,6 +316,9 @@ class Window:
         # Set if icons marked with dirty layouts should also be run through redundant
         # parenthesis removal.
         self.redundantParenFilterRequested = False
+        # Set on Alt+Mouse presses to suppress menu-bar highlighting, which Tkinter will
+        # sometimes do when the Alt key is released
+        self.suppressAltReleaseAction = False
 
         # If a filename was specified, open it
         print("before open file")
@@ -738,7 +743,7 @@ class Window:
         keepAlive = set()
         if self.cursor.type == "text":
             cursorIcon = self.cursor.icon
-            cursorIcon, cursorSite = icon.rightmostSite(cursorIcon)
+            cursorSite = cursorIcon.sites.firstCursorSite()
             includeCursorIcon = True
         elif self.cursor.type  == "icon" and self.cursor.site not in ('seqIn', 'seqOut'):
             cursorIcon = self.cursor.icon
@@ -746,7 +751,7 @@ class Window:
             includeCursorIcon = True
         elif self.cursor.type == "typeover":
             cursorIcon = self.cursor.icon
-            cursorSite = icon.rightmostSite(cursorIcon)[1]
+            _, cursorSite, _, _ = cursorIcon.typeoverSites()
             for _, siteAfter, _, idx in cursorIcon.typeoverSites(allRegions=True):
                 if idx > 0:
                     keepAlive.add((cursorIcon, siteAfter))
@@ -910,6 +915,17 @@ class Window:
     def _focusOutCb(self, evt):
         self.cursor.erase()
 
+    def _altReleaseCb(self, evt):
+        # This is a hack to stop Tkinter from sometimes doing its menubar alt-key
+        # activation when an Alt+MouseButton press has occurred.  This is not ideal,
+        # because we're stopping it from getting the event that it also uses to erase
+        # the underlines, which it will then leave up until the next alt press.  I can't
+        # find an answer to this, so probably need to look at tkinter source code.
+        if self.suppressAltReleaseAction:
+            self.suppressAltReleaseAction = False
+            return "break"
+        return None
+
     def _buttonPressCb(self, evt):
         if self.dragging:
             self._endDrag()
@@ -920,6 +936,22 @@ class Window:
                 return
         x, y = self.imageToContentCoord(evt.x, evt.y)
         ic = self.findIconAt(x, y)
+        if ic is not None and evt.state & (LEFT_ALT_MASK | RIGHT_ALT_MASK):
+            if hasattr(ic, 'becomeEntryIcon'):
+                entryIc, (oldCursorX, oldCursorY) = ic.becomeEntryIcon((x, y))
+                self.cursor.setToText(entryIc)
+                self.refreshDirty()
+                # Jump the mouse cursor to correct for font and text location differences
+                # after replacing the icon with the entry icon.  The icon becomeEntryIcon
+                # methods return the window location where the cursor would be placed
+                # were it placed in the original icon.  We then nudge the screen cursor
+                # by the difference between that and the location of the new entry icon's
+                # cursor in the window, thus accounting for font, spacing, and layout.
+                newCursorX, newCursorY = entryIc.cursorWindowPos()
+                nudgeMouseCursor(newCursorX - oldCursorX, newCursorY - oldCursorY)
+            else:
+                self._select(ic)
+            return
         if hasattr(ic, "pointInTextArea") and ic.pointInTextArea(x, y):
             ic.click(evt)
             self.refreshDirty(addUndoBoundary=True)
@@ -934,6 +966,8 @@ class Window:
             self.unselectAll()
 
     def _buttonReleaseCb(self, evt):
+        if evt.state & (LEFT_ALT_MASK | RIGHT_ALT_MASK):
+            self.suppressAltReleaseAction = True
         if self.buttonDownTime is None:
             return
         if self.dragging is not None:
@@ -1240,6 +1274,10 @@ class Window:
     def backspaceIconToEntry(self, evt, ic, entryText, pendingArgSite=None):
         """Replace the icon holding the cursor with the entry icon, pre-loaded with text,
         entryText"""
+        entryIcon = self.replaceIconWithEntry(ic, entryText, pendingArgSite)
+        self.cursor.setToText(entryIcon, drawNew=False)
+
+    def replaceIconWithEntry(self, ic, entryText, pendingArgSite=None):
         self.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
         parent = ic.parent()
         if parent is None:
@@ -1255,7 +1293,7 @@ class Window:
             if child is not None:
                 ic.replaceChild(None, pendingArgSite)
                 entryIcon.appendPendingArgs([child])
-        self.cursor.setToText(entryIcon, drawNew=False)
+        return entryIcon
 
     def _listPopupCb(self):
         char = self.listPopupVal.get()
@@ -2250,13 +2288,27 @@ class Window:
         display (does not perform redraw, call refreshDirty() to draw marked changes)."""
         if len(icons) == 0:
             return
+        # deletedSet more efficiently determines if an icon is on the deleted list
+        deletedSet = set(icons)
+        # Cursors and selections can coexist, and it is possible for the cursor to be on
+        # an icon that is being deleted.  If so, move it to an icon that will remain.
+        if self.cursor.type == "icon" and self.cursor.icon in deletedSet:
+            cursorPos = self.cursor.icon.pos()
+            for ic in self.cursor.icon.parentage(includeSelf=False):
+                if ic not in deletedSet:
+                    cursorSite = ic.siteOf(self.cursor.icon, recursive=True)
+                    self.cursor.setToIconSite(ic, cursorSite, eraseOld=False,
+                        drawNew=False, placeEntryText=False)
+                    break
+                cursorPos = ic.pos()
+            else:
+                self.cursor.setToWindowPos(cursorPos, eraseOld=False, drawNew=False,
+                    placeEntryText=False)
         # Note that order is important, here. .removeTop() must be called before
         # disconnecting the icon sequences, and .addTop() must be called after connecting
         # them.  Therefore, the first step is to remove deleted top-level icons from
         # the window's .topIcon and .sequences lists.
         self.removeTop([ic for ic in icons if ic.parent() is None])
-        # deletedSet more efficiently determines if an icon is on the deleted list
-        deletedSet = set(icons)
         detachList = set()
         seqReconnectList = []
         reconnectList = {}
@@ -3246,6 +3298,16 @@ def parseText(text, window, source="Pasted text"):
     if len(icons) == 0:
         return None
     return icons
+
+#... Move to OS-dependent module (once that's created)
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+def nudgeMouseCursor(x, y):
+    cursorPos = POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(cursorPos))
+    cursorPos.x += x
+    cursorPos.y += y
+    ctypes.windll.user32.SetCursorPos(cursorPos.x, cursorPos.y)
 
 if __name__ == '__main__':
     appData = App()

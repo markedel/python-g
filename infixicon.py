@@ -143,6 +143,21 @@ class InfixIcon(icon.Icon):
             # We shouldn't be called in this case, because we have no content to the
             # left of the left input, but this can happen on the top level
             return
+        entryIcon = self._becomeEntryIcon()
+        self.window.cursor.setToText(entryIcon, drawNew=False)
+
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + self.sites.output.xOffset + \
+            icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
+        textOriginY = self.rect[1] + self.sites.output.yOffset
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.globalFont, self.operator, textXOffset)
+        cursorX = textOriginX + icon.globalFont.getsize(self.operator[:cursorPos])[0]
+        entryIcon = self._becomeEntryIcon()
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
+
+    def _becomeEntryIcon(self):
         win = self.window
         win.requestRedraw(self.topLevelParent().hierRect())
         parent = self.parent()
@@ -156,7 +171,7 @@ class InfixIcon(icon.Icon):
             entryAttachedSite = parent.siteOf(self)
         else:  # leftArg is not None, attach to that
             entryAttachedIcon, entryAttachedSite = icon.rightmostSite(
-                icon.findLastAttrIcon(leftArg), ignoreAutoParens=True)
+                icon.findLastAttrIcon(leftArg))
         entryString = op[:-1] if op in delimitOperators else op
         entryIcon = entryicon.EntryIcon(initialString=entryString, window=win)
         if leftArg is not None:
@@ -177,7 +192,7 @@ class InfixIcon(icon.Icon):
             entryAttachedIcon.replaceChild(entryIcon, entryAttachedSite)
         self.replaceChild(None, 'leftArg')
         self.replaceChild(None, 'rightArg')
-        win.cursor.setToText(entryIcon, drawNew=False)
+        return entryIcon
 
 class AsIcon(InfixIcon):
     allowableSnaps = {"WithIcon": "values", "ImportIcon": "values",

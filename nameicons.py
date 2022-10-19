@@ -99,6 +99,16 @@ class TextIcon(icon.Icon):
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.text, pendingArgSite=siteId)
 
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width
+        textOriginY = self.rect[1] + self.sites.output.yOffset
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.globalFont, self.text, textXOffset)
+        cursorX = textOriginX + icon.globalFont.getsize(self.text[:cursorPos])[0]
+        entryIcon = self.window.replaceIconWithEntry(self, self.text, 'attrIcon')
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
+
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
         TextIcon.__init__(self, name, window, location)
@@ -276,6 +286,16 @@ class AttrIcon(icon.Icon):
         self.window.backspaceIconToEntry(evt, self, '.' + self.name,
                 pendingArgSite=siteId)
 
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.attrOutImage.width
+        textOriginY = self.rect[1] + self.sites.attrOut.yOffset - icon.ATTR_SITE_OFFSET
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.globalFont, self.name, textXOffset)
+        cursorX = textOriginX + icon.globalFont.getsize(self.name[:cursorPos])[0]
+        entryIcon = self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
+        entryIcon.cursorPos = cursorPos + 1  # self.name does not include .
+        return entryIcon, (cursorX, textOriginY)
+
 class NoArgStmtIcon(icon.Icon):
     def __init__(self, stmt, window, location):
         icon.Icon.__init__(self, window)
@@ -343,6 +363,16 @@ class NoArgStmtIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite=siteId)
+
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width
+        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.boldFont, self.stmt, textXOffset)
+        cursorX = textOriginX + icon.boldFont.getsize(self.stmt[:cursorPos])[0]
+        entryIcon = self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
 
 class PassIcon(NoArgStmtIcon):
     def __init__(self, window, location=None):
@@ -478,6 +508,16 @@ class SeriesStmtIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         return backspaceSeriesStmt(self, siteId, evt, self.stmt)
+
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
+        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.boldFont, self.stmt, textXOffset)
+        cursorX = textOriginX + icon.boldFont.getsize(self.stmt[:cursorPos])[0]
+        entryIcon = seriesStmtToEntryIcon(self, self.stmt)
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
 
 class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
@@ -844,6 +884,84 @@ class ImportFromIcon(icon.Icon):
         retVal = 'moduleIcon', 'importsIcons_0', 'import', self.typeoverIdx
         return [retVal] if allRegions else retVal
 
+    def backspace(self, siteId, evt):
+        if siteId == 'moduleIcon':
+            # Cursor is directly on 'from', open for editing
+            entryIcon = self._becomeEntryIcon()
+            self.window.cursor.setToText(entryIcon)
+        elif siteId[:12] == 'importsIcons':
+            siteName, index = iconsites.splitSeriesSiteId(siteId)
+            if index == 0:
+                # Cursor is directly on 'import', Move cursor
+                moduleIcon = self.childAt('moduleIcon')
+                if moduleIcon is None:
+                    self.window.cursor.setToIconSite(self, 'moduleIcon')
+                else:
+                    rightmostIc, rightmostSite = icon.rightmostSite(moduleIcon)
+                    self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
+            else:
+                # Cursor is on a comma input
+                listicons.backspaceComma(self, siteId, evt)
+
+    def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart,  False)
+
+    def _placeArgsCommon(self, placeList, startSiteId, overwriteStart, doPlacement):
+        # ImportFromIcon has a module name and an import list.  The backspace method
+        # places the module name in the first pending arg, followed by a series
+        # containing the import list.  If placeList is in this form, attempt to recreate
+        # the original.  If not (or if the module ame is specified, since the base class
+        # call handles that correctly, as well), use the base-class method which blindly
+        # throws the first input in to the module name field and everything else in to
+        # the import list.
+        if len(placeList) == 0:
+            return None, None
+        placeArgsCall = icon.Icon.placeArgs if doPlacement else icon.Icon.canPlaceArgs
+        startAtName = startSiteId is None or startSiteId[:10] == 'moduleIcon'
+        if startAtName and placeList[0] is None:
+            # The base class code can almost do everything we need, but if the first site
+            # is empty, it would skip ahead through the placement list and fill the name
+            # from the first non-empty argument (so editing an import-from icon with an
+            # empty module-name field, then focusing out, would mess up what was
+            # originally there).
+            argIdx, argSeriesIdx = placeArgsCall(self, placeList[1:], 'importsIcons_0',
+                overwriteStart=overwriteStart)
+            return argIdx + 1, argSeriesIdx
+        # No special processing needed: use the base class method to fill in the name and
+        # import list.
+        return placeArgsCall(self, placeList, startSiteId, overwriteStart=overwriteStart)
+
+    def _becomeEntryIcon(self):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        moduleIcon = self.childAt('moduleIcon')
+        importsIcons = [site.att for site in self.sites.importsIcons]
+        entryIcon = entryicon.EntryIcon(window=self.window, initialString='from')
+        self.replaceWith(entryIcon)
+        self.replaceChild(None, 'moduleIcon')
+        for imp in importsIcons:
+            if imp is not None:
+                self.replaceChild(None, self.siteOf(imp))
+        # Put the module name and imports in to separate pending arguments on the
+        # entry icon
+        if importsIcons is None:
+            entryIcon.appendPendingArgs([moduleIcon])
+        else:
+            entryIcon.appendPendingArgs([moduleIcon, importsIcons])
+        return entryIcon
+
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
+        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.boldFont, 'from', textXOffset)
+        cursorX = textOriginX + icon.boldFont.getsize('from'[:cursorPos])[0]
+        entryIcon = self._becomeEntryIcon()
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
+
 class ModuleNameIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
         TextIcon.__init__(self, name, window, location)
@@ -978,6 +1096,16 @@ class YieldIcon(icon.Icon):
     def backspace(self, siteId, evt):
         return backspaceSeriesStmt(self, siteId, evt, "yield")
 
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1
+        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.boldFont, 'yield', textXOffset)
+        cursorX = textOriginX + icon.boldFont.getsize('yield'[:cursorPos])[0]
+        entryIcon = seriesStmtToEntryIcon(self, 'yield')
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
+
 class YieldFromIcon(opicons.UnaryOpIcon):
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, 'yield from', window, location)
@@ -1005,7 +1133,7 @@ class AwaitIcon(opicons.UnaryOpIcon):
         return ast.Await(self.arg().createAst(), lineno=self.id, col_offset=0)
 
 class RaiseIcon(icon.Icon):
-    def __init__(self, hasFrom=False, window=None, location=None):
+    def __init__(self, hasFrom=False, window=None, typeover=False, location=None):
         icon.Icon.__init__(self, window)
         self.hasFrom = hasFrom
         bodyWidth = icon.getTextSize('raise', icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
@@ -1020,6 +1148,11 @@ class RaiseIcon(icon.Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        if typeover:
+            self.typeoverIdx = 0
+            self.window.watchTypeover(self)
+        else:
+            self.typeoverIdx = None
         if hasFrom:
             totalWidth = icon.dragSeqImage.width + bodyWidth-1 + \
                 icon.EMPTY_ARG_WIDTH-1 + fromWidth-1
@@ -1056,7 +1189,8 @@ class RaiseIcon(icon.Icon):
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
             # "from"
             if self.hasFrom:
-                fromImg = icon.iconBoxedText("from", icon.boldFont, icon.KEYWORD_COLOR)
+                fromImg = icon.iconBoxedText("from", icon.boldFont, icon.KEYWORD_COLOR,
+                    typeover=self.typeoverIdx)
                 img = Image.new('RGBA', (fromImg.width, bodyHeight), color=(0, 0, 0, 0))
                 img.paste(fromImg, (0, 0))
                 inImgX = fromImg.width - icon.inSiteImage.width
@@ -1074,6 +1208,7 @@ class RaiseIcon(icon.Icon):
         fromX = icon.dragSeqImage.width + bodyWidth-1 + \
             icon.EMPTY_ARG_WIDTH-1 + fromWidth-1 - icon.OUTPUT_SITE_DEPTH
         self.sites.add('causeIcon', 'input', fromX, bodyHeight // 2)
+        self.hasFrom = True
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.removeFrom)
 
@@ -1084,6 +1219,7 @@ class RaiseIcon(icon.Icon):
             print("trying to remove non-empty cause site from raise icon")
             return
         self.sites.remove('causeIcon')
+        self.hasFrom = False
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.addFrom)
 
@@ -1164,36 +1300,175 @@ class RaiseIcon(icon.Icon):
         bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
         return comn.rectsTouch(rect, bodyRect)
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId == 'exceptIcon':
+            # The raise icon is drawn initially without "from".  When the
+            # user types an 'f' in the appropriate place, have to turn it
+            if text == 'f':
+                rightmostIcon, rightmostSite = icon.rightmostFromSite(self, siteId)
+                if entryIc is rightmostIcon:
+                    self.addFrom()
+                    self.setTypeover(0, None)
+                    self.window.watchTypeover(self)
+                    return "typeover"
+        return None
+
+    def setTypeover(self, idx, site=None):
+        self.drawList = None  # Force redraw
+        if idx is None or idx > 3:
+            self.typeoverIdx = None
+            return False
+        self.typeoverIdx = idx
+        return True
+
+    def typeoverCursorPos(self):
+        causeSite = self.sites.causeIcon
+        xOffset = causeSite.xOffset + icon.OUTPUT_SITE_DEPTH - icon.TEXT_MARGIN - \
+            icon.getTextSize("from"[self.typeoverIdx:], icon.boldFont)[0]
+        return xOffset, causeSite.yOffset
+
+    def typeoverSites(self, allRegions=False):
+        if self.typeoverIdx is None:
+            return [] if allRegions else (None, None, None, None)
+        retVal = 'exceptIcon', 'causeIcon', 'from', self.typeoverIdx
+        return [retVal] if allRegions else retVal
+
+    def backspace(self, siteId, evt):
+        if siteId == 'exceptIcon':
+            # Cursor is directly on 'raise', open for editing
+            entryIcon = self._becomeEntryIcon()
+            self.window.cursor.setToText(entryIcon)
+        elif siteId == 'causeIcon':
+            causeIcon = self.childAt('causeIcon')
+            # Cursor is directly on 'from', remove from if it is empty
+            if self.childAt('causeIcon') is not None:
+                for ic in causeIcon.traverse():
+                    self.window.requestRedraw(ic.rect)
+                    self.window.select(ic)
+            else:
+                self.removeFrom()
+                rightmostIc, rightmostSite = icon.rightmostFromSite(self, 'exceptIcon')
+                self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
+
+    def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
+
+    def _placeArgsCommon(self, placeList, startSiteId, overwriteStart, doPlacement):
+        # RaiseIcon has an exception expression and an optional cause expression.  The
+        # placeArgs method is responsible for adding the cause ("from" keyword) if there
+        # are two arguments in placeList that are usable.  The backspace method places
+        # the exception and cause expressions in individual arguments, so in the
+        # (unlikely) case that the user has an empty exception and a filled-in cause, we
+        # want to faithfully reconstruct that.  Otherwise we just take the first two
+        # non-empty arguments (provided that they're compatible with inputs).
+        startAtExcept = startSiteId is None or startSiteId == 'exceptIcon'
+        if not startAtExcept and startSiteId != 'causeIcon':
+            print('RaiseIcon passed invalid site for arg placement')
+            return None, None
+        nonEmptyArgs = list(
+            icon.placementListIter(placeList, includeEmptySeriesSites=False))
+        if len(nonEmptyArgs) == 0:
+            return None, None
+        if startAtExcept and placeList[0] is None:
+            # This is the special case where there's something in the cause field, but
+            # nothing in the except field
+            if self.childAt('exceptIcon') and not overwriteStart:
+                return None, None
+            placeExcept = None
+            placeCause = 0
+        elif not startAtExcept:
+            # We're starting in the cause field
+            if self.childAt('causeIcon') and not overwriteStart:
+                return None, None
+            placeExcept = None
+            placeCause = 0
+        else:
+            # We're starting at the except field
+            if self.childAt('exceptIcon') and not overwriteStart:
+                return None, None
+            placeExcept = 0
+            if len(nonEmptyArgs) == 1 or self.childAt('causeIcon'):
+                placeCause = None
+            else:
+                placeCause = 1
+        placeListIdx = seriesIdx = None
+        if placeExcept is not None:
+            ic, placeListIdx, seriesIdx = nonEmptyArgs[placeExcept]
+            if doPlacement:
+                self.replaceChild(ic, 'exceptIcon')
+        if placeCause is not None:
+            ic, placeListIdx, seriesIdx = nonEmptyArgs[placeCause]
+            if doPlacement:
+                if not self.hasFrom:
+                    self.addFrom()
+                self.replaceChild(ic, 'causeIcon')
+        return placeListIdx, seriesIdx
+
+    def _becomeEntryIcon(self):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        exceptIcon = self.childAt('exceptIcon')
+        causeIcon = self.childAt('causeIcon') if self.hasFrom else None
+        entryIcon = entryicon.EntryIcon(window=self.window, initialString='raise')
+        self.replaceWith(entryIcon)
+        if exceptIcon is not None:
+            self.replaceChild(None, 'exceptIcon')
+        if causeIcon is not None:
+            self.replaceChild(None, 'causeIcon')
+        # Put the exception and cause expressions in to separate pending arguments on the
+        # entry icon
+        if exceptIcon is not None and causeIcon is None:
+            entryIcon.appendPendingArgs([exceptIcon])
+        elif causeIcon is not None:
+            entryIcon.appendPendingArgs([exceptIcon, causeIcon])
+        return entryIcon
+
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
+        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.boldFont, 'raise', textXOffset)
+        cursorX = textOriginX + icon.boldFont.getsize('raise'[:cursorPos])[0]
+        entryIcon = self._becomeEntryIcon()
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
+
 def backspaceSeriesStmt(ic, site, evt, text):
     siteName, index = iconsites.splitSeriesSiteId(site)
     win = ic.window
     if siteName == "values" and index == 0:
-        # Cursor is on first input site.  Remove icon and replace with cursor
-        valueIcons = [s.att for s in ic.sites.values if s.att is not None]
-        if len(valueIcons) in (0, 1):
-            # Zero or one argument, convert to entry icon (with pending arg if
-            # there was an argument)
-            if len(valueIcons) == 1:
-                pendingArgSite = ic.siteOf(valueIcons[0])
-            else:
-                pendingArgSite = None
-            win.backspaceIconToEntry(evt, ic, text, pendingArgSite)
-        else:
-            # Multiple remaining arguments: convert to entry icon with pending args in
-            # a list (entry icon's minimizePendingArgs will unload to parent if possible)
-            win.requestRedraw(ic.topLevelParent().hierRect())
-            valueIcons = [s.att for s in ic.sites.values]
-            entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-            for arg in valueIcons:
-                if arg is not None:
-                    ic.replaceChild(None, ic.siteOf(arg))
-            entryIcon.appendPendingArgs([valueIcons])
-            ic.replaceWith(entryIcon)
-            win.cursor.setToText(entryIcon, drawNew=False)
+        entryIcon = seriesStmtToEntryIcon(ic, text)
+        win.cursor.setToText(entryIcon, drawNew=False)
     elif siteName == "values":
         # Cursor is on comma input.  Delete if empty or previous site is empty, merge
         # surrounding sites if not
         listicons.backspaceComma(ic, site, evt)
+
+def seriesStmtToEntryIcon(ic, text):
+    win = ic.window
+    valueIcons = [s.att for s in ic.sites.values]
+    if len(valueIcons) in (0, 1):
+        # Zero or one argument, convert to entry icon (with pending arg if
+        # there was an argument)
+        if len(valueIcons) == 1 and valueIcons[0] is not None:
+            pendingArgSite = 'values_0'
+        else:
+            pendingArgSite = None
+        entryIcon = win.replaceIconWithEntry(ic, text, pendingArgSite)
+    else:
+        # Multiple remaining arguments: convert to entry icon with pending args in
+        # a list (entry icon's minimizePendingArgs will unload to parent if possible)
+        win.requestRedraw(ic.topLevelParent().hierRect())
+        entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+        for arg in valueIcons:
+            if arg is not None:
+                ic.replaceChild(None, ic.siteOf(arg))
+        entryIcon.appendPendingArgs([valueIcons])
+        ic.replaceWith(entryIcon)
+    return entryIcon
 
 def _moduleNameFromAttrs(identOrAttrIcon):
     isIdentifier = identOrAttrIcon.__class__ in (IdentifierIcon, ModuleNameIcon)

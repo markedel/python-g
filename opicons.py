@@ -242,6 +242,16 @@ class UnaryOpIcon(icon.Icon):
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.operator, pendingArgSite=siteId)
 
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width
+        textOriginY = self.rect[1] + self.sites.output.yOffset
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.globalFont, self.operator, textXOffset)
+        cursorX = textOriginX + icon.globalFont.getsize(self.operator[:cursorPos])[0]
+        entryIcon = self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
+
     def compareData(self, data):
         # The UnaryOp icon can be used in data representation (though maybe it should not
         # be), so must supply a function for checking against real data.  The only case
@@ -477,20 +487,20 @@ class BinOpIcon(icon.Icon):
             text.add(None, ")")
         return text
 
-    def canPlaceArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+    def canPlaceArgs(self, placementList, startSiteId=None, overwriteStart=False):
         iconToPlace, placeListIdx, seriesIdx = icon.firstPlaceListIcon(placementList)
         if iconToPlace is None:
             return None, None
         siteId = 'leftArg' if startSiteId is None else startSiteId
         if not icon.validateCompatibleChild(iconToPlace, self, siteId):
             return None, None
-        if not ignoreOccupiedStart and self.childAt(siteId):
+        if not overwriteStart and self.childAt(siteId):
             return None, None
         return placeListIdx, seriesIdx
 
-    def placeArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+    def placeArgs(self, placementList, startSiteId=None, overwriteStart=False):
         placeListIdx, seriesIdx = self.canPlaceArgs(placementList, startSiteId,
-            ignoreOccupiedStart)
+            overwriteStart)
         if placeListIdx is None:
             return None, None
         if seriesIdx is None:
@@ -562,6 +572,17 @@ class BinOpIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         backspaceBinOpIcon(self, siteId, evt)
+
+    def becomeEntryIcon(self, clickPos):
+        textOriginX = self.rect[0] + self.sites.output.xOffset + \
+            icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
+        textOriginY = self.rect[1] + self.sites.output.yOffset
+        textXOffset = clickPos[0] - textOriginX
+        cursorPos = comn.findTextOffset(icon.globalFont, self.operator, textXOffset)
+        cursorX = textOriginX + icon.globalFont.getsize(self.operator[:cursorPos])[0]
+        entryIcon = _becomeEntryIcon(self)
+        entryIcon.cursorPos = cursorPos
+        return entryIcon, (cursorX, textOriginY)
 
     def updateParens(self):
         needs = needsParens(self)
@@ -1090,13 +1111,13 @@ class IfExpIcon(icon.Icon):
         retVal = 'testExpr', 'falseExpr', 'else', self.typeoverIdx
         return [retVal] if allRegions else retVal
 
-    def placeArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
-        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, True)
+    def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, True)
 
-    def canPlaceArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
-        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, False)
+    def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
 
-    def _placeArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart, doPlacement):
+    def _placeArgsCommon(self, placeList, startSiteId, overwriteStart, doPlacement):
         # Inline-if has a left, a center, and a right argument, none of which can be a
         # series.  Given that placeArgs methods are currently only by the entry icon,
         # there are not yet any contexts in which operators like inline-if and binary
@@ -1137,7 +1158,7 @@ class IfExpIcon(icon.Icon):
             placedIc = placeList[i]
             if placedIc is not None:
                 if not placedIc.hasSite('output') or \
-                        not (ignoreOccupiedStart and i == 0) and \
+                        not (overwriteStart and i == 0) and \
                         self.childAt(placeSites[i]) is not None:
                     return None if i == 0 else i-1, None
             if doPlacement:
@@ -1476,6 +1497,11 @@ def backspaceBinOpIcon(ic, site, evt):
         win.cursor.setToIconSite(updatedCursorIc, updatedCursorSite)
         return
     # Cursor was on the operator itself
+    entryIcon = _becomeEntryIcon(ic)
+    win.cursor.setToText(entryIcon, drawNew=False)
+
+def _becomeEntryIcon(ic):
+    win = ic.window
     win.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
     if not isinstance(ic, DivideIcon) and ic.hasParens:
         # If the operation had parens, place temporary parens for continuity
@@ -1528,7 +1554,7 @@ def backspaceBinOpIcon(ic, site, evt):
     else:
         ic.replaceChild(None, 'leftArg')
         ic.replaceChild(None, 'rightArg')
-    win.cursor.setToText(entryIcon, drawNew=False)
+    return entryIcon
 
 def createUnaryOpIconFromAst(astNode, window):
     topIcon = UnaryOpIcon(unaryOps[astNode.op.__class__], window)

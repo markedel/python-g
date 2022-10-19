@@ -925,7 +925,7 @@ class Icon:
         and attributes attached to the entry icon as pending args/attributes."""
         print('Backspace method not yet implemented for', self.dumpName())
 
-    def placeArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+    def placeArgs(self, placementList, startSiteId=None, overwriteStart=False):
         """Attach icons in placement list to icon sites.  Unlike replace/insertChild
         methods, allows for multiple attachments to a (contiguous) range of sites, and
         creation of sites that don't yet exist on the icon.  Used for placing icons from
@@ -936,17 +936,18 @@ class Icon:
         2. None, representing an empty site in the icon whose arguments were transferred
         3. A tuple or list of icons originating from a site series.  This may also
            contain Nones, representing empty series sites.
-        Starts placing at startAtSite.  if startAtSite is None, starts at the first
+        Starts placing at startAtSite.  If startAtSite is None, starts at the first
         child-type cursor site.  Placement will proceed until any of the following
         conditions are met:
         1. All icons in placementList are placed
         3. The next icon's parent attachment site is incompatible with the next site
         2. The next (non-list) site to be placed is already occupied.  Note, however:
-            a. If ignoreOccupiedStart is True, the starting site will be placed
-               even if it is already occupied (replacing the existing icon).
-            b. List sites are *inserted*, not replaced, so (provided that the site
-               types match) an icon can always be placed on a list site, regardless of
-               whether it is currently occupied.
+            a. If overwriteStart is True, the starting site will be placed regardless of
+               whether it is already occupied (replacing the existing icon).
+            b. List sites are *inserted*, not replaced (except for the starting site,
+               which will be replaced if overwriteStart is True).  Therefore, provided
+               that the site types match, an icon can always be placed on a list site,
+               even it is currently occupied.
         Returns two values: 1) the index in to placementList of the last icon placed
         or None if no icons could be placed, and 2) if that icon was from a series,
         the index in to that series of the icon (or None if it was not from a series).
@@ -966,15 +967,15 @@ class Icon:
         encode all of the information needed to reproduce argument configurations for all
         of the Python-language icons, this mechanism may be insufficient for arbitrary
         icon designs, since some information from the original configuration is lost."""
-        return self._placeArgs(placementList, startSiteId, ignoreOccupiedStart, True)
+        return self._placeArgs(placementList, startSiteId, overwriteStart, True)
 
-    def canPlaceArgs(self, placementList, startSiteId=None, ignoreOccupiedStart=False):
+    def canPlaceArgs(self, placementList, startSiteId=None, overwriteStart=False):
         """Determine which arguments from placementList would be placed if the placeArgs
         method were called.  Arguments and return values are the same as for placeArgs
         method (see placeArgs for descriptions)."""
-        return self._placeArgs(placementList, startSiteId, ignoreOccupiedStart, False)
+        return self._placeArgs(placementList, startSiteId, overwriteStart, False)
 
-    def _placeArgs(self, placementList, startSiteId, ignoreOccupiedStart, doPlacement):
+    def _placeArgs(self, placementList, startSiteId, overwriteStart, doPlacement):
         """"Common method to perform both placeArgs and canPlaceArgs (the only
         difference between the two is the two lines of code that actually insert/replace
         the argument icons, which are called (or not) based on the value of doPlacement)."""
@@ -992,11 +993,13 @@ class Icon:
                     if not validateCompatibleChild(ic, self, seriesName):
                         return placedIdx, placedSeriesIdx
                     if doPlacement:
-                        if i == 0:
-                            self.replaceChild(ic,
-                                iconsites.makeSeriesSiteId(seriesName, seriesIdx))
+                        placeSiteId = iconsites.makeSeriesSiteId(seriesName, seriesIdx+i)
+                        if overwriteStart and placeSiteId == startSiteId:
+                            # This is the start site, and overwriteStart indicates that
+                            # the caller wants it replaced rather than inserted.
+                            self.replaceChild(ic, placeSiteId)
                         else:
-                            self.insertChild(ic, seriesName, seriesIdx + i)
+                            self.insertChild(ic, placeSiteId)
                     placedIdx = placeListIdx
                     placedSeriesIdx = placeListSeriesIdx
                 return placedIdx, placedSeriesIdx
@@ -1008,7 +1011,7 @@ class Icon:
                 site = getattr(self.sites, siteId)
                 if hasattr(site, 'cursorOnly') and site.cursorOnly:
                     return placedIdx, placedSeriesIdx
-                if siteId == startSiteId and not ignoreOccupiedStart:
+                if siteId == startSiteId and not overwriteStart:
                     if site.att is not None:
                         return placedIdx, placedSeriesIdx
                 if not validateCompatibleChild(ic, self, siteId):

@@ -555,6 +555,7 @@ class AugmentedAssignIcon(icon.Icon):
                 if targetIcon is None:
                     win.replaceTop(self, entryIcon)
                 else:
+                    self.replaceChild(None, 'targetIcon')
                     win.replaceTop(self, targetIcon)
                     targetIcon.replaceChild(entryIcon, 'attrIcon')
                 if len(valueIcons) == 1:

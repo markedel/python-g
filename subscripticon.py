@@ -399,13 +399,13 @@ class SubscriptIcon(icon.Icon):
         result = siteBefore, 'attrIcon', ']', 0
         return [result] if allRegions else result
 
-    def placeArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
-        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, True)
+    def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, True)
 
-    def canPlaceArgs(self, placeList, startSiteId=None, ignoreOccupiedStart=False):
-        return self._placeArgsCommon(placeList, startSiteId, ignoreOccupiedStart, False)
+    def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
 
-    def _placeArgsCommon(self, placeList, startSiteId, ignoreOccupiedStart, doPlacement):
+    def _placeArgsCommon(self, placeList, startSiteId, overwriteStart, doPlacement):
         # The subscript icon is the only one where empty arguments are not just
         # placeholders, so they are never skipped-over in placement.  Note that this code
         # is overkill and will rarely ever encounter an appropriate placement list,
@@ -414,12 +414,17 @@ class SubscriptIcon(icon.Icon):
         # Perfect reproduction is needed for icons that users can backspace in to or
         # click to text-edit with an entry icon, but subscript is not such an icon.
         siteOrder = ('indexIcon', 'upperIcon', 'stepIcon', 'attrIcon')
+        if startSiteId is None:
+            startSiteId = 'indexIcon'
         startIdIdx = siteOrder.index(startSiteId)
         siteIds = siteOrder[startIdIdx:]
         siteTypes = ('output', 'output', 'output', 'attrOut')[startIdIdx:]
         placed = []
         for i, (ic, idx, seriesIdx) in enumerate(icon.placementListIter(placeList,
                 includeEmptySites=True)):
+            if self.hasSite(siteIds[i]) and self.childAt(siteIds[i]) and \
+                    not (siteIds[i] == startSiteId and overwriteStart):
+                break
             if ic is None:
                 if siteTypes[i] == 'output':
                     placed.append((None, siteIds[i], idx, seriesIdx))

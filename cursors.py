@@ -382,9 +382,8 @@ class Cursor:
                 return
             cursorPos = min(eIcon.cursorPos, len(eIcon.text))
             cursorImg = textCursorImage
-            x, y = eIcon.rect[:2]
-            x += eIcon.textOffset + icon.globalFont.getsize(eIcon.text[:cursorPos])[0]
-            y += eIcon.sites.output.yOffset - cursorImg.height // 2
+            x, y = eIcon.cursorWindowPos()
+            y -= cursorImg.height // 2
         elif self.type == "typeover":
             if self.icon is None:
                 return

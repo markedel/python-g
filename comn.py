@@ -76,3 +76,41 @@ class AccumRects:
 
     def clear(self):
         self.rect = None
+
+def findTextOffset(font, text, pixelOffset):
+    # We use proportionally-spaced fonts, but don't have full access to the font
+    # rendering code, so the only tool we have to see how it got laid out is the
+    # font.getsize method, which can only answer the question: "how many pixels long is
+    # this entire string".  Rather than try to measure individual characters and adjust
+    # for kerning and other oddness, this code makes a statistical starting guess and
+    # brutally iterates until it finds the right place.
+    nChars = len(text)
+    if nChars == 0:
+        return 0
+    textLength = font.getsize(text)[0]
+    guessedPos = (nChars * pixelOffset) // textLength
+    lastGuess = None
+    lastGuessDist = textLength
+    while True:
+        pixelOfGuess = font.getsize(text[:guessedPos])[0]
+        guessDist = abs(pixelOfGuess - pixelOffset)
+        if pixelOfGuess > pixelOffset:
+            if lastGuess == '<':
+                return guessedPos if guessDist < lastGuessDist else lastGuessedPos
+            lastGuess = '>'
+            lastGuessDist = guessDist
+            lastGuessedPos = guessedPos
+            guessedPos -= 1
+            if guessedPos <= 0:
+                return 0 if pixelOffset < guessDist else lastGuessedPos
+        elif pixelOfGuess < pixelOffset:
+            if lastGuess == '>':
+                return guessedPos if guessDist < lastGuessDist else lastGuessedPos
+            lastGuess = '<'
+            lastGuessDist = guessDist
+            lastGuessedPos = guessedPos
+            guessedPos += 1
+            if guessedPos >= nChars:
+                return nChars if textLength - pixelOffset < guessDist else lastGuessedPos
+        else:
+            return guessedPos
