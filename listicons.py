@@ -1411,9 +1411,10 @@ class CallIcon(icon.Icon):
         if entryOnIc and text[:2] == '**':
             return StarStarIcon(self.window), None
         if isinstance(entryIc.parent(), nameicons.IdentifierIcon) and \
-                text[0] == '=' and onAttr:
-            if len(text) == 1 or len(text) == 2 and text[1] in entryicon.emptyDelimiters:
-                return ArgAssignIcon(self.window), None
+                text[0] == '=' and len(text) <= 2 and onAttr:
+            delim = text[1] if len(text) == 2 else None
+            if delim is None or delim in entryicon.emptyDelimiters:
+                return ArgAssignIcon(self.window), delim
         # Typeover for lists, tuples, and dicts is handled by hard-coded parsing because
         # closing of matching open parens/brackets/braces needs to take precedence
         return None

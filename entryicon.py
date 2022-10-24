@@ -165,9 +165,14 @@ class EntryIcon(icon.Icon):
         """Remove cursor focus from the icon.  If removeIfPossible is True, try to place
         the text as it currently stands, replacing the entry icon with whatever it
         generates.  Returns False only if removal was requested and current text or
-        pending arguments prevent it from being placed.  Note that the use of this
-        function in cursor movement means that simply moving the cursor can reorder the
-        icon structure and thus require layout/refresh/redraw."""
+        pending arguments prevent it from being placed.  If it succeeds, the cursor will
+        be placed to the right of whatever icon(s) the text generated, as if a delimiter
+        had been entered (while most callers will immediately override this, the
+        arrowAction method depends upon this side effect for right-arrow cursor movement
+        out of the icon).  It is important to note that because this function gets called
+        as a result of cursor movement, the fact that it can rearrange icon structure has
+        far-reaching consequences: all cursor-movement calls now need to be followed by
+        layout/refresh/redraw."""
         if self.hasFocus:
             self.focusChanged = True
             self.hasFocus = False
@@ -181,6 +186,9 @@ class EntryIcon(icon.Icon):
             topIcon = self.topLevelParentSafe()
             if topIcon is None or topIcon not in self.window.topIcons:
                 return True
+            if self.text == '':
+                if self.remove():
+                    return True
             if not self.canPlaceEntryText(requireArgPlacement=True):
                 return False
             newText = self.text + ' '
@@ -526,8 +534,17 @@ class EntryIcon(icon.Icon):
         commands add an undo boundary after all icon manipulation is finished, addText
         only adds one if it modified the icon structure, and may make changes to the
         icon structure *after* adding the boundary, leaving the undo stack
-        "unterminated"."""
-        newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
+        "unterminated".  This also handles spaces, as both a command to complete the
+        current entry, and as in internal space following "async"."""
+        if char == ' ':
+            if self.text in ('async', 'async '):
+                # User can type space not at end of async or try to add second space
+                self.cursorPos = 5
+                newText = 'async '
+            else:
+                newText = self.text + char
+        else:
+            newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
         if self.window.cursor.type == "text" and self.window.cursor.icon is self:
             # Currently we're not coloring based on text, but may want to restore later
@@ -545,22 +562,31 @@ class EntryIcon(icon.Icon):
             # Icon has no text.  Try to place pending args and remove
             if self.remove(makePlaceholder=True):
                 return
-        if self.attachedIcon() is None:
-            cursors.beep()
-            return
-        # Text cursor is at the left edge of the text field.  Temporarily remove the text
-        # cursor from the entry icon and put an icon cursor on the site to which it is
-        # currently attached.
+        # Text cursor is at the left edge of the text field.
         cursor = self.window.cursor
+        # If we can place the entry text and pending args, simply focus out.
+        if self.canPlaceEntryText(requireArgPlacement=True):
+            newText = self.text + ' '
+            self._setText(newText, len(newText))
+            if cursor.type == 'icon':
+                cursor.setToIconSite(cursor.icon, cursors.topSite(cursor.icon,
+                    seqDown=False))
+            return
+        # If we can't focus out, backspace in to the next icon.  This is done by
+        # temporarily removing the text cursor from the entry icon and putting an icon
+        # cursor on the site to which it is currently attached, then calling the
+        # backspace method for the icon.  If this results in a new entry icon, reconcile
+        # that with the content of self.
         highestIcon = iconsites.highestCoincidentIcon(self)
         parent = highestIcon.parent()
+        if parent is None:
+            return  # Can't place and can't back up any further
         cursor.setToIconSite(parent, parent.siteOf(highestIcon),
             placeEntryText=False)
-        # Call the icon's backspace method
         cursor.icon.backspace(cursor.site, evt)
         # If the icon backspace method created an entry icon at the cursor, it will
         # put a text cursor in it.  If not, the original entry icon should still be in
-        # the right place, and we can simply move the cursor back in to it.
+        # the right place, and we can simply move the cursor back in to it and be done.
         if cursor.type != "text":
             cursor.setToText(self)
             return
@@ -640,16 +666,40 @@ class EntryIcon(icon.Icon):
             self.window.cursor.icon.remove()
 
     def arrowAction(self, direction):
-        newCursorPos = self.cursorPos
+        cursor = self.window.cursor
+        cursor.erase()
         if direction == "Left":
-            newCursorPos = max(0, self.cursorPos - 1)
+            if self.cursorPos == 0:
+                # Move the cursor out of the entry icon.
+                if self.attachedIcon() is None:
+                    # If we're at the top level, use focusOut, which will leave the
+                    # cursor somewhere on the icon structure, or if it was completely
+                    # empty, at a proper window position.
+                    if self.focusOut():
+                        if cursor.type == 'icon':
+                            topIcon = cursor.icon.topLevelParent()
+                            topSite = cursors.topSite(topIcon, seqDown=False)
+                            cursor.setToIconSite(topIcon, topSite)
+                    else:
+                        # focusOut failed to place
+                        cursor.setToIconSite(self, "output")
+                else:
+                    self.window.cursor.setToIconSite(self.attachedIcon(),
+                        self.attachedSite())
+                self.window.refreshDirty(minimizePendingArgs=False)
+            else:
+                self.cursorPos -= 1
         elif direction == "Right":
-            newCursorPos = min(self.cursorPos + 1, len(self.text))
-        if newCursorPos == self.cursorPos:
-            return
-        self.window.cursor.erase()
-        self.cursorPos = newCursorPos
-        self.window.cursor.draw()
+            if self.cursorPos == len(self.text):
+                # Move cursor out of entry icon.  For right cursor movement, use the
+                # focusOut because it leaves the cursor after the new icon(s)
+                if not self.focusOut():
+                    # We failed to place, cursor is still in icon
+                    cursor.setToIconSite(self, self.sites.firstCursorSite())
+                self.window.refreshDirty(minimizePendingArgs=False)
+            else:
+                self.cursorPos += 1
+        cursor.draw()
 
     def remove(self, forceDelete=False, makePlaceholder=False):
         """Removes the entry icon and replaces it with it's pending argument(s) (if
@@ -1722,7 +1772,6 @@ class EntryIcon(icon.Icon):
                 outSnapSite = siteSnapLists['attrOut'][0]
                 del siteSnapLists['attrOut']
                 siteSnapLists['conditional'] = [(*outSnapSite, 'attrOut', self._snapFn)]
-        print(repr(siteSnapLists))
         return siteSnapLists
 
     def doLayout(self, siteX, siteY, layout):
@@ -1780,6 +1829,23 @@ class EntryIcon(icon.Icon):
             layout.width = width
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
+
+    def backspace(self, siteId, evt):
+        if siteId == self.sites.firstCursorSite():
+            # Backspace from icon cursor location right-of the entry icon into text area
+            self.window.cursor.setToText(self)
+        elif iconsites.isSeriesSiteId(siteId) and \
+                iconsites.splitSeriesSiteId(siteId)[1] != 0:
+            # Cursor is on a comma
+            listicons.backspaceComma(self, siteId, evt)
+            self.recolorPending()
+        else:
+            # Backspace from a pending arg site.  These sites are coincident and should
+            # probably be marked as cursor-prohibited once that is supported.  For now,
+            # forward to the rightmost site of the prior arg.
+            prevSite = self.sites.prevCursorSite(siteId)
+            rightmostIc, rightmostSite = icon.rightmostFromSite(self, prevSite)
+            rightmostIc.backspace(rightmostSite, evt)
 
     def clipboardRepr(self, offset):
         return None
@@ -1940,7 +2006,7 @@ def parseAttrText(text, window):
         if op == "if":
             return opicons.IfExpIcon(window, typeover=True), delim
         if op in ("and", "is", "in", "or"):
-            return opicons.BinOpIcon(op, window), None  # Binary keyword operation
+            return opicons.BinOpIcon(op, window), delim  # Binary keyword operation
     if opDelimPattern.match(delim):
         if op in compareOperators:
             return opicons.BinOpIcon(op, window), delim

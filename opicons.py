@@ -242,15 +242,20 @@ class UnaryOpIcon(icon.Icon):
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.operator, pendingArgSite=siteId)
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width
-        textOriginY = self.rect[1] + self.sites.output.yOffset
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.globalFont, self.operator, textXOffset)
-        cursorX = textOriginX + icon.globalFont.getsize(self.operator[:cursorPos])[0]
-        entryIcon = self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width
+            textOriginY = self.rect[1] + self.sites.output.yOffset
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.globalFont, self.operator)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'argIcon':
+            return self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
+        return None
 
     def compareData(self, data):
         # The UnaryOp icon can be used in data representation (though maybe it should not
@@ -573,16 +578,23 @@ class BinOpIcon(icon.Icon):
     def backspace(self, siteId, evt):
         backspaceBinOpIcon(self, siteId, evt)
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + self.sites.output.xOffset + \
-            icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
-        textOriginY = self.rect[1] + self.sites.output.yOffset
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.globalFont, self.operator, textXOffset)
-        cursorX = textOriginX + icon.globalFont.getsize(self.operator[:cursorPos])[0]
-        entryIcon = _becomeEntryIcon(self)
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            depthWidth = (self.depthWidth // 2 + 1) if self.depthWidth > 0 else 0
+            textOriginX = self.rect[0] + self.sites.output.xOffset + depthWidth + \
+                icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
+            textOriginY = self.rect[1] + self.sites.output.yOffset
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.globalFont, self.operator,
+                padLeft=depthWidth, padRight=depthWidth)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = _becomeEntryIcon(self)
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'rightArg':
+            return _becomeEntryIcon(self)
+        return None
 
     def updateParens(self):
         needs = needsParens(self)

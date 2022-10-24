@@ -32,8 +32,7 @@ DRAG_THRESHOLD = 2
 # Tkinter event modifiers
 SHIFT_MASK = 0x001
 CTRL_MASK = 0x004
-LEFT_ALT_MASK = 0x20000
-RIGHT_ALT_MASK = 0x40000 # Note that numeric keypad divide comes up with this on mine
+ALT_MASK = 0x20000
 LEFT_MOUSE_MASK = 0x100
 RIGHT_MOUSE_MASK = 0x300
 
@@ -629,7 +628,7 @@ class Window:
         self.refresh(redraw=False)
 
     def _keyCb(self, evt):
-        if evt.state & (CTRL_MASK | LEFT_ALT_MASK):
+        if evt.state & ALT_MASK:
             return
         char = cursors.tkCharFromEvt(evt)
         if char is None:
@@ -936,9 +935,9 @@ class Window:
                 return
         x, y = self.imageToContentCoord(evt.x, evt.y)
         ic = self.findIconAt(x, y)
-        if ic is not None and evt.state & (LEFT_ALT_MASK | RIGHT_ALT_MASK):
-            if hasattr(ic, 'becomeEntryIcon'):
-                entryIc, (oldCursorX, oldCursorY) = ic.becomeEntryIcon((x, y))
+        if ic is not None and evt.state & ALT_MASK:
+            entryIc, oldCursorLoc = ic.becomeEntryIcon((x, y))
+            if entryIc is not None:
                 self.cursor.setToText(entryIc)
                 self.refreshDirty()
                 # Jump the mouse cursor to correct for font and text location differences
@@ -947,6 +946,7 @@ class Window:
                 # were it placed in the original icon.  We then nudge the screen cursor
                 # by the difference between that and the location of the new entry icon's
                 # cursor in the window, thus accounting for font, spacing, and layout.
+                oldCursorX, oldCursorY = oldCursorLoc
                 newCursorX, newCursorY = entryIc.cursorWindowPos()
                 nudgeMouseCursor(newCursorX - oldCursorX, newCursorY - oldCursorY)
             else:
@@ -966,7 +966,7 @@ class Window:
             self.unselectAll()
 
     def _buttonReleaseCb(self, evt):
-        if evt.state & (LEFT_ALT_MASK | RIGHT_ALT_MASK):
+        if evt.state & ALT_MASK:
             self.suppressAltReleaseAction = True
         if self.buttonDownTime is None:
             return
@@ -1272,12 +1272,16 @@ class Window:
         ic.backspace(site, evt)
 
     def backspaceIconToEntry(self, evt, ic, entryText, pendingArgSite=None):
-        """Replace the icon holding the cursor with the entry icon, pre-loaded with text,
-        entryText"""
+        """Replace the icon (ic)) with the entry icon, pre-loaded with text, entryText,
+        and make it active by setting the cursor to it.  This is used by icon backspace
+        methods for the simple case of no or one single argument."""
         entryIcon = self.replaceIconWithEntry(ic, entryText, pendingArgSite)
         self.cursor.setToText(entryIcon, drawNew=False)
 
     def replaceIconWithEntry(self, ic, entryText, pendingArgSite=None):
+        """Replace the icon (ic)) with the entry icon, pre-loaded with text, entryText.
+        This is used by icon becomeEntryIcon methods for the simple case of no or one
+        single argument."""
         self.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=True)
         parent = ic.parent()
         if parent is None:
@@ -1325,7 +1329,11 @@ class Window:
             return
         if not evt.state & SHIFT_MASK:
             self.unselectAll()
-        self.cursor.processArrowKey(evt)
+        if evt.state & ALT_MASK and evt.keysym in ("Left", "Right") and \
+                self.cursor.type == 'icon':
+            self.cursor.processBreakingArrowKey(evt)
+        else:
+            self.cursor.processArrowKey(evt)
         self.refreshDirty()
 
     def _cancelCb(self, evt=None):
@@ -2387,7 +2395,7 @@ class Window:
              ic.noParens and len(ic.sites.argIcons) <= 1 and ic.parent() is None and \
              ic in self.topIcons:
                 self.requestRedraw(ic.rect)
-                argIcon = ic.sites.argIcons[0].att
+                argIcon = ic.childAt('argIcons_0')
                 if argIcon is None:  #... Not sure what happens here when no icons are left
                     nextIc = ic.nextInSeq()
                     prevIc = ic.prevInSeq()
@@ -2397,6 +2405,7 @@ class Window:
                     if prevIc is not None:
                         prevIc.replaceChild(nextIc, 'seqOut')
                 else:
+                    ic.replaceChild(None, 'argIcons_0')
                     self.replaceTop(ic, argIcon)
 
     def saveFile(self, filename, exportPython=False):

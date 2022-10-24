@@ -146,16 +146,21 @@ class InfixIcon(icon.Icon):
         entryIcon = self._becomeEntryIcon()
         self.window.cursor.setToText(entryIcon, drawNew=False)
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + self.sites.output.xOffset + \
-            icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
-        textOriginY = self.rect[1] + self.sites.output.yOffset
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.globalFont, self.operator, textXOffset)
-        cursorX = textOriginX + icon.globalFont.getsize(self.operator[:cursorPos])[0]
-        entryIcon = self._becomeEntryIcon()
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + self.sites.output.xOffset + \
+                icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
+            textOriginY = self.rect[1] + self.sites.output.yOffset
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.globalFont, self.operator)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self._becomeEntryIcon()
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'rightArg':
+            return self._becomeEntryIcon()
+        return None
 
     def _becomeEntryIcon(self):
         win = self.window

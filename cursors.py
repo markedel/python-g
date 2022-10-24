@@ -4,9 +4,8 @@
 # the base class for icons, will tie the import system in knots if it tries to import its
 # own subclasses).
 import winsound
-from PIL import Image, ImageDraw
+from PIL import Image
 from operator import itemgetter
-import ast
 import comn
 import iconsites
 import icon
@@ -14,11 +13,10 @@ import opicons
 import blockicons
 import nameicons
 import listicons
-import assignicons
 import subscripticon
 import parenicon
-import infixicon
 import python_g
+import entryicon
 
 # How far to move the cursor per arrow keystroke on the window background
 WINDOW_CURSOR_INCREMENT = 20
@@ -496,15 +494,59 @@ class Cursor:
                 return
         self.moveToIconSite(ic, site, evt)
 
+    def processBreakingArrowKey(self, evt):
+        """Alt+arrow action (since we don't have configurable bindings, yet, I can say
+        this).  Breaks in to and text edits the icon in the direction of the arrow key
+        from the cursor."""
+        if self.type != 'icon' or self.site in ('attrOut', 'seqIn', 'seqOut'):
+            return
+        if evt.keysym == 'Left':
+            ic = self.icon
+            site = self.site
+        elif evt.keysym == 'Right':
+            ic, site = self._lexicalTraverse(self.icon, self.site, 'Right')
+        else:
+            return
+        # If the icon site being entered is coincident with the output of the icon,
+        # the user is probably trying to edit the parent
+        while site == ic.hasCoincidentSite():
+            parent = ic.parent()
+            if parent is None:
+                # Site is coincident with output, but is at the top level.  Call the
+                # icon's backspace routine, but I can't imagine why it would do anything.
+                break
+            site = parent.siteOf(ic)
+            ic = parent
+        # If the icon has a method for text-editing, do that, otherwise fall back to
+        # normal arrow processing.
+        entryIcon = ic.becomeEntryIcon(siteAfter=site)
+        if entryIcon is None:
+            self._processIconArrowKey(evt)
+            return
+        # Put the text cursor on the end from which the arrow was typed
+        if evt.keysym == 'Left':
+            entryIcon.cursorPos = len(entryIcon.text)
+        else:
+            entryIcon.cursorPos = 0
+        self.window.cursor.setToText(entryIcon)
+
     def _processIconArrowKey(self, evt):
         """For cursor on icon site (self.type == "icon"), set new site based on arrow
         direction"""
         if evt.keysym in ('Left', 'Right') and not (evt.state & python_g.CTRL_MASK):
+            # Lexical traversal. This also visits icons that hold a text cursor (probably
+            # only the entry icon, maybe strings and/or comments).
+            if evt.keysym == 'Left' and _isEntryIcBodySite(self.icon, self.site):
+                self.setToText(self.icon)
+                return
             ic, site = self._lexicalTraverse(self.icon, self.site, evt.keysym)
             while ic.typeOf(site) == 'cprhIn':
                 # lexical traversal returns comprehension sites which are usually
                 # coincident with an attribute site and shouldn't get cursor
                 ic, site = self._lexicalTraverse(ic, site, evt.keysym)
+            if evt.keysym == 'Right' and _isEntryIcBodySite(ic, site):
+                self.setToText(ic)
+                return
         else:
             ic, site = self._geometricTraverse(self.icon, self.site, evt.keysym)
         self.moveToIconSite(ic, site, evt)
@@ -543,7 +585,7 @@ class Cursor:
                     if highestIc.hasCoincidentSite():
                         return iconsites.lowestCoincidentSite(highestIc,
                             highestIc.hasCoincidentSite())
-                    return highestIc, self._topSite(highestIc, seqDown=False)
+                    return highestIc, topSite(highestIc, seqDown=False)
                 parentSite = parent.siteOf(highestIc)
                 if fromIcon.hasCoincidentSite():
                     return self._lexicalTraverse(parent, parentSite, direction)
@@ -556,7 +598,7 @@ class Cursor:
             if fromSiteType in iconsites.parentSiteTypes or fromSiteType == 'seqIn':
                 nextSite = fromIcon.sites.firstCursorSite()
                 if nextSite is None:
-                    return fromIcon, self._topSite(fromIcon, seqDown=True)
+                    return fromIcon, topSite(fromIcon, seqDown=True)
                 if fromSite == 'output' and nextSite == fromIcon.hasCoincidentSite():
                     return self._lexicalTraverse(fromIcon, nextSite, direction)
                 return fromIcon, nextSite
@@ -584,7 +626,7 @@ class Cursor:
             while nextSite is None or nextSite == nextIcon.hasCoincidentSite():
                 parent = nextIcon.parent()
                 if parent is None:
-                    return nextIcon, self._topSite(nextIcon, seqDown=True)
+                    return nextIcon, topSite(nextIcon, seqDown=True)
                 parentSite = parent.siteOf(nextIcon)
                 nextSite = parent.sites.nextCursorSite(parentSite)
                 nextIcon = parent
@@ -722,20 +764,20 @@ class Cursor:
         """Returns True if the cursor is already at a given icon site"""
         return self.type == "icon" and self.icon == ic and self.site == site
 
-    def _topSite(self, ic, seqDown=True):
-        """Return the attachment site (and therefore leftmost cursor site) for an icon at
-        the top of the hierarchy."""
-        if seqDown and ic.hasSite('seqOut'):
-            return 'seqOut'
-        elif not seqDown and ic.hasSite('output'):
-            return 'output'
-        elif not seqDown and ic.hasSite('seqIn'):
-            return 'seqIn'
-        else:
-            for site in ic.sites:
-                if site.type in iconsites.parentSiteTypes:
-                    return site.name
-        return None
+def topSite(ic, seqDown=True):
+    """Return the attachment site (and therefore leftmost cursor site) for an icon at
+    the top of the hierarchy."""
+    if seqDown and ic.hasSite('seqOut'):
+        return 'seqOut'
+    elif not seqDown and ic.hasSite('output'):
+        return 'output'
+    elif not seqDown and ic.hasSite('seqIn'):
+        return 'seqIn'
+    else:
+        parentSites = ic.parentSites()
+        if parentSites is not None:
+            return parentSites[0]
+    return None
 
 def tkCharFromEvt(evt):
     if 32 <= evt.keycode <= 127 or 186 <= evt.keycode <= 192 or 219 <= evt.keycode <= 222:
@@ -747,6 +789,13 @@ def beep():
     # an elaborate sound that's supposed to alert the user of a dialog popping up, which
     # is not appropriate for the tiny nudge for your keystroke being rejected.
     winsound.Beep(1500, 120)
+
+def _isEntryIcBodySite(ic, siteId):
+    """Return True if ic is an entry icon and siteId is the site adjacent to the icon
+    body.  This is a temporary placeholder for a more general routine that will do this
+    for all icons that can host text editing (as opposed to interchanging with an entry
+    icon to do so)."""
+    return isinstance(ic, entryicon.EntryIcon) and siteId == ic.sites.firstCursorSite()
 
 topLevelStmts = {'async def': blockicons.DefIcon, 'def': blockicons.DefIcon,
     'class': blockicons.ClassDefIcon, 'break': nameicons.BreakIcon,

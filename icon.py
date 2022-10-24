@@ -925,6 +925,21 @@ class Icon:
         and attributes attached to the entry icon as pending args/attributes."""
         print('Backspace method not yet implemented for', self.dumpName())
 
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        """Open the icon for editing by replacing it with a text entry icon.  If clickPos
+        is specified, will verify that the given x,y position is within its editable
+        area.  If siteAfter is specified, will verify that the given siteId is the site
+        following the editable area of the icon.  Returns the new entry icon and, only if
+        clickPos is specified, the window x,y location within the icon where the cursor
+        would have been placed.  If verification of clickPos or siteAfter fails, returns
+        None for the entry icon.  The reason the additional return value in the clickPos
+        case, is so the caller can nudge the window cursor by the appropriate amount to
+        account for layout and font changes between the clicked icon and the entry icon.
+        Icons that do not support text-editing should not define this method."""
+        if clickPos is not None:
+            return None, None
+        return None
+
     def placeArgs(self, placementList, startSiteId=None, overwriteStart=False):
         """Attach icons in placement list to icon sites.  Unlike replace/insertChild
         methods, allows for multiple attachments to a (contiguous) range of sites, and
@@ -1696,3 +1711,24 @@ def validateCompatibleChild(child, parent, siteOrSeriesName):
     else:
         return False
     return True
+
+def cursorInText(textOriginPos, clickPos, font, text, padLeft=0, padRight=0):
+    """Determine if a given window x,y position, clickPos is within a displayed text
+    string, starting at textOriginPos (by left edge and text center Y).  If so, return
+    the (cursor) position within the text closest to clickPos, and the x,y window
+    coordinate location for that cursor (y center).  If the clickpos is not within
+    TEXT_MARGIN of the text, return (None, None)."""
+    textOriginX, textCenterY = textOriginPos
+    textXOffset = clickPos[0] - textOriginX
+    textWidth, textHeight = font.getsize(text)
+    textWidth += padLeft + padRight
+    textBoxLeft = textOriginX - TEXT_MARGIN - padLeft
+    textBoxTop = textCenterY - textHeight // 2 - TEXT_MARGIN
+    textRight = textBoxLeft + textWidth + 2 * TEXT_MARGIN
+    textBoxBottom = textBoxTop + textHeight + 2 * TEXT_MARGIN
+    textBox = (textBoxLeft, textBoxTop, textRight, textBoxBottom)
+    if not pointInRect(clickPos, textBox):
+        return None, None
+    cursorIdx = comn.findTextOffset(font, text, textXOffset)
+    cursorX = textOriginX + font.getsize(text[:cursorIdx])[0]
+    return cursorIdx, (cursorX, textCenterY)

@@ -99,15 +99,20 @@ class TextIcon(icon.Icon):
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.text, pendingArgSite=siteId)
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width
-        textOriginY = self.rect[1] + self.sites.output.yOffset
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.globalFont, self.text, textXOffset)
-        cursorX = textOriginX + icon.globalFont.getsize(self.text[:cursorPos])[0]
-        entryIcon = self.window.replaceIconWithEntry(self, self.text, 'attrIcon')
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1
+            textOriginY = self.rect[1] + self.sites.output.yOffset
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.globalFont, self.text)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self.window.replaceIconWithEntry(self, self.text, 'attrIcon')
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'attrIcon':
+            return self.window.replaceIconWithEntry(self, self.text, 'attrIcon')
+        return None
 
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
@@ -286,15 +291,21 @@ class AttrIcon(icon.Icon):
         self.window.backspaceIconToEntry(evt, self, '.' + self.name,
                 pendingArgSite=siteId)
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.attrOutImage.width
-        textOriginY = self.rect[1] + self.sites.attrOut.yOffset - icon.ATTR_SITE_OFFSET
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.globalFont, self.name, textXOffset)
-        cursorX = textOriginX + icon.globalFont.getsize(self.name[:cursorPos])[0]
-        entryIcon = self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
-        entryIcon.cursorPos = cursorPos + 1  # self.name does not include .
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.attrOutImage.width - 1
+            textOriginY = self.rect[1] + self.sites.attrOut.yOffset - \
+                    icon.ATTR_SITE_OFFSET
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.globalFont, self.name)
+            if cursorTextIdx is None:
+                return None, None
+            entryIc = self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
+            entryIc.cursorPos = cursorTextIdx + 1
+            return entryIc, cursorWindowPos
+        if siteAfter is None or siteAfter == 'attrIcon':
+            return self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
+        return None
 
 class NoArgStmtIcon(icon.Icon):
     def __init__(self, stmt, window, location):
@@ -364,15 +375,20 @@ class NoArgStmtIcon(icon.Icon):
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite=siteId)
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width
-        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.boldFont, self.stmt, textXOffset)
-        cursorX = textOriginX + icon.boldFont.getsize(self.stmt[:cursorPos])[0]
-        entryIcon = self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, self.stmt)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'attrIcon':
+            return self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
+        return None
 
 class PassIcon(NoArgStmtIcon):
     def __init__(self, window, location=None):
@@ -509,15 +525,20 @@ class SeriesStmtIcon(icon.Icon):
     def backspace(self, siteId, evt):
         return backspaceSeriesStmt(self, siteId, evt, self.stmt)
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.boldFont, self.stmt, textXOffset)
-        cursorX = textOriginX + icon.boldFont.getsize(self.stmt[:cursorPos])[0]
-        entryIcon = seriesStmtToEntryIcon(self, self.stmt)
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, self.stmt)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = seriesStmtToEntryIcon(self, self.stmt)
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'values_0':
+            return seriesStmtToEntryIcon(self, self.stmt)
+        return None
 
 class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
@@ -952,15 +973,20 @@ class ImportFromIcon(icon.Icon):
             entryIcon.appendPendingArgs([moduleIcon, importsIcons])
         return entryIcon
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.boldFont, 'from', textXOffset)
-        cursorX = textOriginX + icon.boldFont.getsize('from'[:cursorPos])[0]
-        entryIcon = self._becomeEntryIcon()
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, 'from')
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self._becomeEntryIcon()
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'moduleIcon':
+            return self._becomeEntryIcon()
+        return None
 
 class ModuleNameIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
@@ -1096,15 +1122,20 @@ class YieldIcon(icon.Icon):
     def backspace(self, siteId, evt):
         return backspaceSeriesStmt(self, siteId, evt, "yield")
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1
-        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.boldFont, 'yield', textXOffset)
-        cursorX = textOriginX + icon.boldFont.getsize('yield'[:cursorPos])[0]
-        entryIcon = seriesStmtToEntryIcon(self, 'yield')
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, 'yield')
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = seriesStmtToEntryIcon(self, 'yield')
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'values_0':
+            return seriesStmtToEntryIcon(self, 'yield')
+        return None
 
 class YieldFromIcon(opicons.UnaryOpIcon):
     def __init__(self, window=None, location=None):
@@ -1426,15 +1457,20 @@ class RaiseIcon(icon.Icon):
             entryIcon.appendPendingArgs([exceptIcon, causeIcon])
         return entryIcon
 
-    def becomeEntryIcon(self, clickPos):
-        textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-        textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-        textXOffset = clickPos[0] - textOriginX
-        cursorPos = comn.findTextOffset(icon.boldFont, 'raise', textXOffset)
-        cursorX = textOriginX + icon.boldFont.getsize('raise'[:cursorPos])[0]
-        entryIcon = self._becomeEntryIcon()
-        entryIcon.cursorPos = cursorPos
-        return entryIcon, (cursorX, textOriginY)
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, 'raise')
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self._becomeEntryIcon()
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'exceptIcon':
+            return self._becomeEntryIcon()
+        return None
 
 def backspaceSeriesStmt(ic, site, evt, text):
     siteName, index = iconsites.splitSeriesSiteId(site)
