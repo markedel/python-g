@@ -73,6 +73,23 @@ attrSiteCursorImage = comn.asciiToImage((
     ".%",))
 attrSiteCursorOffset = 11
 
+cprhSiteCursorImage = comn.asciiToImage((
+    "%.",
+    "%.",
+    "%.",
+    "%.",
+    "%%",
+    "%%",
+    "%%",
+    "%%",
+    "%%",
+    "%.",
+    "%.",
+    "%.",
+    "%.",))
+cprhSiteCursorXOffset = 1
+cprhSiteCursorYOffset = 6
+
 seqInSiteCursorImage = comn.asciiToImage((
     ".......",
     "%25852%",
@@ -372,6 +389,10 @@ class Cursor:
                 cursorImg = seqOutSiteCursorImage
                 x -= seqOutSiteCursorXOffset
                 y -= seqOutSiteCursorYOffset
+            elif self.siteType in ("cprhIn", "cprhOut"):
+                cursorImg = cprhSiteCursorImage
+                x -= cprhSiteCursorXOffset
+                y -= cprhSiteCursorYOffset
             else:
                 return
         elif self.type == "text":
@@ -505,6 +526,10 @@ class Cursor:
             site = self.site
         elif evt.keysym == 'Right':
             ic, site = self._lexicalTraverse(self.icon, self.site, 'Right')
+            if ic.isCursorSkipSite(site):
+                # lexical traversal includes comprehension sites, and we want the icon
+                # that is on the comprehension site, so go around again.
+                ic, site = self._lexicalTraverse(ic, site, evt.keysym)
         else:
             return
         # If the icon site being entered is coincident with the output of the icon,
@@ -540,7 +565,7 @@ class Cursor:
                 self.setToText(self.icon)
                 return
             ic, site = self._lexicalTraverse(self.icon, self.site, evt.keysym)
-            while ic.typeOf(site) == 'cprhIn':
+            while ic.isCursorSkipSite(site):
                 # lexical traversal returns comprehension sites which are usually
                 # coincident with an attribute site and shouldn't get cursor
                 ic, site = self._lexicalTraverse(ic, site, evt.keysym)

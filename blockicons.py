@@ -635,12 +635,14 @@ class ForIcon(icon.Icon):
         name, idx = iconsites.splitSeriesSiteId(siteId)
         if name != 'targets':
             return None
-        if text == '*' and not onAttr:
-            return listicons.StarIcon(self.window), None
-        if not (text.isidentifier() or text in "()[], " or text[:-1].isidentifier and \
-                text[-1] in ")], "):
-            # The only valid targets are identifiers, lists/tuples of identifiers, or *
-            return "reject"
+        if text[0] == '*' and entryIc.parent() == self:
+            if text == '*':
+                return listicons.StarIcon(self.window), None
+            textStripped = text[:-1]
+            delim = text[-1]
+            if textStripped == '*' and entryicon.opDelimPattern.match(delim):
+                return listicons.StarIcon(self.window), delim
+            return None
         if idx != len(self.sites.targets)-1:
             return None
         iconOnTgtSite = self.sites.targets[idx].att
@@ -649,11 +651,8 @@ class ForIcon(icon.Icon):
             # the target (which could start with "in")
             return None
         rightmostIc, rightmostSite = icon.rightmostSite(iconOnTgtSite)
-        if rightmostIc is entryIc and text == "i":
+        if rightmostIc is entryIc and text == "i" and self.typeoverIdx == 0:
             return "typeover"
-        if onAttr and text in ('(', '['):
-            # parens an brackets are legal on input sites, but not as calls or subscripts
-            return "reject"
         return None
 
     def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):

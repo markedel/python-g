@@ -760,6 +760,14 @@ class Icon:
             return False
         return site.cursorOnly
 
+    def isCursorSkipSite(self, siteId):
+        site = self.sites.lookup(siteId)
+        if site is None:
+            return False
+        if not hasattr(site, 'cursorSkip'):
+            return False
+        return site.cursorSkip
+
     def becomeTopLevel(self, isTop):
         """Change top level status of icon (most icons add or remove sequence sites)."""
         self.drawList = None  # Force change at next redraw

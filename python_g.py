@@ -2913,10 +2913,12 @@ class Window:
                     elif siteType in ("attrIn", "attrOut"):
                         y -= icon.ATTR_SITE_OFFSET
                         x += 1
-                    elif siteType in "seqIn":
+                    elif siteType == "seqIn":
                         y -= 1
-                    elif siteType in "seqOut":
+                    elif siteType == "seqOut":
                         y += 1
+                    elif siteType == "cprhOut" and not ic.childAt(siteName):
+                        pass
                     else:
                         continue  # not a visible site type
                     dist = (abs(btnX - x) + abs(btnY - y))

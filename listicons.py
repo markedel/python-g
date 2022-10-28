@@ -426,8 +426,8 @@ class ListTypeIcon(icon.Icon):
         leftWidth, height = leftImgFn(0).size
         self.sites.add('output', 'output', 0, height // 2)
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', leftWidth-1, height//2)
-        self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)])
-        self.sites.cprhIcons.order=None  # No lexical traversal of cprh sites
+        self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)],
+            cursorSkip=True)
         width = self.sites.cprhIcons[-1].xOffset + rightImgFn(0).width
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
@@ -650,19 +650,56 @@ class ListTypeIcon(icon.Icon):
         backspaceListIcon(self, siteId, evt)
 
     def textEntryHandler(self, entryIc, text, onAttr):
-        # Typeover for lists, tuples, and dicts is handled by hard-coded parsing because
-        # we closing of matching open parens/brackets/braces needs to take precedence
-        # This only handles the special case of typing a * (pack/unpack) operator
-        if entryIc.parent() != self:
+        # Typeover for lists, tuples, and dicts is mostly handled by hard-coded parsing
+        # because closing of matching open parens/brackets/braces needs to take
+        # precedence.  This only handles the * (pack/unpack) operator and comprehensions.
+        listSiteId = self.siteOf(entryIc, recursive=True)
+        if listSiteId is None or not iconsites.isSeriesSiteId(listSiteId):
             return None
-        siteId = self.siteOf(entryIc, recursive=True)
-        if siteId is None or not iconsites.isSeriesSiteId(siteId):
+        seriesName, seriesIdx = iconsites.splitSeriesSiteId(listSiteId)
+        textStripped = text[:-1]
+        delim = text[-1]
+        # Star operator (must be directly on the list site)
+        if text[0] == '*' and entryIc.parent() == self and seriesName == 'argIcons':
+            if text == '*':
+                return StarIcon(self.window), None
+            if textStripped == '*' and entryicon.opDelimPattern.match(delim):
+                return StarIcon(self.window), delim
             return None
-        name, idx = iconsites.splitSeriesSiteId(siteId)
-        if name != 'argIcons' or idx != len(self.sites.argIcons)-1:
+        # Comprehension
+        if len(self.sites.argIcons) == 1 and onAttr and seriesName in ('argIcons',
+                'cprhIcons') and text[0] in ('f', 'a', 'i'):
+            if text in ('i', 'if') and seriesName == 'argIcons':
+                # Not allowed to type 'if' as the first comprehension component.  This
+                # isn't simply to discourage the bad syntax (which we do allow), but
+                # because the user needs to be able to type "x if y else z" as the first
+                # element of a list, without it getting turned in to a comprehension.
+                return None
+            if text in ('fo'[:len(text)], 'async fo'[:len(text)], 'i'):
+                return 'accept'
+            if text[:3] != 'for' and text[:2] != 'if' and text[:9] != 'async for':
+                return None
+            # Make sure entryIc is on the rightmost attribute site (either arg or an
+            # existing comprehension), where it's safe to start a new comprehension
+            entryRightmostIcon, entryRightmostSite = icon.rightmostSite(entryIc)
+            listRightmostIcon, listRightmostSite = icon.rightmostFromSite(self, listSiteId)
+            if entryRightmostIcon is not listRightmostIcon or entryRightmostSite != \
+                    listRightmostSite:
+                return None
+            if text == 'for':
+                return CprhForIcon(window=self.window, typeover=True), None
+            if text == 'async for':
+                return CprhForIcon(window=self.window, typeover=True, isAsync=True), None
+            if text == 'if':
+                return CprhIfIcon(window=self.window), None
+            forDelimiters = {*entryicon.emptyDelimiters, '(', '[', ','}
+            if textStripped == 'for' and delim in forDelimiters:
+                return CprhForIcon(window=self.window, typeover=True), delim
+            if textStripped == 'async for' and delim in forDelimiters:
+                return CprhForIcon(window=self.window, typeover=True, isAsync=True), delim
+            if textStripped == 'if' and delim in entryicon.delimitChars:
+                return CprhIfIcon(window=self.window), delim
             return None
-        if text == '*' and not onAttr:
-            return StarIcon(self.window), None
         return None
 
     def setTypeover(self, idx, site=None):
@@ -690,8 +727,16 @@ class ListTypeIcon(icon.Icon):
         # circumstances, none of which currently will lead to them being adjacent with
         # the end paren)
         if self.endParenTypeover:
-            #... I think this needs to take in to account cphr site
-            before = iconsites.makeSeriesSiteId('argIcons', len(self.sites.argIcons) - 1)
+            if self.isComprehension():
+                series = 'cprhIcons'
+                idx = len(self.sites.cprhIcons) - 2
+                if idx < 0:
+                    print('Did not expect comprehension to have no comprehension')
+                    idx = 0
+            else:
+                series = 'argIcons'
+                idx = len(self.sites.argIcons) - 1
+            before = iconsites.makeSeriesSiteId(series, idx)
             returnData = before, 'attrIcon', ')', 0
             return [returnData] if allRegions else returnData
         if self.commaTypeover:
@@ -903,7 +948,7 @@ class TupleIcon(ListTypeIcon):
         # reverse when the last values are removed from an icon that still has a comma,
         # converting that in to the proper form for the empty tuple: ()
         if self.sites.argIcons[0].att is not None and len(self.sites.argIcons) <= 1 and \
-                not self.noParens:
+                not self.noParens and not self.isComprehension():
             self.sites.argIcons.insertSite(1)
             self.commaTypeover = 1
             self.window.watchTypeover(self)
@@ -1123,12 +1168,17 @@ class DictIcon(ListTypeIcon):
         name, idx = iconsites.splitSeriesSiteId(siteId)
         if name != 'argIcons' or idx != len(self.sites.argIcons)-1:
             return ListIcon.textEntryHandler(self, entryIc, text, onAttr)
-        if text == '*' and not onAttr:
+        if text[0] != '*':
+            return None
+        if text == '*':
             return "accept"
-        if text[0] == '*' and len(text) == 2 and (text[1] in " ([{" or text[1].isalpha()):
+        delimValid = entryicon.opDelimPattern.match(text[-1])
+        if text[0] == '*' and len(text) == 2 and delimValid:
             return StarIcon(self.window), text[1]
-        if text == '**' and not onAttr:
+        if text == '**':
             return StarStarIcon(self.window), None
+        if text[:2] == '**' and len(text) == 3 and delimValid:
+            return StarStarIcon(self.window), text[2]
         return None
 
     def compareData(self, data, compareContent=False):
@@ -1492,6 +1542,54 @@ class CprhIfIcon(icon.Icon):
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
+    def backspace(self, siteId, evt):
+        if siteId == "testIcon":
+            # Cursor is on first target site.  Remove icon and replace with entry
+            # icon, converting both targets and iterators in to a flat list
+            entryIcon = self._becomeEntryIcon()
+            self.window.cursor.setToText(entryIcon, drawNew=False)
+        else:
+            print('if comprehension icon backspace passed bad siteId')
+
+    def _becomeEntryIcon(self):
+        win = self.window
+        win.requestRedraw(self.topLevelParent().hierRect(), filterRedundantParens=True)
+        entryIcon = entryicon.EntryIcon(initialString='if', window=win)
+        testIcon = self.childAt('testIcon')
+        if testIcon is not None:
+            self.replaceChild(None, 'testIcon')
+            entryIcon.appendPendingArgs([testIcon])
+        # The entry icon can't simply take the place of a comprehension, because the
+        # comprehension site is neither a valid cursor site nor a supported attachment
+        # site for an entry icon.  Instead, it has to go on to the rightmost site of the
+        # parent list's first argument.
+        parentList = self.parent()
+        if parentList is None:
+            # A comprehension can sit on the top level as a fragment
+            win.replaceTop(self, entryIcon)
+        else:
+            parentListSite = parentList.siteOf(self)
+            prevSite = parentList.sites.prevCursorSite(parentListSite)
+            parentList.replaceChild(None, parentListSite)
+            rightmostIc, rightmostSite = icon.rightmostFromSite(parentList, prevSite)
+            rightmostIc.replaceChild(entryIcon, rightmostSite)
+        return entryIcon
+
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, ' if')
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self._becomeEntryIcon()
+            entryIcon.cursorPos = max(0, cursorTextIdx - 1)
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'testIcon':
+            return self._becomeEntryIcon()
+        return None
+
     def textRepr(self):
         return "if " + icon.argTextRepr(self.sites.testIcon)
 
@@ -1508,13 +1606,18 @@ class CprhIfIcon(icon.Icon):
         return self.sites.testIcon.att.createAst()
 
 class CprhForIcon(icon.Icon):
-    def __init__(self, isAsync=False, window=None, location=None):
+    def __init__(self, isAsync=False, typeover=False, window=None, location=None):
         icon.Icon.__init__(self, window)
+        if typeover:
+            self.typeoverIdx = 0
+            self.window.watchTypeover(self)
+        else:
+            self.typeoverIdx = None
         self.isAsync = isAsync
         text = " async for" if isAsync else " for"
-        bodyWidth = icon.getTextSize(text)[0] + 2 * icon.TEXT_MARGIN + 1
+        bodyWidth = icon.getTextSize(text, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = icon.minTxtIconHgt
-        inWidth = icon.getTextSize("in")[0] + 2 * icon.TEXT_MARGIN + 1
+        inWidth = icon.getTextSize("in", icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight, inWidth)
         siteYOffset = bodyHeight // 2
         targetXOffset = bodyWidth - icon.OUTPUT_SITE_DEPTH
@@ -1533,7 +1636,7 @@ class CprhForIcon(icon.Icon):
             img = Image.new('RGBA', (bodyWidth, bodyHeight),
              color=(0, 0, 0, 0))
             txt = " async for" if self.isAsync else " for"
-            txtImg = icon.iconBoxedText(txt, color=icon.KEYWORD_COLOR)
+            txtImg = icon.iconBoxedText(txt, icon.boldFont, color=icon.KEYWORD_COLOR)
             img.paste(txtImg, (0, 0))
             img.paste(cphSiteImage, (0, bodyHeight // 2 - cphSiteImage.height // 2))
             inImgX = bodyWidth - 1 - icon.inSiteImage.width
@@ -1548,7 +1651,8 @@ class CprhForIcon(icon.Icon):
             # Target list commas
             self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
             # "in"
-            txtImg = icon.iconBoxedText("in", color=icon.KEYWORD_COLOR)
+            txtImg = icon.iconBoxedText("in", icon.boldFont, icon.KEYWORD_COLOR,
+                typeover=self.typeoverIdx)
             img = Image.new('RGBA', (txtImg.width, bodyHeight), color=(0, 0, 0, 0))
             img.paste(txtImg, (0, 0))
             inImgX = txtImg.width - icon.inSiteImage.width
@@ -1608,6 +1712,179 @@ class CprhForIcon(icon.Icon):
         tgtText = icon.seriesTextRepr(self.sites.targets)
         iterText = icon.argTextRepr(self.sites.iterIcon)
         return text + " " + tgtText + " in " + iterText
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId is None or not iconsites.isSeriesSiteId(siteId):
+            return None
+        name, idx = iconsites.splitSeriesSiteId(siteId)
+        if name != 'targets':
+            return None
+        if text[0] == '*' and entryIc.parent() == self:
+            if text == '*':
+                return StarIcon(self.window), None
+            textStripped = text[:-1]
+            delim = text[-1]
+            if textStripped == '*' and delim in entryicon.delimitChars:
+                return StarIcon(self.window), delim
+            return None
+        if idx != len(self.sites.targets)-1:
+            return None
+        iconOnTgtSite = self.sites.targets[idx].att
+        if iconOnTgtSite is entryIc:
+            # If nothing but the entry icon is at the site, don't interfere with typing
+            # the target (which could start with "in")
+            return None
+        rightmostIc, rightmostSite = icon.rightmostSite(iconOnTgtSite)
+        if rightmostIc is entryIc and text == "i" and self.typeoverIdx == 0:
+            return "typeover"
+        return None
+
+    def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
+
+    def _placeArgsCommon(self, placeList, startSiteId, overwriteStart, doPlacement):
+        # The backspace an becomeEntryIcon methods set up the entry icon's pending
+        # arguments as a list followed by a single argument, so the most important thing
+        # for this method to accomplish is to faithfully reproduce that arrangement when
+        # it's detected.  Other than that, use the base class method to do the placement.
+        # This could be improved for the case where the last item to place is clearly not
+        # a valid target, but multi-element placement opportunities outside of reproducing
+        # the original icon don't come up often enough to justify the extra work, yet.
+        if len(placeList) == 0:
+            return None, None
+        if doPlacement:
+            placeArgsCall = icon.Icon.placeArgs
+        else:
+            placeArgsCall = icon.Icon.canPlaceArgs
+        if startSiteId == 'iterIcon':
+            # Just the one site to place
+            return placeArgsCall(self, placeList, startSiteId, overwriteStart)
+        if startSiteId is None:
+            startSiteId = 'targets_0'
+        startSiteName, startIdx = iconsites.splitSeriesSiteId(startSiteId)
+        if startSiteName != 'targets':
+            print('ForIcon.placeArgs: bad startSiteId')
+            return None, None
+        if len(placeList) == 2 and not isinstance(placeList[1], (list, tuple)):
+            # Can faithfully recreate placement in both targets and iterIcon
+            tgts = placeList[0]
+            iterIcon = placeList[1]
+            idx, seriesIdx = placeArgsCall(self, [tgts], startSiteId, overwriteStart)
+            if not icon.placeListAtEnd([tgts], idx, seriesIdx):
+                return idx, seriesIdx
+            self.replaceChild(iterIcon, 'iterIcon')
+            return 1, None
+        # Cannot faithfully recreate placement from the given place list.  Just let the
+        # base class method put everything in targets list
+        return placeArgsCall(self, placeList, startSiteId, overwriteStart)
+
+    def setTypeover(self, idx, site=None):
+        self.drawList = None  # Force redraw
+        if idx is None or idx > 1:
+            self.typeoverIdx = None
+            return False
+        self.typeoverIdx = idx
+        return True
+
+    def typeoverCursorPos(self):
+        xOffset = self.sites.iterIcon.xOffset + icon.OUTPUT_SITE_DEPTH - \
+            icon.TEXT_MARGIN - icon.getTextSize("in"[self.typeoverIdx:], icon.boldFont)[0]
+        return xOffset, self.sites.iterIcon.yOffset
+
+    def typeoverSites(self, allRegions=False):
+        if self.typeoverIdx is None:
+            return [] if allRegions else (None, None, None, None)
+        before = iconsites.makeSeriesSiteId('targets', len(self.sites.targets) - 1)
+        retVal = before, 'iterIcon', 'in', self.typeoverIdx
+        return [retVal] if allRegions else retVal
+
+    def backspace(self, siteId, evt):
+        siteName, index = iconsites.splitSeriesSiteId(siteId)
+        win = self.window
+        if siteName == "targets":
+            if index == 0:
+                # Cursor is on first target site.  Remove icon and replace with entry
+                # icon, converting both targets and iterators in to a flat list
+                parent = self.parent()
+                entryIcon = self._becomeEntryIcon()
+                if not parent.isComprehension() and isinstance(parent, TupleIcon):
+                    # If this was the last comprehension removed from a tuple icon, it
+                    # needs to be converted back to a cursor paren, otherwise it will
+                    # get an unwanted comma.
+                    entryicon.cvtTupleToCursorParen(parent, closed=parent.closed,
+                        typeover=parent.typeoverSites()[0] is not None)
+                win.cursor.setToText(entryIcon, drawNew=False)
+            else:
+                # Cursor is on comma input
+                backspaceComma(self, siteId, evt)
+        elif siteId == "iterIcon":
+            # Cursor is on "in", jump over it to last target
+            lastTgtSite = iconsites.makeSeriesSiteId('targets',
+                len(self.sites.targets) - 1)
+            win.cursor.setToIconSite(*icon.rightmostFromSite(self, lastTgtSite))
+
+    def _becomeEntryIcon(self):
+        win = self.window
+        win.requestRedraw(self.topLevelParent().hierRect(), filterRedundantParens=True)
+        targetIcons = [s.att for s in self.sites.targets]
+        iterIcon = self.sites.iterIcon.att
+        text = "async for" if self.isAsync else "for"
+        if len(targetIcons) <= 1 and iterIcon is None:
+            # Zero or one argument, convert to entry icon (with single pending arg if
+            # there was an argument)
+            entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+            if len(targetIcons) == 1 and targetIcons[0] is not None:
+                self.replaceChild(None, 'targets_0')
+                entryIcon.appendPendingArgs([targetIcons[0]])
+        else:
+            # Multiple remaining arguments: convert to entry icon holding pending
+            # arguments in the form a list for targets and an individual site for values.
+            entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+            targetPlaceList = targetIcons[0] if len(targetIcons) == 1 else targetIcons
+            if iterIcon is None:
+                entryIcon.appendPendingArgs([targetIcons])
+            else:
+                entryIcon.appendPendingArgs([targetIcons, iterIcon])
+            if iterIcon is not None:
+                self.replaceChild(None, 'iterIcon')
+            for arg in targetIcons:
+                if arg is not None:
+                    self.replaceChild(None, self.siteOf(arg))
+        # The entry icon can't simply take the place of a comprehension, because a
+        # comprehension site is neither a valid cursor site nor a supported attachment
+        # site for an entry icon.  Instead, it has to go on to the rightmost site of the
+        # parent list's first argument.
+        parentList = self.parent()
+        if parentList is None:
+            # A comprehension can sit on the top level as a fragment
+            win.replaceTop(self, entryIcon)
+        else:
+            parentListSite = parentList.siteOf(self)
+            prevSite = parentList.sites.prevCursorSite(parentListSite)
+            parentList.replaceChild(None, parentListSite)
+            rightmostIc, rightmostSite = icon.rightmostFromSite(parentList, prevSite)
+            rightmostIc.replaceChild(entryIcon, rightmostSite)
+        return entryIcon
+
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            text = " async for" if self.isAsync else " for"
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, text)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self._becomeEntryIcon()
+            entryIcon.cursorPos = max(0, cursorTextIdx - 1)
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'targets_0':
+            return self._becomeEntryIcon()
+        return None
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
@@ -2320,7 +2597,7 @@ def createComprehensionIconFromAst(astNode, window):
         topIcon.replaceChild(dictElem, 'argIcons_0')
     clauseIdx = 0
     for gen in astNode.generators:
-        forIcon = CprhForIcon(gen.is_async, window)
+        forIcon = CprhForIcon(gen.is_async, window=window)
         if isinstance(gen.target, ast.Tuple):
             tgtIcons = [icon.createFromAst(t, window) for t in gen.target.elts]
             forIcon.insertChildren(tgtIcons, "targets", 0)

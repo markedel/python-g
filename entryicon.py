@@ -830,6 +830,11 @@ class EntryIcon(icon.Icon):
         self.window.requestRedraw(redrawRect)
         return True
 
+    def removeIfEmpty(self):
+        """Remove the icon if it has no text and no pending arguments."""
+        if self.text == '' and not self.hasPendingArgs():
+            self.remove()
+
     def parseEntryText(self, newText):
         """Parse proposed text for the entry icon.  Returns three values: 1) the parse
         result, one of "accept", "reject", "typeover", "comma", "colon", "openBracket",
@@ -867,6 +872,7 @@ class EntryIcon(icon.Icon):
         parseResult, handlerIc, prepend = self.parseEntryText(newText)
         # print('parse result', parseResult)
         if parseResult == "reject":
+            self.removeIfEmpty()
             cursors.beep()
             return
         self.window.requestRedraw(self.topLevelParent().hierRect(),
@@ -888,16 +894,19 @@ class EntryIcon(icon.Icon):
                 else:
                     self.window.cursor.setToTypeover(handlerIc)
             else:
+                self.removeIfEmpty()
                 cursors.beep()
             return
         elif parseResult == "comma":
             if not self.insertComma():
+                self.removeIfEmpty()
                 cursors.beep()
             else:
                 self.window.undo.addBoundary()
             return
         elif parseResult == "colon":
             if not self.insertColon():
+                self.removeIfEmpty()
                 cursors.beep()
             else:
                 self.window.undo.addBoundary()
@@ -908,6 +917,7 @@ class EntryIcon(icon.Icon):
             return
         elif parseResult == "endBracket":
             if not self.insertEndParen(parseResult):
+                self.removeIfEmpty()
                 cursors.beep()
             else:
                 self.window.undo.addBoundary()
@@ -918,6 +928,7 @@ class EntryIcon(icon.Icon):
             return
         elif parseResult == "endBrace":
             if not self.insertEndParen(parseResult):
+                self.removeIfEmpty()
                 cursors.beep()
             else:
                 self.window.undo.addBoundary()
@@ -928,12 +939,14 @@ class EntryIcon(icon.Icon):
             return
         elif parseResult == "endParen":
             if not self.insertEndParen(parseResult):
+                self.removeIfEmpty()
                 cursors.beep()
             else:
                 self.window.undo.addBoundary()
             return
         elif parseResult == "makeFunction":
             if self.attachedIcon().isCursorOnlySite(self.attachedSite()):
+                self.removeIfEmpty()
                 cursors.beep()
             else:
                 self.insertOpenParen(listicons.CallIcon)
@@ -964,6 +977,7 @@ class EntryIcon(icon.Icon):
         elif ic.__class__ in (assignicons.AssignIcon, assignicons.AugmentedAssignIcon):
             cursorIcon, cursorSite = self.insertAssign(ic)
             if not cursorIcon:
+                self.removeIfEmpty()
                 cursors.beep()
                 return
         elif ic.__class__ is nameicons.YieldIcon:
@@ -976,11 +990,14 @@ class EntryIcon(icon.Icon):
                 cursorIcon, cursorSite = ic, "attrIcon"
             elif ic.__class__ is opicons.IfExpIcon:
                 cursorIcon, cursorSite = self.insertIfExpr(ic)
+            elif ic.__class__ in (listicons.CprhIfIcon, listicons.CprhForIcon):
+                cursorIcon, cursorSite = self.insertCprhIcon(ic)
             else:
                 # Operator
                 argIcon = icon.findAttrOutputSite(self.attachedIcon())
                 if argIcon is None:
                     # We can't append an operator if there's no operand to attach it to
+                    self.removeIfEmpty()
                     cursors.beep()
                     return
                 cursorIcon, cursorSite = _appendOperator(ic, self.attachedIcon(),
@@ -1217,17 +1234,7 @@ class EntryIcon(icon.Icon):
             if ic.__class__ is parenicon.CursorParenIcon:
                 # Convert cursor paren to a tuple
                 closed = ic.closed or _canCloseParen(self)
-                tupleIcon = listicons.TupleIcon(window=self.window, closed=closed,
-                    typeover=closed and not ic.closed)
-                arg = ic.childAt('argIcon')
-                ic.replaceChild(None, 'argIcon')
-                ic.replaceWith(tupleIcon)
-                tupleIcon.replaceChild(arg, 'argIcons_0')
-                if ic.closed:
-                    attrIcon = ic.sites.attrIcon.att
-                    ic.replaceChild(None, 'attrIcon')
-                    tupleIcon.replaceChild(attrIcon, 'attrIcon')
-                ic = tupleIcon
+                ic = cvtCursorParenToTuple(ic, closed, typeover=closed and not ic.closed)
                 splitSite = 'argIcons_0'
             elif ic.__class__ is opicons.BinOpIcon and ic.hasParens or \
                     ic.__class__ is opicons.IfExpIcon and ic.hasParens and \
@@ -1245,6 +1252,9 @@ class EntryIcon(icon.Icon):
             else:
                 # Bounding icon will not accept comma: reject
                 return False
+        if isinstance(ic, listicons.ListTypeIcon) and ic.isComprehension():
+            # The bounding icon is a comprehension and won't accept additional clauses
+            return False
         # ic can accept a new comma clause after splitSite.  Split expression in two at
         # entry icon
         left, right = splitExprAtIcon(self, ic, None, self)
@@ -1281,7 +1291,8 @@ class EntryIcon(icon.Icon):
         transferParentArgs = None
         if attachedIc is not None and iconClass is not subscripticon.SubscriptIcon:
             seqIc, seqSite = findEnclosingSite(self)
-            if seqIc and iconsites.isSeriesSiteId(seqSite):
+            if seqIc and iconsites.isSeriesSiteId(seqSite) and \
+                    seqIc.typeOf(seqSite) == 'input':
                 siteName, siteIdx = iconsites.splitSeriesSiteId(seqSite)
                 rightOfSite = iconsites.makeSeriesSiteId(siteName, siteIdx + 1)
                 if seqIc.hasSite(rightOfSite):
@@ -1337,12 +1348,8 @@ class EntryIcon(icon.Icon):
                     rightOfIc.replaceChild(None, 'argIcons_0')
                     self.window.replaceTop(rightOfIc, newTopIcon)
                 else:
-                    newParen = parenicon.CursorParenIcon(closed=rightOfIc.closed,
-                        window=self.window)
-                    arg = rightOfIc.childAt('argIcons_0')
-                    rightOfIc.replaceChild(None, 'argIcons_0')
-                    newParen.replaceChild(arg, 'argIcon')
-                    rightOfIc.replaceWith(newParen)
+                    cvtTupleToCursorParen(rightOfIc, closed=rightOfIc.closed,
+                        typeover=rightOfIc.typeoverSites()[0] is not None)
 
     def insertEndParen(self, token):
         """Find a matching open paren/bracket/brace or paren-less tuple that could be
@@ -1394,11 +1401,8 @@ class EntryIcon(icon.Icon):
                     return False
                 if isinstance(transferArgsFrom, listicons.TupleIcon) and idx == 0:
                     # Tuple is down to 1 argument.  Convert to arithmetic parens
-                    arg = transferArgsFrom.childAt("argIcons_0")
-                    transferArgsFrom.replaceChild(None, 'argIcons_0')
-                    newParen = parenicon.CursorParenIcon(window=self.window, closed=False)
-                    newParen.replaceChild(arg, 'argIcon')
-                    transferArgsFrom.replaceWith(newParen)
+                    newParen = cvtTupleToCursorParen(transferArgsFrom, closed=False,
+                        typeover=False)
                     if transferArgsFrom is matchingParen:
                         matchingParen = newParen
         # Rearrange the hierarchy so the paren/bracket/brace is above all the icons it
@@ -1724,6 +1728,38 @@ class EntryIcon(icon.Icon):
         # Remove entry icon and place pending arguments (if possible)
         self.remove()
         return True
+
+    def insertCprhIcon(self, ic):
+        """Handle insertion of a comprehension.  Comprehension sites are cursor-
+        prohibited, and the entry icon will be sitting somewhere under a list, dict, or
+        tuple icon, from which we will determine the actual insertion (cprh) site."""
+        for parent in self.parentage(includeSelf=False):
+            if isinstance(parent, (listicons.ListIcon, listicons.DictIcon,
+                    listicons.DictIcon, listicons.TupleIcon, parenicon.CursorParenIcon)):
+                insertIn = parent
+                break
+        else:
+            print('Failed to find host icon for comprehension')
+            return None, None
+        if isinstance(insertIn, parenicon.CursorParenIcon):
+            # User can start typing a comprehension before the icon is converted to a
+            # tuple.
+            tupleIcon = cvtCursorParenToTuple(insertIn, closed=True,
+                typeover=not insertIn.closed)
+            insertIn = tupleIcon
+        siteBeforeInsert = insertIn.siteOf(self, recursive=True)
+        if siteBeforeInsert == 'argIcons_0':
+            insertIdx = 0
+        else:
+            series, idx = iconsites.splitSeriesSiteId(siteBeforeInsert)
+            if series != 'cprhIcons':
+                print('Failed to find correct site to insert comprehension')
+                return None, None
+            insertIdx = idx + 1
+        insertIn.insertChild(ic, 'cprhIcons', insertIdx)
+        if isinstance(ic, listicons.CprhForIcon):
+            return ic, 'targets_0'
+        return ic, 'testIcon'
 
     def click(self, evt):
         self.window.cursor.erase()
@@ -2332,12 +2368,8 @@ def reopenParen(ic):
             boundingParent.replaceChild(None, 'argIcons_0')
             recipient.window.replaceTop(boundingParent, newTopIcon)
         else:
-            newParen = parenicon.CursorParenIcon(closed=boundingParent.closed,
-                    window=boundingParent.window)
-            arg = boundingParent.childAt('argIcons_0')
-            boundingParent.replaceChild(None, 'argIcons_0')
-            newParen.replaceChild(arg, 'argIcon')
-            boundingParent.replaceWith(newParen)
+            cvtTupleToCursorParen(boundingParent, closed=boundingParent.closed,
+                typeover=boundingParent.typeoverSites()[0] is not None)
 
 def transferToParentList(fromIc, startIdx, aboveIc, seriesSiteName='argIcons'):
     """Find a suitable parent to receive remaining arguments from a site series that
@@ -2369,12 +2401,7 @@ def transferToParentList(fromIc, startIdx, aboveIc, seriesSiteName='argIcons'):
         siteIdx += 1
     elif isinstance(recipient, parenicon.CursorParenIcon):
         # Found a cursor paren icon that can be converted to a tuple
-        newTuple = listicons.TupleIcon(window=fromIc.window)
-        arg = recipient.childAt('argIcon')
-        recipient.replaceChild(None, 'argIcon')
-        recipient.replaceWith(newTuple)
-        newTuple.replaceChild(arg, 'argIcons_0')
-        recipient = newTuple
+        recipient = cvtCursorParenToTuple(recipient, recipient.closed, typeover=False)
         siteName = 'argIcons'
         siteIdx = 1
     else:
@@ -2411,7 +2438,8 @@ def findEnclosingSite(startIc):
         parentClass = parent.__class__
         if parentClass in (opicons.BinOpIcon, opicons.IfExpIcon) and parent.hasParens or \
                 parentClass in (opicons.DivideIcon, parenicon.CursorParenIcon,
-                    subscripticon.SubscriptIcon) or \
+                    subscripticon.SubscriptIcon, listicons.CprhForIcon,
+                    listicons.CprhIfIcon) or \
                 parentClass is opicons.IfExpIcon and site == 'testExpr' or \
                 parentClass in cursors.stmtIcons:
             return parent, site
@@ -2614,3 +2642,29 @@ def _appendOperator(newOpIcon, onIcon, onSite):
         if isinstance(topArgChild, parenicon.CursorParenIcon) and topArgChild.closed:
             newOpIcon.replaceChild(topArgChild.childAt('argIcon'), 'topArg')
     return cursorIcon, cursorSite
+
+def cvtCursorParenToTuple(parenIcon, closed, typeover):
+    tupleIcon = listicons.TupleIcon(window=parenIcon.window, closed=closed,
+        typeover=typeover)
+    arg = parenIcon.childAt('argIcon')
+    attr = parenIcon.childAt('attrIcon') if parenIcon.closed else None
+    parenIcon.replaceChild(None, 'argIcon')
+    parenIcon.replaceWith(tupleIcon)
+    tupleIcon.replaceChild(arg, 'argIcons_0')
+    if attr and closed:
+        parenIcon.replaceChild(None, 'attrIcon')
+        tupleIcon.replaceChild(attr, 'attrIcon')
+    return tupleIcon
+
+def cvtTupleToCursorParen(tupleIcon, closed, typeover):
+    arg = tupleIcon.childAt("argIcons_0")
+    attr = tupleIcon.childAt('attrIcon') if tupleIcon.closed else None
+    tupleIcon.replaceChild(None, 'argIcons_0')
+    newParen = parenicon.CursorParenIcon(window=tupleIcon.window, closed=closed,
+        typeover=typeover)
+    newParen.replaceChild(arg, 'argIcon')
+    tupleIcon.replaceWith(newParen)
+    if attr and closed:
+        tupleIcon.replaceChild(None, 'attrIcon')
+        newParen.replaceChild(attr, 'attrIcon')
+    return newParen

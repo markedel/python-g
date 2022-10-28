@@ -3,6 +3,8 @@ from PIL import Image, ImageDraw
 import comn
 import iconlayout
 import entryicon
+import iconsites
+import listicons
 import icon
 import reorderexpr
 
@@ -150,6 +152,43 @@ class CursorParenIcon(icon.Icon):
         self.markLayoutDirty()
         self.sites.remove('attrIcon')
         self.window.undo.registerCallback(self.close)
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        # User can start typing a generator comprehension before conversion to tuple.
+        # All we need to do is recognize it.  Entry icon method insertCprh will do the
+        # work of conversion.  Note that the only comprehension supported is "for",
+        # because "if" cannot be the first comprehension and therefore can only come
+        # after tuple conversion.
+        listSiteId = self.siteOf(entryIc, recursive=True)
+        if listSiteId != 'argIcon':
+            return None
+        textStripped = text[:-1]
+        delim = text[-1]
+        if onAttr and text[0] in ('f', 'a'):
+            if text in ('fo'[:len(text)], 'async fo'[:len(text)]):
+                return 'accept'
+            if text[:3] != 'for' and  text[:9] != 'async for':
+                return None
+            # Make sure entryIc is on the rightmost attribute site (either arg or an
+            # existing comprehension), where it's safe to start a new comprehension
+            entryRightmostIcon, entryRightmostSite = icon.rightmostSite(entryIc)
+            listRightmostIcon, listRightmostSite = icon.rightmostFromSite(self, listSiteId)
+            if entryRightmostIcon is not listRightmostIcon or entryRightmostSite != \
+                    listRightmostSite:
+                return None
+            if text == 'for':
+                return listicons.CprhForIcon(window=self.window, typeover=True), None
+            if text == 'async for':
+                return listicons.CprhForIcon(window=self.window, typeover=True,
+                    isAsync=True), None
+            forDelimiters = {*entryicon.emptyDelimiters, '(', '[', ','}
+            if textStripped == 'for' and delim in forDelimiters:
+                return listicons.CprhForIcon(window=self.window, typeover=True), delim
+            if textStripped == 'async for' and delim in forDelimiters:
+                return listicons.CprhForIcon(window=self.window, typeover=True,
+                    isAsync=True), delim
+            return None
+        return None
 
     def backspace(self, siteId, evt):
         win = self.window

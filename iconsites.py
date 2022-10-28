@@ -12,7 +12,7 @@ isSeriesRe = re.compile(".*_\\d*$")
 
 class IconSite:
     def __init__(self, siteName, siteType, xOffset=0, yOffset=0, cursorTravOrder=None,
-            cursorOnly=False):
+            cursorOnly=False, cursorSkip=False):
         self.name = siteName
         self.type = siteType
         self.xOffset = xOffset
@@ -22,6 +22,8 @@ class IconSite:
             self.order = cursorTravOrder
         if cursorOnly:
             self.cursorOnly = True
+        if cursorSkip:
+            self.cursorSkip = True
 
     def attach(self, ownerIcon, fromIcon, fromSiteId=None):
         # Remove original link from attached site
@@ -60,17 +62,20 @@ class IconSite:
         fromSite.att = ownerIcon
 
 class IconSiteSeries:
-    def __init__(self, name, siteType, initCount=0, initOffsets=None, curTravOrder=None):
+    def __init__(self, name, siteType, initCount=0, initOffsets=None, curTravOrder=None,
+            cursorSkip=False):
         self.type = siteType
         self.name = name
         self.order = curTravOrder  # Cursor traversal order in parent site list
+        self.cursorSkip = cursorSkip
         self.sites = [None] * initCount
         for idx in range(initCount):
             if initOffsets is not None and idx < len(initOffsets):
                 xOff, yOff = initOffsets[idx]
             else:
                 xOff, yOff = 0, 0
-            self.sites[idx] = IconSite(makeSeriesSiteId(name, idx), siteType, xOff, yOff)
+            self.sites[idx] = IconSite(makeSeriesSiteId(name, idx), siteType, xOff, yOff,
+                cursorSkip=cursorSkip)
 
     def __getitem__(self, idx):
         return self.sites[idx]
@@ -79,7 +84,8 @@ class IconSiteSeries:
         return len(self.sites)
 
     def insertSite(self, insertIdx):
-        site = IconSite(makeSeriesSiteId(self.name, insertIdx), self.type)
+        site = IconSite(makeSeriesSiteId(self.name, insertIdx), self.type,
+            cursorSkip=self.cursorSkip)
         self.sites[insertIdx:insertIdx] = [site]
         for i in range(insertIdx+1, len(self.sites)):
             self.sites[i].name = makeSeriesSiteId(self.name, i)
@@ -179,7 +185,7 @@ class IconSiteList:
         return parentList
 
     def add(self, name, siteType, xOffset=0, yOffset=0, cursorTraverseOrder=None,
-            cursorOnly=False):
+            cursorOnly=False, cursorSkip=False):
         """Add a new icon site to the site list given name and type.  Optionally add
         offset from the icon origin (sometimes these are not known until the icon has
         been through layout).  The IconSiteList also determines the text-flow through
@@ -193,13 +199,14 @@ class IconSiteList:
             self.nextCursorTraverseOrder = max(cursorTraverseOrder+1,
                 self.nextCursorTraverseOrder)
         setattr(self, name, IconSite(name, siteType, xOffset, yOffset,
-            cursorTravOrder=cursorTraverseOrder, cursorOnly=cursorOnly))
+            cursorTravOrder=cursorTraverseOrder, cursorOnly=cursorOnly,
+            cursorSkip=cursorSkip))
         if siteType not in self._typeDict:
             self._typeDict[siteType] = []
         self._typeDict[siteType].append(name)
 
     def addSeries(self, name, siteType, initCount=0, initOffsets=None,
-            cursorTraverseOrder=None):
+            cursorTraverseOrder=None, cursorSkip=False):
         """Add a new icon site series to the site list given series name and type.
          Optionally add offset of the first element from the icon origin (sometimes these
          are not known until the icon has been through layout).  The IconSiteList also
@@ -216,7 +223,7 @@ class IconSiteList:
             self.nextCursorTraverseOrder = max(cursorTraverseOrder+1,
                 self.nextCursorTraverseOrder)
         series = IconSiteSeries(name, siteType, initCount, initOffsets,
-            cursorTraverseOrder)
+            cursorTraverseOrder, cursorSkip=cursorSkip)
         setattr(self, name, series)
         if siteType not in self._typeDict:
             self._typeDict[siteType] = []
@@ -308,7 +315,8 @@ class IconSiteList:
 
     def nextCursorSite(self, siteId):
         """Return the siteId of the site to the right in the text sequence, None if
-        siteId is already the rightmost site in the site list."""
+        siteId is already the rightmost site in the site list.  Note that sites marked
+        with 'cursorSkip' (provided they are in the traversal sequence) are included."""
         if self.isSeries(siteId):
             name, idx = splitSeriesSiteId(siteId)
             series = getattr(self, name, None)
@@ -333,7 +341,8 @@ class IconSiteList:
 
     def nextTraversalSiteOrSeries(self, orderIdx):
         """Returns the next site or series in the site list with higher traversal order
-        (right of) orderIdx."""
+        (right of) orderIdx.  Note that sites marked with 'cursorSkip' (provided they are
+        in the traversal sequence) are included."""
         for i in range(orderIdx+1, self.nextCursorTraverseOrder):
             nextSite = self.nthCursorSite(i)
             if nextSite is not None:
@@ -342,7 +351,8 @@ class IconSiteList:
 
     def prevCursorSite(self, siteId):
         """Return the siteId of the site to the left in the text sequence, None if
-        siteId is already the leftmost site in the site list."""
+        siteId is already the leftmost site in the site list.  Note that sites marked
+        with 'cursorSkip' (in the traversal sequence) are included."""
         if self.isSeries(siteId):
             name, idx = splitSeriesSiteId(siteId)
             series = getattr(self, name, None)
@@ -367,7 +377,9 @@ class IconSiteList:
         return None
 
     def lastCursorSite(self):
-        """Return siteId for the rightmost site (in cursor traversal) of the site list"""
+        """Return siteId for the rightmost site (in cursor traversal) of the site list.
+        Note that sites marked with 'cursorSkip' will be included, however, currently no
+        icons end with a cursorSkip site (or are ever likely to)."""
         lastSite = self.nthCursorSite(-1)
         if lastSite is None:
             return None
@@ -376,7 +388,9 @@ class IconSiteList:
         return lastSite.name
 
     def firstCursorSite(self):
-        """Returns siteId for the leftmost (child-containing-type) site of the list"""
+        """Returns siteId for the leftmost (child-containing-type) site of the list.
+        Note that sites marked with 'cursorSkip' will be included, however, currently no
+        icons start with a cursorSkip site (or are ever likely to)."""
         firstSite = self.nthCursorSite(0)
         if firstSite is None:  # order of the first item does not have to be 0
             firstSite = self.nextTraversalSiteOrSeries(0)

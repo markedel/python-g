@@ -327,6 +327,24 @@ class AssignIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, numTargets=len(self.tgtLists))
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        # Allow star (*) directly in targets sites.  This should eventually also provide
+        # more enforcement of valid targets, but this gets complicated and should
+        # probably wait for the more general target validation that will go along with
+        # error highlighting.
+        siteId = self.siteOf(entryIc)
+        if siteId is None or siteId[:7] != 'targets':
+            return None
+        if text[0] == '*' and entryIc.parent() == self:
+            if text == '*':
+                return listicons.StarIcon(self.window), None
+            textStripped = text[:-1]
+            delim = text[-1]
+            if textStripped == '*' and entryicon.opDelimPattern.match(delim):
+                return listicons.StarIcon(self.window), delim
+            return None
+        return None
+
     def textRepr(self):
         text = ""
         for tgtList in self.tgtLists:
