@@ -28,8 +28,9 @@ ENTRY_ICON_GAP = 3
 PEN_MARGIN = 6
 
 compareOperators = {'<', '>', '<=', '>=', '==', '!='}
-binaryOperators = {'+', '-', '*', '**', '/', '//', '%', '@<<', '<<', '>>', '&', '|', '^'}
+binaryOperators = {'+', '-', '*', '**', '/', '//', '%', '@', '<<', '>>', '&', '|', '^'}
 unaryOperators = {'+', '-', '~', 'not'}
+unaryNonKeywordOps = {'+', '-', '~'}
 emptyDelimiters = {' ', '\t', '\n', '\r', '\f', '\v'}
 delimitChars = {*emptyDelimiters, '(', ')', '[', ']', '}', ':', '.', ';', '@', '=', ',',
  '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!'}
@@ -40,8 +41,8 @@ keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
 noArgStmts = {'pass', 'continue', 'break', 'else', 'finally'}
 
 identPattern = re.compile('^[a-zA-Z_][a-zA-Z_\\d]*$')
-numPattern = re.compile('^([\\d_]*\\.?[\\d_]*)|'
- '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
+numPattern = re.compile('^([+-]?[\\d_]*\\.?[\\d_]*)|'
+ '([+-]?((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
 attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
 opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~]')
@@ -535,14 +536,15 @@ class EntryIcon(icon.Icon):
         only adds one if it modified the icon structure, and may make changes to the
         icon structure *after* adding the boundary, leaving the undo stack
         "unterminated".  This also handles spaces, as both a command to complete the
-        current entry, and as in internal space following "async"."""
-        if char == ' ':
-            if self.text in ('async', 'async '):
-                # User can type space not at end of async or try to add second space
-                self.cursorPos = 5
-                newText = 'async '
-            else:
-                newText = self.text + char
+        current entry, and as in internal space following "async" and 'not"."""
+        if char == ' ' and not (self.text[:3] == 'not' and self.cursorPos == 3 and
+                self.attachedToAttribute() or
+                self.text[:5] in ('async', 'yield') and self.cursorPos == 5):
+            # Move the space to the end to turn it in to command to delimit from any
+            # cursor position.  Note above the exceptions for "async" and "not".  In
+            # these cases the user needs to be able to be able to insert an internal
+            # space in the text, so we can't take this action.
+            newText = self.text + char
         else:
             newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
         self._setText(newText, self.cursorPos + len(char))
@@ -564,13 +566,15 @@ class EntryIcon(icon.Icon):
                 return
         # Text cursor is at the left edge of the text field.
         cursor = self.window.cursor
-        # If we can place the entry text and pending args, simply focus out.
+        # If we can place the entry text and pending args, simply focus out and move the
+        # cursor one site back (since _setText is designed to place the cursor *after*
+        # what was typed, rather than before.
         if self.canPlaceEntryText(requireArgPlacement=True):
             newText = self.text + ' '
             self._setText(newText, len(newText))
             if cursor.type == 'icon':
-                cursor.setToIconSite(cursor.icon, cursors.topSite(cursor.icon,
-                    seqDown=False))
+                ic, site = cursors.lexicalTraverse(cursor.icon, cursor.site, 'Left')
+                cursor.setToIconSite(ic, site)
             return
         # If we can't focus out, backspace in to the next icon.  This is done by
         # temporarily removing the text cursor from the entry icon and putting an icon
@@ -894,8 +898,7 @@ class EntryIcon(icon.Icon):
                 else:
                     self.window.cursor.setToTypeover(handlerIc)
             else:
-                self.removeIfEmpty()
-                cursors.beep()
+                print('parseEntryText detected typeover, but entry icon has pending args')
             return
         elif parseResult == "comma":
             if not self.insertComma():
@@ -1071,6 +1074,19 @@ class EntryIcon(icon.Icon):
                     ic.replaceChild(topIcon, stmtSite)
                 cursorIcon = self.attachedIcon()
                 cursorSite = self.attachedSite()
+            elif self.canJoinIcons(ic):
+                # 'is' followed by 'not', 'yield' folloed by 'from', or unary minus
+                # followed by number; need to be joined in a single 'is not',
+                # 'yield from', or negative number.
+                self.joinIcons(ic)
+                cursorIcon = self.attachedIcon()
+                cursorSite = self.attachedSite()
+            elif isinstance(ic, opicons.UnaryOpIcon):
+                # Unary operators need to be stitched in by priority
+                self.replaceWith(ic)
+                ic.replaceChild(self, 'argIcon')
+                reorderexpr.reorderArithExpr(ic)
+                cursorIcon, cursorSite = self.attachedIcon(), self.attachedSite()
             else:
                 # Entry icon is on an input site that does not require special treatment
                 self.attachedIcon().replaceChild(ic, self.attachedSite())
@@ -1521,8 +1537,10 @@ class EntryIcon(icon.Icon):
                 splitIdx = seriesIdx + (0 if topParent is attachedIcon else 1)
                 assignIcon.insertChildren(targetIcons[:splitIdx], 'targets0', 0)
                 assignIcon.insertChildren(targetIcons[splitIdx:], 'values', 0)
-                if splitIdx < len(targetIcons):
-                    assignIcon.insertChild(None, 'values_0')
+                # The removed code, below inserts a useless comma and I haven't found any
+                # cases where it was needed (preserved temporarily for documentation).
+                #if splitIdx < len(targetIcons):
+                #    assignIcon.insertChild(None, 'values_0')
             self.window.replaceTop(topParent, assignIcon)
             return assignIcon, "values_0"
         if topParent.__class__ is assignicons.AssignIcon and not isAugmentedAssign:
@@ -1552,8 +1570,10 @@ class EntryIcon(icon.Icon):
                 if tgtIcon is not None:
                     topParent.replaceChild(None, topParent.siteOf(tgtIcon))
             topParent.insertChildren(iconsToMove, 'targets%d' % newTgtGrpIdx, 0)
-            if topParent.childAt(cursorSite):
-                topParent.insertChild(None, cursorSite)
+            # The removed code, below inserts a useless comma and I haven't found any
+            # cases where it was needed (preserved temporarily for documentation).
+            # if topParent.childAt(cursorSite):
+            #     topParent.insertChild(None, cursorSite)
             return topParent, cursorSite
         return None, None
 
@@ -1760,6 +1780,82 @@ class EntryIcon(icon.Icon):
         if isinstance(ic, listicons.CprhForIcon):
             return ic, 'targets_0'
         return ic, 'testIcon'
+
+    def canJoinIcons(self, insertedIc):
+        """Returns True if joinIcons can join insertedIc with the icon which precedes the
+        site where the entry icon is currently attached.  See joinIcons."""
+        return self._joinIcons(insertedIc, False)
+
+    def joinIcons(self, insertedIc):
+        """The "is not", and "yield from" icons and numbers preceded by a '-' can't be
+        typed as a unit, because "is", "yield" and unary minus are needed operators in
+        their own right, so when such a combination is typed, _setText needs to unify
+        them in to a single icon.  If found, join the icons, relocate the entry icon and
+        return True."""
+        return self._joinIcons(insertedIc, True)
+
+    def _joinIcons(self, insertedIc, doJoin):
+        attachedIc = self.attachedIcon()
+        attachedSite = self.attachedSite()
+        leftIc = attachedIc
+        leftSite = attachedSite
+        while iconsites.isCoincidentSite(leftIc, leftSite):
+            parent = leftIc.parent()
+            if parent is None:
+                return False
+            leftSite = parent.siteOf(leftIc)
+            leftIc = parent
+        if (isinstance(insertedIc,
+                opicons.UnaryOpIcon) and insertedIc.operator == 'not' and
+                isinstance(leftIc, opicons.BinOpIcon) and leftIc.operator == 'is' and
+                leftSite == 'rightArg'):
+            # Join an 'is' icon and a 'not' icon into an 'is not' icon
+            if not doJoin:
+                return True
+            leftArg = leftIc.leftArg()
+            rightArg = leftIc.rightArg()
+            leftIc.replaceChild(None, 'leftArg')
+            leftIc.replaceChild(None, 'rightArg')
+            newOp = opicons.BinOpIcon('is not', window=self.window)
+            leftIc.replaceWith(newOp)
+            newOp.replaceChild(leftArg, 'leftArg')
+            newOp.replaceChild(rightArg, 'rightArg')
+            return True
+        elif isinstance(insertedIc, nameicons.YieldFromIcon):
+            # A YieldFrom icon usually signals the existence of a yield icon above, since
+            # the normal way it gets typed is via the text "from" being detected by the
+            # yield icon's textEntryHandler.  However, it can appear by itself if the
+            # user edits a yield from icon.
+            if not isinstance(leftIc, nameicons.YieldIcon):
+                return False
+            if not doJoin:
+                return True
+            values = [v.att for v in leftIc.sites.values]
+            if len(values) > 1:
+                # ... Fix this hack before comitting
+                entryIc = attachedIc.childAt(attachedSite)
+                argList = [[None] + values[1:]]
+                recipient = transferToParentList(leftIc, 1, leftIc, 'values')
+                if recipient is None:
+                    for valueIc in values[1:]:
+                        leftIc.replaceChild(None, leftIc.siteOf(valueIc))
+                    entryIc.appendPendingArgs(argList)
+            leftIc.replaceChild(None, 'values_0')
+            leftIc.replaceWith(insertedIc)
+            insertedIc.replaceChild(values[0], 'argIcon')
+            return True
+        elif isinstance(attachedIc,
+                opicons.UnaryOpIcon) and attachedIc.operator == '-' and \
+                isinstance(insertedIc, nameicons.NumericIcon):
+            # Join unary minus and a numeric icon into a negative numeric icon
+            if not doJoin:
+                return True
+            newNumIc = nameicons.NumericIcon(-insertedIc.value, window=attachedIc.window)
+            attachedIc.replaceChild(None, attachedSite)
+            attachedIc.replaceWith(newNumIc)
+            newNumIc.replaceChild(self, 'attrIcon')
+            return newNumIc, 'attrIcon'
+        return False
 
     def click(self, evt):
         self.window.cursor.erase()
@@ -2004,13 +2100,13 @@ def parseAttrText(text, window):
         return "accept"
     if text == '.' or attrPattern.fullmatch(text):
         return "accept"  # Legal attribute pattern
-    if text in ("i", "a", "o", "an"):
+    if text in ("i", "a", "o", "an", "n", "no", "not", "not ", "not i"):
         return "accept"  # Legal precursor characters to binary keyword operation
     if text == "if":
         return opicons.IfExpIcon(window, typeover=True), None # In-line if
-    if text in ("and", "is", "in", "or"):
+    if text in ("and", "is", "in", "or", "not in"):
         return opicons.BinOpIcon(text, window), None # Binary keyword operation
-    if text in ("*", "/", "@", "<", ">", "=", "!"):
+    if text in ("*", "/", "<", ">", "=", "!"):
         return "accept"  # Legal precursor characters to binary operation
     if text in compareOperators:
         return opicons.BinOpIcon(text, window), None
@@ -2041,7 +2137,7 @@ def parseAttrText(text, window):
         # puts them in an entry icon that requires the user to type a delimiter
         if op == "if":
             return opicons.IfExpIcon(window, typeover=True), delim
-        if op in ("and", "is", "in", "or"):
+        if op in ("and", "is", "in", "or", "not in", "is not"):
             return opicons.BinOpIcon(op, window), delim  # Binary keyword operation
     if opDelimPattern.match(delim):
         if op in compareOperators:
@@ -2062,7 +2158,7 @@ def parseAttrText(text, window):
 def parseExprText(text, window):
     if len(text) == 0:
         return "accept"
-    if text in unaryOperators:
+    if text in unaryNonKeywordOps:
         # Unary operator
         return opicons.UnaryOpIcon(text, window), None
     if text == '(':
@@ -2083,6 +2179,8 @@ def parseExprText(text, window):
         return "colon"
     if text == '=':
         return assignicons.AssignIcon(1, window), None
+    if text == 'yield from':
+        return "accept"  # No need to process immediately (here to accept space)
     if identPattern.fullmatch(text) or numPattern.fullmatch(text):
         return "accept"  # Nothing but legal identifier and numeric
     delim = text[-1]
@@ -2090,15 +2188,17 @@ def parseExprText(text, window):
     if opDelimPattern.match(delim):
         if text in unaryOperators:
             return opicons.UnaryOpIcon(text, window), delim
+    if text == 'yield':
+        return nameicons.YieldIcon(window), delim
+    if text == 'yield from':
+        return nameicons.YieldFromIcon(window), delim
+    if text == 'await':
+        return nameicons.AwaitIcon(window), delim
     if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
         return "reject"  # Precursor characters do not form valid identifier or number
     if len(text) == 0 or delim not in delimitChars:
         return "reject"  # No legal text or not followed by a legal delimiter
     # All but the last character is ok and the last character is a valid delimiter
-    if text == 'yield':
-        return nameicons.YieldIcon(window), delim
-    if text == 'await':
-        return nameicons.AwaitIcon(window), delim
     if text in ('False', 'None', 'True'):
         return nameicons.IdentifierIcon(text, window), delim
     if text in keywords:
@@ -2110,8 +2210,15 @@ def parseExprText(text, window):
         return nameicons.IdentifierIcon(exprAst.id, window), delim
     if exprAst.__class__ == ast.Num:
         return nameicons.NumericIcon(exprAst.n, window), delim
+    if exprAst.__class__ == ast.UnaryOp and exprAst.op.__class__ == ast.USub and \
+            exprAst.operand == ast.Num:
+        return nameicons.NumericIcon(-exprAst.operand.n, window), delim
     if exprAst.__class__ == ast.Constant and isinstance(exprAst.value, numbers.Number):
         return nameicons.NumericIcon(exprAst.value, window), delim
+    if exprAst.__class__ == ast.UnaryOp and exprAst.op.__class__ == ast.USub and \
+            exprAst.operand.__class__ == ast.Constant and \
+            isinstance(exprAst.operand.value, numbers.Number):
+        return nameicons.NumericIcon(-exprAst.operand.value, window), delim
     return "reject"
 
 def parseTopLevelText(text, window):

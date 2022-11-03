@@ -8,9 +8,11 @@ import icon
 import filefmt
 import operator
 import comn
-import cursors
+import re
 
 DEPTH_EXPAND = 4
+
+isKwdPattern = re.compile('^[a-z ]*$')
 
 lParenImage = comn.asciiToImage((
  "..ooooooo",
@@ -131,7 +133,14 @@ class UnaryOpIcon(icon.Icon):
         icon.Icon.__init__(self, window)
         self.operator = op
         self.precedence = unaryOpPrecedence[op]
-        bodyWidth, bodyHeight = icon.getTextSize(self.operator)
+        if isKwdPattern.fullmatch(op):
+            self.font = icon.boldFont
+            self.color = icon.KEYWORD_COLOR
+        else:
+            self.font = icon.globalFont
+            self.color = (0, 0, 0, 255)
+        bodyWidth, bodyHeight = icon.getTextSize(self.operator, self.font)
+        bodyHeight = max(icon.minTxtHgt, bodyHeight)
         bodyWidth += 2 * icon.TEXT_MARGIN + 1
         bodyHeight += 2 * icon.TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
@@ -154,16 +163,17 @@ class UnaryOpIcon(icon.Icon):
         if self.drawList is None:
             img = Image.new('RGBA', (comn.rectWidth(self.rect),
              comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
-            width, height = icon.getTextSize(self.operator)
+#            width, height = icon.getTextSize(self.operator, self.font)
             bodyLeft = icon.outSiteImage.width - 1
-            bodyWidth = width + 2 * icon.TEXT_MARGIN
-            bodyHeight = height + 2 * icon.TEXT_MARGIN
+            bodyWidth, bodyHeight = self.bodySize
+#            bodyWidth = width + 2 * icon.TEXT_MARGIN
+#            bodyHeight = height + 2 * icon.TEXT_MARGIN
             draw = ImageDraw.Draw(img)
-            draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth, bodyHeight),
+            draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth  - 1, bodyHeight - 1),
              fill=comn.ICON_BG_COLOR, outline=comn.OUTLINE_COLOR)
             if needOutSite:
                 outImageY = self.sites.output.yOffset - icon.outSiteImage.height // 2
-                img.paste(icon.outSiteImage, (0, outImageY), mask=icon.outSiteImage)
+                img.paste(icon.outSiteImage, (0, outImageY))
             inImageY = self.sites.argIcon.yOffset - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (self.sites.argIcon.xOffset, inImageY))
             if needSeqSites:
@@ -176,8 +186,7 @@ class UnaryOpIcon(icon.Icon):
             else:
                 textTop = icon.TEXT_MARGIN
                 textLeft = bodyLeft + icon.TEXT_MARGIN + 1
-            draw.text((textLeft, textTop), self.operator, font=icon.globalFont,
-             fill=(0, 0, 0, 255))
+            draw.text((textLeft, textTop), self.operator, font=self.font, fill=self.color)
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
 
@@ -202,6 +211,8 @@ class UnaryOpIcon(icon.Icon):
         for argLayout in argLayouts:
             layout = iconlayout.Layout(self, width, height, height // 2)
             layout.addSubLayout(argLayout, 'argIcon', width-1, 0)
+            if argLayout is None:
+                layout.width += icon.EMPTY_ARG_WIDTH
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
@@ -247,7 +258,7 @@ class UnaryOpIcon(icon.Icon):
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width
             textOriginY = self.rect[1] + self.sites.output.yOffset
             cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.globalFont, self.operator)
+                (textOriginX, textOriginY), clickPos, self.font, self.operator)
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
@@ -275,11 +286,17 @@ class BinOpIcon(icon.Icon):
     def __init__(self, op, window, location=None):
         icon.Icon.__init__(self, window)
         self.operator = op
+        if isKwdPattern.fullmatch(op):
+            self.font = icon.boldFont
+            self.color = icon.KEYWORD_COLOR
+        else:
+            self.font = icon.globalFont
+            self.color = (0, 0, 0, 255)
         self.precedence = binOpPrecedence[op]
         self.hasParens = False  # Filled in by layout methods
         self.leftArgWidth = icon.EMPTY_ARG_WIDTH
         self.rightArgWidth = icon.EMPTY_ARG_WIDTH
-        opWidth, opHeight = icon.getTextSize(self.operator)
+        opWidth, opHeight = icon.getTextSize(self.operator, self.font)
         opHeight = max(opHeight + 2*icon.TEXT_MARGIN + 1, lParenImage.height)
         opWidth += 2*icon.TEXT_MARGIN - 1
         self.opSize = (opWidth, opHeight)
@@ -342,7 +359,7 @@ class BinOpIcon(icon.Icon):
                 outSiteY = siteY - binInSeqImage.height // 2
                 self.drawList.append(((outSiteX, outSiteY), binInSeqImage))
             # Body
-            txtImg = icon.iconBoxedText(self.operator)
+            txtImg = icon.iconBoxedText(self.operator, self.font, color=self.color)
             opWidth, opHeight = self.opSize
             opWidth = txtImg.width + self.depthWidth
             img = Image.new('RGBA', (opWidth, opHeight), color=(0, 0, 0, 0))
@@ -585,7 +602,7 @@ class BinOpIcon(icon.Icon):
                 icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
             textOriginY = self.rect[1] + self.sites.output.yOffset
             cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.globalFont, self.operator,
+                (textOriginX, textOriginY), clickPos, self.font, self.operator,
                 padLeft=depthWidth, padRight=depthWidth)
             if cursorTextIdx is None:
                 return None, None
@@ -1568,7 +1585,15 @@ def _becomeEntryIcon(ic):
         ic.replaceChild(None, 'rightArg')
     return entryIcon
 
+import nameicons
 def createUnaryOpIconFromAst(astNode, window):
+    if astNode.op.__class__ == ast.USub and \
+            astNode.operand.__class__ == ast.Constant and \
+            isinstance(astNode.operand.value, numbers.Number):
+        return nameicons.NumericIcon(-astNode.operand.value, window)
+    if astNode.__class__ == ast.UnaryOp and astNode.op.__class__ == ast.USub and \
+            astNode.operand == ast.Num:
+        return nameicons.NumericIcon(-astNode.operand.n, window)
     topIcon = UnaryOpIcon(unaryOps[astNode.op.__class__], window)
     topIcon.replaceChild(icon.createFromAst(astNode.operand, window), "argIcon")
     return topIcon

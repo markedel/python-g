@@ -357,6 +357,11 @@ class AssignIcon(icon.Icon):
         topIcon = self.topLevelParent()
         win = self.window
         win.requestRedraw(topIcon.hierRect())
+        #... There's an ugly hack, here, which happened because the original code was
+        #    written to replace the = with a comma (before entry icon backspacing was
+        #    established).  Instead of rewriting the code, I just added calls to
+        #    backspaceComma after the existing code.  This is wastefull, and will fail if
+        #    backspaceComma ever adds comma text to the entry icon, which might happen.
         if index == 0:
             if siteName == "targets0":
                 return
@@ -373,30 +378,29 @@ class AssignIcon(icon.Icon):
                 self.replaceWith(newTuple)
                 cursorSite = iconsites.makeSeriesSiteId('argIcons', numTargets)
                 win.cursor.setToIconSite(newTuple, cursorSite)
+                listicons.backspaceComma(newTuple, cursorSite, evt)
             else:
                 # Merge lists around '=' to convert it to ','
-                #... This should do the same as backspaceComma and insert entry icon
-                topIcon = self.topLevelParent()
-                redrawRegion = comn.AccumRects(topIcon.hierRect())
                 if siteName == "values":
                     removetgtGrpIdx = len(self.tgtLists) - 1
                     srcSite = "targets%d" % removetgtGrpIdx
                     destSite = "values"
                     destIdx = 0
-                    cursorIdx = len(getattr(self.sites, srcSite)) - 1
+                    cursorIdx = len(getattr(self.sites, srcSite))
                 else:
                     srcSite = siteName
                     removetgtGrpIdx = int(siteName[7:])
                     destSite = siteName[:7] + str(removetgtGrpIdx - 1)
                     destIdx = len(getattr(self.sites, destSite))
-                    cursorIdx = destIdx - 1
+                    cursorIdx = destIdx
                 argIcons = [s.att for s in getattr(self.sites, srcSite)]
                 for i, arg in enumerate(argIcons):
                     self.replaceChild(None, self.siteOf(arg))
                     self.insertChild(arg, destSite, destIdx + i)
                 self.removeTargetGroup(removetgtGrpIdx)
                 cursorSite = iconsites.makeSeriesSiteId(destSite, cursorIdx)
-                win.cursor.setToIconSite(*icon.rightmostFromSite(self, cursorSite))
+                win.cursor.setToIconSite(self, cursorSite)
+                listicons.backspaceComma(self, cursorSite, evt)
         else:
             # Cursor is on comma input.  Delete if empty or previous site is empty
             listicons.backspaceComma(self, siteId, evt)
@@ -602,21 +606,7 @@ class AugmentedAssignIcon(icon.Icon):
             win.cursor.setToText(entryIcon, drawNew=False)
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty
-            prevSite = iconsites.makeSeriesSiteId(siteName, index - 1)
-            childAtCursor = self.childAt(siteId)
-            if childAtCursor and self.childAt(prevSite):
-                cursors.beep()
-                return
-            topIcon = self.topLevelParent()
-            win.requestRedraw(topIcon.hierRect())
-            if not self.childAt(prevSite):
-                self.removeEmptySeriesSite(prevSite)
-                win.cursor.setToIconSite(self, prevSite)
-            else:
-                rightmostIcon = icon.findLastAttrIcon(self.childAt(prevSite))
-                rightmostIcon, rightmostSite = icon.rightmostSite(rightmostIcon)
-                self.removeEmptySeriesSite(siteId)
-                win.cursor.setToIconSite(rightmostIcon, rightmostSite)
+            listicons.backspaceComma(self, siteId, evt)
 
 def createAssignIconFromAst(astNode, window):
     topIcon = AssignIcon(len(astNode.targets), window)

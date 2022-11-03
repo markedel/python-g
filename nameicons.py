@@ -52,7 +52,7 @@ class TextIcon(icon.Icon):
             if needOutSite:
                 outX = self.sites.output.xOffset
                 outY = self.sites.output.yOffset - icon.outSiteImage.height // 2
-                img.paste(icon.outSiteImage, (outX, outY), mask=icon.outSiteImage)
+                img.paste(icon.outSiteImage, (outX, outY))
             if self.hasAttrIn:
                 attrX = self.sites.attrIcon.xOffset
                 attrY = self.sites.attrIcon.yOffset
@@ -1118,6 +1118,20 @@ class YieldIcon(icon.Icon):
                 valueAst = ast.Tuple(valueAsts, ctx=ast.Load(), lineno=self.id,
                  col_offset=0)
         return ast.Yield(value=valueAst, lineno=self.id, col_offset=0)
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        if text[:-1] == 'from' and text[-1] in entryicon.delimitChars:
+            leftIc = entryIc.attachedIcon()
+            leftSite = entryIc.attachedSite()
+            while iconsites.isCoincidentSite(leftIc, leftSite):
+                parent = leftIc.parent()
+                if parent is None:
+                    return None, None
+                leftSite = parent.siteOf(leftIc)
+                leftIc = parent
+            if leftIc is self and leftSite == 'values_0':
+                return YieldFromIcon(window=self.window), text[-1]
+        return None
 
     def backspace(self, siteId, evt):
         return backspaceSeriesStmt(self, siteId, evt, "yield")
