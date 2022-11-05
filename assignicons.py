@@ -559,54 +559,74 @@ class AugmentedAssignIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         siteName, index = iconsites.splitSeriesSiteId(siteId)
-        win = self.window
         if siteName == "values" and index == 0:
-            # Cursor is on first input site.  Remove icon and replace with cursor
-            text = self.op + '='
-            valueIcons = [s.att for s in self.sites.values if s.att is not None]
-            targetIcon = self.childAt("targetIcon")
-            if len(valueIcons) in (0, 1):
-                # Zero or one argument, convert to entry icon (with pending arg if
-                # there was an argument) attached to name icon
-                win.requestRedraw(self.topLevelParent().hierRect(),
-                    filterRedundantParens=True)
-                if self.parent() is not None:
-                    print('AugmentedAssign has parent?????')
-                    return
-                entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-                if targetIcon is None:
-                    win.replaceTop(self, entryIcon)
-                else:
-                    self.replaceChild(None, 'targetIcon')
-                    win.replaceTop(self, targetIcon)
-                    targetIcon.replaceChild(entryIcon, 'attrIcon')
-                if len(valueIcons) == 1:
-                    entryIcon.appendPendingArgs([valueIcons[0]])
-            else:
-                # Multiple remaining arguments: convert to tuple with entry icon as
-                # first element
-                win.requestRedraw(self.topLevelParent().hierRect(),
-                    filterRedundantParens=True)
-                valueIcons = [s.att for s in self.sites.values if s.att is not None]
-                newTuple = listicons.TupleIcon(window=win, noParens=True)
-                if targetIcon is None:
-                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-                    newTuple.replaceChild(entryIcon, "argIcons_0")
-                else:
-                    entryIcon = entryicon.EntryIcon(initialString=text, window=win)
-                    targetIcon.replaceChild(entryIcon, 'attrIcon')
-                    newTuple.replaceChild(targetIcon, 'argIcons_0')
-                for i, arg in enumerate(valueIcons):
-                    if i == 0:
-                        entryIcon.appendPendingArgs([arg])
-                    else:
-                        self.replaceChild(None, self.siteOf(arg))
-                        newTuple.insertChild(arg, "argIcons", i)
-                win.replaceTop(self, newTuple)
-            win.cursor.setToText(entryIcon, drawNew=False)
+            # Cursor is on first input site.  Remove icon and replace with entry icon
+            entryIcon = self._becomeEntryIcon()
+            self.window.cursor.setToText(entryIcon, drawNew=False)
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty
             listicons.backspaceComma(self, siteId, evt)
+
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.dragSeqImage.width - 1 + \
+                self.targetWidth - 1 + icon.TEXT_MARGIN
+            textOriginY = self.rect[1] + self.sites.targetIcon.yOffset
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.globalFont, self.op + '=')
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self._becomeEntryIcon()
+            entryIcon.cursorPos = cursorTextIdx
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'values_0':
+            return self._becomeEntryIcon()
+        return None
+
+    def _becomeEntryIcon(self):
+        win = self.window
+        text = self.op + '='
+        valueIcons = [s.att for s in self.sites.values if s.att is not None]
+        targetIcon = self.childAt("targetIcon")
+        if len(valueIcons) in (0, 1):
+            # Zero or one argument, convert to entry icon (with pending arg if
+            # there was an argument) attached to name icon
+            win.requestRedraw(self.topLevelParent().hierRect(),
+                filterRedundantParens=True)
+            if self.parent() is not None:
+                print('AugmentedAssign has parent?????')
+                return
+            entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+            if targetIcon is None:
+                win.replaceTop(self, entryIcon)
+            else:
+                self.replaceChild(None, 'targetIcon')
+                win.replaceTop(self, targetIcon)
+                targetIcon.replaceChild(entryIcon, 'attrIcon')
+            if len(valueIcons) == 1:
+                entryIcon.appendPendingArgs([valueIcons[0]])
+        else:
+            # Multiple remaining arguments: convert to tuple with entry icon as
+            # first element
+            win.requestRedraw(self.topLevelParent().hierRect(),
+                filterRedundantParens=True)
+            valueIcons = [s.att for s in self.sites.values if s.att is not None]
+            newTuple = listicons.TupleIcon(window=win, noParens=True)
+            if targetIcon is None:
+                entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+                newTuple.replaceChild(entryIcon, "argIcons_0")
+            else:
+                entryIcon = entryicon.EntryIcon(initialString=text, window=win)
+                targetIcon.replaceChild(entryIcon, 'attrIcon')
+                newTuple.replaceChild(targetIcon, 'argIcons_0')
+            for i, arg in enumerate(valueIcons):
+                if i == 0:
+                    entryIcon.appendPendingArgs([arg])
+                else:
+                    self.replaceChild(None, self.siteOf(arg))
+                    newTuple.insertChild(arg, "argIcons", i)
+            win.replaceTop(self, newTuple)
+        return entryIcon
 
 def createAssignIconFromAst(astNode, window):
     topIcon = AssignIcon(len(astNode.targets), window)

@@ -1850,7 +1850,8 @@ class DefOrClassIcon(icon.Icon):
             # to what the user originally typed (this may be a dumb idea, but I'm
             # going with it)
             callIcon = listicons.CallIcon(window=self.window, closed=True)
-            callIcon.insertChildren(argIcons, 'argIcons', 0)
+            if argIcons is not None and len(argIcons) > 0:
+                callIcon.insertChildren(argIcons, 'argIcons', 0)
             nameIcon.replaceChild(callIcon, 'attrIcon')
             entryIcon.appendPendingArgs([nameIcon])
         else:

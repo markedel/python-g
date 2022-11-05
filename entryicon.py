@@ -545,9 +545,30 @@ class EntryIcon(icon.Icon):
             # these cases the user needs to be able to be able to insert an internal
             # space in the text, so we can't take this action.
             newText = self.text + char
+            newCursorPos = len(newText)
         else:
             newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
-        self._setText(newText, self.cursorPos + len(char))
+            newCursorPos = self.cursorPos + len(char)
+        if not self._setText(newText, newCursorPos):
+            # the resulting text was rejected.  If cursorPos was as the end of the
+            # entry (or space was typed to add a delimiter), beep and do not update.
+            # If not, just enter the updated text
+            if newCursorPos == len(newText):
+                if char == ' ':
+                    # User added space delimiter.  If we had something that would
+                    # otherwise have been self delimiting, try again w/o the delimiter.
+                    if not self._setText(newText[:-1], newCursorPos-1):
+                        cursors.beep()
+                        return
+                else:
+                    # Beep and prohibit the character
+                    cursors.beep()
+                    return
+            else:
+                # Allow insertion, even though it's bad, because user is "editing", and
+                # may go through bad states to get to good ones.
+                self.text = newText
+                self.cursorPos = newCursorPos
         if self.window.cursor.type == "text" and self.window.cursor.icon is self:
             # Currently we're not coloring based on text, but may want to restore later
             self.recolorPending()
@@ -877,8 +898,7 @@ class EntryIcon(icon.Icon):
         # print('parse result', parseResult)
         if parseResult == "reject":
             self.removeIfEmpty()
-            cursors.beep()
-            return
+            return False
         self.window.requestRedraw(self.topLevelParent().hierRect(),
             filterRedundantParens=True)
         if parseResult == "accept":
@@ -887,7 +907,7 @@ class EntryIcon(icon.Icon):
             self.cursorPos = newCursorPos
             self.window.cursor.draw()
             self.markLayoutDirty()
-            return
+            return True
         elif parseResult == "typeover":
             if not self.hasPendingArgs():
                 self.remove(forceDelete=True)
@@ -899,66 +919,66 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToTypeover(handlerIc)
             else:
                 print('parseEntryText detected typeover, but entry icon has pending args')
-            return
+            return True
         elif parseResult == "comma":
             if not self.insertComma():
                 self.removeIfEmpty()
-                cursors.beep()
+                return False
             else:
                 self.window.undo.addBoundary()
-            return
+                return True
         elif parseResult == "colon":
             if not self.insertColon():
                 self.removeIfEmpty()
-                cursors.beep()
+                return False
             else:
                 self.window.undo.addBoundary()
-            return
+                return True
         elif parseResult == "openBracket":
             self.insertOpenParen(listicons.ListIcon)
             self.window.undo.addBoundary()
-            return
+            return True
         elif parseResult == "endBracket":
             if not self.insertEndParen(parseResult):
                 self.removeIfEmpty()
-                cursors.beep()
+                return False
             else:
                 self.window.undo.addBoundary()
-            return
+                return True
         elif parseResult == "openBrace":
             self.insertOpenParen(listicons.DictIcon)
             self.window.undo.addBoundary()
-            return
+            return True
         elif parseResult == "endBrace":
             if not self.insertEndParen(parseResult):
                 self.removeIfEmpty()
-                cursors.beep()
+                return False
             else:
                 self.window.undo.addBoundary()
-            return
+                return True
         elif parseResult == "openParen":
             self.insertOpenParen(parenicon.CursorParenIcon)
             self.window.undo.addBoundary()
-            return
+            return True
         elif parseResult == "endParen":
             if not self.insertEndParen(parseResult):
                 self.removeIfEmpty()
-                cursors.beep()
+                return False
             else:
                 self.window.undo.addBoundary()
-            return
+                return True
         elif parseResult == "makeFunction":
             if self.attachedIcon().isCursorOnlySite(self.attachedSite()):
                 self.removeIfEmpty()
-                cursors.beep()
+                return False
             else:
                 self.insertOpenParen(listicons.CallIcon)
                 self.window.undo.addBoundary()
-            return
+                return True
         elif parseResult == "makeSubscript":
             self.insertOpenParen(subscripticon.SubscriptIcon)
             self.window.undo.addBoundary()
-            return
+            return True
         # Parser emitted an icon.  Splice it in to the hierarchy in place of the entry
         # icon (ignoring, for now, that the entry icon may have to be reinstated if there
         # are pending args/attrs or remaining to be placed).  Figure out where the cursor
@@ -1001,8 +1021,7 @@ class EntryIcon(icon.Icon):
                 if argIcon is None:
                     # We can't append an operator if there's no operand to attach it to
                     self.removeIfEmpty()
-                    cursors.beep()
-                    return
+                    return False
                 cursorIcon, cursorSite = _appendOperator(ic, self.attachedIcon(),
                     self.attachedSite())
         elif self.attachedSiteType() == "input":
@@ -1108,7 +1127,7 @@ class EntryIcon(icon.Icon):
                     self.attachedIcon().replaceChild(None, self.attachedSite())
                 self.window.cursor.setToIconSite(cursorIcon, cursorSite)
                 self.window.undo.addBoundary()
-                return
+                return True
         # There is remaining text or pending arguments.  Restore the entry icon.  Note
         # that the code above is guaranteed to put the cursor in the right place, and
         # either leave or remove the entry icon (I don't think any of the code will leave
@@ -1157,7 +1176,7 @@ class EntryIcon(icon.Icon):
         self.markLayoutDirty()
         if remainingText == "":
             self.window.cursor.draw()
-            return
+            return True
         # There is still text that might be processable.  Recursively go around again
         # (we only get here if something was processed, so this won't loop forever).
         # self.text still contains the content that was processed, above, and (while
@@ -1165,6 +1184,7 @@ class EntryIcon(icon.Icon):
         self.text = ''  # In unlikely event _setText rejects, self.text needs to be right
         self.cursorPos = 0
         self._setText(remainingText, len(remainingText))
+        return True
 
     def canPlaceEntryText(self, requireArgPlacement=False):
         # Parse the existing text and in the entry icon as if it had a delimiter (space)
