@@ -1210,20 +1210,35 @@ class Window:
             self.refreshRequests.clear()
         self.undo.addBoundary()
 
-    def _deleteCb(self, _evt=None):
+    def _deleteCb(self, evt=None):
         selected = self.selectedIcons()
         if selected:
             self.removeIcons(selected)
         elif self.cursor.type == "icon":
-            # Not using removeIcons here, to take advantage or replaceChild operation
-            # on listType icons and remove an empty argument spot.
-            self.requestRedraw(self.cursor.icon.topLevelParent().hierRect(),
-                filterRedundantParens=True)
-            self.cursor.icon.replaceChild(None, self.cursor.site)
+            # Edit or remove the icon to the right of the cursor
+            rightIcon, rightSite = cursors.lexicalTraverse(self.cursor.icon,
+                self.cursor.site, 'Right')
+            if rightIcon is None or rightSite != rightIcon.sites.firstCursorSite():
+                cursors.beep()
+                return
+            if evt.state & CTRL_MASK:
+                # Delete the icon to the right of the cursor
+                self.removeIcons([rightIcon])
+            else:
+                # Edit the icon to the right of the cursor
+                rightIcon.backspace(rightSite, evt)
+                if self.cursor.type == 'text':
+                    # If the icon backspace response was to edit the icon, it will
+                    # leave the cursor at the end rather than the beginning, move it.
+                    self.cursor.icon.cursorPos = 0
+        elif self.cursor.type == 'text':
+            self.cursor.icon.forwardDelete(evt)
         self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceCb(self, evt=None):
-        if self.cursor.type != "text":
+        if self.cursor.type == "text":
+            self.cursor.icon.backspaceInText(evt)
+        else:
             selectedIcons = self.selectedIcons()
             if len(selectedIcons) > 0:
                 self.removeIcons(selectedIcons)
@@ -1245,8 +1260,6 @@ class Window:
                 ic.setTypeover(0, siteAfter)
                 ic.draw()
                 self.cursor.setToIconSite(*icon.rightmostFromSite(ic, siteBefore))
-        else:
-            self.cursor.icon.backspaceInText(evt)
         self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceIcon(self, evt):
@@ -1265,11 +1278,14 @@ class Window:
                 break
             site = parent.siteOf(ic)
             ic = parent
-        # For different types of icon, the method for re-editing is different.  For
-        # identifiers, strings, and numeric constants, it's simply replacing the icon
-        # with an entry icon containing the text of the icon.  Other types of icons are
-        # more complicated (see backspace method of individual icon types).
-        ic.backspace(site, evt)
+        if evt.state & CTRL_MASK:
+            # Delete the icon to the left of the cursor
+            self.removeIcons([ic])
+        else:
+            # Edit the icon to the left of the cursor.  For different types of icon, the
+            # method for re-editing and action per-site is different, so this is done
+            # with an icon-specific method (see individual icon types for specifics).
+            ic.backspace(site, evt)
 
     def backspaceIconToEntry(self, evt, ic, entryText, pendingArgSite=None):
         """Replace the icon (ic)) with the entry icon, pre-loaded with text, entryText,

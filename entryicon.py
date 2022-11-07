@@ -133,7 +133,7 @@ class EntryIcon(icon.Icon):
             img = Image.new('RGBA', (comn.rectWidth(self.rect), self.height))
             bgColor = FOCUS_BG_COLOR if self.hasFocus else PLAIN_BG_COLOR
             draw = ImageDraw.Draw(img)
-            draw.rectangle((self.penOffset(), 0, self.penOffset() + boxWidth,
+            draw.rectangle((self.penOffset(), 0, self.penOffset() - 1 + boxWidth - 1,
                 self.height-1), fill=bgColor, outline=OUTLINE_COLOR)
             draw.text((self.textOffset, icon.TEXT_MARGIN), self.text,
                 font=icon.globalFont, fill=(0, 0, 0, 255))
@@ -689,6 +689,59 @@ class EntryIcon(icon.Icon):
         # don't want to deal with that until there's an actual use case)
         if combinedEntryIcon.text == "":
             self.window.cursor.icon.remove()
+
+    def forwardDelete(self, evt=None):
+        if self.text != "" and self.cursorPos != len(self.text):
+            # Erase the character after the text cursor
+            self.window.requestRedraw(self.topLevelParent().hierRect())
+            self.text = self.text[:self.cursorPos] + self.text[self.cursorPos+1:]
+            self.markLayoutDirty()
+            return
+        if self.text == '':
+            # Icon has no text.  Try to place pending args and remove
+            if self.remove(makePlaceholder=True):
+                return
+        # Text cursor is at the right edge of the text field.  Find the next icon (which
+        # may or may not be a pending argument) and call its becomeEntryIcon method.
+        cursor = self.window.cursor
+        rightIcon, rightSite = cursors.lexicalTraverse(cursor.icon,
+            self.sites.firstCursorSite(), 'Right')
+        if rightIcon is None:
+            return
+        rightIcIsPendingArg = self.siteOf(rightIcon, recursive=True) is not None
+        entryIc = rightIcon.becomeEntryIcon(siteAfter=rightSite)
+        if entryIc is None:
+            # Next icon didn't have or wasn't able to process becomeEntryIcon method.
+            # Some of these cases could be useful, such as for converting normal
+            # parens to call parens, but for now, just try to focus out and beep and
+            # do nothing if we can't
+            if self.canPlaceEntryText(requireArgPlacement=True):
+                if not self._setText(self.text + ' ', len(self.text)):
+                    cursors.beep()
+            else:
+                cursors.beep()
+            return
+        # We successfully transformed the icon to the right into an entry icon.  Merge
+        # the text from this icon into the new entry icon.  If the new icon was or was
+        # part of a pending arg, replace self with the pending arg (even if it's not at
+        # the top of the hierarchy, we know the new entry icon is at the left edge).  If
+        # the new entry icon was not a pending arg, it will either be attached to our
+        # forCursor site, or held by a common ancestor.
+        entryIc.text = self.text + entryIc.text
+        entryIc.cursorPos = len(self.text)
+        if rightIcIsPendingArg:
+            ic, idx, seriesIdx = icon.firstPlaceListIcon(self.listPendingArgs())
+            self.popPendingArgs(idx, seriesIdx)
+            self.replaceWith(ic)
+        else:
+            entryIcSiteOnSelf = self.siteOf(entryIc, recursive=True)
+            if entryIcSiteOnSelf is not None:
+                entryIcTopIc = self.childAt(entryIcSiteOnSelf)
+                self.replaceChild(None, entryIcSiteOnSelf)
+                self.replaceWith(entryIcTopIc)
+            else:
+                self.remove()
+        cursor.setToText(entryIc)
 
     def arrowAction(self, direction):
         cursor = self.window.cursor
@@ -1940,6 +1993,8 @@ class EntryIcon(icon.Icon):
             self.textOffset = penImage.width + icon.TEXT_MARGIN
         top = outSiteY - self.height//2
         self.rect = (outSiteX, top, outSiteX + layout.width, top + self.height)
+        if not self.hasPendingArgs():
+            self.sites.forCursor.xOffset = layout.width - icon.ATTR_SITE_DEPTH
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         self.layoutDirty = False
