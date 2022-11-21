@@ -15,6 +15,7 @@ import assignicons
 import subscripticon
 import parenicon
 import infixicon
+import stringicon
 import cursors
 import reorderexpr
 
@@ -45,7 +46,11 @@ numPattern = re.compile('^([+-]?[\\d_]*\\.?[\\d_]*)|'
  '([+-]?((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
 attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
-opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~]')
+opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~"\']')
+stringPattern = re.compile("^(f|fr|rf|b|br|rb|u|r)?['\"]$", re.IGNORECASE)
+
+textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
+textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
 penImage = comn.asciiToImage((
     "....oooo    ",
@@ -98,7 +103,7 @@ class EntryIcon(icon.Icon):
         self.rect = (x, y, x + width, y + self.height)
         self.markLayoutDirty()
         self.textOffset = penImage.width + icon.TEXT_MARGIN
-        self.cursorPos = len(initialString)
+        self.setCursorPos('end')
         self.hasFocus = False
         self.focusChanged = False
         self.pendingArgListMgrs = {}
@@ -111,7 +116,7 @@ class EntryIcon(icon.Icon):
         """Undo restores all attachments and saves the displayed text.  Update the
         remaining internal state based on attachments and passed text."""
         self.text = text
-        self.cursorPos = len(text)
+        self.setCursorPos('end')
         self.recolorPending()
         self.markLayoutDirty()
 
@@ -728,7 +733,7 @@ class EntryIcon(icon.Icon):
         # the new entry icon was not a pending arg, it will either be attached to our
         # forCursor site, or held by a common ancestor.
         entryIc.text = self.text + entryIc.text
-        entryIc.cursorPos = len(self.text)
+        entryIc.setCursorPos('end')
         if rightIcIsPendingArg:
             ic, idx, seriesIdx = icon.firstPlaceListIcon(self.listPendingArgs())
             self.popPendingArgs(idx, seriesIdx)
@@ -1058,6 +1063,13 @@ class EntryIcon(icon.Icon):
                 return
         elif ic.__class__ is nameicons.YieldIcon:
             cursorIcon, cursorSite = self.insertYieldIcon(ic)
+        elif self.canJoinIcons(ic):
+            # 'is' followed by 'not', 'yield' folloed by 'from', unary minus followed by
+            # number, sinqle-quoted string followed by quote; need to be joined in a
+            # single 'is not', 'yield from', negative number, or triple-quoted string.
+            self.joinIcons(ic)
+            cursorIcon = self.attachedIcon()
+            cursorSite = self.attachedSite()
         elif self.attachedToAttribute():
             # Entry icon is attached to an attribute site (ic is operator or attribute)
             if ic.__class__ is nameicons.AttrIcon:
@@ -1146,13 +1158,6 @@ class EntryIcon(icon.Icon):
                     ic.replaceChild(topIcon, stmtSite)
                 cursorIcon = self.attachedIcon()
                 cursorSite = self.attachedSite()
-            elif self.canJoinIcons(ic):
-                # 'is' followed by 'not', 'yield' folloed by 'from', or unary minus
-                # followed by number; need to be joined in a single 'is not',
-                # 'yield from', or negative number.
-                self.joinIcons(ic)
-                cursorIcon = self.attachedIcon()
-                cursorSite = self.attachedSite()
             elif isinstance(ic, opicons.UnaryOpIcon):
                 # Unary operators need to be stitched in by priority
                 self.replaceWith(ic)
@@ -1178,7 +1183,10 @@ class EntryIcon(icon.Icon):
                 # the entry icon (if still attached), and be done
                 if self.attachedIcon() is not None:
                     self.attachedIcon().replaceChild(None, self.attachedSite())
-                self.window.cursor.setToIconSite(cursorIcon, cursorSite)
+                if hasattr(ic, 'setCursorPos'):
+                    self.window.cursor.setToText(ic)
+                else:
+                    self.window.cursor.setToIconSite(cursorIcon, cursorSite)
                 self.window.undo.addBoundary()
                 return True
         # There is remaining text or pending arguments.  Restore the entry icon.  Note
@@ -1195,7 +1203,10 @@ class EntryIcon(icon.Icon):
             # The entry icon has been removed and it's not carrying pending arguments
             # whose dissappearance would disturb the user. Set a temporary cursor and put
             # the undo boundary here, before we restore the entry icon.
-            self.window.cursor.setToIconSite(cursorIcon, cursorSite)
+            if hasattr(ic, 'setCursorPos'):
+                self.window.cursor.setToText(ic)
+            else:
+                self.window.cursor.setToIconSite(cursorIcon, cursorSite)
             self.window.undo.addBoundary()
             earlyBoundaryAdded = True
         else:
@@ -1206,7 +1217,10 @@ class EntryIcon(icon.Icon):
             cursorIcon.replaceChild(self, cursorSite)
         self.text = remainingText
         self.cursorPos = len(remainingText)
-        self.window.cursor.setToText(self)
+        if hasattr(ic, 'setCursorPos'):
+            self.window.cursor.setToText(ic)
+        else:
+            self.window.cursor.setToText(self)
         if self.attachedIcon().isCursorOnlySite(self.attachedSite()) and \
                 self.attachedIcon().__class__ in cursors.stmtIcons and \
                 self.attachedSiteType() == 'attrIn':
@@ -1905,21 +1919,18 @@ class EntryIcon(icon.Icon):
                 return True
             values = [v.att for v in leftIc.sites.values]
             if len(values) > 1:
-                # ... Fix this hack before comitting
-                entryIc = attachedIc.childAt(attachedSite)
                 argList = [[None] + values[1:]]
                 recipient = transferToParentList(leftIc, 1, leftIc, 'values')
                 if recipient is None:
                     for valueIc in values[1:]:
                         leftIc.replaceChild(None, leftIc.siteOf(valueIc))
-                    entryIc.appendPendingArgs(argList)
+                    self.appendPendingArgs(argList)
             leftIc.replaceChild(None, 'values_0')
             leftIc.replaceWith(insertedIc)
             insertedIc.replaceChild(values[0], 'argIcon')
             return True
-        elif isinstance(attachedIc,
-                opicons.UnaryOpIcon) and attachedIc.operator == '-' and \
-                isinstance(insertedIc, nameicons.NumericIcon):
+        elif isinstance(attachedIc, opicons.UnaryOpIcon) and attachedIc.operator == '-' \
+                and isinstance(insertedIc, nameicons.NumericIcon):
             # Join unary minus and a numeric icon into a negative numeric icon
             if not doJoin:
                 return True
@@ -1928,6 +1939,16 @@ class EntryIcon(icon.Icon):
             attachedIc.replaceWith(newNumIc)
             newNumIc.replaceChild(self, 'attrIcon')
             return newNumIc, 'attrIcon'
+        elif isinstance(attachedIc, stringicon.StringIcon) and \
+                attachedIc.string == '' and len(attachedIc.quote) == 1 and \
+                isinstance(insertedIc, stringicon.StringIcon):
+            # Change a single-quoted string to a triple-quoted string
+            if not doJoin:
+                return True
+            attachedIc.replaceChild(None, 'attrIcon')
+            attachedIc.replaceWith(insertedIc)
+            insertedIc.replaceChild(self, 'attrIcon')
+            return insertedIc, 'attrIcon'
         return False
 
     def click(self, evt):
@@ -2086,6 +2107,15 @@ class EntryIcon(icon.Icon):
         x += self.textOffset + icon.globalFont.getsize(self.text[:self.cursorPos])[0]
         y += self.sites.output.yOffset
         return x, y
+
+    def setCursorPos(self, pos):
+        if pos == 'end':
+            self.cursorPos = len(self.text)
+        else:
+            self.cursorPos = max(0, min(len(self.text), pos))
+
+    def textCursorImage(self):
+        return textCursorImage
 
     def _canPlacePendingArgs(self, onIcon, onSite, overwriteStart=False,
             useAllArgs=False):
@@ -2254,6 +2284,9 @@ def parseExprText(text, window):
         return "colon"
     if text == '=':
         return assignicons.AssignIcon(1, window), None
+    if stringPattern.fullmatch(text):
+        return stringicon.StringIcon(initReprStr=text+text[-1], window=window,
+            typeover=True), None
     if text == 'yield from':
         return "accept"  # No need to process immediately (here to accept space)
     if identPattern.fullmatch(text) or numPattern.fullmatch(text):

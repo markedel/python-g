@@ -105,8 +105,8 @@ seqOutSiteCursorImage = comn.asciiToImage((
 seqOutSiteCursorXOffset = 3
 seqOutSiteCursorYOffset = 0
 
-textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
-textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
+typeoverCursorHeight = sum(icon.globalFont.getmetrics()) + 2
+typeoverCursorImage = Image.new('RGBA', (1, typeoverCursorHeight), color=(0, 0, 0, 255))
 
 class Cursor:
     def __init__(self, window, cursorType):
@@ -133,7 +133,8 @@ class Cursor:
         placeEntryText is set to False, it is still necessary to check for dirty icon
         layouts after calling, as this is the mechanism by which icons that draw
         additional focus graphics can redraw them."""
-        if self.type == "text":
+        if self.type == "text" or \
+                self.type == "typeover" and hasattr(self.icon, 'focusOut'):
             self.icon.focusOut(placeEntryText)
         if self.type is not None and eraseOld:
             self.erase()
@@ -153,7 +154,8 @@ class Cursor:
         setting placeEntryText=False.  Even if placeEntryText is set to False, it is
         still necessary to check for dirty icon layouts after calling, as this is the
         mechanism by which icons that draw additional focus graphics can redraw them."""
-        if self.type == "text":
+        if self.type == "text" or \
+                self.type == "typeover" and hasattr(self.icon, 'focusOut'):
             self.icon.focusOut(placeEntryText)
         if self.type is not None and eraseOld:
             self.erase()
@@ -179,7 +181,8 @@ class Cursor:
         setting placeEntryText=False.  Even if placeEntryText is set to False, it is
         still necessary to check for dirty icon layouts after calling, as this is the
         mechanism by which icons that draw additional focus graphics can redraw them."""
-        if self.type == "text" and self.icon != ic:
+        if self.icon != ic and (self.type == "text" or
+                self.type == "typeover" and hasattr(self.icon, 'focusOut')):
             self.icon.focusOut(placeEntryText)
         if self.type is not None and eraseOld:
             self.erase()
@@ -399,14 +402,13 @@ class Cursor:
             eIcon = self.icon
             if eIcon is None:
                 return
-            cursorPos = min(eIcon.cursorPos, len(eIcon.text))
-            cursorImg = textCursorImage
+            cursorImg = eIcon.textCursorImage()
             x, y = eIcon.cursorWindowPos()
             y -= cursorImg.height // 2
         elif self.type == "typeover":
             if self.icon is None:
                 return
-            cursorImg = textCursorImage
+            cursorImg = typeoverCursorImage
             x, y = self.icon.rect[:2]
             xOffset, yOffset = self.icon.typeoverCursorPos()
             x += xOffset
@@ -546,9 +548,9 @@ class Cursor:
             return
         # Put the text cursor on the end from which the arrow was typed
         if evt.keysym == 'Left':
-            entryIcon.cursorPos = len(entryIcon.text)
+            entryIcon.setCursorPos('end')
         else:
-            entryIcon.cursorPos = 0
+            entryIcon.setCursorPos(0)
         self.window.cursor.setToText(entryIcon)
 
     def _processIconArrowKey(self, evt):

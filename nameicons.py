@@ -2,6 +2,7 @@
 from PIL import Image
 import ast
 import numbers
+import inspect
 import comn
 import iconlayout
 import iconsites
@@ -13,6 +14,7 @@ import assignicons
 import entryicon
 import infixicon
 import parenicon
+import stringicon
 
 namedConsts = {'True':True, 'False':False, 'None':None}
 
@@ -108,7 +110,7 @@ class TextIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, self.text, 'attrIcon')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, self.text, 'attrIcon')
@@ -161,31 +163,6 @@ class NumericIcon(TextIcon):
 
     def compareData(self, data):
         return data == self.value
-
-class StringIcon(TextIcon):
-    def __init__(self, string, window=None, location=None):
-        TextIcon.__init__(self, repr(string), window, location)
-        self.string = string
-
-    def execute(self):
-        if self.sites.attrIcon.att:
-            return self.sites.attrIcon.att.execute(self.string)
-        return self.string
-
-    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        text = filefmt.SegmentedText()
-        text.addQuotedString(None, self.text, contNeeded, parentBreakLevel + 1)
-        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
-
-    def createAst(self):
-        return icon.composeAttrAst(self, ast.Str(self.string, lineno=self.id,
-            col_offset=0))
-
-    def clipboardRepr(self, offset, iconsToCopy):
-        return self._serialize(offset, iconsToCopy, string=self.string)
-
-    def compareData(self, data):
-        return data == self.string and self.sites.attrIcon.att is None
 
 class CommentIcon(TextIcon):
     """Temporary class for displaying comments (move to commenticon.py)"""
@@ -301,7 +278,7 @@ class AttrIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIc = self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
-            entryIc.cursorPos = cursorTextIdx + 1
+            entryIc.setCursorPos(cursorTextIdx + 1)
             return entryIc, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
@@ -384,7 +361,7 @@ class NoArgStmtIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
@@ -534,7 +511,7 @@ class SeriesStmtIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = seriesStmtToEntryIcon(self, self.stmt)
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'values_0':
             return seriesStmtToEntryIcon(self, self.stmt)
@@ -982,7 +959,7 @@ class ImportFromIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'moduleIcon':
             return self._becomeEntryIcon()
@@ -1145,7 +1122,7 @@ class YieldIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = seriesStmtToEntryIcon(self, 'yield')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'values_0':
             return seriesStmtToEntryIcon(self, 'yield')
@@ -1480,7 +1457,7 @@ class RaiseIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'exceptIcon':
             return self._becomeEntryIcon()
@@ -1673,16 +1650,23 @@ def createNameConstantFromAst(astNode, window):
     return NumericIcon(astNode.value, window)
 icon.registerIconCreateFn(ast.NameConstant, createNameConstantFromAst)
 
-def createStringIconFromAst(astNode, window):
-    return StringIcon(astNode.s, window)
-icon.registerIconCreateFn(ast.Str, createStringIconFromAst)
-
 def createConstIconFromAst(astNode, window):
     if isinstance(astNode.value, numbers.Number) or astNode.value is None:
         # Note that numbers.Number includes True and False
         return NumericIcon(astNode.value, window)
-    elif isinstance(astNode.value, str) or isinstance(astNode.value, bytes):
-        return StringIcon(astNode.value, window)
+    elif isinstance(astNode.value, (str, bytes)):
+        if hasattr(astNode, 'annSourceStrings'):
+            initStr = stringicon.joinConcatenatedSourceStrings(astNode.annSourceStrings)
+            if initStr is None:
+                initStr = repr(astNode.value)
+        else:
+            initStr = repr(astNode.value)
+        if hasattr(astNode, 'annIsDocString') and \
+                initStr[:3] in ("'''", '"""') and initStr[-3:] in ("'''", '"""'):
+            quote = initStr[:3]
+            strippedInitString = initStr[3:-3]
+            initStr = quote + inspect.cleandoc(strippedInitString) + quote
+        return stringicon.StringIcon(initStr, window)
     if isinstance(astNode.value, type(...)):
         return NumericIcon(astNode.value, window)
     # Documentation threatens to return constant tuples and frozensets (which could

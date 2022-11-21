@@ -370,8 +370,9 @@ def parseText(macroParser, text, fileName="Pasted Text"):
 def _transferCommentsToAst(text, moduleAst, annotations):
     """Parse comments out of text and annotate the appropriate AST nodes so we can find
     them again when constructing the icon hierarchy from the AST."""
-    comments, elses = _extractTokens(text, annotations)
+    comments, elses, strings = _extractTokens(text, annotations)
     _annotateAstWithComments(comments, elses, moduleAst.body)
+    _annotateAstStrings(strings, moduleAst)
 
 def _extractTokens(text, annotations):
     """ Return two dictionaries: 1 mapping line numbers to comments, and 2 mapping
@@ -386,6 +387,7 @@ def _extractTokens(text, annotations):
     # hackish, but not necessarily faster.
     lineNumToComment = {}
     lineNumToClause = {}
+    posToStr = {}
     # The tokenize module won't just take a text string.  It needs a utf-8 coded
     # readline function
     with io.BytesIO(text.encode('utf-8')) as f:
@@ -394,6 +396,7 @@ def _extractTokens(text, annotations):
         prevCommentCol = -1
         prevKey = None
         wrap = False
+        prevTokenWasString = None
         for token in tokens:
             if token.type == tokenize.COMMENT:
                 startLine, startCol = token.start
@@ -432,7 +435,17 @@ def _extractTokens(text, annotations):
                     'except', 'finally'):
                 startLine, startCol = token.start
                 lineNumToClause[startLine] = startCol
-    return lineNumToComment, lineNumToClause
+                prevTokenWasString = None
+            elif token.type == tokenize.STRING:
+                if prevTokenWasString:
+                    prevTokenWasString.append(token)
+                    posToStr[prevTokenWasString[0].start].append(token.string)
+                else:
+                    prevTokenWasString = [token]
+                posToStr[token.start] = [token.string]
+            else:
+                prevTokenWasString = None
+    return lineNumToComment, lineNumToClause, posToStr
 
 def _annotateAstWithComments(comments, clauses, bodyAsts, startLine=0):
     elseCommentProperties = ('elselinecomments', 'elsestmtcomment')
@@ -526,6 +539,46 @@ def _annotateAstWithComments(comments, clauses, bodyAsts, startLine=0):
         else:
             startLine = lastStmtLine + 1
     return startLine
+
+class StringAnnotator(ast.NodeVisitor):
+    def __init__(self, posToStrTable):
+        self.posToStrTable = posToStrTable
+        ast.NodeVisitor.__init__(self)
+
+    def visit_Constant(self, node):
+        if isinstance(node, ast.Str):
+            origStr = self.posToStrTable.get((node.lineno, node.col_offset))
+            if origStr is not None:
+                node.annSourceStrings = origStr
+        ast.NodeVisitor.visit_Constant(self, node)
+
+    def visit_JoinedStr(self, node):
+        origStr = self.posToStrTable.get((node.lineno, node.col_offset))
+        if origStr is not None:
+            node.annSourceStrings = origStr
+        ast.NodeVisitor.generic_visit(self, node)
+
+    def visit_FunctionDef(self, node):
+        if len(node.body) > 0 and isinstance(node.body[0], ast.Expr):
+            exprAst = node.body[0]
+            if isinstance(exprAst.value, ast.Constant):
+                constAst = exprAst.value
+                if isinstance(constAst.value, str):
+                    constAst.annIsDocString = True
+        ast.NodeVisitor.generic_visit(self, node)
+
+    def visit_ClassDef(self, node):
+        if len(node.body) > 0 and isinstance(node.body[0], ast.Expr):
+            exprAst = node.body[0]
+            if isinstance(exprAst.value, ast.Constant):
+                constAst = exprAst.value
+                if isinstance(constAst.value, str):
+                    constAst.annIsDocString = True
+        ast.NodeVisitor.generic_visit(self, node)
+
+def _annotateAstStrings(astPosToStrTable, astNode):
+    annotator = StringAnnotator(astPosToStrTable)
+    annotator.visit(astNode)
 
 def _commentLinesBetween(lineToCommentMap, startLine, endLine):
     commentList = None

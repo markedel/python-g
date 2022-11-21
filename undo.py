@@ -139,7 +139,7 @@ class Boundary:
             self.cursorPos = cursor.pos
             self.cursorIcon = cursor.icon
             self.cursorSite = cursor.site
-            if cursor.type == "text":
+            if cursor.type == "text" and cursor.icon.__class__.__name__ == 'EntryIcon':
                 self.entryText = window.cursor.icon.text
             else:
                 self.entryText = None
@@ -153,7 +153,8 @@ class Boundary:
         elif self.cursorType == "icon":
             cursor.setToIconSite(self.cursorIcon, self.cursorSite, placeEntryText=False)
         elif self.cursorType == "text":
-            self.cursorIcon.restoreForUndo(self.entryText)
+            if cursor.icon.__class__.__name__ == 'EntryIcon':
+                cursor.icon.restoreForUndo(self.entryText)
             cursor.setToText(self.cursorIcon, placeEntryText=False)
 
 class Attach(UndoListEntry):

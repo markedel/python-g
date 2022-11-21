@@ -14,6 +14,7 @@ import opicons
 import nameicons
 import assignicons
 import entryicon
+import stringicon
 import parenicon
 import undo
 import filefmt
@@ -1214,6 +1215,7 @@ class Window:
         selected = self.selectedIcons()
         if selected:
             self.removeIcons(selected)
+            self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == "icon":
             # Edit or remove the icon to the right of the cursor
             rightIcon, rightSite = cursors.lexicalTraverse(self.cursor.icon,
@@ -1230,14 +1232,18 @@ class Window:
                 if self.cursor.type == 'text':
                     # If the icon backspace response was to edit the icon, it will
                     # leave the cursor at the end rather than the beginning, move it.
-                    self.cursor.icon.cursorPos = 0
+                    self.cursor.icon.setCursorPos(0)
+            self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == 'text':
             self.cursor.icon.forwardDelete(evt)
-        self.refreshDirty(addUndoBoundary=True)
+            self.refreshDirty(addUndoBoundary=False)
+        else:
+            cursors.beep()
 
     def _backspaceCb(self, evt=None):
         if self.cursor.type == "text":
             self.cursor.icon.backspaceInText(evt)
+            self.refreshDirty(addUndoBoundary=False)
         else:
             selectedIcons = self.selectedIcons()
             if len(selectedIcons) > 0:
@@ -1260,7 +1266,7 @@ class Window:
                 ic.setTypeover(0, siteAfter)
                 ic.draw()
                 self.cursor.setToIconSite(*icon.rightmostFromSite(ic, siteBefore))
-        self.refreshDirty(addUndoBoundary=True)
+            self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceIcon(self, evt):
         if self.cursor.type != 'icon' or self.cursor.site in ('output', 'attrOut',
@@ -1364,6 +1370,11 @@ class Window:
 
     def _enterCb(self, evt):
         """Move Entry icon after the top-level icon where the cursor is found."""
+        if self.cursor.type == 'text' and isinstance(self.cursor.icon,
+                stringicon.StringIcon):
+            self.cursor.icon.processEnterKey(evt)
+            self.refreshDirty(addUndoBoundary=True)
+            return
         if not self._completeEntry(evt):
             return
         if self.cursor.type not in ("icon", "typeover"):
@@ -1388,7 +1399,8 @@ class Window:
         # its content before executing.
         if not self._completeEntry(evt):
             return
-        if self.cursor.type in ("icon", "typeover"):
+        if self.cursor.type in ("icon", "typeover") or self.cursor.type == 'text' and \
+                isinstance(self.cursor.icon, stringicon.StringIcon):
             iconToExecute = self.cursor.icon
         else:
             return  # Nothing to execute
@@ -1465,7 +1477,8 @@ class Window:
     def _completeEntry(self, evt):
         """Attempt to finish any text entry in progress.  Returns True if successful,
         false if text remains unprocessed in the entry icon."""
-        if self.cursor.type == "text":
+        if self.cursor.type == "text" and isinstance(self.cursor.icon,
+                entryicon.EntryIcon):
             return self.cursor.icon.focusOut()
         return True
 
@@ -2125,7 +2138,12 @@ class Window:
         elif self.cursor.type == "icon":
             print(f"Icon: {self.cursor.icon.dumpName()}, Site: {self.cursor.site}")
         elif self.cursor.type == "text":
-            print(f"{repr(self.cursor.icon.text)}, {self.cursor.icon.cursorPos}")
+            if isinstance(self.cursor.icon, entryicon.EntryIcon):
+                print(f"Entry Icon {repr(self.cursor.icon.text)},"
+                      f"{self.cursor.icon.cursorPos}")
+            elif isinstance(self.cursor.icon, stringicon.StringIcon):
+                ic = self.cursor.icon
+                print(f"String {ic.dumpName()}, {ic.cursorPos}")
 
     def _debugLayoutCb(self, evt):
         topIcons = findTopIcons(self.selectedIcons())

@@ -577,7 +577,7 @@ class AugmentedAssignIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'values_0':
             return self._becomeEntryIcon()

@@ -285,7 +285,7 @@ class WithIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'values_0':
             return self._becomeEntryIcon()
@@ -432,7 +432,7 @@ class WhileIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, 'while', 'condIcon')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'values_0':
             return self.window.replaceIconWithEntry(self, 'while', 'condIcon')
@@ -783,7 +783,7 @@ class ForIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'targets_0':
             return self._becomeEntryIcon()
@@ -904,7 +904,7 @@ class IfIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, 'if', 'condIcon')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == "condIcon":
             return self.window.replaceIconWithEntry(self, 'if', 'condIcon')
@@ -1032,7 +1032,7 @@ class ElifIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, 'elif', 'condIcon')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'condIcon':
             return self.window.replaceIconWithEntry(self, 'elif', 'condIcon')
@@ -1132,7 +1132,7 @@ class ElseIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, 'else')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, 'else')
@@ -1230,7 +1230,7 @@ class TryIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, 'try')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, 'try')
@@ -1361,7 +1361,7 @@ class ExceptIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, 'except', 'typeIcon')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'typeIcon':
             return self.window.replaceIconWithEntry(self, 'except', 'typeIcon')
@@ -1452,7 +1452,7 @@ class FinallyIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, 'finally')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, 'finally')
@@ -1821,7 +1821,7 @@ class DefOrClassIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'nameIcon':
             return self._becomeEntryIcon()

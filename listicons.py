@@ -1584,7 +1584,7 @@ class CprhIfIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = max(0, cursorTextIdx - 1)
+            entryIcon.setCursorPos(max(0, cursorTextIdx - 1))
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'testIcon':
             return self._becomeEntryIcon()
@@ -1880,7 +1880,7 @@ class CprhForIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self._becomeEntryIcon()
-            entryIcon.cursorPos = max(0, cursorTextIdx - 1)
+            entryIcon.setCursorPos(max(0, cursorTextIdx - 1))
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'targets_0':
             return self._becomeEntryIcon()

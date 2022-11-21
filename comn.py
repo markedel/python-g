@@ -12,22 +12,35 @@ OUTLINE_COLOR = (255, 255, 255, 1)
 
 ICON_BG_COLOR = (255, 255, 255, 255)
 
-def asciiToImage(asciiPixmap):
+def asciiToImage(asciiPixmap, tint=None):
     if asciiToImage.asciiMap is None:
         asciiToImage.asciiMap = {'.':(0, 0, 0, 0), 'o': OUTLINE_COLOR,
                 ' ': ICON_BG_COLOR, '%':(0, 0, 0, 255), 'R':(255, 0, 0, 255),
                 'r':(255, 128, 128, 255)}
         for i in range(1, 10):
-            pixel = int(int(i) * 255 * 0.1)
-            asciiToImage.asciiMap[str(i)] = (pixel, pixel, pixel, 255)
+            lum = int(int(i) * 255 * 0.1)
+            asciiToImage.asciiMap[str(i)] = (lum, lum, lum, 255)
+    if tint is not None:
+        colorMap = dict(asciiToImage.asciiMap)
+        colorMap['%'] = tint
+        for i in range(1,10):
+            lum = int(int(i) * 255 * 0.1)
+            tr, tg, tb, ta = tint
+            colorMap[str(i)] = (_tint(lum, tr), _tint(lum, tg), _tint(lum, tb), ta)
+    else:
+        colorMap = asciiToImage.asciiMap
     height = len(asciiPixmap)
     width = len(asciiPixmap[0])
     pixels = "".join(asciiPixmap)
-    colors = [asciiToImage.asciiMap[pixel] for pixel in pixels]
+    colors = [colorMap[pixel] for pixel in pixels]
     image = Image.new('RGBA', (width, height))
     image.putdata(colors)
     return image
 asciiToImage.asciiMap = None
+
+def _tint(color, tint):
+    scale = (255 - tint) / 255
+    return int(tint + color * scale)
 
 def rectWidth(rect):
     return rect[2] - rect[0]

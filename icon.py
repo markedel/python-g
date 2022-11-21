@@ -35,6 +35,7 @@ import ast
 # environment.
 globalFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 12)
 boldFont = ImageFont.truetype('c:/Windows/fonts/arialbd.ttf', 12)
+textFont = ImageFont.truetype('c:/Windows/fonts/consola.ttf', 13)
 
 stmtAstClasses = {ast.Assign, ast.AugAssign, ast.While, ast.For, ast.AsyncFor, ast.If,
  ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Return, ast.With,
@@ -55,6 +56,7 @@ TEXT_MARGIN = 2
 SHOW_OUTLINE_TINT = (220, 220, 220, 255)
 
 KEYWORD_COLOR = (48, 0, 128, 255)
+TYPEOVER_COLOR = (220, 220, 220, 255)
 SELECT_TINT = (0, 0, 255, 0)
 ERR_TINT = (255, 0, 0, 0)
 PENDING_TINT = (255, 192, 192, 192)
@@ -288,7 +290,7 @@ def iconBoxedText(text, font=globalFont, color=BLACK, typeover=None):
             typeoverOffset = getTextSize(text[:typeover], font)[0]
             draw.text((TEXT_MARGIN, TEXT_MARGIN), text[:typeover], font=font, fill=color)
             draw.text((TEXT_MARGIN + typeoverOffset, TEXT_MARGIN), text=text[typeover:],
-                font=font, fill=(220, 220, 220, 255))
+                font=font, fill=TYPEOVER_COLOR)
         draw.rectangle((0, 0, width-1, height-1), fill=None, outline=comn.OUTLINE_COLOR)
         if typeover is None:
             renderCache[(text, font, color)] = txtImg
@@ -648,7 +650,7 @@ class Icon:
         parent = self.parent()
         if parent is None:
             if replacementIcon is None:
-                self.window.removeTop([self])
+                self.window.removeTop(self)
             else:
                 self.window.replaceTop(self, replacementIcon)
         else:

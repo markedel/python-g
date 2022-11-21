@@ -262,7 +262,7 @@ class UnaryOpIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'argIcon':
             return self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
@@ -607,7 +607,7 @@ class BinOpIcon(icon.Icon):
             if cursorTextIdx is None:
                 return None, None
             entryIcon = _becomeEntryIcon(self)
-            entryIcon.cursorPos = cursorTextIdx
+            entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'rightArg':
             return _becomeEntryIcon(self)
