@@ -53,8 +53,8 @@ textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
 penImage = comn.asciiToImage((
-    "....oooo    ",
-    "...o%%%%oo  ",
+    "....oooo....",
+    "...o%%%%oo..",
     "..o%%%%%%%oo",
     "..o%%%%%%%%%",
     ".o%%%%55%%%%",
@@ -62,8 +62,8 @@ penImage = comn.asciiToImage((
     ".o%%%%55%%%%",
     "..o%%%%%%%%%",
     "..o%%%%%%%oo",
-    "...o%%%%oo  ",
-    "....oooo    "))
+    "...o%%%%oo..",
+    "....oooo...."))
 dimPenImage = penImage.point(lambda p: p + 200)
 
 attrPenImage = comn.asciiToImage((
@@ -171,35 +171,59 @@ class EntryIcon(icon.Icon):
         """Remove cursor focus from the icon.  If removeIfPossible is True, try to place
         the text as it currently stands, replacing the entry icon with whatever it
         generates.  Returns False only if removal was requested and current text or
-        pending arguments prevent it from being placed.  If it succeeds, the cursor will
+        pending arguments prevent it from being placed.  Otherwise, the function will
+        return either True, or "merged" (see below).  If it succeeds, the cursor will
         be placed to the right of whatever icon(s) the text generated, as if a delimiter
         had been entered (while most callers will immediately override this, the
         arrowAction method depends upon this side effect for right-arrow cursor movement
         out of the icon).  It is important to note that because this function gets called
         as a result of cursor movement, the fact that it can rearrange icon structure has
         far-reaching consequences: all cursor-movement calls now need to be followed by
-        layout/refresh/redraw."""
-        if self.hasFocus:
-            self.focusChanged = True
-            self.hasFocus = False
-            self.markLayoutDirty()
-            # If both text and arguments can be placed, do so.  Note that this is a bit
-            # hairy, because focus out is invoked via cursor movement calls, which are
-            # plentiful, and which older code did not expect to be rearranging icons.
-            if not removeIfPossible:
-                return True
-            # Start by at least making sure that the icon is still in the window
-            topIcon = self.topLevelParentSafe()
-            if topIcon is None or topIcon not in self.window.topIcons:
-                return True
-            if self.text == '':
-                if self.remove():
-                    return True
-            if not self.canPlaceEntryText(requireArgPlacement=True):
-                return False
-            newText = self.text + ' '
-            self._setText(newText, len(newText))
+        layout/refresh/redraw.  focusOut also handles the special case of an entry icon
+        attached to the forCursor site of another entry icon.  This is allowed so that an
+        operator following an entry icon can be edited normally, but is not allowed to
+        persist once editing is complete.  In the case where the entry icon is attached
+        to another entry icon by its forCursor site and focusOut is called but cannot
+        place its content, it merges the icon with the parent and returns the special
+        result "merged"."""
+        if not self.hasFocus:
+            return not removeIfPossible
+        self.focusChanged = True
+        self.hasFocus = False
+        self.markLayoutDirty()
+        # If both text and arguments can be placed, do so.  Note that this is a bit
+        # hairy, because focus out is invoked via cursor movement calls, which are
+        # plentiful, and which older code did not expect to be rearranging icons.
+        if not removeIfPossible:
             return True
+        # Start by at least making sure that the icon is still in the window
+        topIcon = self.topLevelParentSafe()
+        if topIcon is None or topIcon not in self.window.topIcons:
+            return True
+        if self.text == '':
+            if self.remove():
+                return True
+        if not self.canPlaceEntryText(requireArgPlacement=True):
+            parent = self.parent()
+            if isinstance(parent, EntryIcon) and parent.siteOf(self) == 'forCursor':
+                # An entry icon is allowed to be (temporarily) attached to the forCursor
+                # site of another entry icon.  Most such attachments are never visible to
+                # the  user, except in the case where an operator with an entry icon as
+                # its right operand is edited, and these are only allowed to persist as
+                # long as the attached entry icon has focus.  At this point, the icons
+                # are consolidated.
+                pendingArgs = self.listPendingArgs()
+                self.popPendingArgs('all')
+                parent.cursorPos = len(parent.text)
+                parent.text += self.text
+                parent.replaceChild(None, 'forCursor')
+                parent.appendPendingArgs(pendingArgs)
+                self.window.cursor.setToText(parent)
+                return "merged"
+            return False
+        newText = self.text + ' '
+        self._setText(newText, len(newText))
+        return True
 
     def hasPendingArgs(self):
         """Return True if the entry icon has pending arguments."""
@@ -243,6 +267,24 @@ class EntryIcon(icon.Icon):
         icon lists, to represent an empty series site."""
         if len(argList) == 0:
             return
+        if isinstance(argList[0], EntryIcon) and not self.hasPendingArgs() and \
+                argList[0].text == '':
+            # The first entry is another entry icon, and we have no existing args.
+            # Instead of embedding it in the pending arg list, consume it (take over its
+            # pending args and remove it).  Note that we don't consume in the case where
+            # there is text in the other icon, even though there are circumstances where
+            # this would be the right thing to do, because Alt-clicking to edit will
+            # overstep its bounds and merge text that we probably don't want merged
+            # (though maybe the right way to do this would be to explicitly stop those
+            # particular commands from doing it, rather than to stop everything)
+            print('*** unifying')
+            entryIc = argList[0]
+            pendingArgs = entryIc.listPendingArgs()
+            entryIc.popPendingArgs('all')
+            self.appendPendingArgs(pendingArgs)
+            #self.text += entryIc.text  # self.cursor stays before any appended text
+            #entryIc.text = ''
+            argList = argList[1:]
         startIdx = self.maxPendingArgIdx() + 1
         for i, arg in enumerate(argList):
             if arg is None:
@@ -602,18 +644,88 @@ class EntryIcon(icon.Icon):
                 ic, site = cursors.lexicalTraverse(cursor.icon, cursor.site, 'Left')
                 cursor.setToIconSite(ic, site)
             return
+        highestIcon = iconsites.highestCoincidentIcon(self)
+        parent = highestIcon.parent()
+        if parent is None:
+            return  # Can't place and can't back up any further
+        # Check if we're attached to another entry icon, either on the forCursor site
+        # or as an individual pending argument, and if so, merge our content in to the
+        # parent icon.  Note that punting the case where the entry icon is part of a
+        # pending argument series, does leave some cases on the table that should
+        # still be addressed, but the combination of directly nested entry icons and
+        # pending lists is quite rare, this is not worth wasting time on, yet.
+        parentSite = parent.siteOf(self, recursive=True)
+        if isinstance(parent, EntryIcon) and not iconsites.isSeriesSiteId(parentSite):
+            if parentSite == parent.sites.firstCursorSite():
+                # We directly follow another entry icon, either on its forCursorSite, or
+                # as its first pending arg
+                pendingArgs = self.listPendingArgs()
+                self.popPendingArgs('all')
+                if parentSite == 'forCursor':
+                    # forCursor site.  If this is reached, something is wrong, because if
+                    # we have focus, then the parent entry icon does not, and therefore
+                    # should not be allowed to hold anything on its forCursor site
+                    print("On other icon's forCursorSite?")
+                    parent.replaceChild(None, 'forCursor')
+                    parent.appendPendingArgs(pendingArgs)
+                else:
+                    # First pending arg site, remove from pending args
+                    parentPendingArgs = parent.listPendingArgs()
+                    if parent is self.parent():
+                        # We are the direct descendant of the other entry icon: just
+                        # remove its first pending arg
+                        parent.popPendingArgs('all')
+                        parent.appendPendingArgs(pendingArgs + parentPendingArgs[1:])
+                    else:
+                        # We are embedded in an expression: leave the expression, but
+                        # still prepend our pending args to the parent and delete this
+                        # entry icon (self) from the expression
+                        parent.popPendingArgs('all')
+                        self.replaceWith(None)
+                        parent.appendPendingArgs(pendingArgs + parentPendingArgs)
+                parent.cursorPos = len(parent.text)
+                parent.text += self.text
+                cursor.setToText(parent)
+                return
+            # We are in the parent entry icon's pending arg list, but not on the left
+            # side, so if there's text, we can't merge it in to the parent, so drop thru
+            # and try to attach to the previous arg.  If there's no text, merge our
+            # pending args with those of the parent.
+            if self.text == '':
+                # I don't think this code block ever runs!  The code at the start of the
+                # function (if self.text == '':) handles 90% of cases and the rest seem
+                # to be handled by the next clause (if self.camPlaceEntryText).  Have not
+                # been able to test, but haven't removed, since I think I wrote it in
+                # response to a failure of some sort.
+                print('Unexercised code exercised!  look in entryIcon.py')
+                pendingArgs = self.listPendingArgs()
+                self.popPendingArgs('all')
+                parentPendingArgs = parent.listPendingArgs()
+                parent.popPendingArgs('all')
+                idx = parentPendingArgs.index(self)
+                parent.appendPendingArgs(parentPendingArgs[:idx] + pendingArgs +
+                    parentPendingArgs[idx+1:])
+                cursorSite = 'pendingArg%d' % idx
+                if parent.hasSite(cursorSite):
+                    cursorIcon = parent
+                elif parent.hasSite(cursorSite + '_0'):
+                    cursorIcon = parent
+                    cursorSite += '_0'
+                else:
+                    cursorIcon, cursorSite = icon.rightmostSite(parent)
+                cursor.setToIconSite(cursorIcon, cursorSite)
+                return
         # If we can't focus out, backspace in to the next icon.  This is done by
         # temporarily removing the text cursor from the entry icon and putting an icon
         # cursor on the site to which it is currently attached, then calling the
         # backspace method for the icon.  If this results in a new entry icon, reconcile
         # that with the content of self.
-        highestIcon = iconsites.highestCoincidentIcon(self)
-        parent = highestIcon.parent()
-        if parent is None:
-            return  # Can't place and can't back up any further
         cursor.setToIconSite(parent, parent.siteOf(highestIcon),
             placeEntryText=False)
         cursor.icon.backspace(cursor.site, evt)
+        if self.parent() is None and self not in self.window.topIcons:
+            # The new entry icon consumed our content, so we're done
+            return
         # If the icon backspace method created an entry icon at the cursor, it will
         # put a text cursor in it.  If not, the original entry icon should still be in
         # the right place, and we can simply move the cursor back in to it and be done.
@@ -626,7 +738,7 @@ class EntryIcon(icon.Icon):
         # and give up.
         newEntryIcon = cursor.icon
         if not isinstance(newEntryIcon, EntryIcon):
-            print('Entry icon backspaceInText: Unexpected text icon from backspace')
+            print('Entry icon backspaceInText: Unexpected entry icon from backspace')
             return
         if not hasattr(newEntryIcon.sites, 'pendingArg0'):
             print('Entry icon backspaceInText: Entry icon site not found')
@@ -732,21 +844,40 @@ class EntryIcon(icon.Icon):
         # the top of the hierarchy, we know the new entry icon is at the left edge).  If
         # the new entry icon was not a pending arg, it will either be attached to our
         # forCursor site, or held by a common ancestor.
-        entryIc.text = self.text + entryIc.text
-        entryIc.setCursorPos('end')
+        combinedText = self.text + entryIc.text
         if rightIcIsPendingArg:
             ic, idx, seriesIdx = icon.firstPlaceListIcon(self.listPendingArgs())
-            self.popPendingArgs(idx, seriesIdx)
-            self.replaceWith(ic)
+            if isinstance(ic, EntryIcon) or self.typeOf(self.siteOf(ic)) == \
+                    self.attachedSiteType():
+                entryIc.text = combinedText
+                entryIc.setCursorPos(len(self.text))
+                self.popPendingArgs(idx, seriesIdx)
+                self.replaceWith(ic)
+                cursor.setToText(entryIc)
+            else:
+                # Can't simply replace ourselves with the pending arg because site type
+                # is not compatible.  Need to leave an empty site and remove the new
+                # entry icon, instead
+                self.setCursorPos('end')
+                self.text = combinedText
+                if entryIc.hasPendingArgs():
+                    pendArgs = entryIc.popPendingArgs('all')
+                    self.appendPendingArgs(pendArgs)
+                entryIc.replaceWith(None)
+                cursor.setToText(self)
         else:
+            entryIc.text = combinedText
+            entryIc.setCursorPos(len(self.text))
             entryIcSiteOnSelf = self.siteOf(entryIc, recursive=True)
             if entryIcSiteOnSelf is not None:
                 entryIcTopIc = self.childAt(entryIcSiteOnSelf)
                 self.replaceChild(None, entryIcSiteOnSelf)
+                # entryIcTopIc must be an entry icon, because that's all we allow on
+                # forCursor sites, so can use replaceWith even if site types don't match
                 self.replaceWith(entryIcTopIc)
             else:
                 self.remove()
-        cursor.setToText(entryIc)
+            cursor.setToText(entryIc)
 
     def arrowAction(self, direction):
         cursor = self.window.cursor
@@ -767,8 +898,13 @@ class EntryIcon(icon.Icon):
                         # focusOut failed to place
                         cursor.setToIconSite(self, "output")
                 else:
-                    self.window.cursor.setToIconSite(self.attachedIcon(),
-                        self.attachedSite())
+                    cursorIcon = self.attachedIcon()
+                    cursorSite = self.attachedSite()
+                    # For 99.99% of cases, set the cursor position to the attached site
+                    # but if the parent icon is an entry icon, and focusing out resulted
+                    # in merging the content, leave the cursor where focusOut put it.
+                    if self.focusOut() != 'merged':
+                        self.window.cursor.setToIconSite(cursorIcon, cursorSite)
                 self.window.refreshDirty(minimizePendingArgs=False)
             else:
                 self.cursorPos -= 1
@@ -776,9 +912,15 @@ class EntryIcon(icon.Icon):
             if self.cursorPos == len(self.text):
                 # Move cursor out of entry icon.  For right cursor movement, use the
                 # focusOut because it leaves the cursor after the new icon(s)
-                if not self.focusOut():
+                parent = self.parent()
+                focusOutResult = self.focusOut()
+                if focusOutResult == False:
                     # We failed to place, cursor is still in icon
                     cursor.setToIconSite(self, self.sites.firstCursorSite())
+                elif focusOutResult == "merged":
+                    # Focusing out merged the entry icon into its parent entry icon.  Put
+                    # the cursor after that, instead
+                    cursor.setToIconSite(parent, parent.sites.firstCursorSite())
                 self.window.refreshDirty(minimizePendingArgs=False)
             else:
                 self.cursorPos += 1
@@ -1074,8 +1216,9 @@ class EntryIcon(icon.Icon):
             # Entry icon is attached to an attribute site (ic is operator or attribute)
             if ic.__class__ is nameicons.AttrIcon:
                 # Attribute
-                self.attachedIcon().replaceChild(ic, "attrIcon")
-                cursorIcon, cursorSite = ic, "attrIcon"
+                attachedSite = self.attachedSite()
+                self.attachedIcon().replaceChild(ic, attachedSite)
+                cursorIcon, cursorSite = ic, attachedSite
             elif ic.__class__ is opicons.IfExpIcon:
                 cursorIcon, cursorSite = self.insertIfExpr(ic)
             elif ic.__class__ in (listicons.CprhIfIcon, listicons.CprhForIcon):
@@ -1959,7 +2102,7 @@ class EntryIcon(icon.Icon):
 
     def pointInTextArea(self, x, y):
         left, top, right, bottom = self.rect
-        left += penImage.width
+        left += penImage.width - 1
         top += 2
         bottom -= 2
         right -= 2
@@ -2016,6 +2159,7 @@ class EntryIcon(icon.Icon):
         self.rect = (outSiteX, top, outSiteX + layout.width, top + self.height)
         if not self.hasPendingArgs():
             self.sites.forCursor.xOffset = layout.width - icon.ATTR_SITE_DEPTH
+            self.sites.forCursor.yOffset = self.height//2 + icon.ATTR_SITE_OFFSET
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         self.layoutDirty = False
@@ -2040,11 +2184,22 @@ class EntryIcon(icon.Icon):
                     argYOffs.append(y)
         baseWidth = self._width() - (1 if self.attachedToAttribute() else 2)
         siteOffset = self.height // 2
-        if len(argLayoutGroups) == 0:
-            # No pending arguments (forCursor site can't hold icons)
-            return self.debugLayoutFilter([iconlayout.Layout(self, baseWidth,
-                self.height, siteOffset)])
         layouts = []
+        if len(argLayoutGroups) == 0:
+            # No pending arguments, but under special circumstances, forCursor site
+            # is allowed to hold another entry icon (such as when the entry icon is in
+            # the left side of a binary operator and the user edits the operator).
+            forCursorArg = self.childAt('forCursor')
+            if forCursorArg is None:
+                layouts = [iconlayout.Layout(self, baseWidth, self.height, siteOffset)]
+            else:
+                for forCursorLayout in forCursorArg.calcLayouts():
+                    layout = iconlayout.Layout(self, baseWidth, self.height, siteOffset)
+                    layout.addSubLayout(forCursorLayout, 'forCursor',
+                        baseWidth - icon.ATTR_SITE_DEPTH, 0)
+                    layout.width += forCursorLayout.width
+                    layouts.append(layout)
+            return self.debugLayoutFilter(layouts)
         for argLayouts in iconlayout.allCombinations(argLayoutGroups):
             width = baseWidth
             layout = iconlayout.Layout(self, width, self.height, siteOffset)
@@ -2116,6 +2271,13 @@ class EntryIcon(icon.Icon):
 
     def textCursorImage(self):
         return textCursorImage
+
+    def dumpName(self):
+        if len(self.text) < 15:
+            entryText = self.text
+        else:
+            entryText = self.text[:15] + '...'
+        return 'EntryIcon "' + entryText + '"'
 
     def _canPlacePendingArgs(self, onIcon, onSite, overwriteStart=False,
             useAllArgs=False):

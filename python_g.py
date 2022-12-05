@@ -937,6 +937,16 @@ class Window:
         x, y = self.imageToContentCoord(evt.x, evt.y)
         ic = self.findIconAt(x, y)
         if ic is not None and evt.state & ALT_MASK:
+            if self.cursor.type == 'text':
+                if ic is self.cursor.icon:
+                    # Don't re-edit an entry icon or string we're already editing
+                    if ic.pointInTextArea(x, y):
+                        ic.click(evt)
+                        self.refreshDirty(addUndoBoundary=False)
+                        self.cursor.draw()
+                    return
+                else:
+                    self.cursor.icon.focusOut()
             entryIc, oldCursorLoc = ic.becomeEntryIcon((x, y))
             if entryIc is not None:
                 self.cursor.setToText(entryIc)

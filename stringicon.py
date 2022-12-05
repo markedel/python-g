@@ -4,12 +4,12 @@ import ast
 import astunparse  # Temporary until move to Python 3.9 or later to use ast.unparse
 import math
 import copy
-import textwrap
 import comn
 import icon
 import iconlayout
 import filefmt
 import cursors
+import entryicon
 
 STRING_COLOR = (40, 110, 110, 255)
 STRING_SPINE_COLOR = (80, 220, 220)
@@ -239,12 +239,17 @@ class StringIcon(icon.Icon):
         if text == self.quote[0] and self.cursorPos == len(self.string) and (
                 self.typeoverIdx is not None or (len(self.quote) == 3 and
                 self.string[-2:] == self.quote[:2])):
-            # Typeover or third quote in a row typed in triple-quote string
+            # Typeover or third quote in a row typed in triple-quote string: focus
+            # out of the string and move the cursor to the site on the right.  Note
+            # special case for entry icon (see arrowAction for explanation).
             if self.typeoverIdx is not None:
                 self.typeoverIdx = None
             else:
                 self.string = self.string[:-2]
-            self.window.cursor.setToIconSite(self, 'attrIcon')
+            if isinstance(self.childAt('attrIcon'), entryicon.EntryIcon):
+                self.window.cursor.setToText(self.childAt('attrIcon'))
+            else:
+                self.window.cursor.setToIconSite(self, 'attrIcon')
             self.markLayoutDirty()
             return
         if self.cursorPos < 0:
@@ -348,15 +353,7 @@ class StringIcon(icon.Icon):
             # Cursor is next to quote: edit quote and string type, unless the string is
             # empty, then delete the whole thing
             if self.string == '':
-                self.window.requestRedraw(self.topLevelParent().hierRect(),
-                    filterRedundantParens=False)
-                parent = self.parent()
-                if parent is None:
-                    self.window.cursor.setToWindowPos(self.pos())
-                else:
-                    self.window.cursor.setToIconSite(parent, parent.siteOf(self))
-                self.replaceWith(None)
-                self.window.undo.addBoundary()
+                removeEmptyAttrOnlyIcon(self)
             else:
                 self.cursorPos = -1
         elif self.cursorPos <= -1:
@@ -385,8 +382,14 @@ class StringIcon(icon.Icon):
                 self.cursorPos -= 1
         elif direction == "Right":
             if self.cursorPos == len(self.string):
-                # Move cursor out of string icon.
-                self.window.cursor.setToIconSite(self, 'attrIcon')
+                # Move cursor out of string icon.  Note the special case for attached
+                # entry icon where we generally avoid the site to the left in lexical
+                # traversal, particularly when inserting a string because the user needs
+                # to continue their insertion to rejoin the code they've orphaned.
+                if isinstance(self.childAt('attrIcon'), entryicon.EntryIcon):
+                    self.window.cursor.setToText(self.childAt('attrIcon'))
+                else:
+                    self.window.cursor.setToIconSite(self, 'attrIcon')
             elif self.cursorPos < 0:
                 self.cursorPos = 0
             else:
@@ -849,3 +852,59 @@ def splitSrcStr(srcStr):
     else:
         strType = ''
     return strType, quote, srcStr[len(strType) + len(quote):-len(quote)]
+
+def removeEmptyAttrOnlyIcon(ic):
+    """This temporarily patches around window.removeIcons not being fully reliable at
+    placing orphaned icons and leaving the cursor in the right place after removing
+    icon.  This and similar code for list icons (and maybe elsewhere, as well) should be
+    removed once removeIcons rewritten."""
+    ic.window.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=False)
+    parent = ic.parent()
+    win = ic.window
+    attrIcon = ic.childAt('attrIcon')
+    if attrIcon:
+        ic.replaceChild(None, 'attrIcon')
+    if parent is None and attrIcon is None:
+        # Empty icon the only thing left of the statement.  Remove from seq
+        if ic.prevInSeq() is not None:
+            cursorIc = ic.prevInSeq()
+            cursorSite = 'seqOut'
+        elif ic.nextInSeq() is not None:
+            cursorIc = ic.nextInSeq()
+            cursorSite = 'seqIn'
+        else:
+            cursorIc = None
+            pos = ic.pos()
+        win.removeIcons([ic])
+        if cursorIc is None:
+            win.cursor.setToWindowPos(pos)
+        else:
+            win.cursor.setToIconSite(cursorIc, cursorSite)
+    elif parent is None:
+        # Top-level empty paren w/attribute: Leave just an attribute
+        if ic.prevInSeq() or ic.nextInSeq():
+            # ic was part of a sequence, hang the attribute off an entry icon
+            entryIcon = entryicon.EntryIcon(window=win)
+            win.replaceTop(ic, entryIcon)
+            entryIcon.appendPendingArgs([attrIcon])
+            win.cursor.setToText(entryIcon, drawNew=False)
+        else:
+            # ic was not part of a sequence (loose in window), attribute can
+            # simply replace it
+            win.replaceTop(ic, attrIcon)
+            win.cursor.setToIconSite(attrIcon, 'attrOut')
+    else:
+        # ic has a parent
+        parentSite = parent.siteOf(ic)
+        if attrIcon:
+            # parent is an input site, use an entry icon to place attribute
+            entryIcon = entryicon.EntryIcon(window=win)
+            parent.replaceChild(entryIcon, parentSite)
+            entryIcon.appendPendingArgs([attrIcon])
+            win.cursor.setToText(entryIcon, drawNew=False)
+        else:
+            # There's no attribute icon, just remove the icon
+            win.cursor.setToIconSite(parent, parentSite)
+            win.removeIcons([ic])
+    ic.window.undo.addBoundary()
+

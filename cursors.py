@@ -557,15 +557,22 @@ class Cursor:
         """For cursor on icon site (self.type == "icon"), set new site based on arrow
         direction"""
         if evt.keysym in ('Left', 'Right') and not (evt.state & python_g.CTRL_MASK):
-            # Lexical traversal. This also visits icons that hold a text cursor (probably
-            # only the entry icon, maybe strings and/or comments).
-            if evt.keysym == 'Left' and _isEntryIcBodySite(self.icon, self.site):
+            # Lexical traversal. This also visits text in entry icons (and possibly
+            # comments, but that code is not done, yet).  Note particularly that we skip
+            # over the site to the left of the entry icon in normal traversal, because
+            # we'd prefer they typed there, instead.
+            if evt.keysym == 'Left' and _isEntryIcBodySite(self.icon, self.site) and \
+                    not (evt.state & python_g.SHIFT_MASK):
                 self.setToText(self.icon)
                 return
             ic, site = lexicalTraverse(self.icon, self.site, evt.keysym)
-            if evt.keysym == 'Right' and _isEntryIcBodySite(ic, site):
-                self.setToText(ic)
-                return
+            if evt.keysym == 'Right' and not (evt.state & python_g.SHIFT_MASK):
+                if _isEntryIcBodySite(ic, site):
+                    self.setToText(ic)
+                    return
+                elif isinstance(ic.childAt(site), entryicon.EntryIcon):
+                    self.setToText(ic.childAt(site))
+                    return
         else:
             ic, site = geometricTraverse(self.icon, self.site, evt.keysym)
         self.moveToIconSite(ic, site, evt)

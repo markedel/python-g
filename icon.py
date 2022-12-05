@@ -1466,12 +1466,16 @@ def rightmostFromSite(ic, siteId):
     return rightmostSite(argIcon)
 
 def findAttrOutputSite(ic):
-    if ic.hasSite('output'):
+    if hasOutputSite(ic):
         return ic
     for i in ic.parentage():
-        if i.hasSite('output'):
+        if hasOutputSite(i):
             return i
     return None
+
+def hasOutputSite(ic):
+    return ic.hasSite('output') and not (ic.__class__.__name__ == 'EntryIcon' and
+        ic.attachedToAttribute())
 
 def containingRect(icons):
     maxRect = comn.AccumRects()
