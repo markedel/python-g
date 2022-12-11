@@ -370,8 +370,8 @@ def parseText(macroParser, text, fileName="Pasted Text"):
 def _transferCommentsToAst(text, moduleAst, annotations):
     """Parse comments out of text and annotate the appropriate AST nodes so we can find
     them again when constructing the icon hierarchy from the AST."""
-    comments, elses, strings = _extractTokens(text, annotations)
-    _annotateAstWithComments(comments, elses, moduleAst.body)
+    comments, elses, strings, commentOnlyLines = _extractTokens(text, annotations)
+    _annotateAstWithComments(comments, elses, commentOnlyLines, moduleAst.body)
     _annotateAstStrings(strings, moduleAst)
 
 def _extractTokens(text, annotations):
@@ -388,6 +388,7 @@ def _extractTokens(text, annotations):
     lineNumToComment = {}
     lineNumToClause = {}
     posToStr = {}
+    commentOnlyLines = set()
     # The tokenize module won't just take a text string.  It needs a utf-8 coded
     # readline function
     with io.BytesIO(text.encode('utf-8')) as f:
@@ -401,6 +402,8 @@ def _extractTokens(text, annotations):
             if token.type == tokenize.COMMENT:
                 startLine, startCol = token.start
                 isLineComment = token.line[:startCol].isspace()
+                if isLineComment:
+                    commentOnlyLines.add(startLine)
                 if len(token.string) > 1 and token.string[1] == " ":
                     commentText = token.string[2:]
                 else:
@@ -443,11 +446,13 @@ def _extractTokens(text, annotations):
                 else:
                     prevTokenWasString = [token]
                 posToStr[token.start] = [token.string]
-            else:
+            elif token.type != tokenize.NL:
+                # Any other token stops string concatenation, except for NL, which is
+                # only emitted for newlines that do not end the statement (continuation).
                 prevTokenWasString = None
-    return lineNumToComment, lineNumToClause, posToStr
+    return lineNumToComment, lineNumToClause, posToStr, commentOnlyLines
 
-def _annotateAstWithComments(comments, clauses, bodyAsts, startLine=0):
+def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, startLine=0):
     elseCommentProperties = ('elselinecomments', 'elsestmtcomment')
     exceptCommentProperties = ('exceptlinecomments', 'exceptstmtcomment')
     finallyCommentProperties = ('finallylinecomments', 'finallystmtcomment')
@@ -456,14 +461,27 @@ def _annotateAstWithComments(comments, clauses, bodyAsts, startLine=0):
         if commentLines is not None:
             stmt.linecomments = [comments[line] for line in commentLines]
         # Block statements' line number range covers the entire code block below the stmt
-        # so we guess based on the line number of the first statement of the body (a
-        # guess that will be wrong for the unlikely case of a multi-line statement with
-        # no newline between it an the body)
+        # so we examine all of the comments between the first line after the statement,
+        # and the first line of the first statement of the body, and if any of them is
+        # not on a line by itself, assume that's still part of the block owning stmt, but
+        # anything following it is a line comment below it.  This will fail when the
+        # first statement of the body shares a line with a multi-line block-owning stmt
+        # (which will only appear in cases of really bad code formatting), and when
+        # there's a comment all by itself on a line between parts of the block-owning
+        # stmt and not followed by one that shares a line with it (which is also bad
+        # formatting, but could happen in weird cases, and will simply relocate the
+        # comment to after the stmt, which is acceptable).
         if hasattr(stmt, 'body'):
-            lastStmtLine = max(stmt.lineno, stmt.body[0].lineno - 1)
+            firstBodyStmtLine = max(stmt.lineno+1, stmt.body[0].lineno)
+            commentLines = _commentLinesBetween(comments, stmt.lineno, firstBodyStmtLine)
+            lastStmtLine = stmt.lineno
+            if commentLines is not None:
+                for lineNum in commentLines:
+                    if lineNum not in commentOnlyLines:
+                        lastStmtLine = lineNum
         else:
             lastStmtLine = stmt.end_lineno
-        commentLines = _commentLinesBetween(comments, stmt.lineno, lastStmtLine+1)
+            commentLines = _commentLinesBetween(comments, stmt.lineno, lastStmtLine+1)
         if commentLines is None:
             pass
         elif len(commentLines) == 1:
@@ -485,11 +503,12 @@ def _annotateAstWithComments(comments, clauses, bodyAsts, startLine=0):
                 for commentAst, line in zip(commentAsts, commentLines):
                     commentAst.iconcomment = comments[line]
             else:
-                commentList = [comments[line] for line in commentLines]
-                stmt.stmtcomment = '\n'.join(commentList)
+                commentList = [comments[line][1] for line in commentLines]
+                stmt.stmtcomment = comments[commentLines[0]][0], '\n'.join(commentList)
         if hasattr(stmt, 'body'):
             # Recursively process statements in code block(s)
-            _annotateAstWithComments(comments, clauses, stmt.body, lastStmtLine + 1)
+            _annotateAstWithComments(comments, clauses, commentOnlyLines, stmt.body,
+                lastStmtLine + 1)
             startLine = stmt.end_lineno + 1
             # Process else/elif/except/finally clauses after if, for, while, and try.
             # Unfortunately, the relevant AST nodes don't record the location of these,
@@ -534,7 +553,8 @@ def _annotateAstWithComments(comments, clauses, bodyAsts, startLine=0):
                     afterClauseLine = clauseLine + 1
                 # Recursively process statements in the clause's code block (and line
                 # comments between the clause statement and it.
-                _annotateAstWithComments(comments, clauses, clauseBody, afterClauseLine)
+                _annotateAstWithComments(comments, clauses, commentOnlyLines, clauseBody,
+                    afterClauseLine)
                 bodyEnd = clauseBody[-1].end_lineno
         else:
             startLine = lastStmtLine + 1
@@ -616,25 +636,32 @@ class SegmentedText:
     Once collected, the wrapText method will produce an attractively (and compactly)
     wrapped version of the text."""
     __slots__ = ('segments',)
-    breakPrefix = {0:"", 1:' \\', 2:'"', 3:'" \\', 4:"'", 5:"' \\", 6: '"', 7:'" \\',
-        8:"'", 9:"f' \\"}
-    breakSuffix = {0:"", 1:"", 2:'"', 3:'"', 4:"'", 5:"'", 6: 'f"', 7:'f"', 8:"f'",
-        9:"f'"}
     # Format for "segments" list is strings separated by numbers (break values).  break
     # values encapsulate the break "level", as well as how the break needs to be made
     # (with/without line continuation and string splitting).  Strings represent text to
     # be added to the file/clipboard, but can also be an object of class QuotedString
     # representing Python strings that can be internally wrapped if necessary.
     #
-    # Break values are coded as: breakLevel * 10 + breakType.  The weird base-10 coding
-    # is simply to make the values more human-readable (last digit is type).  breakType
-    # is a value from 0 to 9 from the table below (needs-continue means that if the code
-    # is wrapped, the line must end with a backslash (\) character):
-    #   0: code                     1: code needs-continue
-    #   2: double-quote string      3: double-quote string needs-continue
-    #   4: single-quote string      5: single-quote string needs-continue
-    #   6: double-quote f-string    7: double-quote f-string needs-continue
-    #   8: single-quote f-string    9: single-quote f-string needs-continue
+    # Break values are coded as: breakLevel * 100 + breakType.  The weird base-10 coding
+    # is simply to make the values more human-readable (last two digits are type).
+    # breakType is a value from 0 to 99 from the table below (needs-continue means that
+    # if the code is wrapped, the line must end with a backslash (\) character):
+    #   Code:
+    #       00: code                    01: code needs-continue
+    #   Single quoted strings:
+    #       Ones digit is string type:
+    #           0 = none, 1 = f, 2 = b, 3 = u, 4 = r, 5 = fr, 6 = br
+    #       Tens digit combines quote type and needs-continue:
+    #           10 = Single-quote string not needing continue
+    #           20 = Double-quote string not needing continue
+    #           30 = Single-quote string needing continue
+    #           40 = Double-quote string needing continue
+    #   Triple quoted strings:
+    #       50 = Newline break (mandatory) with dedent to left margin
+    #       51 = Non-newline (optional) break needing backslash escape with dedent to
+    #            left margin
+    #       52 = Newline break (mandatory) without dedent to left margin (help strings)
+    #       53 = Non-newline break without dedent to left margin (help strings)
 
     def __init__(self, initialString=None):
         """Create a SegmentedText object.  initialString may be set to None or an empty
@@ -691,6 +718,7 @@ class SegmentedText:
                 prevString.append(firstSeg)
             elif type(firstSeg) is QuotedString:
                 firstSeg.prepend(prevString)
+                self.segments[-1] = firstSeg
             else:
                 self.segments[-1] = prevString + otherSegText.segments[0]
             self.segments += otherSegText.segments[1:]
@@ -699,20 +727,23 @@ class SegmentedText:
             self.segments.append(breakValue)
             self.segments += otherSegText.segments
 
-    def addQuotedString(self, breakLevel, quotedString, needsContinue,
-            stringBreakLevel=None):
+    def addQuotedString(self, breakLevel, strType, strQuote, strContent, isDocString,
+            needsContinue, stringBreakLevel=None, noDedent=False):
         """Append a (single or double) quoted Python string or f-string to the accumulated
         text.  Like the "add" and "concat" methods, breakLevel may be specified as None
         to add without allowing a line break from the previous text segment.  However, if
         breakLevel is specified as None, stringBreakLevel (which would otherwise default
         to breakLevel + 1) must be specified.  Strings may not be concatenated to each
-        other without a wrap point in between."""
+        other without a wrap point in between.  Specify noDedent for the special case of
+        a triple-quote string (usually help strings) whose continuation should not be
+        dedented back to the left margin."""
         if stringBreakLevel is None:
             if breakLevel is None:
                 raise ValueError("SegmentedText.addQuotedString with breakLevel = None "
                     "requires stringBreakLevel argument specified")
             stringBreakLevel = breakLevel + 1
-        qs = QuotedString(quotedString, stringBreakLevel, needsContinue)
+        qs = QuotedString(strType, strQuote, strContent, isDocString, stringBreakLevel,
+            needsContinue)
         if self.segments is None:
             self.segments = [qs]
             return
@@ -765,7 +796,7 @@ class SegmentedText:
                 maxDepth = max(maxDepth, brkLvl + 1)  # A string can be further broken
         # Remove QuotedString objects representing breakable strings, and (if necessary),
         # break them down at word boundaries
-        self._breakStrings(margin - continuationIndent)
+        self._breakStrings(startIndent, continuationIndent, margin)
         # Baseline with no level cutoff
         breakPointList = self._findAllBreakPoints(maxDepth + 1, startIndent,
             continuationIndent, margin)
@@ -787,23 +818,21 @@ class SegmentedText:
             # Copy the strings before the breakpoint to strings
             for i in range(startIdx, bp, 2):
                 strings.append(self.segments[i])
-            # If the last string ended in a space, delete it
-            if strings[-1][-1] == ' ':
-                strings[-1] = strings[-1][:-1]
             # If continuation and/or string splitting is needed, add it
-            strings.append(self.breakPrefix[breakType])
-            # Append the newline and continuation indent
+            strings.append(_breakPrefix(breakType))
+            # Append the newline and continuation indent (triple quoted strings get
+            # no indent, unless they are docstrings, which get startIndent)
             strings.append('\n')
-            strings.append(' ' * continuationIndent)
+            if breakType < 50:
+                strings.append(' ' * continuationIndent)
+            elif breakType in (52, 53):
+                strings.append(' ' * startIndent)
             # If string continuation was used, restart the string
-            strings.append(self.breakSuffix[breakType])
+            strings.append(_breakSuffix(breakType))
             startIdx = bp + 1
         # Copy the text after the last break point
         for i in range(startIdx, len(self.segments), 2):
             strings.append(self.segments[i])
-        # If the last string ended in a space (I'm not sure this happens) delete it
-        if strings[-1][-1] == ' ':
-            strings[-1] = strings[-1][:-1]
         # Return the joined string
         return "".join(strings)
 
@@ -843,19 +872,25 @@ class SegmentedText:
 
     def _findAllBreakPoints(self, levelCutoff, startIndent, continueIndent, margin):
         startIdx = 0
+        tempTripleQuoteDedent = 0
         continueIndentAdded = False
         breakPoints = []
         while True:
-            breakPoint = self._findBreakPoint(startIdx, levelCutoff, startIndent, margin)
+            breakPoint = self._findBreakPoint(startIdx, levelCutoff,
+                startIndent - tempTripleQuoteDedent, margin)
             if breakPoint is None:
                 break
             breakPoints.append(breakPoint)
             startIdx = breakPoint + 1
+            _breakLvl, breakType = _decodeBreakValue(self.segments[breakPoint])
             if not continueIndentAdded:
                 startIndent = continueIndent
-                _breakLvl, breakType = _decodeBreakValue(self.segments[breakPoint])
-                startIndent += len(self.breakSuffix[breakType])
+                startIndent += len(_breakSuffix(breakType))
                 continueIndentAdded = True
+            if breakType in (50, 51):
+                tempTripleQuoteDedent = startIndent
+            else:
+                tempTripleQuoteDedent = 0
         return breakPoints
 
     def _findBreakPoint(self, startIdx, levelCutoff, startIndent, margin):
@@ -866,7 +901,11 @@ class SegmentedText:
         textWidth = startIndent
         for i in range(startIdx, len(self.segments), 2):
             string = self.segments[i]
-            lastCharIsSpace = string[-1] == ' '
+            if i+1 < len(self.segments) and _decodeBreakValue(self.segments[i+1])[1] > 1:
+                # For strings, trailing spaces are part of the data (don't lop them off).
+                lastCharIsSpace = False
+            else:
+                lastCharIsSpace = string[-1] == ' '
             stringRequiredWidth = len(string) - (1 if lastCharIsSpace else 0)
             if i+1 >= len(self.segments):
                 # We reached the end of the statement and it either fits or does not
@@ -876,21 +915,27 @@ class SegmentedText:
                     return lastAcceptableBreakPoint
             breakLevel, breakType = _decodeBreakValue(self.segments[i + 1])
             if breakLevel < levelCutoff:
-                stringRequiredWidth += len(self.breakPrefix[breakType])
+                stringRequiredWidth += len(_breakPrefix(breakType))
                 if textWidth + stringRequiredWidth > margin:
                     return lastAcceptableBreakPoint
                 lastAcceptableBreakPoint = i + 1
+            if breakType in (50, 52):  # Mandatory break at newline
+                return i + 1
             textWidth += len(string)
         return None  # Because of odd length of segList, this will not be reached
 
-    def _breakStrings(self, maxLength):
-        """Measure the length of the text, and if it exceeds maxLength, break quoted
-        string objects at word boundaries (and non-word boundaries based on maxLength."""
+    def _breakStrings(self, startIndent, continueIndent, margin):
+        """Measure the length of the text, and if it exceeds what will fit within the
+        given parameters (margin - continueIndent for most things), break quoted string
+        objects at word boundaries (and non-word boundaries based on on the calculated
+        maximum length.  Triple-quoted strings break the rules, in that their indent for
+        continuation is either all the way to the left margin, or to startIndent instead
+        of continueIndent for doc-strings."""
         totalLength = 0
         for entry in self.segments:
             if type(entry) is not int:
                 totalLength += len(entry)
-        if totalLength < maxLength:
+        if totalLength < margin - startIndent:
             # Everything fits on one line, no breaks necessary: leave everything intact
             # but replace QuotedString objects with the (un-broken) string they represent
             for i, entry in enumerate(self.segments):
@@ -900,7 +945,8 @@ class SegmentedText:
             # Break strings at word boundaries (or as necessary to fit within maxLength)
             for i, entry in enumerate(self.segments):
                 if isinstance(entry, QuotedString):
-                    self.segments[i:i+1] = entry.breakString(maxLength)
+                    self.segments[i:i+1] = entry.breakString(startIndent, continueIndent,
+                        margin)
 
 class QuotedString:
     """Helper object for SegmentedText to hold Python quoted strings.  Strings are
@@ -912,26 +958,14 @@ class QuotedString:
     if any of the remaining "words" exceed that limit).  breakString returns the split
     string in SegmentedText's "segments" format, so the SegmentedText wrapText method
     can wrap the string along with everything else it's wrapping."""
-    __slots__ = ('text', 'breakLevel', 'breakType', 'prependedText', 'appendedText')
+    __slots__ = ('strType', 'quote', 'text', 'breakLevel', 'breakType', 'prependedText',
+        'appendedText')
 
-    def __init__(self, quotedString, brkLvl, needsContinue):
-        c0, c1 = quotedString[:2]
-        if c0 == '"':
-            self.breakType = 2
-            self.text = quotedString[1:-1]
-        elif c0 == "'":
-            self.breakType = 4
-            self.text = quotedString[1:-1]
-        elif c0 == 'f' and c1 == '"':
-            self.breakType = 6
-            self.text = quotedString[2:-1]
-        elif c0 == 'f' and c1 == "'":
-            self.breakType = 8
-            self.text = quotedString[2:-1]
-        else:
-            raise ValueError("Error adding string to SegmentedText: bad string format")
-        if needsContinue:
-            self.breakType += 1
+    def __init__(self, strType, strQuote, text, isDocString, brkLvl, needsCont):
+        self.breakType = _encodeStringBreakType(strType, strQuote, isDocString, needsCont)
+        self.strType = strType
+        self.quote = strQuote
+        self.text = text
         self.breakLevel = brkLvl
         self.prependedText = ""
         self.appendedText = ""
@@ -939,17 +973,22 @@ class QuotedString:
     def __len__(self):
         """Return the length of the quoted string (including quotes) assuming no
         line breaks are added."""
-        return len(SegmentedText.breakSuffix[self.breakType]) + len(self.text) + 1 + \
+        return len(self.strType) + 2 * len(self.quote) + len(self.text) + \
             len(self.prependedText) + len(self.appendedText)
 
-    def breakString(self, maxLength):
+    def breakString(self, startIndent, continueIndent, margin):
         """Split the string at the end of whitespace of word boundaries, and return a
         SegmentedText.segments-style list that can be spliced-in in place of the
-        QuotedString object in the list."""
+        QuotedString object in the list.  Strings longer than will fit between the
+        given indents and margin are also split, even if they don't have whitespace.
+        The maximum length depends upon the string type and whether it is the initial
+        or subsequent portion of the string (triple-quoted strings dedent either back
+        to the left margin, or to startIndent if they are doc-strings)."""
         foundSpace = False
         segmentStrings = []
         startIdx = 0
-        stringStart = self.prependedText + SegmentedText.breakSuffix[self.breakType]
+        stringStart = self.prependedText + self.strType + self.quote
+        maxFirstSegLen = max(margin - continueIndent, len(stringStart) + 1)
         for i, c in enumerate(self.text):
             if c.isspace():
                 foundSpace = True
@@ -958,12 +997,19 @@ class QuotedString:
                 stringStart = ""
                 startIdx = i
                 foundSpace = False
-        segmentStrings.append(self.text[startIdx:] +
-            SegmentedText.breakSuffix[self.breakType][-1] + self.appendedText)
+        segmentStrings.append(stringStart + self.text[startIdx:] + self.quote +
+            self.appendedText)
         # Adjust maxLength for continuation characters needed, to a minimum of 5
-        # characters (at that point we give up and exceed the requested margin)
-        maxLength -= len(SegmentedText.breakPrefix[self.breakType]) + \
-                     len(SegmentedText.breakSuffix[self.breakType])
+        # characters (at that point we give up and exceed the requested margin),
+        # and for triple quotes which dedent all the way to the left margin.
+        if self.breakType == 51:
+            maxLength = margin
+        elif self.breakType == 53:
+            maxLength = margin - startIndent
+        else:
+            maxLength = margin - continueIndent
+        maxLength -= len(_breakPrefix(self.breakType)) + \
+                     len(_breakSuffix(self.breakType))
         if maxLength < 5:
             maxLength = 5
         # add breakValue between segments, and if any segments are still longer than
@@ -971,23 +1017,28 @@ class QuotedString:
         segments = []
         brkValue = _encodeBreakValue(self.breakLevel, self.breakType)
         for i, string in enumerate(segmentStrings):
-            if len(string) > maxLength:
+            maxSegLength = maxFirstSegLen if i == 0 else maxLength
+            if len(string) > maxSegLength:
                 startIdx = 0
-                while len(string) - startIdx > maxLength:
-                    segments.append(string[startIdx:startIdx + maxLength])
+                while len(string) - startIdx > maxSegLength:
+                    segments.append(string[startIdx:startIdx + maxSegLength])
                     segments.append(brkValue)
-                    startIdx += maxLength
+                    startIdx += maxSegLength
                 segments.append(string[startIdx:])
             else:
                 segments.append(string)
             if i < len(segmentStrings) - 1:
-                segments.append(brkValue)
+                if segments[-1][-1] == '\n':
+                    # Triple quoted string line ending: strip off newline and add a
+                    # mandatory break (type 50 or 53)
+                    segments[-1] = segments[-1][:-1]
+                    segments.append(self.breakType - 1)
+                else:
+                    segments.append(brkValue)
         return segments
 
     def unbrokenString(self):
-        stringStart = SegmentedText.breakSuffix[self.breakType]
-        stringEnd = stringStart[-1]
-        return self.prependedText + stringStart + self.text + stringEnd + \
+        return self.prependedText + self.strType + self.quote + self.text + self.quote + \
                self.appendedText
 
     def append(self, text):
@@ -1004,12 +1055,53 @@ class SegTextComment:
         self.sepFromPrev = sepFromPrev
 
 def _decodeBreakValue(breakValue):
-    brkLevel = breakValue // 10
-    brkType = breakValue - brkLevel * 10
+    brkLevel = breakValue // 100
+    brkType = breakValue - brkLevel * 100
     return brkLevel, brkType
 
 def _encodeBreakValue(breakLevel, breakType):
-    return breakLevel * 10 + breakType
+    return breakLevel * 100 + breakType
+
+def _encodeStringBreakType(strType, quote, isDocString, needsContinue):
+    if len(quote) == 1:
+        typeDigit = {'': 0, 'f': 1, 'b': 2, 'u': 3, 'r': 4, 'fr': 5, 'br': 6, 'rf': 5,
+            'rb': 6}[strType]
+        quoteContDigit = {"'": 10, '"': 20}[quote] + (20 if needsContinue else 0)
+        return typeDigit + quoteContDigit
+    # For triple quoted strings, string and quote types and need for continuation are not
+    # encoded in the break type, since we don't have to restart the string after a wrap.
+    if isDocString:
+        return 53
+    return 51
+
+def _decodeStringBreakType(breakType):
+    quoteContDigit = breakType // 10
+    if quoteContDigit == 5:
+        return None, '"""', None
+    typeDigit = breakType - quoteContDigit * 10
+    strType = {0:'', 1:'f', 2:'b', 3:'u', 4:'r', 5:'fr', 6:'br'}[typeDigit]
+    quote = "'" if quoteContDigit in (1, 3) else '"'
+    needsCont = quoteContDigit in (3, 4)
+    return strType, quote, needsCont
+
+def _breakPrefix(breakValue):
+    breakLvl, breakType = _decodeBreakValue(breakValue)
+    if breakType < 10:
+        return '' if breakType == 0 else ' \\'
+    if breakType in (50, 52):
+        return ''
+    if breakType in (51, 53):
+        return '\\'
+    if 10 <= breakType <= 49:
+        strType, quote, needsCont = _decodeStringBreakType(breakType)
+        return quote + (' \\' if needsCont else '')
+
+def _breakSuffix(breakValue):
+    breakLvl, breakType = _decodeBreakValue(breakValue)
+    if breakType < 10 or breakType >= 50:
+        return ''
+    strType, quote, needsCont = _decodeStringBreakType(breakType)
+    return strType + quote
 
 def _parsePosMacro(macroArgs):
     match = posMacroPattern.match(macroArgs)
@@ -1149,18 +1241,30 @@ def outFormatTest():
     segText = SegmentedText("asdf")
     segText.add(None, "(")
     segText.add(2, "$:w$")
-    segText.addQuotedString(None,'f"this is a very long string with a lot of words in '
+    segText.addQuotedString(None,'fr', '"', 'this is a long string with lots of words '
         'it. I am going to keep typing and typing until I have oooooooooooooooooooooo '
-        'something really long and hard to fit within the margin.  Lets do lot\'s of'
+        'something really long and hard to fit within the margin.  Lets do lot\'s of '
         'wrapping!  Here I go, lots more text coming.  Lots of love: xxxxxxxxxxxxxxxx'
-        'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"', False, 2)
+        'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', False, True, 2)
+    segText.add(2 , ", ")
+    segText.addQuotedString(None,'r', '"""',
+    """Add a macro to annotate and extend the save-file and pasted-text format beyond
+the base Python syntax.  The save-file format extends Python with macros of the
+form $name:argString$.  name is composed of the same set of characters as Python
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+identifiers. Macros that skip the name ($:args$) provide (mostly layout-ralated)
+information to the built-in icon creation functions for Python itself.  The colon
+separates the macro name from its arguments, and may be omitted if there are no
+arguments to pass.  The format of the argument string (argString) is entirely up
+to the implementer, but must not contain the "$" character.""", False, True, 2)
+
     segText.add(None, ", ")
     fakeSegText = SegmentedText("deleteme")
-    fakeSegText.segments = ["asdf, ",20,"nert(",30, "wang, ",30, "blort), ",21,
-        "bbbbb + ", 30, "45 * ", 40, "3) + ", 11, "10 * ", 21, "2 ** ", 31, "4"]
+    fakeSegText.segments = ["asdf, ",200,"nert(",300, "wang, ",300, "blort), ",201,
+        "bbbbb + ", 300, "45 * ", 400, "3) + ", 101, "10 * ", 201, "2 ** ", 301, "4"]
     segText.concat(2, fakeSegText)
     print(repr(segText.segments))
-    for margin in range(12, 100):
+    for margin in range(12, 100, 4):
         print("-"*margin, margin)
         savedSegments = segText.segments[:]  # Wrapping can only be done once
         print(segText.wrapText(4, 8, margin))

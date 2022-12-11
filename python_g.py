@@ -2481,9 +2481,10 @@ class Window:
                             continueIndent = tabSize
                         saveText = ic.createSaveText(export=exportPython)
                         if isinstance(ic, nameicons.CommentIcon):
-                            stmtText = saveText.commentText(ic.wrap, indent, margin=40)
+                            stmtText = saveText.commentText(ic.wrap, indent, margin=100)
                         else:
-                            stmtText = saveText.wrapText(indent, indent + continueIndent, margin=40)
+                            stmtText = saveText.wrapText(indent, indent + continueIndent,
+                                margin=100)
                         f.write(stmtText)
                         f.write('\n')
         print('Finished save')

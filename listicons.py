@@ -644,7 +644,7 @@ class ListTypeIcon(icon.Icon):
             icon.addArgSaveText(cprhText, brkLvl, site, False, export)
         text.concat(brkLvl, cprhText, False)
         text.add(None, self.rightText)
-        return text
+        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
 
     def backspace(self, siteId, evt):
         backspaceListIcon(self, siteId, evt)
@@ -1385,7 +1385,7 @@ class CallIcon(icon.Icon):
         argText = icon.seriesSaveText(brkLvl, self.sites.argIcons, False, export)
         text.concat(brkLvl, argText)
         text.add(None, ')')
-        return text
+        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
 
     def dumpName(self):
         return "call("  + (")" if self.closed else "")

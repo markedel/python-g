@@ -1533,24 +1533,33 @@ def addArgSaveText(saveText, breakLevel, site, cont, export):
     break-level as is being passed to argSaveText."""
     saveText.concat(breakLevel, argSaveText(breakLevel, site, cont, export), cont)
 
-def seriesSaveText(breakLevel, seriesSite, cont, export):
+def seriesSaveText(breakLevel, seriesSite, cont, export, allowTrailingComma=False):
     """Create a filefmt.SegmentedText string representing a series of arguments.  If
     any but the first argument of a single-entry list has no icon, place the $Empty$
-    macro at the site."""
+    macro at the site.  If allowTrailingComma is specified, the second position of a
+    two-element series will not be marked with $Empty$ if it is empty (used when the
+    series can represent a non-parenthesized tuple, such as =, for, return, and yield)."""
     if len(seriesSite) == 0 or len(seriesSite) == 1 and seriesSite[0].att is None:
         return filefmt.SegmentedText(None)
     args = [argSaveText(breakLevel, site, cont, export) for site in seriesSite]
     combinedText = args[0]
-    for arg in args[1:]:
+    if allowTrailingComma and len(args) == 2 and seriesSite[1].att is None:
         combinedText.add(None, ', ', cont)
-        combinedText.concat(breakLevel, arg, cont)
+    else:
+        for arg in args[1:]:
+            combinedText.add(None, ', ', cont)
+            combinedText.concat(breakLevel, arg, cont)
     return combinedText
 
-def addSeriesSaveText(saveText, breakLevel, seriesSite, cont, export):
+def addSeriesSaveText(saveText, breakLevel, seriesSite, cont, export,
+        allowTrailingComma=False):
     """Convenience function to append the result of seriesSaveText to saveText at the
-    same break-level as is being passed to seriesSaveText."""
-    saveText.concat(breakLevel, seriesSaveText(breakLevel, seriesSite, cont, export),
-        cont)
+    same break-level as is being passed to seriesSaveText.  If allowTrailingComma is
+    specified, the second position of a two-element series will not be marked with
+    $Empty$ if it is empty (used when the series can represent a non-parenthesized tuple,
+    such as =, for, return, and yield)."""
+    saveText.concat(breakLevel, seriesSaveText(breakLevel, seriesSite, cont, export,
+        allowTrailingComma=allowTrailingComma), cont)
 
 def addAttrSaveText(saveText, ic, parentBreakLevel, cont, export):
     """If the given icon has an attribute attached, compose and append the text from the

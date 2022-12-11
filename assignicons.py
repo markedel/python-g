@@ -254,7 +254,8 @@ class AssignIcon(icon.Icon):
             icon.addSeriesSaveText(text, brkLvl,
                 getattr(self.sites, tgtList.siteSeriesName), contNeeded, export)
             text.add(None, " = ")
-        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
+            allowTrailingComma=True)
         return text
 
     def assignValues(self, tgtIcon, value):
@@ -554,7 +555,8 @@ class AugmentedAssignIcon(icon.Icon):
         brkLvl = parentBreakLevel + 1
         text = icon.argSaveText(brkLvl, self.sites.targetIcon, contNeeded, export)
         text.add(None, " " + self.op + "= ")
-        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded,export)
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
+            allowTrailingComma=True)
         return text
 
     def backspace(self, siteId, evt):
@@ -639,6 +641,8 @@ def createAssignIconFromAst(astNode, window):
     if isinstance(astNode.value, ast.Tuple):
         valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
         topIcon.insertChildren(valueIcons, "values", 0)
+        if len(valueIcons) == 1:
+            topIcon.insertChild(None, "values", 1)
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
     return topIcon
@@ -651,6 +655,8 @@ def createAugmentedAssignIconFromAst(astNode, window):
     if isinstance(astNode.value, ast.Tuple):
         valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
         assignIcon.insertChildren(valueIcons, "values", 0)
+        if len(valueIcons) == 1:
+            assignIcon.insertChild(None, "values", 1)
     else:
         assignIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
     return assignIcon

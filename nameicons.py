@@ -536,6 +536,17 @@ class ReturnIcon(SeriesStmtIcon):
                  col_offset=0)
         return ast.Return(value=valueAst, lineno=self.id, col_offset=0)
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        # This differs from the superclass version in that a trailing comma is allowed
+        # after a single entry (to indicate a single-element tuple )
+        brkLvl = parentBreakLevel + 1
+        if len(self.sites.values) == 0:
+            return filefmt.SegmentedText(self.stmt)
+        text = filefmt.SegmentedText(self.stmt + " ")
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
+            allowTrailingComma=True)
+        return text
+
 class DelIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "del", window, location=location)
@@ -1075,7 +1086,8 @@ class YieldIcon(icon.Icon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText("yield ")
-        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
+            allowTrailingComma=True)
         return text
 
     def dumpName(self):
@@ -1568,6 +1580,8 @@ def createReturnIconFromAst(astNode, window):
     if isinstance(astNode.value, ast.Tuple):
         valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
         topIcon.insertChildren(valueIcons, "values", 0)
+        if len(valueIcons) == 1:
+            topIcon.insertChild(None, "values", 1)
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
     return topIcon
@@ -1695,6 +1709,8 @@ def createYieldIconFromAst(astNode, window):
     if isinstance(astNode.value, ast.Tuple):
         valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
         topIcon.insertChildren(valueIcons, "values", 0)
+        if len(valueIcons) == 1:
+            topIcon.insertChild(None, "values", 1)
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
     return topIcon

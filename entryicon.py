@@ -1064,7 +1064,7 @@ class EntryIcon(icon.Icon):
         """Parse proposed text for the entry icon.  Returns three values: 1) the parse
         result, one of "accept", "reject", "typeover", "comma", "colon", "openBracket",
         "end"bracket" "openBrace", "endBrace", "openParen", "endParen", "makeFunction",
-        "makeSubscript", or a pair of a created icon and delimiter.  1) If the text was
+        "makeSubscript", or a pair of a created icon and delimiter.  2) If the text was
         processed by a per-icon textHandler method, the responsible icon, 3) A boolean
         value indicating that the text represents a statement that needs to be prepended
         to the attached icon, as opposed to being inserted at the site."""

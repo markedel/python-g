@@ -570,12 +570,12 @@ class ForIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText(self.stmt)
+        text = filefmt.SegmentedText(self.stmt + ' ')
         icon.addSeriesSaveText(text, brkLvl, self.sites.targets, contNeeded,
             export)
         text.add(brkLvl, " in ", contNeeded)
         icon.addSeriesSaveText(text, brkLvl, self.sites.iterIcons, contNeeded,
-            export)
+            export, allowTrailingComma=True)
         text.add(None, ":")
         return text
 
@@ -1372,6 +1372,8 @@ class ExceptIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
+        if self.sites.typeIcon.att is None:
+            return filefmt.SegmentedText("except:")
         text = filefmt.SegmentedText("except ")
         icon.addArgSaveText(text, brkLvl, self.sites.typeIcon, contNeeded, export)
         text.add(None, ":")
@@ -2216,6 +2218,8 @@ def createForIconFromAst(astNode, window):
     if isinstance(astNode.iter, ast.Tuple):
         iterIcons = [icon.createFromAst(i, window) for i in astNode.iter.elts]
         topIcon.insertChildren(iterIcons, "iterIcons", 0)
+        if len(iterIcons) == 1:
+            topIcon.insertChild(None, "iterIcons", 1)
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.iter, window), "iterIcons_0")
     return topIcon

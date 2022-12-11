@@ -10,6 +10,8 @@ import iconlayout
 import filefmt
 import cursors
 import entryicon
+import blockicons
+import nameicons
 
 STRING_COLOR = (40, 110, 110, 255)
 STRING_SPINE_COLOR = (80, 220, 220)
@@ -504,10 +506,8 @@ class StringIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         text = filefmt.SegmentedText()
-        strText = self.strType + self.quote + self.string + self.quote
-        if len(self.strType) == 3:
-            contNeeded = False
-        text.addQuotedString(None, strText, contNeeded, parentBreakLevel + 1)
+        text.addQuotedString(parentBreakLevel, self.strType, self.quote, self.string,
+            self.isDocStringIcon(), contNeeded, parentBreakLevel + 1)
         return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
 
     def createAst(self):
@@ -590,6 +590,19 @@ class StringIcon(icon.Icon):
         else:
             self.cursorPos = max(-1, min(len(self.string), pos))
         self._updateTypeoverState()
+
+    def isDocStringIcon(self):
+        if not self.hasSite('seqIn'):
+            return False
+        stmt = self
+        while True:
+            stmt = stmt.prevInSeq()
+            if stmt is None:
+                return False
+            if isinstance(stmt, blockicons.DefOrClassIcon):
+                return True
+            if not isinstance(stmt, nameicons.CommentIcon):
+                return False
 
     def _updateTypeoverState(self):
         if self.typeoverIdx is not None and not self.cursorPos == len(self.string):
