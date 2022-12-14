@@ -42,8 +42,8 @@ keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'b
 noArgStmts = {'pass', 'continue', 'break', 'else', 'finally'}
 
 identPattern = re.compile('^[a-zA-Z_][a-zA-Z_\\d]*$')
-numPattern = re.compile('^([+-]?[\\d_]*\\.?[\\d_]*)|'
- '([+-]?((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*)?$')
+numPattern = re.compile('^[+-]?(([\\d_]*\\.?[\\d_]*)|(0[xX][0-9a-fA-F]*)|(0[oO][0-7]*)|'
+ '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*))?$')
 attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
 opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~"\']')
@@ -2074,10 +2074,17 @@ class EntryIcon(icon.Icon):
             return True
         elif isinstance(attachedIc, opicons.UnaryOpIcon) and attachedIc.operator == '-' \
                 and isinstance(insertedIc, nameicons.NumericIcon):
+            if not isinstance(insertedIc.value, (numbers.Real, numbers.Rational,
+                    numbers.Integral)) or insertedIc.value < 0 or \
+                    isinstance(insertedIc.value, bool):
+                # True, False, ellipsis are also considered numbers and represented by
+                # NumericIcon, but can't be negated.
+                return False
             # Join unary minus and a numeric icon into a negative numeric icon
             if not doJoin:
                 return True
-            newNumIc = nameicons.NumericIcon(-insertedIc.value, window=attachedIc.window)
+            newNumIc = nameicons.NumericIcon("-" + insertedIc.text,
+                window=attachedIc.window)
             attachedIc.replaceChild(None, attachedSite)
             attachedIc.replaceWith(newNumIc)
             newNumIc.replaceChild(self, 'attrIcon')
@@ -2482,13 +2489,13 @@ def parseExprText(text, window):
         return nameicons.NumericIcon(exprAst.n, window), delim
     if exprAst.__class__ == ast.UnaryOp and exprAst.op.__class__ == ast.USub and \
             exprAst.operand == ast.Num:
-        return nameicons.NumericIcon(-exprAst.operand.n, window), delim
+        return nameicons.NumericIcon(text, window), delim
     if exprAst.__class__ == ast.Constant and isinstance(exprAst.value, numbers.Number):
-        return nameicons.NumericIcon(exprAst.value, window), delim
+        return nameicons.NumericIcon(text, window), delim
     if exprAst.__class__ == ast.UnaryOp and exprAst.op.__class__ == ast.USub and \
             exprAst.operand.__class__ == ast.Constant and \
             isinstance(exprAst.operand.value, numbers.Number):
-        return nameicons.NumericIcon(-exprAst.operand.value, window), delim
+        return nameicons.NumericIcon(text, window), delim
     return "reject"
 
 def parseTopLevelText(text, window):

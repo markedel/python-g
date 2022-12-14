@@ -142,14 +142,34 @@ class IdentifierIcon(TextIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
 
+    def compareData(self, data):
+        # Identifiers are considered code and rejected.  However, currently our only
+        # representation for complex numbers is complex(real, imag), and those are
+        # considered data.
+        if self.name != 'complex':
+            return False
+        attr = self.sites.attrIcon.att
+        if not isinstance(attr, listicons.CallIcon):
+            return False
+        if len(attr.sites.argIcons) != 2:
+            return False
+        realIconSite, imagIconSite = attr.sites.argIcons
+        realIcon = realIconSite.att
+        imagIcon = imagIconSite.att
+        if not isinstance(realIcon, NumericIcon) or not isinstance(imagIcon, NumericIcon):
+            return False
+        if not isinstance(data, complex):
+            return False
+        return complex(realIcon.value, imagIcon.value) == data
+
 class NumericIcon(TextIcon):
     def __init__(self, value, window=None, location=None):
-        if type(value) == type(""):
-            try:
-                value = int(value)
-            except ValueError:
-                value = float(value)
-        TextIcon.__init__(self, repr(value), window, location, cursorOnlyAttrSite=True)
+        if type(value) is str:
+            text = value
+            value = ast.literal_eval(value)
+        else:
+            text = repr(value)
+        TextIcon.__init__(self, text, window, location, cursorOnlyAttrSite=True)
         self.value = value
 
     def execute(self):
@@ -487,8 +507,6 @@ class SeriesStmtIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        if len(self.sites.values) == 0:
-            return filefmt.SegmentedText(self.stmt)
         text = filefmt.SegmentedText(self.stmt + " ")
         icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
         return text
@@ -540,7 +558,7 @@ class ReturnIcon(SeriesStmtIcon):
         # This differs from the superclass version in that a trailing comma is allowed
         # after a single entry (to indicate a single-element tuple )
         brkLvl = parentBreakLevel + 1
-        if len(self.sites.values) == 0:
+        if len(self.sites.values) == 1 and self.sites.values[0].att is None:
             return filefmt.SegmentedText(self.stmt)
         text = filefmt.SegmentedText(self.stmt + " ")
         icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
@@ -1085,6 +1103,8 @@ class YieldIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
+        if len(self.sites.values) == 1 and self.sites.values[0].att is None:
+            return filefmt.SegmentedText("yield")
         text = filefmt.SegmentedText("yield ")
         icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
             allowTrailingComma=True)
@@ -1657,6 +1677,7 @@ def createNonlocalIconFromAst(astNode, window):
 icon.registerIconCreateFn(ast.Nonlocal, createNonlocalIconFromAst)
 
 def createNumericIconFromAst(astNode, window):
+    # Deprecated in Python 3.8 and beyond (not called)
     return NumericIcon(astNode.n, window)
 icon.registerIconCreateFn(ast.Num, createNumericIconFromAst)
 
@@ -1667,6 +1688,11 @@ icon.registerIconCreateFn(ast.NameConstant, createNameConstantFromAst)
 def createConstIconFromAst(astNode, window):
     if isinstance(astNode.value, numbers.Number) or astNode.value is None:
         # Note that numbers.Number includes True and False
+        if hasattr(astNode, 'annNumberSrcStr'):
+            # We have a source string available.  Use it if it matches the value
+            # stored in the ast
+            if astNode.value == ast.literal_eval(astNode.annNumberSrcStr):
+                return NumericIcon(astNode.annNumberSrcStr, window)
         return NumericIcon(astNode.value, window)
     elif isinstance(astNode.value, (str, bytes)):
         if hasattr(astNode, 'annSourceStrings'):

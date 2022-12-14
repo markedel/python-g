@@ -3,7 +3,7 @@ import re
 import io
 import tokenize
 import textwrap
-import tkinter
+import numbers
 
 SINGLE_QUOTE_STRING = 1
 DOUBLE_QUOTE_STRING = 2
@@ -126,13 +126,11 @@ class MacroParser:
                     elif inString == DOUBLE_QUOTE_STRING:
                         if not strAt(text, origIdx-1, '\\"') or \
                                 strAt(text, origIdx-2, '\\'):
-                            print('"')
                             inString = None
                     elif inString == TRIPLE_DOUBLE_QUOTE_STRING:
                         if strAt(text, origIdx-2, '"""'):
                             if not strAt(text, origIdx-3, '"') or \
                                     strAt(text, origIdx-5, '""""""'):
-                                print('"')
                                 inString = None
                 elif origChar == "'" and not inComment:
                     if inString is None:
@@ -143,16 +141,13 @@ class MacroParser:
                     elif inString == SINGLE_QUOTE_STRING:
                         if not strAt(text, origIdx-1, "\\'") or \
                                 strAt(text, origIdx-2, '\\'):
-                            print("'")
                             inString = None
                     elif inString == TRIPLE_SINGLE_QUOTE_STRING:
                         if strAt(text, origIdx-2, "'''"):
                             if not strAt(text, origIdx-3,  "'") or \
                                     strAt(text, origIdx-5, "''''''"):
-                                print("'")
                                 inString = None
                 # Advance to the next character and increment column count
-                if inString is not None: print(origChar, end="")
                 modColNum += 1
                 origIdx += 1
         # Copy the text between the last macro and the end of the input text to the output
@@ -370,16 +365,18 @@ def parseText(macroParser, text, fileName="Pasted Text"):
 def _transferCommentsToAst(text, moduleAst, annotations):
     """Parse comments out of text and annotate the appropriate AST nodes so we can find
     them again when constructing the icon hierarchy from the AST."""
-    comments, elses, strings, commentOnlyLines = _extractTokens(text, annotations)
+    comments, elses, consts, commentOnlyLines = _extractTokens(text, annotations)
     _annotateAstWithComments(comments, elses, commentOnlyLines, moduleAst.body)
-    _annotateAstStrings(strings, moduleAst)
+    _annotateAstConsts(consts, moduleAst)
 
 def _extractTokens(text, annotations):
-    """ Return two dictionaries: 1 mapping line numbers to comments, and 2 mapping
+    """ Return four dictionaries: 1 mapping line numbers to comments, and 2 mapping
     line numbers to else/elif/except/finally statements (the dictionary holds start
-    column number).  annotations argument is used to attach comment macro annotations,
-    and to know  how to interpret line breaks in the column (by interpreting the macro
-    arguments to detect "w" argument indicating that the comment should be wrapped)."""
+    column number), 3 mapping line/col pairs to source strings for strings and numbers,
+    and 4 (a set, not a dict) records line numbers of lines that contain only a comment.
+    annotations argument is used to attach comment macro annotations, and to know  how to
+    interpret line breaks in the column (by interpreting the macro arguments to detect
+    "w" argument indicating that the comment should be wrapped)."""
     # While it seems wasteful to run a whole separate pass over the file to extract
     # comments and detect the positioning of else statements, these are easier on
     # tokenized code (which we can't do before macro substitution).  I suspect the
@@ -387,7 +384,7 @@ def _extractTokens(text, annotations):
     # hackish, but not necessarily faster.
     lineNumToComment = {}
     lineNumToClause = {}
-    posToStr = {}
+    posToConstSrcStr = {}
     commentOnlyLines = set()
     # The tokenize module won't just take a text string.  It needs a utf-8 coded
     # readline function
@@ -439,18 +436,20 @@ def _extractTokens(text, annotations):
                 startLine, startCol = token.start
                 lineNumToClause[startLine] = startCol
                 prevTokenWasString = None
+            elif token.type == tokenize.NUMBER:
+                posToConstSrcStr[token.start] = token.string
             elif token.type == tokenize.STRING:
                 if prevTokenWasString:
                     prevTokenWasString.append(token)
-                    posToStr[prevTokenWasString[0].start].append(token.string)
+                    posToConstSrcStr[prevTokenWasString[0].start].append(token.string)
                 else:
                     prevTokenWasString = [token]
-                posToStr[token.start] = [token.string]
+                posToConstSrcStr[token.start] = [token.string]
             elif token.type != tokenize.NL:
                 # Any other token stops string concatenation, except for NL, which is
                 # only emitted for newlines that do not end the statement (continuation).
                 prevTokenWasString = None
-    return lineNumToComment, lineNumToClause, posToStr, commentOnlyLines
+    return lineNumToComment, lineNumToClause, posToConstSrcStr, commentOnlyLines
 
 def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, startLine=0):
     elseCommentProperties = ('elselinecomments', 'elsestmtcomment')
@@ -560,20 +559,24 @@ def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, star
             startLine = lastStmtLine + 1
     return startLine
 
-class StringAnnotator(ast.NodeVisitor):
-    def __init__(self, posToStrTable):
-        self.posToStrTable = posToStrTable
+class ConstAnnotator(ast.NodeVisitor):
+    def __init__(self, posToSrcTable):
+        self.posToSrcTable = posToSrcTable
         ast.NodeVisitor.__init__(self)
 
     def visit_Constant(self, node):
         if isinstance(node, ast.Str):
-            origStr = self.posToStrTable.get((node.lineno, node.col_offset))
+            origStr = self.posToSrcTable.get((node.lineno, node.col_offset))
             if origStr is not None:
                 node.annSourceStrings = origStr
+        elif isinstance(node.value, numbers.Number):
+            srcStr = self.posToSrcTable.get((node.lineno, node.col_offset))
+            if srcStr is not None:
+                node.annNumberSrcStr = srcStr
         ast.NodeVisitor.visit_Constant(self, node)
 
     def visit_JoinedStr(self, node):
-        origStr = self.posToStrTable.get((node.lineno, node.col_offset))
+        origStr = self.posToSrcTable.get((node.lineno, node.col_offset))
         if origStr is not None:
             node.annSourceStrings = origStr
         ast.NodeVisitor.generic_visit(self, node)
@@ -596,8 +599,8 @@ class StringAnnotator(ast.NodeVisitor):
                     constAst.annIsDocString = True
         ast.NodeVisitor.generic_visit(self, node)
 
-def _annotateAstStrings(astPosToStrTable, astNode):
-    annotator = StringAnnotator(astPosToStrTable)
+def _annotateAstConsts(astPosToSrcTable, astNode):
+    annotator = ConstAnnotator(astPosToSrcTable)
     annotator.visit(astNode)
 
 def _commentLinesBetween(lineToCommentMap, startLine, endLine):
@@ -728,15 +731,16 @@ class SegmentedText:
             self.segments += otherSegText.segments
 
     def addQuotedString(self, breakLevel, strType, strQuote, strContent, isDocString,
-            needsContinue, stringBreakLevel=None, noDedent=False):
+            needsContinue, stringBreakLevel=None):
         """Append a (single or double) quoted Python string or f-string to the accumulated
         text.  Like the "add" and "concat" methods, breakLevel may be specified as None
         to add without allowing a line break from the previous text segment.  However, if
         breakLevel is specified as None, stringBreakLevel (which would otherwise default
         to breakLevel + 1) must be specified.  Strings may not be concatenated to each
-        other without a wrap point in between.  Specify noDedent for the special case of
-        a triple-quote string (usually help strings) whose continuation should not be
-        dedented back to the left margin."""
+        other without a wrap point in between.  Specify isDocString for the special case
+        of a triple-quote string whose continuation should not be dedented back to the
+        left margin (currently, only Python help strings, but might be a worthwhile icon
+        option for later)."""
         if stringBreakLevel is None:
             if breakLevel is None:
                 raise ValueError("SegmentedText.addQuotedString with breakLevel = None "
@@ -935,18 +939,16 @@ class SegmentedText:
         for entry in self.segments:
             if type(entry) is not int:
                 totalLength += len(entry)
-        if totalLength < margin - startIndent:
-            # Everything fits on one line, no breaks necessary: leave everything intact
-            # but replace QuotedString objects with the (un-broken) string they represent
-            for i, entry in enumerate(self.segments):
-                if isinstance(entry, QuotedString):
-                    self.segments[i] = entry.unbrokenString()
-        else:
-            # Break strings at word boundaries (or as necessary to fit within maxLength)
-            for i, entry in enumerate(self.segments):
-                if isinstance(entry, QuotedString):
-                    self.segments[i:i+1] = entry.breakString(startIndent, continueIndent,
-                        margin)
+        fitsOnLine = totalLength < margin - startIndent
+        # Break strings at word boundaries (or as necessary to fit within maxLength)
+        newSegments = []
+        for entry in self.segments:
+            if isinstance(entry, QuotedString):
+                newSegments += entry.breakString(startIndent, continueIndent,
+                    margin, fitsOnLine)
+            else:
+                newSegments.append(entry)
+        self.segments = newSegments
 
 class QuotedString:
     """Helper object for SegmentedText to hold Python quoted strings.  Strings are
@@ -976,21 +978,32 @@ class QuotedString:
         return len(self.strType) + 2 * len(self.quote) + len(self.text) + \
             len(self.prependedText) + len(self.appendedText)
 
-    def breakString(self, startIndent, continueIndent, margin):
+    def breakString(self, startIndent, continueIndent, margin, fitsOnLine):
         """Split the string at the end of whitespace of word boundaries, and return a
         SegmentedText.segments-style list that can be spliced-in in place of the
         QuotedString object in the list.  Strings longer than will fit between the
         given indents and margin are also split, even if they don't have whitespace.
         The maximum length depends upon the string type and whether it is the initial
         or subsequent portion of the string (triple-quoted strings dedent either back
-        to the left margin, or to startIndent if they are doc-strings)."""
+        to the left margin, or to startIndent if they are doc-strings).  Set fitsOnLine
+        to True to save work if the stated (by len()) total length of the string will fit
+        on the line, but we may still break the line, if it is a doc-string containing
+        one or more newline characters, since that will need reindenting by the caller."""
+        if fitsOnLine and self.breakType != 53 or (self.breakType == 53 and
+                '\n' not in self.text):
+            return [self.unbrokenString()]
         foundSpace = False
         segmentStrings = []
         startIdx = 0
         stringStart = self.prependedText + self.strType + self.quote
         maxFirstSegLen = max(margin - continueIndent, len(stringStart) + 1)
         for i, c in enumerate(self.text):
-            if c.isspace():
+            if c == '\n':
+                segmentStrings.append(stringStart + self.text[startIdx:i+1])
+                stringStart = ""
+                startIdx = i+1
+                foundSpace = False
+            elif c.isspace():
                 foundSpace = True
             elif foundSpace:
                 segmentStrings.append(stringStart + self.text[startIdx:i])

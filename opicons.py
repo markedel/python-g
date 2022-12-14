@@ -275,7 +275,7 @@ class UnaryOpIcon(icon.Icon):
         # positive numeric value.  Any other use is considered code and rejected.
         if self.operator != "-":
             return False
-        if not isinstance(data, numbers.Number):
+        if not isinstance(data, numbers.Number) or isinstance(data, complex):
             return False
         if data >= 0:
             return False
@@ -1589,7 +1589,14 @@ import nameicons
 def createUnaryOpIconFromAst(astNode, window):
     if astNode.op.__class__ == ast.USub and \
             astNode.operand.__class__ == ast.Constant and \
-            isinstance(astNode.operand.value, numbers.Number):
+            isinstance(astNode.operand.value, (numbers.Real, numbers.Rational,
+            numbers.Integral)) and not isinstance(astNode.operand.value, bool):
+        if hasattr(astNode.operand, 'annNumberSrcStr'):
+            # We have a source string available.  Use it if it matches the value
+            # stored in the ast
+            if astNode.operand.value == ast.literal_eval(astNode.operand.annNumberSrcStr):
+                return nameicons.NumericIcon('-' + astNode.operand.annNumberSrcStr,
+                    window)
         return nameicons.NumericIcon(-astNode.operand.value, window)
     if astNode.__class__ == ast.UnaryOp and astNode.op.__class__ == ast.USub and \
             astNode.operand == ast.Num:

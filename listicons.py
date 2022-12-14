@@ -973,6 +973,16 @@ class TupleIcon(ListTypeIcon):
             return self.sites.attrIcon.att.execute(result)
         return result
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        if not (len(self.sites.argIcons) == 2 and self.sites.argIcons[1].att is None):
+            return super().createSaveText(parentBreakLevel, contNeeded, export)
+        # Process single-element tuple syntax, (x,), not handled by ListTypeIcon.
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("(")
+        icon.addArgSaveText(text, brkLvl, self.sites.argIcons[0], contNeeded, export)
+        text.add(None, ",)")
+        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+
     def createAst(self):
         if not self.closed:
             raise icon.IconExecException(self, "Unclosed temporary icon")

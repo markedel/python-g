@@ -2031,6 +2031,10 @@ class Window:
             ic.insertChildren(elems, 'argIcons', 0)
         elif isinstance(obj, (int, float)):
             ic = nameicons.NumericIcon(obj, window=self)
+        elif isinstance(obj, complex):
+            # Complex should probably be a numeric icon subtype or a specialty icon of
+            # its own, or maybe just left as an object type.
+            ic = parseText(f'complex({obj.real}, {obj.imag})', self)[0]
         else:
             ic = parseText(repr(obj), self)[0]
         return ic
