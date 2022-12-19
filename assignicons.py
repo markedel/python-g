@@ -379,7 +379,7 @@ class AssignIcon(icon.Icon):
                 self.replaceWith(newTuple)
                 cursorSite = iconsites.makeSeriesSiteId('argIcons', numTargets)
                 win.cursor.setToIconSite(newTuple, cursorSite)
-                listicons.backspaceComma(newTuple, cursorSite, evt)
+                newTuple.backspace(cursorSite, evt)  # Also handles num args <= 1 case
             else:
                 # Merge lists around '=' to convert it to ','
                 if siteName == "values":

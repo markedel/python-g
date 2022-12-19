@@ -99,6 +99,46 @@ defRParenTypeoverImage = comn.asciiToImage( (
  "o      o",
  "oooooooo"))
 
+lambdaColonImage = comn.asciiToImage( (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o  %%  o",
+ "o  %% o.",
+ "o    o..",
+ "o     o.",
+ "o  %%  o",
+ "o  %%  o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "oooooooo"))
+
+lambdaColonTypeoverImage = comn.asciiToImage( (
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o  88  o",
+ "o  88 o.",
+ "o    o..",
+ "o     o.",
+ "o  88  o",
+ "o  88  o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "oooooooo"))
+
 class WithIcon(icon.Icon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
         stmt = "async with" if isAsync else "with"
@@ -1846,16 +1886,19 @@ class DefOrClassIcon(icon.Icon):
             for arg in argIcons:
                 if arg is not None:
                     self.replaceChild(None, self.siteOf(arg))
-        if self.hasArgs and isinstance(nameIcon, nameicons.IdentifierIcon) and \
-                nameIcon.childAt('attrIcon') is None:
+        if self.hasArgs and (isinstance(nameIcon, nameicons.IdentifierIcon) and
+                nameIcon.childAt('attrIcon') is None or nameIcon is None):
             # Dissolving in to a function call is weird, but it's slightly closer
             # to what the user originally typed (this may be a dumb idea, but I'm
             # going with it)
             callIcon = listicons.CallIcon(window=self.window, closed=True)
             if argIcons is not None and len(argIcons) > 0:
                 callIcon.insertChildren(argIcons, 'argIcons', 0)
-            nameIcon.replaceChild(callIcon, 'attrIcon')
-            entryIcon.appendPendingArgs([nameIcon])
+            if nameIcon is None:
+                entryIcon.appendPendingArgs([callIcon])
+            else:
+                nameIcon.replaceChild(callIcon, 'attrIcon')
+                entryIcon.appendPendingArgs([nameIcon])
         else:
             # If we can't dissolve in to a function call, put the name and args
             # in to separate pending arguments on the entry icon
@@ -1989,62 +2032,7 @@ class DefIcon(DefOrClassIcon):
             raise icon.IconExecException(self, "Definition missing function name")
         if not isinstance(nameIcon, nameicons.IdentifierIcon):
             raise icon.IconExecException(nameIcon, "Argument name must be identifier")
-        posOnlyArgAsts = []
-        normalArgAsts = []
-        kwdOnlyAsts = []
-        normalArgDefaults = []
-        kwOnlyDefaults = []
-        accumArgAsts = normalArgAsts
-        accumArgDefaults = normalArgDefaults
-        starArgAst = None
-        starStarArgAst = None
-        for site in self.sites.argIcons:
-            arg = site.att
-            if arg is None:
-                if site.name == 'argIcons_0':
-                    continue  # 1st site can be empty, meaning "no arguments"
-                raise icon.IconExecException(self, "Missing argument(s)")
-            if isinstance(arg, listicons.ArgAssignIcon):
-                argIcon = arg.sites.leftArg.att
-                defaultIcon = arg.sites.rightArg.att
-                if argIcon is None:
-                    raise icon.IconExecException(arg, "Missing argument name")
-                if not isinstance(argIcon, nameicons.IdentifierIcon):
-                    raise icon.IconExecException(arg, "Argument name must be identifier")
-                if defaultIcon is None:
-                    raise icon.IconExecException(arg, "Missing default value")
-                accumArgAsts.append(ast.arg(argIcon.name, lineno=arg.id, col_offset=0))
-                accumArgDefaults.append(defaultIcon.createAst())
-            elif isinstance(arg, listicons.StarStarIcon):
-                starStarArg = arg.sites.argIcon.att
-                if starStarArg is None:
-                    raise icon.IconExecException(arg, "Missing value for **")
-                if not isinstance(starStarArg, nameicons.IdentifierIcon):
-                    raise icon.IconExecException(starStarArg,
-                            "Argument must be identifier")
-                starStarArgAst = ast.arg(starStarArg.name, lineno=arg.id, col_offset=0)
-            elif isinstance(arg, listicons.StarIcon):
-                # A star icon with an argument is a vararg list.  Without, it is a
-                # keyword-only marker.  Either way, subsequent arguments are keyword-only
-                # and should go in the kwdOnly lists
-                starArg = arg.sites.argIcon.att
-                if starArg is not None:
-                    if not isinstance(starArg, nameicons.IdentifierIcon):
-                        raise icon.IconExecException(starArg,
-                                "Argument must be identifier")
-                    starArgAst = ast.arg(starArg.name, lineno=arg.id, col_offset=0)
-                accumArgAsts = kwdOnlyAsts
-                accumArgDefaults = kwOnlyDefaults
-            elif isinstance(arg, nameicons.PosOnlyMarkerIcon):
-                posOnlyArgAsts = normalArgAsts
-                normalArgAsts = []
-                accumArgAsts = normalArgAsts
-            else:
-                if not isinstance(arg, nameicons.IdentifierIcon):
-                    raise icon.IconExecException(arg, "Argument name must be identifier")
-                accumArgAsts.append(ast.arg(arg.name, lineno=arg.id, col_offset=0))
-        argumentAsts = ast.arguments(posOnlyArgAsts, normalArgAsts, starArgAst,
-         kwdOnlyAsts, kwOnlyDefaults, starStarArgAst, normalArgDefaults)
+        argumentAsts = _createFnDefArgsAst(self.sites.argIcons)
         bodyAsts = createBlockAsts(self)
         if self.isAsync:
             return ast.AsyncFunctionDef(nameIcon.name, argumentAsts, **bodyAsts,
@@ -2060,13 +2048,378 @@ class DefIcon(DefOrClassIcon):
         return _defPlaceArgsCommon(self, placeList, startSiteId, overwriteStart,
             False)
 
+class LambdaIcon(icon.Icon):
+    hasTypeover = True
+
+    def __init__(self, window=None, typeover=False, location=None):
+        icon.Icon.__init__(self, window)
+        self.colonTypeover = typeover
+        if typeover:
+            self.window.watchTypeover(self)
+        bodyWidth = icon.getTextSize('lambda', icon.boldFont)[0] + 2*icon.TEXT_MARGIN + 1
+        bodyHeight = icon.minTxtIconHgt
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        self.sites.add('output', 'output', 0, siteYOffset)
+        seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.colonWidth = lambdaColonImage.width - icon.inSiteImage.width + 1
+        argX = icon.inSiteImage.width - 1 + bodyWidth
+        self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, siteYOffset,
+            simpleSpine=True)
+        totalWidth = argX + self.argList.width + self.colonWidth
+        self.sites.add('exprIcon', 'input', totalWidth, siteYOffset)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        needSeqSites = self.parent() is None and toDragImage is None
+        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
+                self.sites.seqOut.att is None or toDragImage is not None)
+        if self.drawList is None:
+            bodyLeft = icon.outSiteImage.width - 1
+            bodyWidth, bodyHeight = self.bodySize
+            img = Image.new('RGBA', (bodyLeft + bodyWidth, bodyHeight),
+                color=(0, 0, 0, 0))
+            textImg = icon.iconBoxedText("lambda", icon.boldFont, icon.KEYWORD_COLOR)
+            img.paste(textImg, (bodyLeft, 0))
+            if needOutSite:
+                outImageY = self.sites.output.yOffset - icon.outSiteImage.height // 2
+                img.paste(icon.outSiteImage, (0, outImageY))
+            if needSeqSites:
+                icon.drawSeqSites(img, bodyLeft, 0, bodyHeight + 1)
+            bodyTopY = self.sites.seqIn.yOffset - 1
+            self.drawList = [((0, bodyTopY), img)]
+            # Minimal spines (if arg-list has multi-row layout)
+            argsOffset = bodyLeft + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
+            cntrSiteY = bodyTopY + bodyHeight // 2
+            self.drawList += self.argList.drawSimpleSpine(argsOffset, cntrSiteY)
+            # Commas
+            self.drawList += self.argList.drawListCommas(bodyWidth - 1,
+                self.sites.output.yOffset)
+            # Colon
+            colonImg = lambdaColonTypeoverImage if self.colonTypeover else \
+                lambdaColonImage
+            colonX = bodyLeft + bodyWidth - 1 + self.argList.width - 1
+            self.drawList.append(((colonX, bodyTopY), colonImg))
+        self._drawFromDrawList(toDragImage, location, clip, style)
+
+    def argIcons(self):
+        return [site.att for site in self.sites.argIcons]
+
+    def snapLists(self, forCursor=False):
+        siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
+        # Add back versions of sites that were filtered out for having more local
+        # snap targets (such as left arg of BinOpIcon).  The ones added back are highly
+        # conditional on the icons that have to be connected directly to the call icon
+        # argument list (*, **, =).
+        listicons.restoreConditionalTargets(self, siteSnapLists,
+            (listicons.StarIcon, listicons.StarStarIcon, listicons.ArgAssignIcon))
+        return siteSnapLists
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        self.argList.doLayout(layout)
+        bodyWidth, bodyHeight = self.bodySize
+        heightAbove = bodyHeight // 2
+        heightBelow = bodyHeight - heightAbove
+        width = icon.outSiteImage.width - 1 + bodyWidth - 1 + self.argList.width - 1 + \
+            self.colonWidth - 1
+        if self.argList.simpleSpineWillDraw():
+            heightAbove = max(heightAbove, self.argList.spineTop)
+            heightBelow = max(heightBelow, self.argList.spineHeight -
+                    self.argList.spineTop)
+        self.sites.output.yOffset = heightAbove
+        self.sites.exprIcon.yOffset = heightAbove
+        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2 + 1
+        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 2
+        height = heightAbove + heightBelow
+        left = outSiteX - self.sites.output.xOffset
+        top = outSiteY - self.sites.output.yOffset
+        self.rect = left, top, left + width, top + height
+        layout.updateSiteOffsets(self.sites.output)
+        layout.doSubLayouts(self.sites.output, left, top + heightAbove)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        bodyWidth, bodyHeight = self.bodySize
+        argListLayouts = self.argList.calcLayouts()
+        exprIcon = self.sites.exprIcon.att
+        exprLayouts = [None] if exprIcon is None else exprIcon.calcLayouts()
+        cntrYOff = bodyHeight // 2
+        layouts = []
+        for argListLayout, exprLayout in iconlayout.allCombinations(
+                (argListLayouts, exprLayouts)):
+            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, cntrYOff)
+            argListLayout.mergeInto(layout, bodyWidth - 1, 0)
+            exprXOff = bodyWidth + argListLayout.width - 1 + self.colonWidth
+            layout.addSubLayout(exprLayout, 'exprIcon', exprXOff, 0)
+            exprWidth = icon.EMPTY_ARG_WIDTH if exprLayout is None else exprLayout.width
+            layout.width = exprXOff + exprWidth - 1
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
+
+    def textRepr(self):
+        exprIcon = self.sites.exprIcon.att
+        exprText = '' if exprIcon is None else exprIcon.textRepr()
+        return 'lambda ' + icon.seriesTextRepr(self.sites.argIcons) + ':' + exprText
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText('lambda ')
+        icon.addSeriesSaveText(text, brkLvl, self.sites.argIcons, contNeeded, export)
+        text.add(None, ": ")
+        icon.addArgSaveText(text, brkLvl, self.sites.exprIcon, contNeeded, export)
+        text.add(None, ":")
+        return text
+
+    def dumpName(self):
+        return "lambda"
+
+    def inRectSelect(self, rect):
+        # Require selection rectangle to touch icon body
+        if not icon.Icon.inRectSelect(self, rect):
+            return False
+        icLeft, icTop = self.rect[:2]
+        bodyLeft = icLeft + icon.outSiteImage.width - 1
+        bodyWidth, bodyHeight = self.bodySize
+        bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
+        return comn.rectsTouch(rect, bodyRect)
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId[:8] == 'argIcons':
+            if text == '*' and not onAttr:
+                return "accept"
+            if text[0] == '*' and len(text) == 2 and (text[1].isalnum() or text[1] == ' '):
+                return listicons.StarIcon(self.window), text[1]
+            if text[:2] == '**':
+                return listicons.StarStarIcon(self.window), None
+            if text == '=' and onAttr:
+                return listicons.ArgAssignIcon(self.window), None
+            if text[-1] == ':':
+                rightmostArgSite = self.sites.argIcons[-1].name
+                rightmostIc, _ = icon.rightmostFromSite(self, rightmostArgSite)
+                acceptTypeover = rightmostIc is entryIc and self.colonTypeover
+                if text == ':' and acceptTypeover:
+                    return 'typeover'
+            else:
+                acceptTypeover = False
+            if not (text.isidentifier() or text in "), =" or \
+                    text[:-1].isidentifier() and (text[-1] in "), =") or
+                    text[-1] == ':' and acceptTypeover):
+                # The only valid arguments are identifiers, *, **, =, and comma, *unless*
+                # they are on the right side of argument assignment or a typeover colon
+                argAtSite = self.childAt(siteId)
+                if argAtSite is None or not isinstance(argAtSite,
+                        listicons.ArgAssignIcon):
+                    return "reject"
+        return None
+
+    def createAst(self):
+        exprIcon = self.sites.exprIcon.att
+        if exprIcon is None:
+            raise icon.IconExecException(self, "Lambda missing body expression")
+        argumentAsts = _createFnDefArgsAst(self.sites.argIcons)
+        return ast.Lambda(argumentAsts, exprIcon.createAst(),  lineno=self.id,
+            col_offset=0)
+
+    def setTypeover(self, idx, site=None):
+        self.drawList = None
+        if site is None or site == 'exprIcon':
+            self.colonTypeover = idx is not None and idx == 0
+            return self.colonTypeover
+        return False
+
+    def typeoverSites(self, allRegions=False):
+        rVals = None, None, None, None
+        if self.colonTypeover:
+            rVals = iconsites.makeSeriesSiteId('argIcons',
+                len(self.sites.argIcons) - 1), 'exprIcon', ':', 0
+        if allRegions:
+            return [rVals]
+        return rVals
+
+    def backspace(self, siteId, evt):
+        win = self.window
+        if siteId[:8] == 'argIcons':
+            siteName, index = iconsites.splitSeriesSiteId(siteId)
+            if index == 0:
+                # Cursor is on body of icon: edit its text
+                entryIcon = self._becomeEntryIcon()
+                self.window.cursor.setToText(entryIcon, drawNew=False)
+            else:
+                # Cursor is on a comma input
+                listicons.backspaceComma(self, siteId, evt)
+        elif siteId == 'exprIcon':
+            # Cursor is on the colon.  Move the cursor inside.
+            lastArgSite = self.sites.argIcons[-1].name
+            lastArg = self.childAt(lastArgSite)
+            if lastArg is None:
+                self.window.cursor.setToIconSite(self, lastArgSite)
+            else:
+                rightmostIc, rightmostSite = icon.rightmostSite(lastArg)
+                self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
+
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, "lambda")
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self._becomeEntryIcon()
+            entryIcon.setCursorPos(cursorTextIdx)
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'argIcons_0':
+            return self._becomeEntryIcon()
+        return None
+
+    def _becomeEntryIcon(self):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        entryIcon = entryicon.EntryIcon(window=self.window, initialString='lambda')
+        self.replaceWith(entryIcon)
+        argIcons = self.argIcons()
+        if len(argIcons) == 1 and argIcons[0] is None:
+            argIcons = []
+        for arg in argIcons:
+            if arg is not None:
+                self.replaceChild(None, self.siteOf(arg))
+        exprIcon = self.sites.exprIcon.att
+        if exprIcon is not None:
+            self.replaceChild(None, 'exprIcon')
+        # Put the args into a call icon and expression in to a separate pending argument
+        if len(argIcons) > 0 or exprIcon is not None:
+            callIcon = listicons.CallIcon(self.window)
+            callIcon.insertChildren(argIcons, 'argIcons', 0)
+            if len(argIcons) > 0 and exprIcon is None:
+                entryIcon.appendPendingArgs([callIcon])
+            else:
+                entryIcon.appendPendingArgs([callIcon, exprIcon])
+        return entryIcon
+
+    def _placeArgsCommon(self, placeList, startSiteId, overwriteStart, doPlacement):
+        if startSiteId is None:
+            startSiteId = 'argIcons_0'
+        compressedPL = [ic for ic in icon.placementListIter(placeList,
+            includeEmptySeriesSites=False)]
+        if startSiteId == 'argIcons_0' and (len(compressedPL) == 1 or
+                len(compressedPL) == 2 and
+                compressedPL[1][0].hasSite('output')) and \
+                isinstance(compressedPL[0][0], listicons.CallIcon) \
+                and (overwriteStart or not self.childAt('argIcons_0')):
+            # placeList is in a format at least close to what _becomeEntryIcon, above,
+            # would create, or possibly an edited version of a function def icon.
+            # Reconstruct it to match the original
+            callIcon = compressedPL[0][0]
+            callAttrIcon = callIcon.childAt('attrIcon')
+            if doPlacement:
+                if overwriteStart:
+                    self.replaceChild(None, 'argIcons_0')
+                argList = callIcon.argIcons()
+                self.insertChildren(argList, 'argIcons', 0)
+                if callAttrIcon is not None:
+                    # While the _becomeEntryIcon method will never attach an attribute
+                    # to the call icon it creates, the user can subsequently do so (and
+                    # is in fact, easy to do accidentally by changing the text of the
+                    # lambda to a valid identifier).  We don't want it to disappear,
+                    # so make an entry icon and put it on the exprIcon site.
+                    callIcon.replaceChild(None, 'attrIcon')
+                    if isinstance(callAttrIcon, entryicon.EntryIcon):
+                        entryIc = callAttrIcon
+                    else:
+                        entryIc = entryicon.EntryIcon(window=self.window)
+                        entryIc.appendPendingArgs([callAttrIcon])
+                    self.replaceChild(entryIc, 'exprIcon')
+                    entryIc.remove(makePlaceholder=True)
+                elif len(compressedPL) == 2:
+                    self.replaceChild(compressedPL[1][0], 'exprIcon')
+            if callAttrIcon is not None:
+                return compressedPL[0][1], compressedPL[0][2]
+            else:
+                return compressedPL[-1][1], compressedPL[-1][2]
+        else:
+            # We don't know what we have, let the root icon method do whatever it wants
+            if doPlacement:
+                return icon.Icon.placeArgs(self, placeList, startSiteId, overwriteStart)
+            return icon.Icon.canPlaceArgs(self, placeList, startSiteId, overwriteStart)
+
+    def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
+
+def _createFnDefArgsAst(argSiteList):
+    posOnlyArgAsts = []
+    normalArgAsts = []
+    kwdOnlyAsts = []
+    normalArgDefaults = []
+    kwOnlyDefaults = []
+    accumArgAsts = normalArgAsts
+    accumArgDefaults = normalArgDefaults
+    starArgAst = None
+    starStarArgAst = None
+    for site in argSiteList:
+        arg = site.att
+        if arg is None:
+            if site.name == 'argIcons_0':
+                continue  # 1st site can be empty, meaning "no arguments"
+            raise icon.IconExecException(self, "Missing argument(s)")
+        if isinstance(arg, listicons.ArgAssignIcon):
+            argIcon = arg.sites.leftArg.att
+            defaultIcon = arg.sites.rightArg.att
+            if argIcon is None:
+                raise icon.IconExecException(arg, "Missing argument name")
+            if not isinstance(argIcon, nameicons.IdentifierIcon):
+                raise icon.IconExecException(arg, "Argument name must be identifier")
+            if defaultIcon is None:
+                raise icon.IconExecException(arg, "Missing default value")
+            accumArgAsts.append(ast.arg(argIcon.name, lineno=arg.id, col_offset=0))
+            accumArgDefaults.append(defaultIcon.createAst())
+        elif isinstance(arg, listicons.StarStarIcon):
+            starStarArg = arg.sites.argIcon.att
+            if starStarArg is None:
+                raise icon.IconExecException(arg, "Missing value for **")
+            if not isinstance(starStarArg, nameicons.IdentifierIcon):
+                raise icon.IconExecException(starStarArg,
+                    "Argument must be identifier")
+            starStarArgAst = ast.arg(starStarArg.name, lineno=arg.id, col_offset=0)
+        elif isinstance(arg, listicons.StarIcon):
+            # A star icon with an argument is a vararg list.  Without, it is a
+            # keyword-only marker.  Either way, subsequent arguments are keyword-only
+            # and should go in the kwdOnly lists
+            starArg = arg.sites.argIcon.att
+            if starArg is not None:
+                if not isinstance(starArg, nameicons.IdentifierIcon):
+                    raise icon.IconExecException(starArg,
+                        "Argument must be identifier")
+                starArgAst = ast.arg(starArg.name, lineno=arg.id, col_offset=0)
+            accumArgAsts = kwdOnlyAsts
+            accumArgDefaults = kwOnlyDefaults
+        elif isinstance(arg, nameicons.PosOnlyMarkerIcon):
+            posOnlyArgAsts = normalArgAsts
+            normalArgAsts = []
+            accumArgAsts = normalArgAsts
+        else:
+            if not isinstance(arg, nameicons.IdentifierIcon):
+                raise icon.IconExecException(arg, "Argument name must be identifier")
+            accumArgAsts.append(ast.arg(arg.name, lineno=arg.id, col_offset=0))
+    return ast.arguments(posOnlyArgAsts, normalArgAsts, starArgAst,
+        kwdOnlyAsts, kwOnlyDefaults, starStarArgAst, normalArgDefaults)
+
 def _defPlaceArgsCommon(ic, placeList, startSiteId, overwriteStart, doPlacement):
     # DefIcon has a name and an argument list.  The backspace method uses two
     # different methods to produce pending arguments for faithful reassembly: 1) the
     # name and arguments become a function call, 2) the name becomes the first
     # pending arg, followed by a series containing the parameter list.  As a fallback
     # we use the base-class method which blindly throws the first input in to the
-    # name field and everything else in to the parameter list.
+    # name field and everything else in to the parameter list.  Also, if given a call
+    # icon by itself, the method will place the argument list in the parameter list.
+    # This makes it easier to edit a lambda expression to a function call.
     if len(placeList) == 0:
         return None, None
     placeArgsCall = icon.Icon.placeArgs if doPlacement else icon.Icon.canPlaceArgs
@@ -2078,23 +2431,46 @@ def _defPlaceArgsCommon(ic, placeList, startSiteId, overwriteStart, doPlacement)
         # field, then focusing out, would mess up what was originally there).
         argIdx, argSeriesIdx = placeArgsCall(ic, placeList[1:], 'argIcons_0')
         return argIdx + 1, argSeriesIdx
-    elif startAtName and isinstance(placeList[0], nameicons.IdentifierIcon) and \
-            isinstance(placeList[0].childAt('attrIcon'), listicons.CallIcon):
-        # The first pending arg is a function call.
+    elif startAtName and (isinstance(placeList[0], nameicons.IdentifierIcon) and
+            isinstance(placeList[0].childAt('attrIcon'), listicons.CallIcon) or
+            isinstance(placeList[0], listicons.CallIcon)):
+        # The first pending arg is a function call or a call icon by itself.
         if doPlacement:
-            callIcon = placeList[0].childAt('attrIcon')
+            if isinstance(placeList[0], nameicons.IdentifierIcon):
+                # The first pending arg is a function call
+                callIcon = placeList[0].childAt('attrIcon')
+                placeList[0].replaceChild(None, 'attrIcon')
+                ic.replaceChild(placeList[0], 'nameIcon')
+            else:
+                # The first item in a call icon by itself: skip the name site and place
+                # the arguments from the call icon in the parameter list.
+                callIcon = placeList[0]
             args = callIcon.argIcons()
+            attrIcon = callIcon.childAt('attrIcon')
             for arg in args:
                 if arg is not None:
                     callIcon.replaceChild(None, callIcon.siteOf(arg))
-            placeList[0].replaceChild(None, 'attrIcon')
-            ic.replaceChild(placeList[0], 'nameIcon')
             ic.insertChildren(args, 'argIcons', 0)
+            if attrIcon is not None:
+                # Call icon has an attribute and we don't have a usable attribute site:
+                # move it to a new statement in our block (but since it's an attribute,
+                # it will need an entry icon to adapt it).  Note afterward, the call to
+                # entryIc.remove.  This handles the case where the attribute was already
+                # an entry icon that may have been adapting an input site for the
+                # attribute (exactly what happens when you backspace a lambda).
+                callIcon.replaceChild(None, 'attrIcon')
+                if isinstance(attrIcon, entryicon.EntryIcon):
+                    entryIc = attrIcon
+                else:
+                    entryIc = entryicon.EntryIcon(window=ic.window)
+                    entryIc.appendPendingArgs([attrIcon])
+                icon.insertSeq(entryIc, ic)
+                ic.window.addTopSingle(entryIc)
+                entryIc.remove(makePlaceholder=True)
         return 0, None
     # None of the special cases applied, so use the base class method to fill in the
     # name and argument list.
-    return placeArgsCall(ic, placeList, startSiteId,
-        overwriteStart=overwriteStart)
+    return placeArgsCall(ic, placeList, startSiteId, overwriteStart=overwriteStart)
 
 def createBlockAsts(ic):
     """Create ASTs for icons in the block belonging to ic.  Returns a dictionary mapping
@@ -2238,20 +2614,35 @@ icon.registerIconCreateFn(ast.Try, createTryIconFromAst)
 
 def createDefIconFromAst(astNode, window):
     isAsync = astNode.__class__ is ast.AsyncFunctionDef
-    if hasattr(astNode.args, 'posonlyargs'):
-        args = [arg.arg for arg in astNode.args.posonlyargs]
-    else:
-        args = []
-    nPosOnly = len(args)
     defIcon = DefIcon(isAsync, window=window)
     nameIcon = nameicons.IdentifierIcon(astNode.name, window)
     defIcon.replaceChild(nameIcon, 'nameIcon')
-    defaults = [icon.createFromAst(e, window) for e in astNode.args.defaults]
-    if len(defaults) < len(astNode.args.args):
+    _addFnDefArgs(defIcon, astNode.args)
+    return defIcon
+icon.registerIconCreateFn(ast.FunctionDef, createDefIconFromAst)
+icon.registerIconCreateFn(ast.AsyncFunctionDef, createDefIconFromAst)
+
+def createLambdaIconFromAst(astNode, window):
+    defIcon = LambdaIcon(window=window)
+    _addFnDefArgs(defIcon, astNode.args)
+    exprIcon = icon.createFromAst(astNode.body, window)
+    defIcon.replaceChild(exprIcon, 'exprIcon')
+    return defIcon
+icon.registerIconCreateFn(ast.Lambda, createLambdaIconFromAst)
+
+def _addFnDefArgs(defIcon, astNodeArgs):
+    if hasattr(astNodeArgs, 'posonlyargs'):
+        args = [arg.arg for arg in astNodeArgs.posonlyargs]
+    else:
+        args = []
+    nPosOnly = len(args)
+    window = defIcon.window
+    defaults = [icon.createFromAst(e, window) for e in astNodeArgs.defaults]
+    if len(defaults) < len(astNodeArgs.args):
         # Weird rule in defaults list for ast that defaults can be shorter than args
-        defaults = ([None] * (len(astNode.args.args) - len(defaults))) + defaults
+        defaults = ([None] * (len(astNodeArgs.args) - len(defaults))) + defaults
     numArgs = 0
-    for i, arg in enumerate(arg.arg for arg in astNode.args.args):
+    for i, arg in enumerate(arg.arg for arg in astNodeArgs.args):
         default = defaults[i]
         argNameIcon = nameicons.IdentifierIcon(arg, window)
         if nPosOnly != 0 and numArgs == nPosOnly:
@@ -2267,15 +2658,15 @@ def createDefIconFromAst(astNode, window):
             argAssignIcon.replaceChild(defaultIcon, 'rightArg')
             defIcon.insertChild(argAssignIcon, "argIcons", numArgs)
         numArgs += 1
-    varArg = astNode.args.vararg.arg if astNode.args.vararg is not None else None
+    varArg = astNodeArgs.vararg.arg if astNodeArgs.vararg is not None else None
     if varArg is not None:
         argNameIcon = nameicons.IdentifierIcon(varArg, window)
         starIcon = listicons.StarIcon(window)
         starIcon.replaceChild(argNameIcon, 'argIcon')
         defIcon.insertChild(starIcon, 'argIcons', numArgs)
         numArgs += 1
-    kwOnlyArgs = [arg.arg for arg in astNode.args.kwonlyargs]
-    kwDefaults = [icon.createFromAst(e, window) for e in astNode.args.kw_defaults]
+    kwOnlyArgs = [arg.arg for arg in astNodeArgs.kwonlyargs]
+    kwDefaults = [icon.createFromAst(e, window) for e in astNodeArgs.kw_defaults]
     if len(kwOnlyArgs) > 0 and varArg is None:
         defIcon.insertChild(listicons.StarIcon(window), 'argIcons', numArgs)
         numArgs += 1
@@ -2290,14 +2681,11 @@ def createDefIconFromAst(astNode, window):
             argAssignIcon.replaceChild(defaultIcon, 'rightArg')
             defIcon.insertChild(argAssignIcon, "argIcons", numArgs + i)
     numArgs += len(kwOnlyArgs)
-    if astNode.args.kwarg is not None:
-        argNameIcon = nameicons.IdentifierIcon(astNode.args.kwarg.arg, window)
+    if astNodeArgs.kwarg is not None:
+        argNameIcon = nameicons.IdentifierIcon(astNodeArgs.kwarg.arg, window)
         starStarIcon = listicons.StarStarIcon(window)
         starStarIcon.replaceChild(argNameIcon, 'argIcon')
         defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
-    return defIcon
-icon.registerIconCreateFn(ast.FunctionDef, createDefIconFromAst)
-icon.registerIconCreateFn(ast.AsyncFunctionDef, createDefIconFromAst)
 
 def createClassDefIconFromAst(astNode, window):
     hasArgs = len(astNode.bases) + len(astNode.keywords) > 0

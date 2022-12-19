@@ -1724,6 +1724,20 @@ def placeListEmpty(argList, thruIdx=None, thruSeriesIdx=None):
         return False
     return True  # Only empty sites used
 
+def placeListIdxOf(placeList, ic):
+    """Return the place list index and series index of an icon from a placement list."""
+    #... this is currently unused and not well tested, but left in because it is
+    #    potentially useful functionality.
+    for placeListIdx, placeItem in enumerate(placeList):
+        if isinstance(placeItem, (list, tuple)):
+            for seriesIdx, seriesIc in enumerate(placeItem):
+                if seriesIc is ic:
+                    return placeListIdx, seriesIdx
+        else:
+            if placeItem is ic:
+                return placeListIdx, None
+    return None, None
+
 def validateCompatibleChild(child, parent, siteOrSeriesName):
     if child is None:
         return True  # Anything can have an empty site

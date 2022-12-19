@@ -571,11 +571,21 @@ class BinOpIcon(icon.Icon):
         if self.rightArg() is None:
             raise icon.IconExecException(self, "Missing right operand")
         if self.operator in compareAsts:
-            return ast.Compare(left=self.leftArg().createAst(),
-             ops=[compareAsts[self.operator]()],
-             comparators=[self.rightArg().createAst()], lineno=self.id, col_offset=0)
+            leftArgAst = self.leftArg().createAst()
+            ops = [compareAsts[self.operator]()]
+            comparators = [self.rightArg().createAst()]
+            if isinstance(leftArgAst, ast.Compare) and not self.leftArg().hasParens:
+                # This is a chained comparison.  Extend the chain.  Note: I *think* the
+                # hasParens check, above, is unnecessary, since all comparison operators
+                # have the same precedence and are left-associative, but it's a cheap
+                # test that will handle the problem completely in case I'm wrong.
+                ops = leftArgAst.ops + ops
+                comparators = leftArgAst.comparators + comparators
+                leftArgAst = leftArgAst.left
+            return ast.Compare(left=leftArgAst, ops=ops, comparators=comparators,
+                lineno=self.id, col_offset=0)
         return ast.BinOp(lineno=self.id, col_offset=0, left=self.leftArg().createAst(),
-         op=binOpAsts[self.operator](), right=self.rightArg().createAst())
+            op=binOpAsts[self.operator](), right=self.rightArg().createAst())
 
     def selectionRect(self):
         # Limit selection rectangle for extending selection to op itself
@@ -1631,10 +1641,15 @@ def createBoolOpIconFromAst(astNode, window):
 icon.registerIconCreateFn(ast.BoolOp, createBoolOpIconFromAst)
 
 def createCompareIconFromAst(astNode, window):
-    # Note: this does not yet handle multi-comparison types
-    topIcon = BinOpIcon(compareOps[astNode.ops[0].__class__], window)
-    topIcon.replaceChild(icon.createFromAst(astNode.left, window), "leftArg")
-    topIcon.replaceChild(icon.createFromAst(astNode.comparators[0], window), "rightArg")
+    compareIcons = [BinOpIcon(compareOps[op.__class__], window) for op in astNode.ops]
+    topIcon = None
+    for ic, compAst in zip(compareIcons, astNode.comparators):
+        if topIcon is None:
+            ic.replaceChild(icon.createFromAst(astNode.left, window), 'leftArg')
+        else:
+            ic.replaceChild(topIcon, 'leftArg')
+        ic.replaceChild(icon.createFromAst(compAst, window), 'rightArg')
+        topIcon = ic
     return topIcon
 icon.registerIconCreateFn(ast.Compare, createCompareIconFromAst)
 

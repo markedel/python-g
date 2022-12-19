@@ -1037,7 +1037,7 @@ class EntryIcon(icon.Icon):
             # to check and place the pending args (so this code can be shared with
             # _setText which needs to do the exact same thing).
             if not self._canPlacePendingArgs(attachedIcon, attachedSite,
-                    overwriteStart=True, useAllArgs=True):
+                    overwriteStart=True, useAllArgs=not makePlaceholder):
                 if not forceDelete:
                     return False
             self._placePendingArgs(attachedIcon, attachedSite, overwriteStart=True)
@@ -1187,7 +1187,11 @@ class EntryIcon(icon.Icon):
         if remainingText is None or remainingText in emptyDelimiters:
             remainingText = ""
         snapLists = ic.snapLists(forCursor=True)
-        if self.attachedIcon() is None:
+        if isinstance(ic, blockicons.LambdaIcon):
+            self.insertLambda(ic)
+            cursorIcon = ic
+            cursorSite = 'argIcons_0'
+        elif self.attachedIcon() is None:
             # Entry icon is on the top level
             self.window.replaceTop(self, ic)
             ic.markLayoutDirty()
@@ -1883,6 +1887,39 @@ class EntryIcon(icon.Icon):
         ifExpr.replaceChild(right, 'testExpr')
         return self.attachedIcon(), self.attachedSite()
 
+    def insertLambda(self, lambdaIc):
+        """When the user types "lambda" before an existing icon, they usually don't want
+        the icon to end up in the parameter list for the lambda, which would be the
+        default behavior without the special assistance provided here."""
+        # Design note: This could be done in the lambda icon's placeIcons call and kept
+        # out of general parsing.  The function def icon does almost exactly this, and
+        # for similar reasons.  What makes this different is that the function-def icon
+        # does it for a very narrow set of cases and in an icon that's much more
+        # constrained.  For lambda, the placeArgs call would then be redirecting most
+        # icon placement to a site other than the one requested by its caller, which I
+        # think would get confusing.
+        if self.hasPendingArgs():
+            pendingArgs = self.listPendingArgs()
+            compressedArgs = [ic for ic, _, _ in icon.placementListIter(pendingArgs)
+                if ic is not None]
+            if isinstance(pendingArgs[0], listicons.CallIcon):
+                # This is almost certainly from either a lambda icon being edited, or a
+                # def icon being converted to a lambda, as the call icon attaches to an
+                # attribute and the lambda attaches to an input.  Here, we actually want
+                # to move the content to the parameter list.  No code necessary, here,
+                # because this will be done by the lambda icon's placeArgs method.
+                pass
+            elif len(compressedArgs) == 1 and compressedArgs[0].hasSite('output'):
+                # There is one single pending arg: skip the parameter list and put it on
+                # the expression site.
+                ic, idx, seriesIdx = icon.firstPlaceListIcon(pendingArgs)
+                self.popPendingArgs(idx, seriesIdx)
+                lambdaIc.replaceChild(compressedArgs[0], 'exprIcon')
+        if self.attachedIcon():
+            self.attachedIcon().replaceChild(lambdaIc, self.attachedSite())
+        else:
+            self.window.replaceTop(self, lambdaIc)
+
     def insertDictColon(self, onIcon):
         onSite = onIcon.siteOf(self, recursive=True)
         child = onIcon.childAt(onSite)
@@ -2465,6 +2502,10 @@ def parseExprText(text, window):
     if opDelimPattern.match(delim):
         if text in unaryOperators:
             return opicons.UnaryOpIcon(text, window), delim
+    if text == 'lambda':
+        if delim not in ' *:':
+            return 'reject'
+        return blockicons.LambdaIcon(window, typeover=True), delim
     if text == 'yield':
         return nameicons.YieldIcon(window), delim
     if text == 'yield from':
@@ -2902,6 +2943,10 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
             else:
                 print('Unexpected site attachment in "splitExprAtIcon" function')
                 return None, None
+        elif childSiteType == 'input' and isinstance(parent, blockicons.LambdaIcon) and \
+                childSite == 'exprIcon':
+            parent.replaceChild(leftArg, 'exprIcon')
+            leftArg = parent
         elif childSiteType == 'attrIn':
             leftArg = parent
         else:

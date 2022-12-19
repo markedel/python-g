@@ -2421,9 +2421,10 @@ def backspaceListIcon(ic, site, evt):
             parent = ic.parent()
             if parent is None:
                 if argIcon is None:
-                    # This (the 0-argument case) probably can't happen since a single
+                    # This (the 0-argument case) normally can't happen since a single
                     # backspace can only take out one argument and naked tuple with a
-                    # single argument should not be allowed to exist
+                    # single argument should not be allowed to exist, however, the
+                    # backspace hack for assign icons can, in fact, set this up.
                     print("Naked tuple removed in backspace of single element")
                     nextIc = ic.nextInSeq()
                     prevIc = ic.prevInSeq()
