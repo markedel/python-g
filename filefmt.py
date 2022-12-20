@@ -456,6 +456,23 @@ def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, star
     exceptCommentProperties = ('exceptlinecomments', 'exceptstmtcomment')
     finallyCommentProperties = ('finallylinecomments', 'finallystmtcomment')
     for stmt in bodyAsts:
+        if hasattr(stmt, 'decorator_list'):
+            # This is a function or class def with decorators.  Since decorators are on
+            # lines before the definition, they (rather than the definition stmt) get the
+            # comments that precede them.
+            for decorator in stmt.decorator_list:
+                cmntLns = _commentLinesBetween(comments, startLine, decorator.lineno)
+                if cmntLns is not None:
+                    decorator.linecomments = [comments[line] for line in cmntLns]
+                cmntLns = _commentLinesBetween(comments, decorator.lineno,
+                    decorator.end_lineno + 1)
+                if cmntLns is not None:
+                    # A comment on the same line with the decorator (assume only 1)
+                    decorator.stmtcomment = comments[cmntLns[0]]
+                    if len(cmntLns) > 1:
+                        print('Dropped second stmt comment attached to decorator: %s' %
+                            comments[cmntLns[1]], '...')
+                startLine = decorator.end_lineno + 1
         commentLines = _commentLinesBetween(comments, startLine, stmt.lineno)
         if commentLines is not None:
             stmt.linecomments = [comments[line] for line in commentLines]

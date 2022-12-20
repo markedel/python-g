@@ -187,6 +187,7 @@ class NumericIcon(TextIcon):
 class CommentIcon(TextIcon):
     """Temporary class for displaying comments (move to commenticon.py)"""
     def __init__(self, text, window=None, location=None, args=None):
+        text = text.replace('\n', '\\n')
         TextIcon.__init__(self, '# ' + text, window, location)
         self.string = text
         self.wrap = args is not None and "w" in args
@@ -1493,6 +1494,123 @@ class RaiseIcon(icon.Icon):
             return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'exceptIcon':
             return self._becomeEntryIcon()
+        return None
+
+class DecoratorIcon(icon.Icon):
+    # This implementation is a bit of a hack, because it's really just the name part of
+    # the decorator, with an attribute site for a call icon for decorators with
+    # parameters.  The attribute site, however, has both typing and snapping conditions
+    # placed on it, so you can't type or snap anything other than a call icon.  Users
+    # may still find it weird that you can drag the parens off of it.
+    def __init__(self, name, window, location=None):
+        icon.Icon.__init__(self, window)
+        self.stmt = '@' + name
+        bodyWidth = icon.getTextSize(self.stmt, icon.boldFont)[0] + 2*icon.TEXT_MARGIN + 1
+        bodyHeight = icon.minTxtIconHgt
+        self.bodySize = (bodyWidth, bodyHeight)
+        siteYOffset = bodyHeight // 2
+        seqX = icon.dragSeqImage.width
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
+        self.sites.add('attrIcon', 'attrIn', bodyWidth,
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET)
+        totalWidth = icon.dragSeqImage.width + bodyWidth
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + totalWidth, y + bodyHeight)
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (comn.rectWidth(self.rect),
+                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
+            bodyWidth, bodyHeight = self.bodySize
+            bodyOffset = icon.dragSeqImage.width - 1
+            txtImg = icon.iconBoxedText(self.stmt)
+            img.paste(txtImg, (bodyOffset, 0))
+            icon.drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage, (0, bodyHeight//2 -
+                        icon.dragSeqImage.height//2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, left, top, layout):
+        bodyWidth, bodyHeight = self.bodySize
+        width = icon.dragSeqImage.width - 1 + bodyWidth
+        self.rect = (left, top, left + width, top + bodyHeight)
+        layout.doSubLayouts(self.sites.seqInsert, left, top + bodyHeight // 2)
+        self.drawList = None
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        if self.sites.attrIcon.att is None:
+            attrLayouts = [None]
+        else:
+            attrLayouts = self.sites.attrIcon.att.calcLayouts()
+        width, height = self.bodySize
+        layouts = []
+        for attrLayout in attrLayouts:
+            layout = iconlayout.Layout(self, width, height, height // 2)
+            layout.addSubLayout(attrLayout, 'attrIcon', width-1, icon.ATTR_SITE_OFFSET)
+            layouts.append(layout)
+        return self.debugLayoutFilter(layouts)
+
+    def textRepr(self):
+        return self.stmt
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        return icon.addAttrSaveText(filefmt.SegmentedText(self.stmt), self,
+            parentBreakLevel, contNeeded, export)
+
+    def dumpName(self):
+        return self.stmt
+
+    def textEntryHandler(self, entryIc, text, onAttr):
+        # Prohibit from typing anything but a call icon directly on our (decorator icon)
+        # attribute site (below that, users can still type whatever the call icon allows).
+        if self.siteOf(entryIc) != 'attrIcon':
+            return None
+        if text != '(':
+            return "reject"
+
+    def snapLists(self, forCursor=False):
+        # Make snapping on attribute site conditional on icon being a call icon
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        def snapFn(ic, siteId):
+            return isinstance(ic, listicons.CallIcon)
+        attrSites = snapLists['attrIn']
+        snapLists['attrIn'] = []
+        snapLists['insertAttr'] = []
+        snapLists['conditional'] = [(*attrSites[0], 'attrIn', snapFn)]
+        return snapLists
+
+    def backspace(self, siteId, evt):
+        self.window.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite=siteId)
+
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, self.stmt)
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
+            entryIcon.setCursorPos(cursorTextIdx)
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'attrIcon':
+            return self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
         return None
 
 def backspaceSeriesStmt(ic, site, evt, text):

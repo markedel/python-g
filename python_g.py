@@ -1580,23 +1580,23 @@ class Window:
             matingSites = []
             for siteData in draggingOutputs:
                 if sSiteType in ('input', 'insertInput', 'seqIn', 'seqOut'):
-                    if sTest is None or sTest(sIcon, sName):
+                    if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for siteData in draggingAttrOuts:
                 if sSiteType in ('attrIn', 'insertAttr'):
-                    if sTest is None or sTest(sIcon, sName):
+                    if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for siteData in draggingCprhOuts:
                 if sSiteType in ('cprhIn', 'insertCprh'):
-                    if sTest is None or sTest(sIcon, sName):
+                    if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for siteData in draggingSeqInserts:
                 if sSiteType in ('seqIn', 'seqOut'):
-                    if sTest is None or sTest(sIcon, sName):
+                    if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for pos, ic, name, test in draggingConditionals:
                 if test(sIcon, sName):
-                    if sTest is None or sTest(ic, name):
+                    if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append((pos, ic, name))
             for (dx, dy), dIcon, dName in matingSites:
                 self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sName))

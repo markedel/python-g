@@ -48,7 +48,7 @@ attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
 opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~"\']')
 stringPattern = re.compile("^(f|fr|rf|b|br|rb|u|r)?['\"]$", re.IGNORECASE)
-
+decoratorPattern = re.compile('^@[a-zA-Z_][a-zA-Z_\\d]*$')
 textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
@@ -2560,6 +2560,10 @@ def parseTopLevelText(text, window):
         # don't yet even know if it's a list on the first keystroke, it's necessary to
         # generate a star icon, even though this is more likely a typing error.
         return listicons.StarIcon(window), None
+    if text == '@' or decoratorPattern.fullmatch(text):
+        return "accept"
+    if decoratorPattern.fullmatch(text[:-1]) and text[-1] in (' ('):
+        return nameicons.DecoratorIcon(text[1:-1], window), text[-1]
     return parseExprText(text, window)
 
 def runIconTextEntryHandlers(entryIc, text, onAttr):

@@ -2582,12 +2582,16 @@ def createCallIconFromAst(astNode, window):
             kwIcon.replaceChild(nameicons.IdentifierIcon(key.arg, window), 'leftArg')
             kwIcon.replaceChild(valueIcon, 'rightArg')
             argIcons.append(kwIcon)
+    callIcon.insertChildren(argIcons, "argIcons", 0)
+    return callIcon
+
+def createFnIconFromAst(astNode, window):
+    callIcon = createCallIconFromAst(astNode, window)
     topIcon = icon.createFromAst(astNode.func, window)
     parentIcon = icon.findLastAttrIcon(topIcon)
     parentIcon.replaceChild(callIcon, "attrIcon")
-    callIcon.insertChildren(argIcons, "argIcons", 0)
     return topIcon
-icon.registerIconCreateFn(ast.Call, createCallIconFromAst)
+icon.registerIconCreateFn(ast.Call, createFnIconFromAst)
 
 def createComprehensionIconFromAst(astNode, window):
     if astNode.__class__ is ast.DictComp:

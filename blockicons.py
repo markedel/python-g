@@ -2726,6 +2726,18 @@ icon.registerIconCreateFn(ast.AsyncWith, createWithIconFromAst)
 def createIconsFromBodyAst(bodyAst, window):
     icons = []
     for stmt in bodyAst:
+        if isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
+            # Process decorators
+            for decorator in stmt.decorator_list:
+                if hasattr(decorator, 'linecomments'):
+                    _addLineCommentIcons(decorator.linecomments, window, icons)
+                decoratorIc = _createDecoratorIconFromAst(decorator, window)
+                if hasattr(decorator, 'stmtcomment'):
+                    _addStmtComment(decoratorIc, decorator.stmtcomment)
+                if len(icons) > 0:
+                    if icons[-1].hasSite('seqOut'):
+                        icons[-1].sites.seqOut.attach(icons[-1], decoratorIc, 'seqIn')
+                icons.append(decoratorIc)
         if hasattr(stmt, 'linecomments'):
             _addLineCommentIcons(stmt.linecomments, window, icons)
         if isinstance(stmt, ast.Expr):
@@ -2823,6 +2835,15 @@ def createIconsFromBodyAst(bodyAst, window):
         if bodyIcons is not None:
             icons += bodyIcons
     return icons
+
+def _createDecoratorIconFromAst(decoratorAst, window):
+    if isinstance(decoratorAst, ast.Name):
+        decoratorIc = nameicons.DecoratorIcon(decoratorAst.id, window)
+    else:  # decoratorAst is ast.Call
+        decoratorIc = nameicons.DecoratorIcon(decoratorAst.func.id, window)
+        callIcon = listicons.createCallIconFromAst(decoratorAst, window)
+        decoratorIc.replaceChild(callIcon, "attrIcon")
+    return decoratorIc
 
 def _addLineCommentIcons(commentList, window, sequence):
     for comment in commentList:
