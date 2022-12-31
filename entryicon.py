@@ -16,6 +16,7 @@ import subscripticon
 import parenicon
 import infixicon
 import stringicon
+import commenticon
 import cursors
 import reorderexpr
 
@@ -619,6 +620,7 @@ class EntryIcon(icon.Icon):
         if self.window.cursor.type == "text" and self.window.cursor.icon is self:
             # Currently we're not coloring based on text, but may want to restore later
             self.recolorPending()
+        self.markLayoutDirty()
 
     def backspaceInText(self, evt=None):
         if self.text != "" and self.cursorPos != 0:
@@ -924,6 +926,16 @@ class EntryIcon(icon.Icon):
                 self.window.refreshDirty(minimizePendingArgs=False)
             else:
                 self.cursorPos += 1
+        elif direction in ('Up', 'Down'):
+            x, y = self.cursorWindowPos()
+            self.window.cursor.erase()
+            cursorType, ic, site, pos = cursors.geometricTraverseFromPos(x, y,
+                direction, self.window, self)
+            if cursorType == 'window':
+                cursorType = 'icon'
+                site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
+                ic = self
+            self.window.cursor.setTo(cursorType, ic, site, pos)
         cursor.draw()
 
     def remove(self, forceDelete=False, makePlaceholder=False):
@@ -1014,7 +1026,8 @@ class EntryIcon(icon.Icon):
                     self.window.removeIcons([self])
                     if prevIcon:
                         self.window.cursor.setToIconSite(prevIcon, 'seqOut')
-                    elif nextIcon and nextIcon is not self.blockEnd:
+                    elif nextIcon and not (hasattr(self, 'blockEnd') and
+                            nextIcon is self.blockEnd):
                         self.window.cursor.setToIconSite(nextIcon, 'seqIn')
                     else:
                         self.window.cursor.setToWindowPos(self.posOfSite('output'))
@@ -1028,7 +1041,8 @@ class EntryIcon(icon.Icon):
                     self.window.removeIcons([self])
                 if prevIcon:
                     self.window.cursor.setToIconSite(prevIcon, 'seqOut')
-                elif nextIcon and nextIcon is not self.blockEnd:
+                elif nextIcon and not (hasattr(self, 'blockEnd') and
+                        nextIcon is self.blockEnd):
                     self.window.cursor.setToIconSite(nextIcon, 'seqIn')
                 else:
                     self.window.cursor.setToWindowPos(self.posOfSite('output'))
@@ -1199,6 +1213,8 @@ class EntryIcon(icon.Icon):
                 cursorIcon, cursorSite = ic, snapLists["input"][0][2]  # First input site
             elif "attrIn" in snapLists:
                 cursorIcon, cursorSite = ic, "attrIcon"
+            elif isinstance(ic, (commenticon.CommentIcon, commenticon.VerticalBlankIcon)):
+                cursorIcon, cursorSite = ic, 'seqOut'
             else:
                 cursorIcon, cursorSite = icon.rightmostSite(ic)
         elif ic.__class__ in (assignicons.AssignIcon, assignicons.AugmentedAssignIcon):
@@ -2138,11 +2154,14 @@ class EntryIcon(icon.Icon):
             return insertedIc, 'attrIcon'
         return False
 
-    def click(self, evt):
+    def click(self, x, y):
+        if not self.pointInTextArea(x, y):
+            return False
         self.window.cursor.erase()
         self.cursorPos = comn.findTextOffset(icon.globalFont, self.text,
-            evt.x - self.rect[0] - self.textOffset)
+            x - self.rect[0] - self.textOffset)
         self.window.cursor.setToText(self, drawNew=False)
+        return True
 
     def pointInTextArea(self, x, y):
         left, top, right, bottom = self.rect
@@ -2151,6 +2170,20 @@ class EntryIcon(icon.Icon):
         bottom -= 2
         right -= 2
         return left < x < right and top < y < bottom
+
+    def nearestCursorPos(self, x, y):
+        """Returns cursor index and x, y position (tuple) of the cursor position nearest
+        text cursor position to the given x,y coordinate."""
+        textLeft = self.rect[0] + self.textOffset
+        textRight = self.rect[2] - icon.TEXT_MARGIN
+        textCenter = self.height // 2
+        if x <= textLeft:
+            return 0, (textLeft, textCenter)
+        if x >= textRight:
+            return len(self.text), (textRight, textCenter)
+        cursorPos = comn.findTextOffset(icon.globalFont, self.text,
+            x - self.rect[0] - self.textOffset)
+        return cursorPos, self.cursorWindowPos()
 
     @staticmethod
     def _snapFn(ic, siteId):
@@ -2564,6 +2597,8 @@ def parseTopLevelText(text, window):
         return "accept"
     if decoratorPattern.fullmatch(text[:-1]) and text[-1] in (' ('):
         return nameicons.DecoratorIcon(text[1:-1], window), text[-1]
+    if text == '#':
+        return commenticon.CommentIcon('', window=window), None
     return parseExprText(text, window)
 
 def runIconTextEntryHandlers(entryIc, text, onAttr):

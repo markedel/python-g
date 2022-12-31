@@ -124,6 +124,18 @@ class Cursor:
         self.lastSelIc = None
         self.lastSelSite = None
 
+    def setTo(self, cursorType, ic=None, site=None, pos=None, eraseOld=True, drawNew=True,
+            placeEntryText=True):
+        if cursorType == 'window':
+            self.setToWindowPos(pos, eraseOld, drawNew, placeEntryText)
+        elif cursorType == 'icon':
+            self.setToIconSite(ic, site, eraseOld=eraseOld, drawNew=drawNew,
+                placeEntryText=placeEntryText)
+        elif cursorType == 'text':
+            self.setToText(ic, pos, eraseOld, drawNew, placeEntryText)
+        elif cursorType == 'typeover':
+            self.setToTypeover(ic, eraseOld, drawNew)
+
     def setToWindowPos(self, pos, eraseOld=True, drawNew=True, placeEntryText=True):
         """Place the cursor at an arbitrary location on the window background.  Be
         aware that this can cause rearrangement of icons by virtue of taking focus from
@@ -171,7 +183,7 @@ class Cursor:
         if drawNew:
             self.draw()
 
-    def setToText(self, ic, eraseOld=True, drawNew=True, placeEntryText=True):
+    def setToText(self, ic, pos=None, eraseOld=True, drawNew=True, placeEntryText=True):
         """Place the cursor within a text-edit-capable icon (ic), such as an entry
         icon, text icon or comment icon.  Note that the cursor position within the text
         is not held by the cursor object, but by ic.  Also be aware that this can cause
@@ -191,6 +203,8 @@ class Cursor:
         self.window.updateTypeoverStates()
         self.blinkState = True
         ic.focusIn()
+        if pos is not None:
+            ic.setCursorPos(pos)
         if drawNew:
             self.draw()
 
@@ -218,13 +232,16 @@ class Cursor:
             cursorIc, cursorSite = iconsites.lowestCoincidentSite(ic, site)
         self.setToIconSite(cursorIc, cursorSite)
 
-    def moveToIconSite(self, ic, site, evt):
+    def moveToIconSite(self, cursorType, ic, site, pos, evt):
         """Place the cursor at an icon site, paying attention to keyboard modifiers"""
         shiftPressed = evt.state & python_g.SHIFT_MASK
         if shiftPressed:
+            if cursorType != 'icon':
+                print('moveToIconSite tried to select to a non-site destination')
+                return
             self.selectToCursor(ic, site, evt.keysym)
         else:
-            self.setToIconSite(ic, site)
+            self.setTo(cursorType, ic, site, pos)
 
     def selectToCursor(self, ic, site, direction):
         """Modify selection based on cursor movement (presumably with Shift key held)"""
@@ -432,8 +449,9 @@ class Cursor:
             if direction in ("Up", "Down"):
                 fromIcon = self.icon
                 fromSite = fromIcon.sites.lastCursorSite()
-                toIcon, toSite = geometricTraverse(fromIcon, fromSite, direction)
-                self.moveToIconSite(toIcon, toSite, evt)
+                cursorType, toIcon, toSite, toPos = geometricTraverse(fromIcon, fromSite,
+                    direction, enterTextFields=not evt.state & python_g.SHIFT_MASK)
+                self.moveToIconSite(cursorType, toIcon, toSite, toPos, evt)
             siteBefore, siteAfter, text, idx = self.icon.typeoverSites()
             if direction == 'Right':
                 # Move to site after (typeover will be automatically cancelled)
@@ -448,21 +466,13 @@ class Cursor:
                     toIcon, toSite = self.icon, siteBefore
                 else:
                     toIcon, toSite = icon.rightmostSite(siteBeforeIcon)
-                self.moveToIconSite(toIcon, toSite, evt)
+                self.moveToIconSite('icon', toIcon, toSite, None, evt)
             return
         if self.type == "window":
-            x, y = self.pos
-            directions = {"Up":(0,-1), "Down":(0,1), "Left":(-1,0), "Right":(1,0)}
-            xOff, yOff = directions[direction]
-            x += xOff * WINDOW_CURSOR_INCREMENT
-            y += yOff * WINDOW_CURSOR_INCREMENT
-            windowWidth, windowHeight = self.window.image.size
-            if  WINDOW_CURSOR_MARGIN < x < windowWidth - WINDOW_CURSOR_MARGIN and \
-             WINDOW_CURSOR_MARGIN < y < windowHeight - WINDOW_CURSOR_MARGIN:
-                self.erase()
-                self.pos = x, y
-                self.draw()
-            return
+            cursorType, ic, site, pos = geometricTraverseFromPos(*self.pos, direction,
+                self.window, limitDist=(WINDOW_CURSOR_INCREMENT, WINDOW_CURSOR_INCREMENT),
+                enterTextFields=False)
+            self.setTo(cursorType, ic, site, pos)
         elif self.type == "icon":
             self._processIconArrowKey(evt)
 
@@ -492,6 +502,10 @@ class Cursor:
             outSites = snapLists.get("output", [])
             if len(outSites) > 0:
                 cursorSites.append((*outSites[0][1], ic, "output"))
+            if ic.__class__.__name__ in ("CommentIcon", "VerticalBlankIcon"):
+                # Icons with only sequence sites
+                cursorSites.append((ic.rect[0], ic.rect[1], ic, 'seqIn'))
+                cursorSites.append((ic.rect[2], ic.rect[3], ic, 'seqOut'))
         if len(cursorSites) == 0:
             return  # It is possible to have icons with no viable cursor sites
         selLeft, selTop, selRight, selBottom = selectedRect
@@ -515,7 +529,7 @@ class Cursor:
             if parent is not None:
                 self.setToIconSite(parent, parent.siteOf(ic))
                 return
-        self.moveToIconSite(ic, site, evt)
+        self.moveToIconSite('icon', ic, site, None, evt)
 
     def processBreakingArrowKey(self, evt):
         """Alt+arrow action (since we don't have configurable bindings, yet, I can say
@@ -561,21 +575,24 @@ class Cursor:
             # comments, but that code is not done, yet).  Note particularly that we skip
             # over the site to the left of the entry icon in normal traversal, because
             # we'd prefer they typed there, instead.
-            if evt.keysym == 'Left' and _isEntryIcBodySite(self.icon, self.site) and \
+            if evt.keysym == 'Left' and _isTextIcBodySite(self.icon, self.site) and \
                     not (evt.state & python_g.SHIFT_MASK):
                 self.setToText(self.icon)
                 return
             ic, site = lexicalTraverse(self.icon, self.site, evt.keysym)
             if evt.keysym == 'Right' and not (evt.state & python_g.SHIFT_MASK):
-                if _isEntryIcBodySite(ic, site):
+                if _isTextIcBodySite(ic, site):
                     self.setToText(ic)
                     return
                 elif isinstance(ic.childAt(site), entryicon.EntryIcon):
                     self.setToText(ic.childAt(site))
                     return
+            cursorType = 'icon'
+            pos = None
         else:
-            ic, site = geometricTraverse(self.icon, self.site, evt.keysym)
-        self.moveToIconSite(ic, site, evt)
+            cursorType, ic, site, pos = geometricTraverse(self.icon, self.site,
+                evt.keysym, enterTextFields=not evt.state & python_g.SHIFT_MASK)
+        self.moveToIconSite(cursorType, ic, site, pos, evt)
 
     def moveOutOfEndParen(self, token):
         """Move the cursor past the next end paren/bracket/brace (token is one of
@@ -641,12 +658,16 @@ def _lexicalTraverse(fromIcon, fromSite, direction):
         elif fromSite == 'seqOut':
             if isinstance(fromIcon, icon.BlockEnd):
                 return fromIcon, "seqIn"
+            if fromIcon.sites.lastCursorSite() is None:
+                return fromIcon, "seqIn"
             return icon.rightmostSite(fromIcon)
         elif fromSite == 'seqIn':
             prevStmt = fromIcon.prevInSeq()
             if prevStmt is None:
                 return fromIcon, fromSite
             if isinstance(prevStmt, icon.BlockEnd):
+                return prevStmt, "seqIn"
+            if prevStmt.sites.lastCursorSite() is None:
                 return prevStmt, "seqIn"
             return icon.rightmostSite(prevStmt)
         # Cursor is on an input site of some sort (input, attrIn, cprhIn)
@@ -705,58 +726,78 @@ def _lexicalTraverse(fromIcon, fromSite, direction):
             nextIcon = parent
         return nextIcon, nextSite
 
-def geometricTraverse(fromIcon, fromSite, direction):
+def geometricTraverse(fromIcon, fromSite, direction, enterTextFields=True,
+        allowEscapeToWindow=False):
     """Return the next cursor position (icon and siteId) in a given direction
     (physically, not lexically) from the given position (fromIcon, fromSite)."""
     # Special cases for traversing block end icons up and down, since their sites
     # are not physically up and down from each other, but need to be visited as such
     if isinstance(fromIcon, icon.BlockEnd) and fromSite == 'seqIn' and \
             direction == 'Down':
-        return fromIcon, 'seqOut'
+        return 'icon', fromIcon, 'seqOut', None
     if isinstance(fromIcon.nextInSeq(), icon.BlockEnd) and fromSite == 'seqOut' and \
             direction == 'Down':
-        return fromIcon.nextInSeq(), 'seqOut'
+        return 'icon', fromIcon.nextInSeq(), 'seqOut', None
     if isinstance(fromIcon, icon.BlockEnd) and fromSite == 'seqOut' and \
             direction == 'Up':
-        return fromIcon, 'seqIn'
+        return 'icon', fromIcon, 'seqIn', None
     if isinstance(fromIcon.prevInSeq(), icon.BlockEnd) and fromSite == 'seqIn' and \
             direction == 'Up':
-        return fromIcon.prevInSeq(), 'seqIn'
+        return 'icon', fromIcon.prevInSeq(), 'seqIn', None
     # Build a list of possible destination cursor positions, normalizing attribute
     # site positions to the center of the cursor (in/out site position).
     cursorX, cursorY = fromIcon.posOfSite(fromSite)
-    searchRect = (cursorX-HORIZ_ARROW_MAX_DIST, cursorY-VERT_ARROW_MAX_DIST,
-     cursorX+HORIZ_ARROW_MAX_DIST, cursorY+VERT_ARROW_MAX_DIST)
-    cursorTopIcon = fromIcon.topLevelParent()
-    cursorPrevIcon = cursorTopIcon.prevInSeq()
-    cursorNextIcon = cursorTopIcon.nextInSeq()
+    if fromIcon.typeOf(fromSite) == "attrIn":
+        cursorY -= icon.ATTR_SITE_OFFSET  # Normalize to input/output site y
+    cursorType, ic, site, pos = geometricTraverseFromPos(cursorX, cursorY, direction,
+        fromIcon.window, limitAdjacentStmt=fromIcon, enterTextFields=enterTextFields)
+    if not allowEscapeToWindow and cursorType == 'window':
+        return 'icon', fromIcon, fromSite, None
+    return cursorType, ic, site, pos
+
+def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentStmt=None,
+        limitDist=(HORIZ_ARROW_MAX_DIST, VERT_ARROW_MAX_DIST), enterTextFields=True):
+    searchRect = (cursorX-limitDist[0], cursorY-limitDist[1],
+        cursorX+limitDist[0], cursorY+limitDist[1])
+    if limitAdjacentStmt is not None:
+        cursorTopIcon = limitAdjacentStmt.topLevelParent()
+        cursorPrevIcon = cursorTopIcon.prevInSeq()
+        cursorNextIcon = cursorTopIcon.nextInSeq()
+        limitToStmts = [cursorTopIcon]
+        if cursorPrevIcon:
+            limitToStmts.append(cursorPrevIcon.topLevelParent())
+        if cursorNextIcon is not None:
+            limitToStmts.append(cursorNextIcon.topLevelParent())
     cursorSites = []
-    for winIcon in fromIcon.window.findIconsInRegion(searchRect):
-        topIcon = winIcon.topLevelParent()
-        if topIcon not in (cursorTopIcon, cursorPrevIcon, cursorNextIcon):
-            continue  # Limit statement jumps to a single statement
+    for winIcon in window.findIconsInRegion(searchRect):
+        if limitAdjacentStmt is not None:
+            topIcon = winIcon.topLevelParent()
+            if topIcon not in limitToStmts:
+                continue  # Limit statement jumps to a single statement
         snapLists = winIcon.snapLists(forCursor=True)
         hasOutSite = len(snapLists.get("output", [])) > 0
         for ic, (x, y), name in snapLists.get('input', []):
-            cursorSites.append((x, y, ic, name))
+            cursorSites.append((x, y, 'icon', ic, name, None))
         for ic, (x, y), name in snapLists.get('seqIn', []):
             if direction in ('Up', 'Down'):
-                cursorSites.append((x, y, ic, name))
+                cursorSites.append((x, y, 'icon', ic, name, None))
         for ic, (x, y), name in snapLists.get('seqOut', []):
             if  direction in ('Up', 'Down') or not hasOutSite:
-                cursorSites.append((x, y, ic, name))
+                cursorSites.append((x, y, 'icon', ic, name, None))
         for ic, (x, y), name in snapLists.get("attrIn", []):
-            cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, name))
+            cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, 'icon', ic, name, None))
         if winIcon.parent() is None:
             outSites = snapLists.get("output", [])
             if len(outSites) > 0:
-                cursorSites.append((*outSites[0][1], winIcon, "output"))
+                cursorSites.append((*outSites[0][1], 'icon', winIcon, "output", None))
+        if enterTextFields:
+            if hasattr(winIcon, 'nearestCursorPos'):
+                cursorPos, (x, y) = winIcon.nearestCursorPos(cursorX, cursorY)
+                cursorSites.append((x, y, 'text', winIcon, None, cursorPos))
     # Rank the destination positions by nearness to the current cursor position
     # in the cursor movement direction, and cull those in the wrong direction
-    if fromIcon.typeOf(fromSite) == "attrIn":
-        cursorY -= icon.ATTR_SITE_OFFSET  # Normalize to input/output site y
     choices = []
-    for x, y, ic, site in cursorSites:
+    for x, y, cursorType, ic, site, pos in cursorSites:
         if direction == "Left":
             dist = cursorX - x
         elif direction == "Right":
@@ -766,29 +807,29 @@ def geometricTraverse(fromIcon, fromSite, direction):
         elif direction == "Down":
             dist = y - cursorY
         if dist > 0:
-            choices.append((dist, x, y, ic, site))
+            choices.append((dist, x, y, cursorType, ic, site, pos))
     if len(choices) == 0:
-        return fromIcon, fromSite
+        return "window", None, None, _windowCursorIncr(cursorX, cursorY, direction)
     choices.sort(key=itemgetter(0))
     if direction in ("Left", "Right"):
         # For horizontal movement, just use a simple vertical threshold to decide
         # if the movement is appropriate
-        for xDist, x, y, ic, site in choices:
+        for xDist, x, y, cursorType, ic, site, pos in choices:
             if xDist > VERT_ARROW_X_JUMP_MIN:
                 if abs(y - cursorY) < HORIZ_ARROW_Y_JUMP_MAX:
-                    return ic, site
+                    return cursorType, ic, site, pos
     else:  # Up, Down
         # For vertical movement, do a second round of ranking.  This time add y
         # distance to weighted X distance (ranking x jumps as further away)
         bestRank = None
-        for yDist, x, y, ic, site in choices:
+        for yDist, x, y, cursorType, ic, site, pos in choices:
             if yDist > VERT_ARROW_Y_JUMP_MIN or isinstance(ic, icon.BlockEnd):
                 rank = yDist + VERT_ARROW_X_WEIGHT*abs(x-cursorX)
                 if bestRank is None or rank < bestRank[0]:
-                    bestRank = (rank, ic, site)
+                    bestRank = (rank, cursorType, ic, site, pos)
         if bestRank is None:
-            return fromIcon, fromSite
-        rank, ic, site = bestRank
+            return "window", None, None, _windowCursorIncr(cursorX, cursorY, direction)
+        rank, cursorType, ic, site, pos = bestRank
         if site == 'seqIn' and direction == "Up":
             # Typing at a seqIn site is the same as typing at the connected seqOut
             # site, so save the user a keypress by going to the seqOut site above
@@ -796,8 +837,8 @@ def geometricTraverse(fromIcon, fromSite, direction):
             if prevIcon:
                 ic = prevIcon
                 site = 'seqOut'
-        return ic, site
-    return fromIcon, fromSite
+        return cursorType, ic, site, pos
+    return "window", None, None, _windowCursorIncr(cursorX, cursorY, direction)
 
 def topSite(ic, seqDown=True):
     """Return the attachment site (and therefore leftmost cursor site) for an icon at
@@ -825,12 +866,22 @@ def beep():
     # is not appropriate for the tiny nudge for your keystroke being rejected.
     winsound.Beep(1500, 120)
 
-def _isEntryIcBodySite(ic, siteId):
+def _isTextIcBodySite(ic, siteId):
     """Return True if ic is an entry icon and siteId is the site adjacent to the icon
     body.  This is a temporary placeholder for a more general routine that will do this
     for all icons that can host text editing (as opposed to interchanging with an entry
     icon to do so)."""
-    return isinstance(ic, entryicon.EntryIcon) and siteId == ic.sites.firstCursorSite()
+    if  ic.__class__.__name__ in ('EntryIcon', 'StringIcon'):
+        return siteId == ic.sites.firstCursorSite()
+    if ic.__class__.__name__ in ('CommentIcon'):
+        return siteId == 'seqOut'
+
+def _windowCursorIncr(x, y, direction):
+    directions = {"Up": (0, -1), "Down": (0, 1), "Left": (-1, 0), "Right": (1, 0)}
+    xOff, yOff = directions[direction]
+    x += xOff * WINDOW_CURSOR_INCREMENT
+    y += yOff * WINDOW_CURSOR_INCREMENT
+    return x, y
 
 topLevelStmts = {'async def': blockicons.DefIcon, 'def': blockicons.DefIcon,
     'class': blockicons.ClassDefIcon, 'break': nameicons.BreakIcon,

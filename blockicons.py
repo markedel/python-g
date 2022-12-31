@@ -10,6 +10,7 @@ import nameicons
 import listicons
 import infixicon
 import entryicon
+import commenticon
 
 # Number of pixels to the left of sequence site to start else and elif icons
 ELSE_DEDENT = 21
@@ -2846,8 +2847,13 @@ def _createDecoratorIconFromAst(decoratorAst, window):
     return decoratorIc
 
 def _addLineCommentIcons(commentList, window, sequence):
-    for comment in commentList:
-        commentIcon = nameicons.CommentIcon(comment[1], window, args=comment[0])
+    # Comment list contains both line comments in form (annotation, text), and blank
+    # lines (None, None)
+    for annotation, text in commentList:
+        if text is None:
+            commentIcon = commenticon.VerticalBlankIcon(window)
+        else:
+            commentIcon = commenticon.CommentIcon(text, window, ann=annotation)
         if len(sequence) > 0:
             sequence[-1].sites.seqOut.attach(sequence[-1], commentIcon, 'seqIn')
         sequence.append(commentIcon)

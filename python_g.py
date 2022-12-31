@@ -16,6 +16,7 @@ import assignicons
 import entryicon
 import stringicon
 import parenicon
+import commenticon
 import undo
 import filefmt
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
@@ -741,7 +742,8 @@ class Window:
         the user would need to navigate somehow to reach it (in which case they can
         just as well navigate over it as type over it)"""
         keepAlive = set()
-        if self.cursor.type == "text":
+        if self.cursor.type == "text" and isinstance(self.cursor.icon,
+                entryicon.EntryIcon):
             cursorIcon = self.cursor.icon
             cursorSite = cursorIcon.sites.firstCursorSite()
             includeCursorIcon = True
@@ -940,8 +942,7 @@ class Window:
             if self.cursor.type == 'text':
                 if ic is self.cursor.icon:
                     # Don't re-edit an entry icon or string we're already editing
-                    if ic.pointInTextArea(x, y):
-                        ic.click(evt)
+                    if ic.click(x, y):
                         self.refreshDirty(addUndoBoundary=False)
                         self.cursor.draw()
                     return
@@ -964,7 +965,9 @@ class Window:
                 self._select(ic)
             return
         if hasattr(ic, "pointInTextArea") and ic.pointInTextArea(x, y):
-            ic.click(evt)
+            if not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
+                self.unselectAll()
+            ic.click(x, y)
             self.refreshDirty(addUndoBoundary=True)
             self.cursor.draw()
             return
@@ -1230,7 +1233,12 @@ class Window:
             # Edit or remove the icon to the right of the cursor
             rightIcon, rightSite = cursors.lexicalTraverse(self.cursor.icon,
                 self.cursor.site, 'Right')
-            if rightIcon is None or rightSite != rightIcon.sites.firstCursorSite():
+            if rightIcon is None:
+                cursors.beep()
+                return
+            if not isinstance(rightIcon,
+                    (commenticon.CommentIcon, commenticon.VerticalBlankIcon)) and \
+                    rightSite != rightIcon.sites.firstCursorSite():
                 cursors.beep()
                 return
             if evt.state & CTRL_MASK:
@@ -1259,14 +1267,22 @@ class Window:
             if len(selectedIcons) > 0:
                 self.removeIcons(selectedIcons)
             elif self.cursor.type == "icon":
-                if self.cursor.siteType == 'seqIn' and self.cursor.icon.prevInSeq():
-                    ic, site = icon.rightmostSite(self.cursor.icon.prevInSeq())
-                    self.cursor.setToIconSite(ic, site)
-                if self.cursor.siteType == 'seqOut':
-                    if isinstance(self.cursor.icon, icon.BlockEnd):
-                        ic, site = self.cursor.icon, 'seqIn'
+                if self.cursor.siteType in ('seqIn', 'seqOut'):
+                    cursorIc = self.cursor.icon
+                    if self.cursor.siteType == 'seqIn' and cursorIc.prevInSeq():
+                        cursorIc = cursorIc.prevInSeq()
+                    if isinstance(cursorIc, icon.BlockEnd):
+                        ic, site = cursorIc, 'seqIn'
+                    elif isinstance(cursorIc, commenticon.CommentIcon):
+                        cursorIc.setCursorPos('end')
+                        self.cursor.setToText(cursorIc)
+                        return
+                    elif isinstance(cursorIc, commenticon.VerticalBlankIcon):
+                        cursorIc.backspace('seqOut', evt)
+                        self.refreshDirty(addUndoBoundary=True)
+                        return
                     else:
-                        ic, site = icon.rightmostSite(self.cursor.icon)
+                        ic, site = icon.rightmostSite(cursorIc)
                     self.cursor.setToIconSite(ic, site)
                 else:
                     self._backspaceIcon(evt)
@@ -1279,8 +1295,7 @@ class Window:
             self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceIcon(self, evt):
-        if self.cursor.type != 'icon' or self.cursor.site in ('output', 'attrOut',
-                'seqIn', 'seqOut'):
+        if self.cursor.type != 'icon' or self.cursor.site in ('output', 'attrOut'):
             return
         ic = self.cursor.icon
         site = self.cursor.site
@@ -1381,7 +1396,7 @@ class Window:
     def _enterCb(self, evt):
         """Move Entry icon after the top-level icon where the cursor is found."""
         if self.cursor.type == 'text' and isinstance(self.cursor.icon,
-                stringicon.StringIcon):
+                (stringicon.StringIcon, commenticon.CommentIcon)):
             self.cursor.icon.processEnterKey(evt)
             self.refreshDirty(addUndoBoundary=True)
             return
@@ -1389,6 +1404,13 @@ class Window:
             return
         if self.cursor.type not in ("icon", "typeover"):
             return  # Not on an icon
+        if self.cursor.type == 'icon' and self.cursor.site in ('seqIn', 'seqOut'):
+            blankIc = commenticon.VerticalBlankIcon(self)
+            icon.insertSeq(blankIc, self.cursor.icon, before=self.cursor.site=='seqIn')
+            self.addTopSingle(blankIc)
+            self.cursor.setToIconSite(blankIc, 'seqOut')
+            self.refreshDirty(addUndoBoundary=True)
+            return
         # Find the top level icon associated with the icon at the cursor
         topIcon = self.cursor.icon.topLevelParent()
         if topIcon is None or not topIcon.hasSite('seqOut'):
@@ -2071,8 +2093,11 @@ class Window:
         containing ic"""
         if op in ('select', 'hier', 'left', 'block'):
             self.unselectAll()
-        if ic is None or self.cursor.type == "text" and ic is self.cursor.icon:
-            return
+        #... I'm leaving the commented-out code below as a reminder that I removed it
+        #    because it's clearly wrong for comments and strings, but worried that I've
+        #    forgotten about cases where the entry icon needs to preserve a selection.
+        # if ic is None or self.cursor.type == "text" and ic is self.cursor.icon:
+        #    return
         if op == 'hier':
             changedIcons = list(ic.traverse())
         elif op == 'block':
@@ -2348,18 +2373,30 @@ class Window:
         deletedSet = set(icons)
         # Cursors and selections can coexist, and it is possible for the cursor to be on
         # an icon that is being deleted.  If so, move it to an icon that will remain.
-        if self.cursor.type == "icon" and self.cursor.icon in deletedSet:
+        if self.cursor.type in ("icon", "text") and self.cursor.icon in deletedSet:
             cursorPos = self.cursor.icon.pos()
+            cursorIc, cursorSite = None, None
             for ic in self.cursor.icon.parentage(includeSelf=False):
                 if ic not in deletedSet:
-                    cursorSite = ic.siteOf(self.cursor.icon, recursive=True)
-                    self.cursor.setToIconSite(ic, cursorSite, eraseOld=False,
-                        drawNew=False, placeEntryText=False)
+                    cursorIc, cursorSite = ic, ic.siteOf(self.cursor.icon, recursive=True)
                     break
                 cursorPos = ic.pos()
             else:
+                for ic in icon.traverseSeq(self.cursor.icon):
+                    if ic not in deletedSet:
+                        cursorIc, cursorSite = ic, 'seqIn'
+                        break
+                else:
+                    for ic in icon.traverseSeq(self.cursor.icon, reverse=True):
+                        if ic not in deletedSet:
+                            cursorIc, cursorSite = ic, 'seqOut'
+                            break
+            if cursorIc is None:
                 self.cursor.setToWindowPos(cursorPos, eraseOld=False, drawNew=False,
-                    placeEntryText=False)
+                        placeEntryText=False)
+            else:
+                self.cursor.setToIconSite(cursorIc, cursorSite, eraseOld=False,
+                    drawNew=False, placeEntryText=False)
         # Note that order is important, here. .removeTop() must be called before
         # disconnecting the icon sequences, and .addTop() must be called after connecting
         # them.  Therefore, the first step is to remove deleted top-level icons from
@@ -2484,8 +2521,8 @@ class Window:
                         else:
                             continueIndent = tabSize
                         saveText = ic.createSaveText(export=exportPython)
-                        if isinstance(ic, nameicons.CommentIcon):
-                            stmtText = saveText.commentText(ic.wrap, indent, margin=100)
+                        if isinstance(ic, commenticon.CommentIcon):
+                            stmtText = saveText.commentText(False, indent, margin=100)
                         else:
                             stmtText = saveText.wrapText(indent, indent + continueIndent,
                                 margin=100)

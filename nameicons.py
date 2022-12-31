@@ -184,24 +184,6 @@ class NumericIcon(TextIcon):
     def compareData(self, data):
         return data == self.value
 
-class CommentIcon(TextIcon):
-    """Temporary class for displaying comments (move to commenticon.py)"""
-    def __init__(self, text, window=None, location=None, args=None):
-        text = text.replace('\n', '\\n')
-        TextIcon.__init__(self, '# ' + text, window, location)
-        self.string = text
-        self.wrap = args is not None and "w" in args
-
-    def createAst(self):
-        print("Creating AST for comment.  ...Try to prevent this from happening")
-        return ast.Pass(lineno=self.id, col_offset=0)
-
-    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        priorComment = isinstance(self.sites.seqIn.att, CommentIcon)
-        text = filefmt.SegmentedText()
-        text.addComment(self.string, priorComment)
-        return text
-
 class PosOnlyMarkerIcon(TextIcon):
     def __init__(self, window=None, location=None):
         TextIcon.__init__(self, '/', window, location)

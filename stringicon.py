@@ -11,10 +11,15 @@ import filefmt
 import cursors
 import entryicon
 import blockicons
-import nameicons
+import commenticon
 
 STRING_COLOR = (40, 110, 110, 255)
-STRING_SPINE_COLOR = (80, 220, 220)
+STRING_SPINE_COLOR = (150, 230, 230)
+
+# The fixed-width font we're using for strings (icon.textFont) is two pixels shorter
+# than the font we use for code.  Rather than make string icons shorter, we pad on top
+# by one pixel to center the text vertically within the icon.
+STRING_V_TEXT_OFFSET = 1
 
 tripleDoubleQuoteImage = comn.asciiToImage((
  "5%.%5",
@@ -108,7 +113,7 @@ class StringIcon(icon.Icon):
             # Text, including quotes and string type if applicable
             textLeft = boxLeft + icon.TEXT_MARGIN
             textRight = boxLeft + boxWidth - icon.TEXT_MARGIN
-            textTop = icon.TEXT_MARGIN
+            textTop = icon.TEXT_MARGIN + STRING_V_TEXT_OFFSET
             isMultiline = len(self.wrappedString) >= 2
             quote = self.quote if len(self.quote) == 1 else ' '
             for i, line in enumerate(self.wrappedString):
@@ -311,22 +316,54 @@ class StringIcon(icon.Icon):
         if len(self.quote) == 3:
             self.insertText('\n', self.cursorPos)
         else:
-            self.insertText('\\n', self.cursorPos)
+            topIcon = self.topLevelParent()
+            if topIcon.hasSite('seqOut'):
+                self.window.cursor.setToIconSite(topIcon, 'seqOut')
+            else:
+                # Not sure this can happen
+                self.window.cursor.setToIconSite(self, 'attrIcon')
 
-    def click(self, evt):
+    def click(self, x, y):
         self.window.cursor.erase()
-        self.becomeEntryIcon(clickPos=(evt.x, evt.y))
+        if self.becomeEntryIcon(clickPos=(x, y)) is None:
+            return False
+        self.window.cursor.setToText(self)
+        return True
 
     def pointInTextArea(self, x, y):
-        if not self.hasFocus:
-            # Unlike entry icons, we don't allow direct click to type, must (Alt+click)
+        left = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1 + \
+            int(charWidth)
+        top = self.rect[1] + icon.TEXT_MARGIN
+        right = self.rect[2] - icon.TEXT_MARGIN - int(charWidth)
+        bottom = self.rect[3] - icon.TEXT_MARGIN
+        if not (left < x < right and top < y < bottom):
             return False
-        left, top, right, bottom = self.rect
-        left += icon.outSiteImage.width - 1
-        top += 2
-        bottom -= 2
-        right -= 2
-        return left < x < right and top < y < bottom
+        if y < top + charHeight and x < left + int(len(self.strType) * charWidth):
+            # First line of text, x must be after type and quote
+            return False
+        return True
+
+    def nearestCursorPos(self, x, y):
+        """Returns cursor index and x, y position of the cursor position nearest text
+        cursor position to the given x,y coordinate.  This is the same information as
+        returned by cursorInText, except in this case we expect x,y to be outside of the
+        text area, presumably processing geometric arrow key traversal.
+
+        For string icons, we only allow traversal in to the quoted part of the string.
+        Editing the string type requires traversal from inside the string."""
+        left = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1 + \
+            int(charWidth)
+        top = self.rect[1] + icon.TEXT_MARGIN
+        right = self.rect[2] - icon.TEXT_MARGIN - int(charWidth)
+        bottom = self.rect[3] - icon.TEXT_MARGIN
+        xMargin = int(charWidth / 2)
+        yMargin = charHeight // 2
+        cursorX = min(right - xMargin, max(left + xMargin, x))
+        cursorY = min(bottom - yMargin, max(top + yMargin, y))
+        cursorPos, windowXY = self.cursorInText((cursorX, cursorY))
+        if cursorPos <0:
+            return 0, self.cursorWindowPos()
+        return cursorPos, windowXY
 
     def setTypeover(self, idx, site=None):
         if idx == self.typeoverIdx:
@@ -396,18 +433,18 @@ class StringIcon(icon.Icon):
                 self.cursorPos = 0
             else:
                 self.cursorPos += 1
-        elif direction == 'Up':
+        elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
-            y -= lineSpacing
+            newY = y + lineSpacing * {'Up': -1, 'Down': 1}[direction]
             self.window.cursor.erase()
-            if self.becomeEntryIcon(clickPos=(x, y))[0] is None:
-                cursors.beep()
-        elif direction == 'Down':
-            x, y = self.cursorWindowPos()
-            y += lineSpacing
-            self.window.cursor.erase()
-            if self.becomeEntryIcon(clickPos=(x, y))[0] is None:
-                cursors.beep()
+            if self.becomeEntryIcon(clickPos=(x, newY))[0] is None:
+                cursorType, ic, site, pos = cursors.geometricTraverseFromPos(x, y,
+                    direction, self.window, self)
+                if cursorType == 'window':
+                    cursorType = 'icon'
+                    site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
+                    ic = self
+                self.window.cursor.setTo(cursorType, ic, site, pos)
         self._updateTypeoverState()
         cursor.draw()
 
@@ -469,7 +506,7 @@ class StringIcon(icon.Icon):
         return None
 
     def cursorInText(self, clickPos):
-        """Determine if a given window x,y position (clickPos) is within the text area
+        """Determine if a given x,y (content) position (clickPos) is within the text area
         of the string.  If so, return the (cursor) position within the text closest to
         clickPos, and the x,y window coordinate location for that cursor (y center).  If
         the clickpos is not within the clickable area, return (None, None)."""
@@ -483,7 +520,7 @@ class StringIcon(icon.Icon):
         clickX -= left
         clickY -= top
         lineNum = clickY // lineSpacing
-        cursorY = top + lineNum * lineSpacing + lineSpacing // 2
+        cursorY = top + STRING_V_TEXT_OFFSET + lineNum * lineSpacing + lineSpacing // 2
         cursorIdx = 0
         for i in range(lineNum):
             cursorIdx += len(self.wrappedString[i])
@@ -495,7 +532,7 @@ class StringIcon(icon.Icon):
         if charNum >= len(self.wrappedString[lineNum]) and \
                 lineNum < len(self.wrappedString):
             # clickPos is right of the line: move cursor to the last allowed position
-            charNum = len(self.wrappedString[lineNum]) - 1
+            charNum = len(self.wrappedString[lineNum])
         cursorIdx += charNum
         if cursorIdx < 0:
             cursorIdx = -1  # String type/quote area has only one cursor pos
@@ -560,6 +597,7 @@ class StringIcon(icon.Icon):
     def cursorWindowPos(self):
         x, y = self.rect[:2]
         x += icon.outSiteImage.width - 1 + icon.TEXT_MARGIN
+        y += icon.TEXT_MARGIN + STRING_V_TEXT_OFFSET
         if self.cursorPos < 0:
             x -= 1
         else:
@@ -601,7 +639,8 @@ class StringIcon(icon.Icon):
                 return False
             if isinstance(stmt, blockicons.DefOrClassIcon):
                 return True
-            if not isinstance(stmt, nameicons.CommentIcon):
+            if not isinstance(stmt, (commenticon.CommentIcon,
+                    commenticon.VerticalBlankIcon)):
                 return False
 
     def _updateTypeoverState(self):
@@ -722,7 +761,7 @@ class StringIcon(icon.Icon):
         layouts = []
         minPossibleWraps = 0
         for w in widths:
-            if width is None:
+            if w is None:
                 minPossibleWraps += 1
         for i, lineWidth in enumerate(widths):
             if lineWidth is None:

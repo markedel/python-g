@@ -44,7 +44,6 @@ class MacroParser:
         should be a function with parameters for astNode and window.  Macro name and
         macro arguments are attached to astNode as properties (macroName, macroArgs)
         (see ... for details)"""
-
         self.macroList[name] = subs, iconCreateFn
 
     def expandMacros(self, text):
@@ -398,7 +397,7 @@ def _extractTokens(text, annotations):
         for token in tokens:
             if token.type == tokenize.COMMENT:
                 startLine, startCol = token.start
-                isLineComment = token.line[:startCol].isspace()
+                isLineComment = startCol == 0 or token.line[:startCol].isspace()
                 if isLineComment:
                     commentOnlyLines.add(startLine)
                 if len(token.string) > 1 and token.string[1] == " ":
@@ -406,8 +405,9 @@ def _extractTokens(text, annotations):
                 else:
                     # Most comments start "# ".  If not, capture the second character.
                     commentText = token.string[1:]
+                ann = annotations.getByLineAndCol(startLine, startCol)
                 if startLine == prevCommentLine + 1 and startCol == prevCommentCol \
-                        and isLineComment:
+                        and isLineComment and ann is None:
                     # Continuing previous comment, append to it
                     ann, prevText = lineNumToComment[prevKey]
                     if wrap:
@@ -421,7 +421,6 @@ def _extractTokens(text, annotations):
                     # it is supposed to be wrapped.  If so comment lines are joined with
                     # ' ', and '\n' characters become newlines
                     wrap = False
-                    ann = annotations.getByLineAndCol(startLine, startCol)
                     if ann is not None:
                         ann = ann[1]
                         if "w" in ann:
@@ -431,6 +430,7 @@ def _extractTokens(text, annotations):
                     prevKey = startLine
                 prevCommentLine = startLine
                 prevCommentCol = startCol
+                prevTokenWasString = None
             elif token.type == tokenize.NAME and token.string in ('elif', 'else',
                     'except', 'finally'):
                 startLine, startCol = token.start
@@ -445,9 +445,16 @@ def _extractTokens(text, annotations):
                 else:
                     prevTokenWasString = [token]
                 posToConstSrcStr[token.start] = [token.string]
-            elif token.type != tokenize.NL:
-                # Any other token stops string concatenation, except for NL, which is
-                # only emitted for newlines that do not end the statement (continuation).
+            elif token.type == tokenize.NL:
+                # NL is only emitted for newlines that do not end the statement
+                # (continuation or blank line).
+                startLine, startCol = token.start
+                if startCol == 0 or token.line[:startCol].isspace():
+                    # This is a blank line, log it in the comments list
+                    lineNumToComment[startLine] = None, None
+                    commentOnlyLines.add(startLine)
+                # Note that specifically, we don't clear prevTokenWasString
+            else:
                 prevTokenWasString = None
     return lineNumToComment, lineNumToClause, posToConstSrcStr, commentOnlyLines
 
@@ -495,6 +502,9 @@ def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, star
                 for lineNum in commentLines:
                     if lineNum not in commentOnlyLines:
                         lastStmtLine = lineNum
+                # Leave commentsLines with only those associated with the statement.
+                # The rest will be handled in the recursive call to process the body.
+                commentLines = [ln for ln in commentLines if ln <= lastStmtLine]
         else:
             lastStmtLine = stmt.end_lineno
             commentLines = _commentLinesBetween(comments, stmt.lineno, lastStmtLine+1)
@@ -780,7 +790,7 @@ class SegmentedText:
             self.segments.append(_encodeBreakValue(breakLevel, 1 if needsContinue else 0))
             self.segments.append(qs)
 
-    def addComment(self, comment, sepFromPrevComment):
+    def addComment(self, comment, sepFromPrevComment=False):
         """Add the content of a comment to the text"""
         # Note that this is cheaty because we know comments are currently not allowed
         # to be combined with other icons
@@ -1080,7 +1090,7 @@ class QuotedString:
 class SegTextComment:
     """Helper object for SegmentedText to hold comments and their related settings."""
     __slots__ = ('text', 'sepFromPrev')
-    def __init__(self, text, sepFromPrev):
+    def __init__(self, text, sepFromPrev=None):
         self.text = text
         self.sepFromPrev = sepFromPrev
 
