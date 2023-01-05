@@ -331,7 +331,8 @@ class Window:
         with open(filename) as f:
             text = f.read()
         print("done")
-        icons = parseText(text, self)
+        _base, ext = os.path.splitext(filename)
+        icons = parseText(text, self, source=filename, forImport=ext!=".pyg")
         if icons is None or len(icons) == 0:
             return None
         self.addTop(icons)
@@ -2493,7 +2494,9 @@ class Window:
                     ic.replaceChild(None, 'argIcons_0')
                     self.replaceTop(ic, argIcon)
 
-    def saveFile(self, filename, exportPython=False):
+    def saveFile(self, filename):
+        _base, ext = os.path.splitext(filename)
+        exportPython = ext != ".pyg"
         tabSize = 4
         print('Started save')
         firstSeq = True
@@ -2504,7 +2507,8 @@ class Window:
                 if not firstSeq:
                     f.write('\n')
                 firstSeq = False
-                f.write("$@%+d%+d$\n" % (left, top))
+                if not exportPython:
+                    f.write("$@%+d%+d$\n" % (left, top))
                 branchDepth = 0
                 for ic in icon.traverseSeq(startIcon):
                     if isinstance(ic, icon.BlockEnd):
@@ -2521,11 +2525,11 @@ class Window:
                         else:
                             continueIndent = tabSize
                         saveText = ic.createSaveText(export=exportPython)
-                        if isinstance(ic, commenticon.CommentIcon):
-                            stmtText = saveText.commentText(False, indent, margin=100)
-                        else:
-                            stmtText = saveText.wrapText(indent, indent + continueIndent,
-                                margin=100)
+                        if hasattr(ic, 'stmtComment') and ic.stmtComment is not None:
+                            saveText.addComment(ic.stmtComment.createSaveText(
+                                export=exportPython), isStmtComment=True)
+                        stmtText = saveText.wrapText(indent, indent + continueIndent,
+                            margin=100, export=exportPython)
                         f.write(stmtText)
                         f.write('\n')
         print('Finished save')
@@ -3376,8 +3380,8 @@ def restoreSeries(series):
         newIcons.append(newTuple)
     return newIcons
 
-def parseText(text, window, source="Pasted text"):
-    segments = filefmt.parseText(window.macroParser, text, source)
+def parseText(text, window, source="Pasted text", forImport=False):
+    segments = filefmt.parseText(window.macroParser, text, source, forImport)
     if segments is None:
         return None
     icons = []

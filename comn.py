@@ -127,3 +127,91 @@ def findTextOffset(font, text, pixelOffset):
                 return nChars if textLength - pixelOffset < guessDist else lastGuessedPos
         else:
             return guessedPos
+
+def splitWords(text):
+    """Split the string at the end of whitespace of word boundaries, and return a
+    list of strings.  Newlines are considered a word by themselves."""
+    foundSpace = False
+    words = []
+    startIdx = 0
+    inEscape = False
+    for i, c in enumerate(text):
+        if c == '\n':
+            words.append(text[startIdx:i])
+            words.append('\n')
+            startIdx = i + 1
+            foundSpace = False
+            inEscape = False
+        elif c.isspace():
+            foundSpace = True
+        elif foundSpace:
+            words.append(text[startIdx:i])
+            startIdx = i
+            foundSpace = False
+            inEscape = c == '\\'
+        elif c == '\\':
+            inEscape = True
+        elif inEscape and c in ('t', 'n', 'r', 'v', 'f'):
+            words.append(text[startIdx:i+1])
+            startIdx = i + 1
+            foundSpace = False
+            inEscape = False
+        else:
+            inEscape = False
+    words.append(text[startIdx:])
+    return words
+
+def breakLongWords(words, maxWordLength, maxFirstWrapLength=None):
+    if maxFirstWrapLength is None:
+        maxFirstWrapLength = maxWordLength
+    segments = []
+    maxLength = maxFirstWrapLength
+    for i, string in enumerate(words):
+        if len(string) > maxLength:
+            startIdx = 0
+            while len(string) - startIdx > maxLength:
+                segments.append(string[startIdx:startIdx + maxLength])
+                startIdx += maxLength
+                maxLength = maxWordLength
+            segments.append(string[startIdx:])
+        else:
+            segments.append(string)
+        maxLength = maxWordLength
+    return segments
+
+def wordWrap(words, maxLineLength, firstLineMax=None, lastLineMax=None):
+    """Python's built-in textwrap module, unfortunately, does not treat space characters
+    and their equivalents at the end of the line the way we need them treated for
+    displaying strings and comments and wrapping comments in the save-file format.  In
+    all three of these cases, we need to both preserve all characters, and if possible,
+    place space characters before the wrap."""
+    if firstLineMax is None:
+        firstLineMax = maxLineLength
+    if lastLineMax is None:
+        lastLineMax = maxLineLength
+    words = breakLongWords(words, maxLineLength, firstLineMax)
+    lines = []
+    lineLen = 0
+    lineWords = []
+    maxLength = firstLineMax
+    lastWordIdx = len(words) - 1
+    for i, word in enumerate(words):
+        if i == lastWordIdx and len(lines) > 0:
+            maxLength = lastLineMax
+        if word == '\n':
+            lineWords.append(word)
+            lines.append(''.join(lineWords))
+            lineLen = 0
+            lineWords = []
+            maxLength = maxLineLength
+        elif len(word) + lineLen <= maxLength or (word[-1] == ' ' and
+                len(word) + lineLen == maxLength + 1 and i < len(words)-1):
+            lineWords.append(word)
+            lineLen += len(word)
+        else:
+            lines.append(''.join(lineWords))
+            lineLen = len(word)
+            lineWords = [word]
+            maxLength = maxLineLength
+    lines.append(''.join(lineWords))
+    return lines

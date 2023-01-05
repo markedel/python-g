@@ -737,7 +737,7 @@ class StringIcon(icon.Icon):
         startWidth = len(text)
         minWidth = min(int(math.sqrt(startWidth)), (self.window.margin // charWidth) // 2)
         minWidth = max(min(15, startWidth), minWidth)
-        words = _splitWords(text)
+        words = comn.splitWords(text)
         if len(words) == 0:
             widths = [len(text)]
             lineLists = [[text]]
@@ -745,7 +745,7 @@ class StringIcon(icon.Icon):
             widths = []
             lineLists = []
             for width in range(len(text)+1, minWidth-1, -1):
-                lines = _wordWrap(words, width)
+                lines = comn.wordWrap(words, width)
                 if len(lines) > currentHeight:
                     for i in range(len(lines) - currentHeight):
                         widths.append(None)
@@ -787,74 +787,6 @@ def replaceEscapeChar(str, fromChars, toChars):
     """Replace escaped characters in a string being mindful of escaped backslashes."""
     noBsStrings = str.split('\\\\')
     return '\\\\'.join([s.replace(fromChars, toChars) for s in noBsStrings])
-
-def _splitWords(text):
-    """Split the string at the end of whitespace of word boundaries, and return a
-    list of strings.  Newlines are considered a word by themselves."""
-    foundSpace = False
-    words = []
-    startIdx = 0
-    inEscape = False
-    for i, c in enumerate(text):
-        if c == '\n':
-            words.append(text[startIdx:i])
-            words.append('\n')
-            startIdx = i + 1
-            foundSpace = False
-            inEscape = False
-        elif c.isspace():
-            foundSpace = True
-        elif foundSpace:
-            words.append(text[startIdx:i])
-            startIdx = i
-            foundSpace = False
-            inEscape = c == '\\'
-        elif c == '\\':
-            inEscape = True
-        elif inEscape and c in ('t', 'n', 'r', 'v', 'f'):
-            words.append(text[startIdx:i+1])
-            startIdx = i + 1
-            foundSpace = False
-            inEscape = False
-        else:
-            inEscape = False
-    words.append(text[startIdx:])
-    return words
-
-def _breakLongWords(words, maxLength):
-    segments = []
-    for i, string in enumerate(words):
-        if len(string) > maxLength:
-            startIdx = 0
-            while len(string) - startIdx > maxLength:
-                segments.append(string[startIdx:startIdx + maxLength])
-                startIdx += maxLength
-            segments.append(string[startIdx:])
-        else:
-            segments.append(string)
-    return segments
-
-def _wordWrap(words, maxLength):
-    words = _breakLongWords(words, maxLength)
-    lines = []
-    lineLen = 0
-    lineWords = []
-    for i, word in enumerate(words):
-        if word == '\n':
-            lineWords.append(word)
-            lines.append(''.join(lineWords))
-            lineLen = 0
-            lineWords = []
-        elif len(word) + lineLen <= maxLength or (word[-1] == ' ' and
-                len(word) + lineLen == maxLength + 1 and i < len(words)-1):
-            lineWords.append(word)
-            lineLen += len(word)
-        else:
-            lines.append(''.join(lineWords))
-            lineLen = len(word)
-            lineWords = [word]
-    lines.append(''.join(lineWords))
-    return lines
 
 def createStringIconFromAst(astNode, window):
     # I don't think this is ever called as all supported Python versions now create

@@ -60,10 +60,11 @@ lineSepPixels = 2
 lineSpacing = charHeight + lineSepPixels
 
 class CommentIcon(icon.Icon):
-    def __init__(self, text='', window=None, location=None, ann=None):
+    def __init__(self, text='', attachedToStmt=None, window=None, location=None,
+            ann=None):
         icon.Icon.__init__(self, window)
         self.string = text
-        self.isStmtComment = False
+        self.attachedToStmt = attachedToStmt
         self.cursorPos = len(text)
         self.hasFocus = False
         self.wrappedString = []
@@ -81,8 +82,9 @@ class CommentIcon(icon.Icon):
         height = max(icon.minTxtHgt, (len(self.wrappedString) + 1) * lineSpacing) + 2 * \
             icon.TEXT_MARGIN + 1
         seqX = icon.dragSeqImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, height-2)
+        if not attachedToStmt:
+            self.sites.add('seqIn', 'seqIn', seqX, 1)
+            self.sites.add('seqOut', 'seqOut', seqX, height-2)
         self.sites.add('seqInsert', 'seqInsert', 0, height // 2)
         if location is None:
             x, y = 0, 0
@@ -98,7 +100,7 @@ class CommentIcon(icon.Icon):
             # its sequence-insert snap site unless it is in a sequence and not the start.
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
-        needSeqSites = not self.isStmtComment and toDragImage is None
+        needSeqSites = not self.attachedToStmt and toDragImage is None
         if self.drawList is None:
             boxWidth = comn.rectWidth(self.rect)
             boxHeight = comn.rectHeight(self.rect)
@@ -282,7 +284,7 @@ class CommentIcon(icon.Icon):
         return repr(self.string) + icon.attrTextRepr(self)
 
     def dumpName(self):
-        return 'stmt comment' if self.isStmtComment else 'line comment'
+        return 'stmt comment' if self.attachedToStmt else 'line comment'
 
     def backspace(self, siteId, evt):
         if siteId != 'seqOut':
@@ -345,9 +347,14 @@ class CommentIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         text = filefmt.SegmentedText()
+        # Multi-line comments are represented in the save file as contiguous lines
+        # starting with the pound character in the same column.  Since users can place
+        # multiple comment icons contiguously in the same sequence, we need to keep them
+        # separate, and do so by adding an empty macro when separation is needed.
         prevIcon = self.prevInSeq()
         sepFromPrev = prevIcon is not None and isinstance(prevIcon, CommentIcon)
-        text.addComment(self.string, sepFromPrevComment=sepFromPrev)
+        text.addComment(self.string, isStmtComment=self.attachedToStmt is not None,
+            annotation='' if sepFromPrev else None)
         return text
 
     def clipboardRepr(self, offset, iconsToCopy):
@@ -396,11 +403,11 @@ class CommentIcon(icon.Icon):
         startWidth = len(text)
         minWidth = min(int(math.sqrt(startWidth)), (self.window.margin // charWidth) // 2)
         minWidth = max(min(15, startWidth), minWidth)
-        words = _splitWords(text)
+        words = comn.splitWords(text)
         widths = []
         lineLists = []
         for width in range(len(text)+1, minWidth-1, -1):
-            lines = _wordWrap(words, width)
+            lines = comn.wordWrap(words, width)
             if len(lines) > currentHeight:
                 for i in range(len(lines) - currentHeight):
                     widths.append(None)
@@ -504,59 +511,3 @@ class VerticalBlankIcon(icon.Icon):
                 self.window.cursor.setToIconSite(nextIcon, 'seqIn')
             else:
                 self.window.cursor.setToWindowPos(self.pos())
-
-def _splitWords(text):
-    """Split the string at the end of whitespace of word boundaries, and return a
-    list of strings.  Newlines are considered a word by themselves."""
-    foundSpace = False
-    words = []
-    startIdx = 0
-    for i, c in enumerate(text):
-        if c == '\n':
-            words.append(text[startIdx:i])
-            words.append('\n')
-            startIdx = i + 1
-            foundSpace = False
-        elif c.isspace():
-            foundSpace = True
-        elif foundSpace:
-            words.append(text[startIdx:i])
-            startIdx = i
-            foundSpace = False
-    words.append(text[startIdx:])
-    return words
-
-def _breakLongWords(words, maxLength):
-    segments = []
-    for i, string in enumerate(words):
-        if len(string) > maxLength:
-            startIdx = 0
-            while len(string) - startIdx > maxLength:
-                segments.append(string[startIdx:startIdx + maxLength])
-                startIdx += maxLength
-            segments.append(string[startIdx:])
-        else:
-            segments.append(string)
-    return segments
-
-def _wordWrap(words, maxLength):
-    words = _breakLongWords(words, maxLength)
-    lines = []
-    lineLen = 0
-    lineWords = []
-    for i, word in enumerate(words):
-        if word == '\n':
-            lineWords.append(word)
-            lines.append(''.join(lineWords))
-            lineLen = 0
-            lineWords = []
-        elif len(word) + lineLen <= maxLength or (word[-1] == ' ' and
-                len(word) + lineLen == maxLength + 1 and i < len(words)-1):
-            lineWords.append(word)
-            lineLen += len(word)
-        else:
-            lines.append(''.join(lineWords))
-            lineLen = len(word)
-            lineWords = [word]
-    lines.append(''.join(lineWords))
-    return lines

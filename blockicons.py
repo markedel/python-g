@@ -2173,7 +2173,6 @@ class LambdaIcon(icon.Icon):
         icon.addSeriesSaveText(text, brkLvl, self.sites.argIcons, contNeeded, export)
         text.add(None, ": ")
         icon.addArgSaveText(text, brkLvl, self.sites.exprIcon, contNeeded, export)
-        text.add(None, ":")
         return text
 
     def dumpName(self):
@@ -2853,11 +2852,15 @@ def _addLineCommentIcons(commentList, window, sequence):
         if text is None:
             commentIcon = commenticon.VerticalBlankIcon(window)
         else:
-            commentIcon = commenticon.CommentIcon(text, window, ann=annotation)
+            commentIcon = commenticon.CommentIcon(text, window=window, ann=annotation)
         if len(sequence) > 0:
             sequence[-1].sites.seqOut.attach(sequence[-1], commentIcon, 'seqIn')
         sequence.append(commentIcon)
 
 def _addStmtComment(ic, comment):
-    print('Statement/icon comments not implemented yet -- %s (args %s): %s' %
+    commentText = comment[1].replace('\\n', '\n')
+    commentIcon = commenticon.CommentIcon(commentText, attachedToStmt=ic,
+        window=ic.window, ann=comment[0])
+    ic.stmtComment = commentIcon
+    print('Attached stmt comment to %s (args %s): %s' %
           (ic.dumpName(), comment[0], comment[1]))
