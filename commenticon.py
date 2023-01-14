@@ -11,11 +11,12 @@ COMMENT_POUND_COLOR = (190, 210, 240, 255)
 COMMENT_SPINE_COLOR = (200, 240, 255, 255)
 
 # Our fixed-width font for comments and strings (icon.textFont) is two pixels shorter
-# than the font we use for code.  Rather than make comment icons shorter, or centering
-# the text as we do in the string icon, we add both spare pixels to the top of the icon,
-# biasing the text toward the bottom of the icon as a very subtle nod to the convention
-# that comments document the code underneath them.
-COMMENT_V_TEXT_OFFSET = 2
+# than the font we use for code.  For line comments, rather than make comment icons
+# shorter, or centering the text as we do in the string icon and statement comment, we
+# add both spare pixels to the top of the icon, biasing the text toward the bottom as a
+# subtle nod to the convention that line comments document the code underneath them.
+STMT_COMMENT_V_TEXT_OFFSET = 1
+LINE_COMMENT_V_TEXT_OFFSET = 2
 
 poundImage = comn.asciiToImage((
  "  28  28",
@@ -64,20 +65,14 @@ class CommentIcon(icon.Icon):
             ann=None):
         icon.Icon.__init__(self, window)
         self.string = text
-        self.attachedToStmt = attachedToStmt
+        self.attachedToStmt = None
+        if attachedToStmt is not None:
+            self.attachStmtComment(attachedToStmt)
         self.cursorPos = len(text)
         self.hasFocus = False
-        self.wrappedString = []
+        self.wrappedString = text.split('\n')
+        stringWidth = max((len(s) for s in self.wrappedString))
         self.annotation = ann  # No options, yet, but "fill" will be one
-        startPos = 0
-        stringWidth = 0
-        for i, c in enumerate(text):
-            if c == '\n':
-                self.wrappedString.append(self.string[startPos:i])
-                stringWidth = max(stringWidth, i - startPos)
-                startPos = i + 1
-        if startPos < len(self.string):
-            self.wrappedString.append(self.string[startPos:len(self.string)])
         width = int(stringWidth * charWidth) + poundImage.width + 2*icon.TEXT_MARGIN + 1
         height = max(icon.minTxtHgt, (len(self.wrappedString) + 1) * lineSpacing) + 2 * \
             icon.TEXT_MARGIN + 1
@@ -85,7 +80,7 @@ class CommentIcon(icon.Icon):
         if not attachedToStmt:
             self.sites.add('seqIn', 'seqIn', seqX, 1)
             self.sites.add('seqOut', 'seqOut', seqX, height-2)
-        self.sites.add('seqInsert', 'seqInsert', 0, height // 2)
+        self.sites.add('seqInsert', 'seqInsert', 0, icon.minTxtIconHgt // 2)
         if location is None:
             x, y = 0, 0
         else:
@@ -93,18 +88,19 @@ class CommentIcon(icon.Icon):
         self.rect = (x, y, x + width + 4, y + height)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
-        if toDragImage is None:
+        if toDragImage is None or self.attachedToStmt is not None:
             temporaryDragSite = False
         else:
             # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site unless it is in a sequence and not the start.
+            # its sequence-insert snap site unless it is in a sequence and not the start,
+            # or a statement-comment attached to a statement.
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         needSeqSites = not self.attachedToStmt and toDragImage is None
         if self.drawList is None:
-            boxWidth = comn.rectWidth(self.rect)
-            boxHeight = comn.rectHeight(self.rect)
             boxOffset = icon.dragSeqImage.width - 1
+            boxWidth = comn.rectWidth(self.rect) - boxOffset
+            boxHeight = comn.rectHeight(self.rect)
             img = Image.new('RGBA', (comn.rectWidth(self.rect), boxHeight),
                 color=(0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
@@ -114,7 +110,8 @@ class CommentIcon(icon.Icon):
             # Text
             spineLeft = boxOffset + 1
             textLeft = spineLeft + poundImage.width + icon.TEXT_MARGIN
-            textTop = icon.TEXT_MARGIN + COMMENT_V_TEXT_OFFSET
+            textTop = icon.TEXT_MARGIN + (STMT_COMMENT_V_TEXT_OFFSET if
+                self.attachedToStmt else  LINE_COMMENT_V_TEXT_OFFSET)
             isMultiline = len(self.wrappedString) >= 2
             for i, line in enumerate(self.wrappedString):
                 y = textTop + i * lineSpacing
@@ -132,8 +129,8 @@ class CommentIcon(icon.Icon):
             if needSeqSites:
                 icon.drawSeqSites(img, icon.dragSeqImage.width-1, 0, boxHeight)
             if temporaryDragSite:
-                img.paste(icon.dragSeqImage, (0, boxHeight // 2 -
-                        icon.dragSeqImage.height//2))
+                img.paste(icon.dragSeqImage, (0, icon.minTxtIconHgt // 2 -
+                    icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
 
@@ -170,6 +167,8 @@ class CommentIcon(icon.Icon):
         return True
 
     def insertText(self, text, insertPos, undoFwdDelete=False):
+        if insertPos == 'end':
+            insertPos = len(self.string)
         if text == "" or insertPos < 0 or insertPos > len(self.string):
             return False
         self.window.requestRedraw(self.topLevelParent().hierRect())
@@ -213,7 +212,7 @@ class CommentIcon(icon.Icon):
 
     def _textAreaClickBoundary(self):
         left, top, right, bottom = self.rect
-        left += icon.dragSeqImage.width + poundImage.width // 2
+        left += icon.dragSeqImage.width + poundImage.width
         top += icon.TEXT_MARGIN
         bottom -= icon.TEXT_MARGIN
         right -= icon.TEXT_MARGIN
@@ -228,7 +227,13 @@ class CommentIcon(icon.Icon):
             # Cursor is next to pound:remove the comment if it's empty, otherwise, select
             # the content of the comment
             if self.string == '':
-                self.window.removeIcons([self])
+                stmt = self.attachedToStmt
+                if stmt:
+                    self.detachStmtComment()
+                    rightmostIc, rightmostSite = icon.rightmostSite(stmt)
+                    self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
+                else:
+                    self.window.removeIcons([self])
             else:
                 #... Once we have text selections
                 pass
@@ -244,34 +249,46 @@ class CommentIcon(icon.Icon):
         if direction == "Left":
             if self.cursorPos <= 0:
                 # Move the cursor out of the icon
-                self.window.cursor.setToIconSite(self, 'seqIn')
+                if self.attachedToStmt:
+                    rightmostIc, rightmostSite = icon.rightmostSite(self.attachedToStmt)
+                    self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
+                else:
+                    self.window.cursor.setToIconSite(self, 'seqIn')
             else:
                 self.cursorPos -= 1
         elif direction == "Right":
             if self.cursorPos == len(self.string):
                 # Move the cursor out of the icon
-                self.window.cursor.setToIconSite(self, 'seqOut')
+                if self.attachedToStmt:
+                    if self.attachedToStmt.hasSite('seqOut'):
+                        self.window.cursor.setToIconSite(self.attachedToStmt, 'seqOut')
+                    else:
+                        cursors.topSite(self.attachedToStmt)
+                else:
+                    self.window.cursor.setToIconSite(self, 'seqOut')
             else:
                 self.cursorPos += 1
         elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
             newY = y + lineSpacing * {'Up':-1, 'Down':1}[direction]
             self.window.cursor.erase()
+            stmt = self.attachedToStmt if self.attachedToStmt is not None else self
             if self.becomeEntryIcon(clickPos=(x, newY))[0] is None:
                 cursorType, ic, site, pos = cursors.geometricTraverseFromPos(x, y,
-                    direction, self.window, self)
+                    direction, self.window, stmt)
                 if cursorType == 'window':
                     cursorType = 'icon'
                     site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
-                    ic = self
+                    ic = self if self.attachedToStmt is None else self.attachedToStmt
                 self.window.cursor.setTo(cursorType, ic, site, pos)
         cursor.draw()
 
-    def doLayout(self, top, left, layout):
+    def doLayout(self, left, top, layout):
         self.rect = (left, top, left + layout.width + icon.dragSeqImage.width - 1,
             top + layout.height)
-        self.sites.seqOut.yOffset = layout.height - 2
-        self.sites.seqInsert.yOffset = layout.height // 2
+        if not self.attachedToStmt:
+            self.sites.seqOut.yOffset = layout.height - 2
+        self.sites.seqInsert.yOffset = icon.minTxtIconHgt // 2
         self.wrappedString = layout.wrappedString
         self.drawList = None
         self.layoutDirty = False
@@ -284,7 +301,9 @@ class CommentIcon(icon.Icon):
         return repr(self.string) + icon.attrTextRepr(self)
 
     def dumpName(self):
-        return 'stmt comment' if self.attachedToStmt else 'line comment'
+        commentType = 'stmt comment' if self.attachedToStmt else 'line comment'
+        commentStr = self.string if len(self.string) < 20 else (self.string[:20] + '...')
+        return commentType + ' ' + commentStr.replace('\n', '\\n')
 
     def backspace(self, siteId, evt):
         if siteId != 'seqOut':
@@ -301,14 +320,18 @@ class CommentIcon(icon.Icon):
             return self, cursorWindowPos
         return None
 
-    def cursorInText(self, clickPos):
+    def cursorInText(self, clickPos, nearestToClick=True):
         """Determine if a given window x,y position (clickPos) is within the text area
         of the icon.  If so, return the (cursor) position within the text closest to
         clickPos, and the x,y window coordinate location for that cursor (y center).  If
-        the clickpos is not within the clickable area, return (None, None)."""
+        the clickpos is not within the clickable area, return (None, None).  In order to
+        have a single cursor location associated with ends of lines, the cursor position
+        to the right of the line (which often follows a space when lines are word
+        wrapped) actually belongs to the start of the next line, so the nearest cursor
+        position to a wrapped line end is one character left of the wrap.  This behavior
+        can be changed by specifying nearestToClick as False."""
         left = self.rect[0] + icon.dragSeqImage.width + poundImage.width + \
             icon.TEXT_MARGIN
-
         poundXCenter = self.rect[0] + icon.dragSeqImage.width + poundImage.width // 2
         top = self.rect[1] + icon.TEXT_MARGIN
         right = self.rect[2] - icon.TEXT_MARGIN
@@ -328,7 +351,13 @@ class CommentIcon(icon.Icon):
         if charNum >= len(self.wrappedString[lineNum]) and \
                 lineNum < len(self.wrappedString):
             # clickPos is right of the line: move cursor to the last allowed position
+            # (see details of line-ending behavior in function description).
             charNum = len(self.wrappedString[lineNum])
+            if lineNum != len(self.wrappedString) - 1:
+                if nearestToClick:
+                    charNum = max(0, charNum - 1)
+                else:
+                    cursorY += lineSpacing
         cursorIdx += charNum
         cursorX = left + int(charWidth * charNum)
         return cursorIdx, (cursorX, cursorY)
@@ -366,7 +395,8 @@ class CommentIcon(icon.Icon):
     def cursorWindowPos(self):
         x, y = self.rect[:2]
         x += icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN + poundImage.width
-        y += icon.TEXT_MARGIN + COMMENT_V_TEXT_OFFSET
+        y += icon.TEXT_MARGIN + (STMT_COMMENT_V_TEXT_OFFSET if
+            self.attachedToStmt else LINE_COMMENT_V_TEXT_OFFSET)
         lineCount = 0
         charCount = 0
         charsInLine = 0
@@ -391,6 +421,18 @@ class CommentIcon(icon.Icon):
             self.cursorPos = len(self.string)
         else:
             self.cursorPos = max(0, min(len(self.string), pos))
+
+    def markLayoutDirty(self):
+        if self.attachedToStmt:
+            # When a statement comment is changed, the attached statement will also need
+            # layout to re-balance the space between them. Marking the attached statement
+            # also serves a second purpose: to mark the page containing the comment
+            # dirty, which the root markLayoutDirty method can't otherwise do from a stmt
+            # comment, because they are outside of the icon/site hierarchy.
+            self.layoutDirty = True
+            icon.Icon.markLayoutDirty(self.attachedToStmt)
+        else:
+            icon.Icon.markLayoutDirty(self)
 
     def _enumerateStringLayouts(self):
         """Return a list of possible layouts for the string.  Layout includes a special
@@ -435,7 +477,8 @@ class CommentIcon(icon.Icon):
                 layoutHeight = max(icon.minTxtHgt, charHeight + 2 * icon.TEXT_MARGIN)
             else:
                 layoutHeight = ((i + 1) * lineSpacing) + 2 * icon.TEXT_MARGIN
-            layout = iconlayout.Layout(self, layoutWidth, layoutHeight, layoutHeight//2)
+            layout = iconlayout.Layout(self, layoutWidth, layoutHeight,
+                icon.minTxtIconHgt // 2)
             if i == minPossibleWraps:
                 layout.badness = 0
             else:
@@ -443,6 +486,31 @@ class CommentIcon(icon.Icon):
             layout.wrappedString = lineList
             layouts.append(layout)
         return layouts
+
+    def attachStmtComment(self, toIc):
+        toIc.stmtComment = self
+        self.attachedToStmt = toIc
+        if self.hasSite('seqIn'):
+            self.sites.remove('seqIn')
+            self.sites.remove('seqOut')
+        self.markLayoutDirty()
+        toIc.markLayoutDirty()
+        self.window.undo.registerCallback(self.detachStmtComment)
+
+    def detachStmtComment(self):
+        self.window.requestRedraw(self.rect)
+        attachedStmt = self.attachedToStmt
+        if attachedStmt is None:
+            return
+        del attachedStmt.stmtComment
+        self.attachedToStmt = None
+        self.markLayoutDirty()
+        attachedStmt.markLayoutDirty()
+        if not self.hasSite('seqIn'):
+            seqX = icon.dragSeqImage.width
+            self.sites.add('seqIn', 'seqIn', seqX, 1)
+            self.sites.add('seqOut', 'seqOut', seqX, comn.rectHeight(self.rect) - 2)
+        self.window.undo.registerCallback(self.attachStmtComment, attachedStmt)
 
 class VerticalBlankIcon(icon.Icon):
     def __init__(self, window, location=None):

@@ -35,7 +35,7 @@ unaryOperators = {'+', '-', '~', 'not'}
 unaryNonKeywordOps = {'+', '-', '~'}
 emptyDelimiters = {' ', '\t', '\n', '\r', '\f', '\v'}
 delimitChars = {*emptyDelimiters, '(', ')', '[', ']', '}', ':', '.', ';', '@', '=', ',',
- '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!'}
+ '-', '+', '*', '/', '<', '>', '%', '&', '|', '^', '!', '#'}
 keywords = {'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
  'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise',
@@ -1108,6 +1108,19 @@ class EntryIcon(icon.Icon):
     def _setText(self, newText, newCursorPos):
         """Process the text in the icon, possibly creating or rearranging the icon
         structure around it."""
+        if newText == '#' and self.text == '' and (self.parent() is not None or
+                self.hasPendingArgs()):
+            # The user has typed a pound character outside of  the legal context for a
+            # line comment, so we assume they want to add a statement comment.  Note
+            # that the removal or placeholder conversion of this entry icon happens via
+            # focusOut as a side effect of placing the cursor in the comment.
+            topParent = self.topLevelParent()
+            if hasattr(topParent, 'stmtComment'):
+                topParent.stmtComment.detachStmtComment()
+            stmtComment = commenticon.CommentIcon(attachedToStmt=topParent,
+                window=self.window)
+            self.window.cursor.setToText(stmtComment)
+            return
         parseResult, handlerIc, prepend = self.parseEntryText(newText)
         # print('parse result', parseResult)
         if parseResult == "reject":
@@ -1887,6 +1900,7 @@ class EntryIcon(icon.Icon):
         # it in the testExpr site.  No reordering is necessary because inline-if has the
         # lowest expression precedence.
         splitAt = icon.findAttrOutputSite(self)
+        self.replaceWith(None)
         splitTo, splitToSite = findEnclosingSite(splitAt)
         if splitTo is None:
             topExprParentSite = None
@@ -2957,7 +2971,7 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
     vetted as holding the root of the expression (probably by findEnclosingSite), and
     will fail badly if it does not."""
     if splitAt.parent() is None:
-        return None, splitAt
+        return replaceLeft, replaceRight
     leftArg = replaceLeft
     rightArg = replaceRight
     child = splitAt

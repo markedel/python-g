@@ -76,6 +76,10 @@ INSERT_SITE_Y_OFFSET = 5
 # This should be based on font metrics, but for the moment, we have a hard-coded cursor
 ATTR_SITE_OFFSET = 4
 
+# How far (pixels in addition to dragSeqImage.width) to the right of a statement to place
+# the statement comment
+STMT_COMMENT_OFFSET = 4
+
 outSiteImage = comn.asciiToImage((
  "..o",
  ".o ",
@@ -380,6 +384,9 @@ class Icon:
         # Calculate layout choices (... This would be a good place to add a hint when
         # the layout is sequential for optimization)
         layouts = self.calcLayouts()
+        if hasattr(self, 'stmtComment'):
+            incorporateStmtCommentLayouts(layouts, self.stmtComment.calcLayouts(),
+                self.window.margin)
         # Determine the best of the calculated layouts based on size and "badness" rating
         # recorded in each of the layouts.  Incorporate size and margin exceeded penalties
         # directly in to the layout badness score
@@ -439,28 +446,41 @@ class Icon:
             for ic in self.traverse():
                 left, top = ic.rect[:2]
                 ic.rect = moveRect(ic.rect, (left + xOff, top + yOff))
+        if hasattr(self, 'stmtComment'):
+            xOff = bestLayout.width - bestLayout.stmtCommentLayout.width + \
+                STMT_COMMENT_OFFSET
+            self.stmtComment.doLayout(self.rect[0]+xOff, y-bestLayout.parentSiteOffset,
+                bestLayout.stmtCommentLayout)
         return bestLayout
 
-    def traverse(self, order="draw", includeSelf=True):
+    def traverse(self, order="draw", includeSelf=True, inclStmtComment=False):
         """Iterator for traversing the tree below this icon.  Traversal can be in either
         drawing (order="draw") or picking (order="pick") order."""
-        if includeSelf and order != "pick":
-            yield self
+        if order == 'pick':
+            if inclStmtComment and hasattr(self, 'stmtComment'):
+                yield self.stmtComment
+        else:
+            if includeSelf:
+                yield self
         # For "pick" order to be the true opposite of "draw", this loop should run in
         # reverse, but child icons are not intended to overlap in a detectable way.
         for child in self.children():
             if child is None:
                 print('icon has null child', self)
             yield from child.traverse(order)
-        if includeSelf and order == "pick":
-            yield self
+        if order == "pick":
+            if includeSelf:
+                yield self
+        else:
+            if inclStmtComment and hasattr(self, 'stmtComment'):
+                yield self.stmtComment
 
-    def traverseBlock(self, includeSelf=True, hier=False):
+    def traverseBlock(self, includeSelf=True, hier=False, inclStmtComment=False):
         """If the icon owns a code block return either all the icons in the code block
         (if hier is True), or just the top level icons in the block (if hier is False)."""
         if includeSelf:
             if hier:
-                yield from self.traverse()
+                yield from self.traverse(inclStmtComment=inclStmtComment)
             else:
                 yield self
         if not hasattr(self, 'blockEnd'):
@@ -469,7 +489,7 @@ class Icon:
             if ic is self.blockEnd:
                 break
             if hier:
-                yield from ic.traverse()
+                yield from ic.traverse(inclStmtComment=inclStmtComment)
             else:
                 yield ic
         if includeSelf:
@@ -517,9 +537,9 @@ class Icon:
         excludes tiny connectors and snap sites"""
         return self.rect
 
-    def hierRect(self):
+    def hierRect(self, inclStmtComment=True):
         """Return a rectangle covering this icon and its children"""
-        return containingRect(self.traverse())
+        return containingRect(self.traverse(inclStmtComment=inclStmtComment))
 
     def needsLayout(self):
         """Returns True if the icon requires re-layout due to changes to child icons"""
@@ -1220,6 +1240,32 @@ def tintSelectedImage(image, selected, style):
     selImg = Image.blend(image, colorImg, .15)
     return selImg
 
+def incorporateStmtCommentLayouts(layouts, commentLayouts, margin):
+    """extend each layout in the list (layouts) to incorporate the best matching
+    statement comment from commentLayouts.  Best-matching means fits within margin
+    and adds the least badness."""
+    widthRankedComments = sorted(commentLayouts, key=lambda l: l.width)
+    heightRankedComments = sorted(commentLayouts, key=lambda l: l.height)
+    for layout in layouts:
+        for commentLayout in widthRankedComments:
+            if commentLayout.height <= layout.height and \
+                    layout.width + commentLayout.width + STMT_COMMENT_OFFSET <= margin:
+                bestCommentLayout = commentLayout
+                break
+        else:
+            for commentLayout in heightRankedComments:
+                if layout.width + commentLayout.width + STMT_COMMENT_OFFSET <= margin:
+                    bestCommentLayout = commentLayout
+                    break
+            else:
+                bestCommentLayout = widthRankedComments[0]
+        # Since the comment will only extend to the right of and (possibly) below, the
+        # existing layout, it will not affect any of the offsets, so just extend size
+        layout.width += bestCommentLayout.width + STMT_COMMENT_OFFSET
+        layout.height = max(layout.height, bestCommentLayout.height)
+        layout.stmtCommentLayout = bestCommentLayout
+    return layouts
+
 def drawSeqSites(img, boxLeft, boxTop, boxHeight, indent=None, extendWidth=None):
     """Draw sequence (in and out) sites on a rectangular boxed icon.  If extendWidth
     is specified and the icon specifies an indent, build up the icon outline to include
@@ -1371,10 +1417,10 @@ def findSeqEnd(ic, toEndOfBlock=False):
         ic = nextIc
 
 def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
- restrictToPage=None, skipInnerBlocks=False):
+        restrictToPage=None, skipInnerBlocks=False, inclStmtComments=False):
     if includeStartingIcon:
         if hier:
-            yield from ic.traverse()
+            yield from ic.traverse(inclStmtComment=inclStmtComments)
         else:
             yield ic
     if reverse:
@@ -1390,7 +1436,7 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
             if restrictToPage is not None and ic.window.topIcons[ic] != restrictToPage:
                 return
             if hier:
-                yield from ic.traverse()
+                yield from ic.traverse(inclStmtComment=inclStmtComments)
             else:
                 yield ic
     else:
@@ -1406,7 +1452,7 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
             if restrictToPage is not None and ic.window.topIcons[ic] != restrictToPage:
                 return
             if hier:
-                yield from ic.traverse()
+                yield from ic.traverse(inclStmtComment=inclStmtComments)
             else:
                 yield ic
 
@@ -1597,8 +1643,11 @@ def attrTextRepr(ic):
         return ""
     return ic.sites.attrIcon.att.textRepr()
 
-def dumpHier(ic, indent=0, site=""):
-    print("   " * indent, site, ic.dumpName(), '#' + str(ic.id))
+def dumpHier(ic, indent=0, site=None):
+    siteStr = (" " + site) if site is not None else ""
+    print("   " * indent + siteStr, ic.dumpName(), '#' + str(ic.id))
+    if hasattr(ic, 'stmtComment'):
+        dumpHier(ic.stmtComment, indent+1)
     for child in ic.children():
         dumpHier(child, indent+1, ic.siteOf(child))
 

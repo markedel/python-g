@@ -344,7 +344,7 @@ class Cursor:
 
     def _seqIconsBetween(self, topIcons):
         """Return all of the icons in the sequence including topIcons (filling in gaps,
-        and adding all of the icons in the statement hierarchy)"""
+        and adding all of the icons in the statement hierarchy and statement-comments)"""
         # Note that we can cheat, here for efficiency, knowing that the caller is working
         # geometrically, so we can order the sequence by icon position
         topIconSet = set(topIcons)
@@ -362,7 +362,7 @@ class Cursor:
             print("Did your last cursor movement leave a gap in selected statments?")
             iconsInSeq.union(topIconSet)
         # return the full hierarchy
-        return [i for ic in iconsInSeq for i in ic.traverse()]
+        return [i for ic in iconsInSeq for i in ic.traverse(inclStmtComment=True)]
 
     def removeCursor(self, eraseOld=True, placeEntryText=True):
         """Remove the cursor from the window.  Be aware that this can cause rearrangement
@@ -579,12 +579,16 @@ class Cursor:
                     not (evt.state & python_g.SHIFT_MASK):
                 self.setToText(self.icon)
                 return
-            ic, site = lexicalTraverse(self.icon, self.site, evt.keysym)
-            if evt.keysym == 'Right' and not (evt.state & python_g.SHIFT_MASK):
+            traverseToText = not (evt.state & python_g.SHIFT_MASK)
+            ic, site = lexicalTraverse(self.icon, self.site, evt.keysym,
+                traverseStmtComment=traverseToText)
+            if evt.keysym == 'Right' and traverseToText:
                 if _isTextIcBodySite(ic, site):
+                    ic.setCursorPos(0)
                     self.setToText(ic)
                     return
                 elif isinstance(ic.childAt(site), entryicon.EntryIcon):
+                    ic.setCursorPos(0)
                     self.setToText(ic.childAt(site))
                     return
             cursorType = 'icon'
@@ -632,17 +636,19 @@ class Cursor:
         """Returns True if the cursor is already at a given icon site"""
         return self.type == "icon" and self.icon == ic and self.site == site
 
-def lexicalTraverse(fromIcon, fromSite, direction):
+def lexicalTraverse(fromIcon, fromSite, direction, traverseStmtComment=False):
     """Return the cursor position (icon and siteId) to the left or right according
-    to the "text-flow"."""
-    ic, site = _lexicalTraverse(fromIcon, fromSite, direction)
-    if ic.isCursorSkipSite(site):
+    to the "text-flow".  If travStmtComment is specified, will return the statement
+    comment following the rightmost cursor position at the end of a statement, with
+    a site of None (since statement comments are not attached to a site)."""
+    ic, site = _lexicalTraverse(fromIcon, fromSite, direction, traverseStmtComment)
+    if site is not None and ic.isCursorSkipSite(site):
         # lexical traversal includes comprehension sites, and we want the icon
         # that is on the comprehension site, so go around again.
-        ic, site = _lexicalTraverse(ic, site, direction)
+        ic, site = _lexicalTraverse(ic, site, direction, traverseStmtComment)
     return ic, site
 
-def _lexicalTraverse(fromIcon, fromSite, direction):
+def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
     """Guts of lexicalTraverse, but will visit cursorSkipSites."""
     fromSiteType = fromIcon.typeOf(fromSite)
     if direction == 'Left':
@@ -654,7 +660,7 @@ def _lexicalTraverse(fromIcon, fromSite, direction):
             if attachedIc is None:
                 return fromIcon, fromSite
             attachedSite = attachedIc.siteOf(fromIcon)
-            return _lexicalTraverse(attachedIc, attachedSite, direction)
+            return _lexicalTraverse(attachedIc, attachedSite, direction, travStmtComment)
         elif fromSite == 'seqOut':
             if isinstance(fromIcon, icon.BlockEnd):
                 return fromIcon, "seqIn"
@@ -682,7 +688,7 @@ def _lexicalTraverse(fromIcon, fromSite, direction):
                 return highestIc, topSite(highestIc, seqDown=False)
             parentSite = parent.siteOf(highestIc)
             if fromIcon.hasCoincidentSite():
-                return _lexicalTraverse(parent, parentSite, direction)
+                return _lexicalTraverse(parent, parentSite, direction, travStmtComment)
             return iconsites.lowestCoincidentSite(parent, parentSite)
         iconAtPrevSite = fromIcon.childAt(prevSite)
         if iconAtPrevSite is None:
@@ -694,7 +700,7 @@ def _lexicalTraverse(fromIcon, fromSite, direction):
             if nextSite is None:
                 return fromIcon, topSite(fromIcon, seqDown=True)
             if fromSite == 'output' and nextSite == fromIcon.hasCoincidentSite():
-                return _lexicalTraverse(fromIcon, nextSite, direction)
+                return _lexicalTraverse(fromIcon, nextSite, direction, travStmtComment)
             return fromIcon, nextSite
         if fromSite == 'seqOut':
             nextStmt = fromIcon.nextInSeq()
@@ -720,7 +726,10 @@ def _lexicalTraverse(fromIcon, fromSite, direction):
         while nextSite is None or nextSite == nextIcon.hasCoincidentSite():
             parent = nextIcon.parent()
             if parent is None:
-                return nextIcon, topSite(nextIcon, seqDown=True)
+                if travStmtComment and hasattr(nextIcon, 'stmtComment'):
+                    return nextIcon.stmtComment, None
+                else:
+                    return nextIcon, topSite(nextIcon, seqDown=True)
             parentSite = parent.siteOf(nextIcon)
             nextSite = parent.sites.nextCursorSite(parentSite)
             nextIcon = parent
@@ -764,10 +773,18 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
         cursorPrevIcon = cursorTopIcon.prevInSeq()
         cursorNextIcon = cursorTopIcon.nextInSeq()
         limitToStmts = [cursorTopIcon]
+        if hasattr(cursorTopIcon, 'stmtComment'):
+            limitToStmts.append(cursorTopIcon.stmtComment)
         if cursorPrevIcon:
-            limitToStmts.append(cursorPrevIcon.topLevelParent())
+            prevTopIcon = cursorPrevIcon.topLevelParent()
+            limitToStmts.append(prevTopIcon)
+            if hasattr(prevTopIcon, 'stmtComment'):
+                limitToStmts.append(prevTopIcon.stmtComment)
         if cursorNextIcon is not None:
-            limitToStmts.append(cursorNextIcon.topLevelParent())
+            nextTopIcon = cursorNextIcon.topLevelParent()
+            limitToStmts.append(nextTopIcon)
+            if hasattr(nextTopIcon, 'stmtComment'):
+                limitToStmts.append(nextTopIcon.stmtComment)
     cursorSites = []
     for winIcon in window.findIconsInRegion(searchRect):
         if limitAdjacentStmt is not None:
@@ -870,11 +887,12 @@ def _isTextIcBodySite(ic, siteId):
     """Return True if ic is an entry icon and siteId is the site adjacent to the icon
     body.  This is a temporary placeholder for a more general routine that will do this
     for all icons that can host text editing (as opposed to interchanging with an entry
-    icon to do so)."""
+    icon to do so).  Also accepts the non-standard return from lexicalTraverse with
+    traverseStmtComment option set, of a statement comment and siteId of None."""
     if  ic.__class__.__name__ in ('EntryIcon', 'StringIcon'):
         return siteId == ic.sites.firstCursorSite()
     if ic.__class__.__name__ in ('CommentIcon'):
-        return siteId == 'seqOut'
+        return siteId in ('seqOut', None)
 
 def _windowCursorIncr(x, y, direction):
     directions = {"Up": (0, -1), "Down": (0, 1), "Left": (-1, 0), "Right": (1, 0)}

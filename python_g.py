@@ -356,7 +356,10 @@ class Window:
         # removing icons, after which this code can be removed.
         removeSet = set()
         for ic in self.selectedSet:
-            topParent = ic.topLevelParent()
+            if isStmtComment(ic):
+                topParent = ic.attachedToStmt
+            else:
+                topParent = ic.topLevelParent()
             if topParent is None or topParent not in self.topIcons:
                 print("Removing deleted icon from selection")
                 removeSet.add(ic)
@@ -561,7 +564,7 @@ class Window:
                 yMax = max(page.bottomY, yMax)
                 if page.bottomY >= scrollOriginY and page.topY <= windowBottom:
                     page.applyOffset()
-                    for ic in page.traverseSeq(hier=True):
+                    for ic in page.traverseSeq(hier=True, inclStmtComments=True):
                         l, t, r, b = ic.rect
                         if b >= scrollOriginY and t <= windowBottom:
                             xMin = min(ic.rect[0], xMin)
@@ -643,7 +646,7 @@ class Window:
             self.cursor.icon.addText(char)
         elif self.cursor.type == "icon":
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
-            self._insertEntryIconAtCursor()
+            self._insertEntryIconAtCursor(allowOnCursorOnly=char=='#')
             self.cursor.icon.addText(char)
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
@@ -695,7 +698,7 @@ class Window:
                 return
         self.refreshDirty()  # Undo boundary added within entryIcon.addText
 
-    def _insertEntryIconAtCursor(self):
+    def _insertEntryIconAtCursor(self, allowOnCursorOnly=False):
         # Note that location is set in the entry icon for the single case where it
         # becomes the beginning of a sequence.  All others are overwritten by layout
         self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
@@ -712,7 +715,7 @@ class Window:
             icon.insertSeq(entryIcon, self.cursor.icon, before=before)
             self.addTopSingle(entryIcon)
         elif self.cursor.siteType == "attrIn":  # Cursor site type is input or attrIn
-            if self.cursor.icon.__class__ in noAppendIcons:
+            if self.cursor.icon.__class__ in noAppendIcons and not allowOnCursorOnly:
                 icon.insertSeq(entryIcon, self.cursor.icon)
                 self.addTopSingle(entryIcon)
             else:
@@ -874,12 +877,12 @@ class Window:
                     # children (without the code block)
                     if isinstance(ic, icon.BlockEnd):
                         ic = ic.primary
-                    icons = list(ic.traverse())
+                    icons = list(ic.traverse(inclStmtComment=True))
                     icons.append(ic.blockEnd)
                     self._startDrag(evt, icons)
                 else:
                     # double-click drag, ignores associativity and outer icon
-                    self._startDrag(evt, list(ic.traverse()))
+                    self._startDrag(evt, list(ic.traverse(inclStmtComment=True)))
             # It would seem natural to drag an entire sequence by the top icon, but that
             # can also be done by double-clicking to the right of the icon then dragging.
             # Prefer to reserve that gesture for dragging the icon and its block.
@@ -887,15 +890,17 @@ class Window:
             #  ic.childAt('seqOut') is not None and ic.childAt('seqIn') is None:
             #     self._startDrag(evt, list(icon.traverseSeq(ic, hier=True)))
             elif hasattr(ic, 'blockEnd'):
-                self._startDrag(evt, list(ic.traverseBlock(hier=True)))
+                self._startDrag(evt, list(ic.traverseBlock(hier=True,
+                    inclStmtComment=True)))
             elif isinstance(ic, icon.BlockEnd):
-                self._startDrag(evt, list(ic.primary.traverseBlock(hier=True)))
+                self._startDrag(evt, list(ic.primary.traverseBlock(hier=True,
+                    inclStmtComment=True)))
             elif ic.__class__ in (blockicons.ElseIcon, blockicons.ElifIcon,
                     blockicons.ExceptIcon, blockicons.FinallyIcon):
                 self._startDrag(evt, blockicons.clauseBlockIcons(ic))
             else:
                 self._startDrag(evt, list(findLeftOuterIcon(self.assocGrouping(ic),
-                        self.buttonDownLoc).traverse()))
+                        self.buttonDownLoc).traverse(inclStmtComment=True)))
 
     def _mouseWheelCb(self, evt):
         delta = -int(evt.delta * MOUSE_WHEEL_SCALE)
@@ -1069,30 +1074,59 @@ class Window:
         which the icon is the leftmost argument."""
         siteIcon, site = self.siteSelected(evt)
         siteSelected = self.cursor.type == "icon" and self.cursor.icon is siteIcon
-        currentSel = self.selectedIcons()
-        singleSel = [clickedIcon]
-        hierSel = list(clickedIcon.traverse())
-        leftSel = list(findLeftOuterIcon(self.assocGrouping(clickedIcon),
-            self.buttonDownLoc).traverse())
+        currentSel = set(self.selectedIcons())
+        singleSel = {clickedIcon}
+        hierSel = set(clickedIcon.traverse())
+        hasHierSel = singleSel != hierSel
+        leftIc = findLeftOuterIcon(self.assocGrouping(clickedIcon), self.buttonDownLoc)
+        leftSel = set(leftIc.traverse())
+        hasLeftSel = leftSel != hierSel
+        if hasattr(leftIc, 'stmtComment'):
+            commentSel = {*leftSel, leftIc.stmtComment}
+            hasCommentSel = True
+        else:
+            commentSel = leftSel
+            hasCommentSel = False
         if hasattr(clickedIcon, 'blockEnd'):
-            singleSel.append(clickedIcon.blockEnd)
-            hierSel.append(clickedIcon.blockEnd)
+            hasBlockSel = True
+            singleSel.add(clickedIcon.blockEnd)
+            hierSel.add(clickedIcon.blockEnd)
+            leftSel.add(clickedIcon.blockEnd)
+            commentSel.add(clickedIcon.blockEnd)
+        else:
+            hasBlockSel = False
         if not currentSel:
             if siteIcon is not None and (not siteSelected or site != self.cursor.site):
                 return "moveCursor"
             return "select"
-        if currentSel == singleSel:
-            if hierSel == currentSel:
-                if leftSel == currentSel:
-                    return "moveCursor"
+        elif currentSel == singleSel:
+            if hasHierSel:
+                return "hier"
+            if hasLeftSel:
                 return "left"
-            return "hier"
-        if currentSel == hierSel:
-            if hasattr(clickedIcon, 'blockEnd'):
-                return "icAndblock"
-            if leftSel == currentSel:
-                return "moveCursor"
-            return "left"
+            if hasCommentSel:
+                return "comment"
+            if hasBlockSel:
+                return "icAndBlock"
+            return "moveCursor"
+        elif currentSel == hierSel:
+            if hasLeftSel:
+                return "left"
+            if hasCommentSel:
+                return "comment"
+            if hasBlockSel:
+                return "icAndBlock"
+            return "moveCursor"
+        elif currentSel == leftSel:
+            if hasCommentSel:
+                return "comment"
+            if hasBlockSel:
+                return "icAndBlock"
+            return "moveCursor"
+        elif currentSel == commentSel:
+            if hasBlockSel:
+                return "icAndBlock"
+            return "moveCursor"
         return "moveCursor"
 
     def _destroyCb(self, evt):
@@ -1570,6 +1604,8 @@ class Window:
             for ic, (x, y), name, siteType, test in dragSnapList.get("conditional", []):
                 draggingConditionals.append(((x, y), ic, name, test))
         stationaryInputs = []
+        draggingComment = any((isinstance(i, commenticon.CommentIcon) for i in
+            topDraggingIcons))
         for winIcon in self.findIconsInRegion(order='pick'):
             snapLists = winIcon.snapLists()
             for ic, pos, name in snapLists.get("input", []):
@@ -1597,6 +1633,16 @@ class Window:
                     nextInX, nextInY = nextIc.posOfSite('seqIn')
                     sHgt = nextInY - pos[1]
                 stationaryInputs.append((pos, sHgt, ic, "seqOut", name, None))
+            if draggingComment and winIcon.parent() is None and not isinstance(winIcon,
+                    (commenticon.CommentIcon, commenticon.VerticalBlankIcon,
+                    icon.BlockEnd)):
+                ic, name = icon.rightmostSite(winIcon)
+                x, y = ic.posOfSite(name)
+                x += icon.STMT_COMMENT_OFFSET
+                if ic.typeOf(name) == 'attrIn':
+                    y -= icon.ATTR_SITE_OFFSET
+                stationaryInputs.append(((x, y), 0, winIcon, 'seqIn', 'stmtComment',
+                    lambda snapIc, _: isinstance(snapIc, commenticon.CommentIcon)))
         self.snapList = []
         for si in stationaryInputs:
             (sx, sy), sh, sIcon, sSiteType, sName, sTest = si
@@ -1675,8 +1721,22 @@ class Window:
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             statIcon, movIcon, siteType, siteName = self.snapped
-            if siteType == "input":
+            if siteName == "stmtComment":
                 topDraggedIcons.remove(movIcon)
+                if hasattr(statIcon, 'stmtComment'):
+                    statIcon.stmtComment.detachStmtComment()
+                movIcon.attachStmtComment(statIcon)
+            elif siteType == "input":
+                topDraggedIcons.remove(movIcon)
+                if hasattr(movIcon, 'stmtComment'):
+                    # Icon owning stmt comment is no longer top icon.  Move or merge
+                    stmtComment = movIcon.stmtComment
+                    stmtComment.detachStmtComment()
+                    topParent = statIcon.topLevelParent()
+                    if hasattr(topParent, 'stmtComment'):
+                        topParent.stmtComment.insertText(' ' + stmtComment.string, "end")
+                    else:
+                        stmtComment.attachStmtComment(topParent)
                 if iconsites.isSeriesSiteId(siteName) and \
                         isinstance(movIcon, listicons.TupleIcon) and movIcon.noParens:
                     # Splice in naked tuple
@@ -1813,7 +1873,7 @@ class Window:
             needsSelect = drawBottom > seqInY and drawTop < seqOutY
             selected = ic.isSelected()
             if not selected and needsSelect or selected and not needsSelect:
-                for selIc in ic.traverse():
+                for selIc in ic.traverse(inclStmtComment=True):
                     selIc.select(needsSelect)
                     redrawRegion.add(selIc.rect)
             if seqInY < anchorY < seqOutY:
@@ -2090,8 +2150,9 @@ class Window:
         changes the state of a single icon, 'add': adds a single icon to the selection,
         'hier': changes the selection to the icon and it's children, 'left': changes
         the selection to the icon and associated expression for which it is the
-        leftmost component, 'block' changes the selection to the entire code block
-        containing ic"""
+        leftmost component, 'comment' changes the selection to the top icon in the
+        statement and its associated statement comment, 'icAndBlock' changes the
+        selection to the entire code block containing ic"""
         if op in ('select', 'hier', 'left', 'block'):
             self.unselectAll()
         #... I'm leaving the commented-out code below as a reminder that I removed it
@@ -2110,8 +2171,10 @@ class Window:
                 changedIcons += list(i.traverse())
                 if i is seqEnd:
                     break
-        elif op == 'icAndblock':
-            changedIcons = list(ic.traverseBlock(hier=True))
+        elif op == 'comment':
+            changedIcons = list(ic.topLevelParent().traverse(inclStmtComment=True))
+        elif op == 'icAndBlock':
+            changedIcons = list(ic.traverseBlock(hier=True, inclStmtComment=True))
         elif op == 'left':
             ic = findLeftOuterIcon(self.assocGrouping(ic), self.buttonDownLoc)
             changedIcons = list(ic.traverse())
@@ -2302,7 +2365,7 @@ class Window:
                 if page.bottomY >= rect[1] and page.topY <= bottom:
                     page.applyOffset()
                     for topIc in page.traverseSeq():
-                        for ic in topIc.traverse(order=order):
+                        for ic in topIc.traverse(order=order, inclStmtComment=True):
                             if comn.rectsTouch(rect, ic.rect):
                                 iconsInRegion.append(ic)
                         if inclSeqRules and seqRuleSeed is None and topIc.rect[1] >= top:
@@ -2335,7 +2398,8 @@ class Window:
             for page in seqStartPage.traversePages():
                 if page.bottomY >= y >= page.topY:
                     page.applyOffset()
-                    for ic in page.traverseSeq(order="pick", hier=True):
+                    for ic in page.traverseSeq(order="pick", hier=True,
+                            inclStmtComments=True):
                         if ic.touchesPosition(x, y):
                             return ic
         return None
@@ -2402,7 +2466,8 @@ class Window:
         # disconnecting the icon sequences, and .addTop() must be called after connecting
         # them.  Therefore, the first step is to remove deleted top-level icons from
         # the window's .topIcon and .sequences lists.
-        self.removeTop([ic for ic in icons if ic.parent() is None])
+        self.removeTop([ic for ic in icons if ic.parent() is None and not
+            isStmtComment(ic)])
         detachList = set()
         seqReconnectList = []
         reconnectList = {}
@@ -2435,6 +2500,8 @@ class Window:
                 affectedTopIcons.add(nextIcon)
         for ic in icons:
             affectedTopIcons.add(ic.topLevelParent())
+            if isStmtComment(ic):
+                affectedTopIcons.add(ic.attachedToStmt)
         for topIcon in affectedTopIcons:
             nextIcon = topIcon.nextInSeq()
             if nextIcon is not None:
@@ -2465,6 +2532,15 @@ class Window:
                                 if i not in deletedSet:
                                     reconnectList[i] = (ic, 'attrIcon')
                                     break
+            if hasattr(topIcon, 'stmtComment'):
+                stmtComment = topIcon.stmtComment
+                if stmtComment in deletedSet and topIcon not in deletedSet:
+                    stmtComment.detachStmtComment()
+                    topIcon.markLayoutDirty()
+                elif stmtComment not in deletedSet and topIcon in deletedSet:
+                    #... this is not properly handled, yet (like all other such deletions)
+                    stmtComment.detachStmtComment()
+                    addTopIcons.add(stmtComment)
         for ic, child in detachList:
             ic.replaceChild(None, ic.siteOf(child))
         for outIcon, inIcon in seqReconnectList:
@@ -2621,7 +2697,7 @@ class Window:
                     return
         print("removePage could not find page to remove")
 
-    def replaceTop(self, old, new):
+    def replaceTop(self, old, new, transferStmtComment=True):
         """Replace an existing top-level icon with a new icon.  If the existing icon was
         part of a sequence, replace it in the sequence.  If the icon was not part of a
         sequence place it in the same location.  If "new" will own a code block, also
@@ -2683,6 +2759,10 @@ class Window:
             self.addTop((new, new.blockEnd))
         else:
             self.addTop(new)
+        if transferStmtComment and hasattr(old, 'stmtComment'):
+            stmtComment = old.stmtComment
+            stmtComment.detachStmtComment()
+            stmtComment.attachStmtComment(new)
 
     def addTop(self, icons):
         """Place an icon or icons on the window at the top level.  If the icons are
@@ -2909,6 +2989,9 @@ class Window:
                         # X shifts are rare as edits are usually balanced, but can
                         # happen: propagate to next page and force layout.
                         nextIcon.rect = comn.offsetRect(nextIcon.rect, seqOutX - x, 0)
+                        if hasattr(nextIcon, 'stmtComment'):
+                            nextIcon.stmtComment.rect = comn.offsetRect(
+                                nextIcon.stmtComment.rect, seqOutX - x, 0)
                         page.nextPage.layoutDirty = True
                         nextIcon.markLayoutDirty()
         # If a page was found with more than PAGE_SPLIT_THRESHOLD icons, split it up
@@ -2919,7 +3002,7 @@ class Window:
         return redrawRegion.get()
 
     def layoutIconsInSeq(self, seqStartIcon, filterRedundantParens, fromTopY=None,
-     restrictToPage=None):
+            restrictToPage=None):
         """Lay out all icons in a sequence starting from seqStartIcon. if
         filterRedundantParens is True, apply redundant paren filter before laying out.
         If fromTop specifies a value, line up the layout below that y value.  If fromTop
@@ -2948,7 +3031,8 @@ class Window:
             seqIcOrigRect = seqIc.hierRect()
             xOffsetToSeqIn, yOffsetToSeqIn = seqIc.posOfSite('seqIn')
             yOffsetToSeqIn -= seqIcOrigRect[1]
-            if seqIc.layoutDirty:
+            if seqIc.layoutDirty or hasattr(seqIc, 'stmtComment') and \
+                    seqIc.stmtComment.layoutDirty:
                 redrawRegion.add(seqIcOrigRect)
                 layout = seqIc.layout((0, 0))
                 # Find y offset from top of layout to the seqIn site by which the icon
@@ -2976,7 +3060,7 @@ class Window:
                 seqIcNewRect = seqIc.hierRect()  # Already in the right place
             else:
                 redrawRegion.add(seqIcOrigRect)
-                for ic in seqIc.traverse():
+                for ic in seqIc.traverse(inclStmtComment=True):
                     ic.rect = comn.offsetRect(ic.rect, xOffset, yOffset)
                 seqIcNewRect = seqIc.hierRect()
                 redrawRegion.add(seqIcNewRect)
@@ -3127,7 +3211,7 @@ class Page:
             yield page
             page = page.nextPage
 
-    def traverseSeq(self, hier=False, order="draw"):
+    def traverseSeq(self, hier=False, order="draw", inclStmtComments=False):
         """Traverse the icons in the page (note, generator).  If hier is False, just
         return the top icons in the sequence.  If hier is True, return all icons.  order
         can be either "pick" or "draw", and controls hierarchical (hier=True) traversal.
@@ -3140,7 +3224,7 @@ class Page:
                 break
             count += 1
             if hier:
-                yield from ic.traverse(order=order)
+                yield from ic.traverse(order=order, inclStmtComment=inclStmtComments)
             else:
                 yield ic
         if count != self.iconCount:
@@ -3154,7 +3238,7 @@ class Page:
         page vertically by unappliedOffset and set it to 0)."""
         if self.unappliedOffset == 0:
             return
-        for ic in self.traverseSeq(hier=True):
+        for ic in self.traverseSeq(hier=True, inclStmtComments=True):
             l, t, r, b = ic.rect
             ic.rect = l, t + self.unappliedOffset, r, b + self.unappliedOffset
         self.unappliedOffset = 0
@@ -3280,14 +3364,17 @@ class App:
                 return window
         return None
 
+def isStmtComment(ic):
+    return isinstance(ic, commenticon.CommentIcon) and ic.attachedToStmt is not None
+
 def findTopIcons(icons, stmtLvlOnly=False):
     """ Find the top icon(s) within a list of icons.  If stmtLvlOnly is True, the only
     criteria is that the icons have no parent.  If stmtLvlOnly is False, icons that have
     a parent but that parent is not in the list, are also returned."""
     if stmtLvlOnly:
-        return [ic for ic in icons if ic.parent() is None]
+        return [ic for ic in icons if ic.parent() is None and not isStmtComment(ic)]
     iconSet = set(icons)
-    return [ic for ic in icons if ic.parent() not in iconSet]
+    return [ic for ic in icons if ic.parent() not in iconSet and not isStmtComment(ic)]
 
 def clipboardRepr(icons, offset):
     """Top level function for converting icons into their serialized string representation

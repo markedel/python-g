@@ -2559,10 +2559,10 @@ def _consolidateHandlerBlocks(paramDict, handlerIcs):
         handlers.append(handlerAst)
     paramDict['handlers'] = handlers
 
-def clauseBlockIcons(ic):
+def clauseBlockIcons(ic, inclStmtComment=True):
     """Returns a list of all icons (hierarchy) in an else or elif clause, including
     the else or elif icon itself."""
-    seqIcons = list(ic.traverse())
+    seqIcons = list(ic.traverse(inclStmtComment=inclStmtComment))
     nestLevel = 0
     for seqIcon in icon.traverseSeq(ic, includeStartingIcon=False):
         if isinstance(seqIcon, icon.BlockEnd):
@@ -2574,7 +2574,7 @@ def clauseBlockIcons(ic):
         elif seqIcon.__class__ in (ElifIcon, ElseIcon, ExceptIcon, FinallyIcon) and \
                 nestLevel == 0:
             break
-        seqIcons += list(seqIcon.traverse())
+        seqIcons += list(seqIcon.traverse(inclStmtComment=inclStmtComment))
     return seqIcons
 
 def createWhileIconFromAst(astNode, window):
@@ -2859,8 +2859,5 @@ def _addLineCommentIcons(commentList, window, sequence):
 
 def _addStmtComment(ic, comment):
     commentText = comment[1].replace('\\n', '\n')
-    commentIcon = commenticon.CommentIcon(commentText, attachedToStmt=ic,
-        window=ic.window, ann=comment[0])
-    ic.stmtComment = commentIcon
-    print('Attached stmt comment to %s (args %s): %s' %
-          (ic.dumpName(), comment[0], comment[1]))
+    commenticon.CommentIcon(commentText, attachedToStmt=ic, window=ic.window,
+        ann=comment[0])

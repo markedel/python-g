@@ -115,7 +115,7 @@ binOpAsts = {'+':ast.Add, '-':ast.Sub, '*':ast.Mult, '/':ast.Div, '//':ast.Floor
  '&':ast.BitAnd}
 
 compareAsts = {'is':ast.Is, 'is not':ast.IsNot, '<':ast.Lt, '<=':ast.LtE, '>':ast.Gt,
- '>=':ast.GtE, '==':ast.Eq, '!=':ast.NotEq}
+ '>=':ast.GtE, '==':ast.Eq, '!=':ast.NotEq, 'in':ast.In, 'not in':ast.NotIn}
 
 binOps = {ast.Add:'+', ast.Sub:'-', ast.Mult:'*', ast.Div:'/', ast.FloorDiv:'//',
  ast.Mod:'%', ast.Pow:'**', ast.LShift:'<<', ast.RShift:'>>', ast.BitOr:'|',
