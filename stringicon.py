@@ -505,11 +505,16 @@ class StringIcon(icon.Icon):
             return self
         return None
 
-    def cursorInText(self, clickPos):
+    def cursorInText(self, clickPos, nearestToClick=True):
         """Determine if a given x,y (content) position (clickPos) is within the text area
         of the string.  If so, return the (cursor) position within the text closest to
         clickPos, and the x,y window coordinate location for that cursor (y center).  If
-        the clickpos is not within the clickable area, return (None, None)."""
+        the clickpos is not within the clickable area, return (None, None).  In order to
+        have a single cursor location associated with ends of lines, the cursor position
+        to the right of the line (which often follows a space when lines are word
+        wrapped) actually belongs to the start of the next line, so the nearest cursor
+        position to a wrapped line end is one character left of the wrap.  This behavior
+        can be changed by specifying nearestToClick as False."""
         left = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1
         top = self.rect[1] + icon.TEXT_MARGIN
         right = self.rect[2] - icon.TEXT_MARGIN
@@ -532,7 +537,13 @@ class StringIcon(icon.Icon):
         if charNum >= len(self.wrappedString[lineNum]) and \
                 lineNum < len(self.wrappedString):
             # clickPos is right of the line: move cursor to the last allowed position
+            # (function description explains this behavior).
             charNum = len(self.wrappedString[lineNum])
+            if lineNum != len(self.wrappedString) - 1:
+                if nearestToClick:
+                    charNum = max(0, charNum - 1)
+                else:
+                    cursorY += lineSpacing
         cursorIdx += charNum
         if cursorIdx < 0:
             cursorIdx = -1  # String type/quote area has only one cursor pos
