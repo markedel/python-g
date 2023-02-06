@@ -506,6 +506,7 @@ class ForIcon(icon.Icon):
         iterX = icon.dragSeqImage.width + bodyWidth-1 + self.tgtList.width-1 + inWidth-1
         self.iterList = iconlayout.ListLayoutMgr(self, 'iterIcons', iterX, siteYOffset,
                 simpleSpine=True)
+        self.dragSiteDrawn = False
         totalWidth = iterX + self.iterList.width - 1
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
@@ -514,14 +515,8 @@ class ForIcon(icon.Icon):
             self.sites.seqOut.attach(self, self.blockEnd)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
-        if toDragImage is None:
-            temporaryDragSite = False
-        else:
-            # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site unless it is in a sequence and not the start.
-            self.drawList = None
-            temporaryDragSite = self.prevInSeq() is None
-        if self.drawList is None:
+        needDragSite = toDragImage is not None and self.prevInSeq() is None
+        if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight, inWidth = self.bodySize
             bodyOffset = icon.dragSeqImage.width - 1
             img = Image.new('RGBA', (max(comn.BLOCK_INDENT + 3, bodyWidth) + bodyOffset,
@@ -534,7 +529,7 @@ class ForIcon(icon.Icon):
             img.paste(icon.inSiteImage, (inImgX, inImageY))
             icon.drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right",
              extendWidth=txtImg.width)
-            if temporaryDragSite:
+            if needDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
             # Target list commas and possible list simple-spines
@@ -555,8 +550,7 @@ class ForIcon(icon.Icon):
             self.drawList += self.iterList.drawListCommas(iterOffset, cntrSiteY)
             self.drawList += self.iterList.drawSimpleSpine(iterOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        if temporaryDragSite:
-            self.drawList = None
+        self.dragSiteDrawn = needDragSite
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -1536,6 +1530,7 @@ class DefOrClassIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqX + comn.BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         self.nameWidth = icon.EMPTY_ARG_WIDTH
+        self.dragSiteDrawn = False
         if hasArgs:
             lParenWidth = defLParenImage.width
             argX = icon.dragSeqImage.width + bodyWidth + self.nameWidth + lParenWidth
@@ -1557,14 +1552,8 @@ class DefOrClassIcon(icon.Icon):
             self.sites.seqOut.attach(self, self.blockEnd)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
-        if toDragImage is None:
-            temporaryDragSite = False
-        else:
-            # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site unless it is in a sequence and not the start.
-            self.drawList = None
-            temporaryDragSite = self.prevInSeq() is None
-        if self.drawList is None:
+        needDragSite = toDragImage is not None and self.prevInSeq() is None
+        if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = icon.dragSeqImage.width - 1
             img = Image.new('RGBA', (max(bodyWidth, comn.BLOCK_INDENT+3) + bodyOffset,
@@ -1575,7 +1564,7 @@ class DefOrClassIcon(icon.Icon):
             img.paste(icon.inSiteImage, (self.sites.nameIcon.xOffset, inImageY))
             icon.drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right",
              extendWidth=txtImg.width)
-            if temporaryDragSite:
+            if needDragSite:
                 img.paste(icon.dragSeqImage,
                         (0, bodyHeight // 2 - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
@@ -1601,8 +1590,7 @@ class DefOrClassIcon(icon.Icon):
                     self.argList.spineHeight)
                 self.drawList.append(((rParenOffset, 0), rParenImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
-        if temporaryDragSite:
-            self.drawList = None
+        self.dragSiteDrawn = needDragSite
 
     def argIcons(self):
         if not self.hasArgs:
@@ -1767,7 +1755,10 @@ class DefOrClassIcon(icon.Icon):
             if text[:2] == '**':
                 return listicons.StarStarIcon(self.window), None
             if text == '=' and onAttr:
-                return listicons.ArgAssignIcon(self.window), None
+                attachedIc = entryIc.attachedIcon()
+                if isinstance(attachedIc, nameicons.IdentifierIcon) and \
+                        attachedIc.parent() is self:
+                    return listicons.ArgAssignIcon(self.window), None
             if not (text.isidentifier() or text in "), =" or \
                     text[:-1].isidentifier() and text[-1] in "), ="):
                 # The only valid arguments are identifiers, *, **, =, and comma, *unless*

@@ -146,6 +146,9 @@ class InfixIcon(icon.Icon):
         entryIcon = self._becomeEntryIcon()
         self.window.cursor.setToText(entryIcon, drawNew=False)
 
+    def offsetOfPart(self, partId):
+        return self.sites.rightArg.xOffset - self.opImg.width, 0
+
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
         if clickPos is not None:
             textOriginX = self.rect[0] + self.sites.output.xOffset + \

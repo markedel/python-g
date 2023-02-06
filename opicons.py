@@ -477,6 +477,32 @@ class BinOpIcon(icon.Icon):
             del siteSnapLists['attrIn']
         return siteSnapLists
 
+    def touchesPosition(self, x, y):
+        # Base class method can figure out from our drawList whether x, y touches the
+        # drawn part of the icon, but it can't identify the icon sub-part because our
+        # draw-list is unstable (since we sometimes draw a left input site).
+        partId = icon.Icon.touchesPosition(self, x, y)
+        if partId is None:
+            return None
+        pos, img = self.drawList[partId-1]
+        if img == lParenImage:
+            return 1
+        if img == rParenImage:
+            return 3
+        return 2  # Icon body
+
+    def offsetOfPart(self, partId):
+        if partId == 1:
+            # Left paren
+            return self.sites.output.xOffset, 0
+        elif partId == 2:
+            # Icon body
+            width, height = self.opSize
+            return self.sites.rightArg.xOffset - width, 0
+        elif partId == 3:
+            # Right paren
+            return self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH, 0
+
     def textRepr(self):
         leftArgText = icon.argTextRepr(self.sites.leftArg)
         rightArgText = icon.argTextRepr(self.sites.rightArg)

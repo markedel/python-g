@@ -420,6 +420,20 @@ class IconSiteList:
             return lastSite
         return None
 
+    def traverseLexical(self):
+        """Yield the sites or site series in the site list in lexical traversal order.
+        Note that this only traverses child sites (not sequence or parent)."""
+        site = self.nthCursorSite(0)
+        if site is None:  # order of the first item does not have to be 0
+            site = self.nextTraversalSiteOrSeries(0)
+        if site is None:
+            return
+        while True:
+            yield site
+            site = self.nextTraversalSiteOrSeries(site.order)
+            if site is None:
+                return
+
     def makeSnapLists(self, ic, x, y, forCursor=False):
         snapSites = {}
         for site in self.allSites():

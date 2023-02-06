@@ -902,9 +902,9 @@ class TupleIcon(ListTypeIcon):
         icons gets dragged or pasted in to an expression, it needs its parens back."""
         if not self.noParens:
             return
+        self.noParens = False
         if closed:
             self.close(typeover=typeover)
-        self.noParens = False
         self.drawList = None
         self.coincidentSite = None
         self.markLayoutDirty()
@@ -1474,7 +1474,10 @@ class CallIcon(icon.Icon):
                 text[0] == '=' and len(text) <= 2 and onAttr:
             delim = text[1] if len(text) == 2 else None
             if delim is None or delim in entryicon.emptyDelimiters:
-                return ArgAssignIcon(self.window), delim
+                attachedIc = entryIc.attachedIcon()
+                if isinstance(attachedIc, nameicons.IdentifierIcon) and \
+                        attachedIc.parent() is self:
+                    return ArgAssignIcon(self.window), delim
         # Typeover for lists, tuples, and dicts is handled by hard-coded parsing because
         # closing of matching open parens/brackets/braces needs to take precedence
         return None
@@ -1979,10 +1982,11 @@ class ArgAssignIcon(infixicon.InfixIcon):
             siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
             return ic.__class__ in (CallIcon, blockicons.DefIcon,
                     blockicons.ClassDefIcon) and siteName == "argIcons"
-        outSites = snapLists['output']
-        snapLists['output'] = []
-        snapLists['conditional'] = \
-            [(*snapData, 'output', snapFn) for snapData in outSites]
+        if 'output' in snapLists:  # ArgAssigns can end up in a sequence (via deletion)
+            outSites = snapLists['output']
+            snapLists['output'] = []
+            snapLists['conditional'] = \
+                [(*snapData, 'output', snapFn) for snapData in outSites]
         return snapLists
 
     def execute(self):

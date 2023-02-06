@@ -21,7 +21,7 @@ def _reduceOperatorStack(operatorStack, operandStack):
         print('_reduceOperatorStack: unexpected icon on operator stack')
     operandStack.append(stackOp)
 
-def reorderArithExpr(changedIcon, closeParenAt=None):
+def reorderArithExpr(changedIcon, closeParenAt=None, skipReplaceTop=False):
     """Reorders the arithmetic operators surrounding changed icon to agree with the text
     of the connected icons.  Because the icon representation reflects the hierarchy of
     operations, as opposed to the precedence and associativity of operators that the user
@@ -114,7 +114,8 @@ def reorderArithExpr(changedIcon, closeParenAt=None):
     if newTopNode is not topNode:
         if topNodeParent is None:
             newTopNode.replaceChild(None, 'output')
-            topNode.window.replaceTop(topNode, newTopNode)
+            if not skipReplaceTop:
+                topNode.window.replaceTop(topNode, newTopNode)
         else:
             topNodeParent.replaceChild(newTopNode, topNodeParentSite)
     # Parent links were not necessarily intact when icons were re-linked, and even though
@@ -135,6 +136,8 @@ def highestAffectedExpr(changedIcon):
             return ic  # ic is at top level
         site = parent.siteOf(ic)
         siteType = parent.typeOf(site)
+        #... why is CursorParenIcon in the expression, below?  It may have something to
+        #    do with closing cursor parens, but wouldn't that affect braces and brackets?
         if siteType == "input" and parent.__class__ not in (opicons.BinOpIcon,
                 opicons.IfExpIcon, opicons.UnaryOpIcon, parenicon.CursorParenIcon):
             return ic  # Everything other than arithmetic expressions encloses args

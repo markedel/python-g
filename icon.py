@@ -496,21 +496,51 @@ class Icon:
             yield self.blockEnd
 
     def touchesPosition(self, x, y):
-        """Return True if any of the drawn part of the icon falls at x, y"""
+        """Return a non-zero integer value if any of the drawn part of the icon falls at
+        x, y.  The returned value can be use to identify what sub-part of the icon was
+        clicked, to the offsetOfPart() method.  Note that for most icons, this method
+        will only operate properly if the icon is *drawn* (not just laid-out)."""
         if not pointInRect((x, y), self.rect):
-            return False
+            return None
         if self.drawList is None:
             print('Missing drawlist (%s)?' % self.dumpName())
+        partId = 0
         for imgOffset, img in self.drawList:
             if img is commaImage:
                 continue
+            partId += 1
             left, top = addPoints(self.rect[:2], imgOffset)
             imgX = x - left
             imgY = y - top
             if pointInRect((imgX, imgY), (0, 0, img.width, img.height)):
                 pixel = img.getpixel((imgX, imgY))
-                return pixel[3] > 128
-        return False
+                return partId if pixel[3] > 128 else None
+        return None
+
+    def offsetOfPart(self, partId):
+        """Returns the position of a sub-part of the icon (identified by partId) relative
+        to the icon rectangle.  partId is the value returned by the touchesPosition
+        method.  The calculation of partId used here (Icon superclass) for offsetOfPart
+        and touchesPosition, works for most Python-syntax icons, but by the somewhat
+        sleazy method of counting images in the icon's drawList and ignoring those that
+        point to icon.commaImage.  This will fail for icons that are not consistent in
+        their usage of drawList images or use something other than comma images as
+        separators between variable numbers of arguments (and, of course, will fail if it
+        hasn't been drawn yet).  Note, also, that it returns the position (top, left) of
+        the underlying pixmap used for drawing the part, which may not correspond to a
+        visible pixel (since this call is only used to determine offset relative to a
+        previous icon layout, it only matters that the position has a consistent
+        relationship to the drawn location of the part)."""
+        if self.drawList is None or len(self.drawList) == 0:
+            return 0, 0
+        iconPartId = 0
+        for imgOffset, img in self.drawList:
+            if img is commaImage:
+                continue
+            iconPartId += 1
+            if partId <= iconPartId:
+                return imgOffset
+        return self.drawList[-1][0]
 
     def inRectSelect(self, rect):
         """Return True if rect overlaps any visible part of the icon (commas excepted).
@@ -1548,6 +1578,11 @@ def addPoints(p1, p2):
     x2, y2 = p2
     return x1 + x2, y1 + y2
 
+def subtractPoints(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+    return x1 - x2, y1 - y2
+
 def rectWithinXBounds(rect, leftBound, rightBound):
     left, top, right, bottom = rect
     return left > leftBound and right < rightBound
@@ -1566,6 +1601,22 @@ def _getIconClasses():
         _getIconClasses.cachedDict = {cls.__name__:cls for cls in _allSubclasses(Icon)}
     return _getIconClasses.cachedDict
 _getIconClasses.cachedDict = None
+
+def dumpPlaceList(placeList):
+    if placeList is None:
+        print('<None>')
+        return
+    for e in placeList:
+        if isinstance(e, (list,tuple)):
+            print('[', end='')
+            for i, ic in enumerate(e):
+                name = 'None' if ic is None else ic.dumpName()
+                comma = ', ' if i < len(e) - 1 else ''
+                print(name + comma, end='')
+            print('] ', end='')
+        else:
+            print(e.dumpName() + ' ', end='')
+    print()
 
 def argSaveText(breakLevel, site, cont, export):
     """Create a filefmt.SegmentedText string representing an argument icon (tree) at
@@ -1790,6 +1841,8 @@ def placeListIdxOf(placeList, ic):
 def validateCompatibleChild(child, parent, siteOrSeriesName):
     if child is None:
         return True  # Anything can have an empty site
+    if isEntryIcon(child):
+        return True  # Anything can host an entry icon
     parentSiteOrSeries = getattr(parent.sites, siteOrSeriesName)
     for childParentSite in child.sites.parentSites():
         if iconsites.matingSiteType[parentSiteOrSeries.type] == childParentSite.type:
@@ -1818,3 +1871,7 @@ def cursorInText(textOriginPos, clickPos, font, text, padLeft=0, padRight=0):
     cursorIdx = comn.findTextOffset(font, text, textXOffset)
     cursorX = textOriginX + font.getsize(text[:cursorIdx])[0]
     return cursorIdx, (cursorX, textCenterY)
+
+def isEntryIcon(ic):
+    """Hack for modularity issues preventing import of entryicon"""
+    return ic.__class__.__name__ == 'EntryIcon'

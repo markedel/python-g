@@ -674,19 +674,14 @@ class ImportFromIcon(icon.Icon):
                    impWidth-1
         self.importsList = iconlayout.ListLayoutMgr(self, 'importsIcons', importsX,
             siteYOffset, simpleSpine=True)
+        self.dragSiteDrawn = False
         totalWidth = importsX + self.importsList.width - 1
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
-        if toDragImage is None:
-            temporaryDragSite = False
-        else:
-            # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site unless it is in a sequence and not the start.
-            self.drawList = None
-            temporaryDragSite = self.prevInSeq() is None
-        if self.drawList is None:
+        needDragSite = toDragImage is not None and self.prevInSeq() is None
+        if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight, importWidth = self.bodySize
             bodyOffset = icon.dragSeqImage.width - 1
             # "from"
@@ -699,7 +694,7 @@ class ImportFromIcon(icon.Icon):
             fromImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (fromImgX, fromImageY))
             icon.drawSeqSites(img, bodyOffset, 0, fromImg.height)
-            if temporaryDragSite:
+            if needDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
             # "import"
@@ -716,8 +711,7 @@ class ImportFromIcon(icon.Icon):
             self.drawList += self.importsList.drawListCommas(listOffset, cntrSiteY)
             self.drawList += self.importsList.drawSimpleSpine(listOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        if temporaryDragSite:
-            self.drawList = None
+        self.dragSiteDrawn = needDragSite
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -1020,10 +1014,10 @@ class YieldIcon(icon.Icon):
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = icon.outSiteImage.width - 1
+            img = Image.new('RGBA', (bodyWidth + bodyOffset, bodyHeight),
+                color=(0, 0, 0, 0))
             txtImg = icon.iconBoxedText("yield", icon.boldFont, icon.KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             inImgX = bodyOffset + bodyWidth - icon.inSiteImage.width
@@ -1197,18 +1191,13 @@ class RaiseIcon(icon.Icon):
             self.sites.add('causeIcon', 'input', fromX, siteYOffset)
         else:
             totalWidth = exceptOffset + icon.OUTPUT_SITE_DEPTH
+        self.dragSiteDrawn = False
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
-        if toDragImage is None:
-            temporaryDragSite = False
-        else:
-            # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site unless it is in a sequence and not the start.
-            self.drawList = None
-            temporaryDragSite = self.prevInSeq() is None
-        if self.drawList is None:
+        needDragSite = toDragImage is not None and self.prevInSeq() is None
+        if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight, fromWidth = self.bodySize
             bodyOffset = icon.dragSeqImage.width - 1
             # "raise"
@@ -1221,7 +1210,7 @@ class RaiseIcon(icon.Icon):
             inImgY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inImgX, inImgY))
             icon.drawSeqSites(img, bodyOffset, 0, raiseImg.height)
-            if temporaryDragSite:
+            if needDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY-icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
             # "from"
@@ -1235,8 +1224,7 @@ class RaiseIcon(icon.Icon):
                 importOffset = bodyOffset + bodyWidth - 1 + self.exceptWidth - 1
                 self.drawList.append(((importOffset, self.sites.seqIn.yOffset - 1), img))
         self._drawFromDrawList(toDragImage, location, clip, style)
-        if temporaryDragSite:
-            self.drawList = None
+        self.dragSiteDrawn = needDragSite
 
     def addFrom(self):
         if self.hasFrom:

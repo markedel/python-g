@@ -849,10 +849,12 @@ def splitSrcStr(srcStr):
     return strType, quote, srcStr[len(strType) + len(quote):-len(quote)]
 
 def removeEmptyAttrOnlyIcon(ic):
-    """This temporarily patches around window.removeIcons not being fully reliable at
-    placing orphaned icons and leaving the cursor in the right place after removing
-    icon.  This and similar code for list icons (and maybe elsewhere, as well) should be
-    removed once removeIcons rewritten."""
+    """This was temporarily code to patch around window.removeIcons not being fully
+    reliable at placing orphaned icons and leaving the cursor in the right place after
+    removing an icon.  removeIcons has been mostly rewritten and now handles all the icon
+    placement sufficiently well, but is still not as good as this and similar special-
+    purpose code in listicons.py at placing the cursor after the operation.  It would
+    be good to get rid of these, but they work, so it's lower on the priority list."""
     ic.window.requestRedraw(ic.topLevelParent().hierRect(), filterRedundantParens=False)
     parent = ic.parent()
     win = ic.window

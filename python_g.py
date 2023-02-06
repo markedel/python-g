@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import tkinter.messagebox
 import ctypes
+import reorderexpr
 
 WINDOW_BG_COLOR = (255, 255, 255)
 #WINDOW_BG_COLOR = (128, 128, 128)
@@ -267,6 +268,8 @@ class Window:
         self.buttonDownTime = None
         self.buttonDownLoc = None
         self.buttonDownState = None
+        self.buttonDownIcon = None
+        self.buttonDownIcPart = None
         self.doubleClickFlag = False
         self.dragging = None
         self.dragImageOffset = None
@@ -741,6 +744,9 @@ class Window:
         makes those icons with active typeover, findable)."""
         self.activeTypeovers.add(ic)
 
+    def cancelAllTypeovers(self, draw=True):
+        self._refreshTypeovers([], draw)
+
     def updateTypeoverStates(self, draw=True):
         """Typeover is only allowed directly in front of the cursor, and goes away if
         the user would need to navigate somehow to reach it (in which case they can
@@ -970,7 +976,8 @@ class Window:
             else:
                 self._select(ic)
             return
-        if hasattr(ic, "pointInTextArea") and ic.pointInTextArea(x, y):
+        if hasattr(ic, "pointInTextArea") and ic.pointInTextArea(x, y) and not \
+                ic.isSelected():
             if not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
                 self.unselectAll()
             ic.click(x, y)
@@ -979,6 +986,8 @@ class Window:
             return
         self.buttonDownTime = msTime()
         self.buttonDownLoc = x, y
+        self.buttonDownIcon = ic
+        self.buttonDownIcPart = None if ic is None else ic.touchesPosition(x, y)
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
         if (ic is None or not ic.isSelected()) and not (evt.state & SHIFT_MASK or
@@ -1549,24 +1558,27 @@ class Window:
             return self.cursor.icon.focusOut()
         return True
 
-    def _startDrag(self, evt, icons, needRemove=True):
-        self.dragging = icons
+    def _startDrag(self, evt, icons):
+        btnDownIcPartPos = icon.addPoints(self.buttonDownIcon.rect[:2],
+            self.buttonDownIcon.offsetOfPart(self.buttonDownIcPart))
+        self.cancelAllTypeovers(draw=False)
         # Remove the icons from the window image and handle the resulting detachments
-        # re-layouts, and redrawing.
-        sequences = findSeries(icons)
-        if needRemove:
-            self.removeIcons(self.dragging)
-        # Refresh the whole display with icon outlines turned on
+        # re-layouts, and redrawing.  removeIcons (with assembleDeleted=True) also does
+        # the important job of re-building deleted icons into a set of dragable sequences
+        # and hierarchies.
+        draggingSequences = self.removeIcons(icons, assembleDeleted=True)
+        # Note that the icons we'll actually drag may not be identical to the function
+        # parameter (icons) because removeIcons may have added placeholders or naked
+        # tuples to reassemble the icons based on the expressions and sequences to which
+        # they were originally attached.
+        topDraggingIcons = [ic for seq in draggingSequences for ic in seq]
+        self.dragging = [ic for top in topDraggingIcons for ic in
+            top.traverse(inclStmtComment=True)]
+        # Recalculate layouts for dirty icons remaining in the window and those that will
+        # be dragged, and refresh the whole display with icon outlines turned on.
         self.layoutDirtyIcons()
         self.refresh(redraw=True, showOutlines=True)
         self.refreshRequests.clear()
-        # Dragging parent icons away from their children may require re-layout of the
-        # (moving) parent icons, and in some cases adding icons to keep lists intact
-        self.dragging += restoreSeries(sequences)
-        topDraggingIcons = findTopIcons(self.dragging)
-        for ic in topDraggingIcons:
-            if ic.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and ic.hasParens:
-                ic.markLayoutDirty()  # BinOp icons need to check check auto-parens
         self.layoutDirtyIcons(topDraggingIcons, filterRedundantParens=False)
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
@@ -1584,6 +1596,13 @@ class Window:
             # icon.drawSeqSiteConnection(ic, image=self.dragImage)
         for ic in topDraggingIcons:
             icon.drawSeqRule(ic, image=self.dragImage)
+        # Fine-tune the positioning of the drag image based on the specific part of the
+        # icon that the user dragged (for example, a right paren)
+        newPartPos = icon.addPoints(icon.addPoints(self.buttonDownIcon.rect[:2],
+            self.buttonDownIcon.offsetOfPart(self.buttonDownIcPart)), (el, et))
+        if newPartPos != btnDownIcPartPos:
+            newPartOffset = icon.subtractPoints(btnDownIcPartPos, newPartPos)
+            self.dragImageOffset = icon.addPoints(self.dragImageOffset, newPartOffset)
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons
         draggingOutputs = []
@@ -1665,7 +1684,7 @@ class Window:
                         matingSites.append(siteData)
             for pos, ic, name, test in draggingConditionals:
                 if test(sIcon, sName):
-                    if sTest is None or sTest(siteData[1], siteData[2]):
+                    if sTest is None or sTest(ic, name):
                         matingSites.append((pos, ic, name))
             for (dx, dy), dIcon, dName in matingSites:
                 self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sName))
@@ -2289,7 +2308,9 @@ class Window:
         request refreshDirty to apply redundant parenthesis removal to to icons whose
         layouts are marked as dirty."""
         if redrawArea == "all":
-            redrawArea = (*self.imageToContentCoord(0, 0), *self.image.size)
+            left, top = self.imageToContentCoord(0, 0)
+            width, height = self.image.size
+            redrawArea = (left, top, left + width, top + height)
         self.refreshRequests.add(redrawArea)
         if filterRedundantParens:
             self.redundantParenFilterRequested = True
@@ -2429,16 +2450,17 @@ class Window:
                                 return ic  # Point is adjacent to connector to next icon
         return None
 
-    def removeIcons(self, icons):
+    def removeIcons(self, icons, assembleDeleted=False):
         """Remove icons from window icon list, request redraw of affected areas of the
         display (does not perform redraw, call refreshDirty() to draw marked changes)."""
         if len(icons) == 0:
-            return
+            return []
         # deletedSet more efficiently determines if an icon is on the deleted list
         deletedSet = set(icons)
         # Cursors and selections can coexist, and it is possible for the cursor to be on
         # an icon that is being deleted.  If so, move it to an icon that will remain.
-        if self.cursor.type in ("icon", "text") and self.cursor.icon in deletedSet:
+        if self.cursor.type in ("icon", "text") and self.cursor.icon in deletedSet \
+                and not assembleDeleted:
             cursorPos = self.cursor.icon.pos()
             cursorIc, cursorSite = None, None
             for ic in self.cursor.icon.parentage(includeSelf=False):
@@ -2462,19 +2484,17 @@ class Window:
             else:
                 self.cursor.setToIconSite(cursorIc, cursorSite, eraseOld=False,
                     drawNew=False, placeEntryText=False)
-        # Note that order is important, here. .removeTop() must be called before
-        # disconnecting the icon sequences, and .addTop() must be called after connecting
-        # them.  Therefore, the first step is to remove deleted top-level icons from
-        # the window's .topIcon and .sequences lists.
-        self.removeTop([ic for ic in icons if ic.parent() is None and not
-            isStmtComment(ic)])
-        detachList = set()
-        seqReconnectList = []
-        reconnectList = {}
+        # Find the top icons of the statement hierarchy for the icons being deleted
+        topIcons = set()
+        for ic in icons:
+            if isStmtComment(ic):
+                topIcons.add(ic.attachedToStmt)
+            else:
+                topIcons.add(ic.topLevelParent())
         # Find region needing erase, including following sequence connectors
         self.requestRedraw(None, filterRedundantParens=True)
-        for ic in icons:
-            self.requestRedraw(ic.rect)
+        for ic in topIcons:
+            self.requestRedraw(ic.hierRect())
             nextIc = ic.nextInSeq()
             if nextIc is not None:
                 tx, ty = ic.posOfSite('seqOut')
@@ -2485,12 +2505,99 @@ class Window:
                 tx, ty = prevIc.posOfSite('seqOut')
                 bx, by = ic.posOfSite('seqIn')
                 self.requestRedraw((tx-1, ty-1, tx+1, by+1))
-        # Find and unlink child icons from parents at deletion boundary.  Note use of
-        # child icon rather than siteId in detachList because site names change as icons
-        # are removed from variable-length sequences.
-        addTopIcons = set()
+        # If we're being asked to assemble the deleted icons, need to do additional work
+        # before deletion to associate the top icons with the sequence from which they
+        # come and their order in the sequence.  We randomly assign an integer identifier
+        # to each sequence, and build a dictionary (iconToSeqId) to map the top icons
+        # involved in the deletion to its sequence.  Rather than store the original
+        # ordering of the sequence, we use the fact that topIcons controls the order of
+        # deletion, and simply replace the set (topIcons) that was used to find the top
+        # affected icons, with an ordered list, and collect them as they are processed.
+        if assembleDeleted:
+            sequences = orderTopIcons(topIcons)
+            iconToSeqId = {}
+            orderedTopIcons = []
+            deletedSeqList = [[] for _ in range(len(sequences))]
+            for seqId, seq in enumerate(sequences):
+                for order, ic in enumerate(seq):
+                    iconToSeqId[ic] = seqId
+                    orderedTopIcons.append(ic)
+            topIcons = orderedTopIcons
+        else:
+            deletedSeqList = None
+        # Recursively call the icon  deletion code to build up a replacement tree for
+        # each of those top-level icons.  The deletion code will return either 1) None
+        # indicating no change (leave current icon), 2) Empty list (fully delete),
+        # 3) a list, in placement list format (call appropriate translation code to
+        # convert to either a series or a single icon).  Do any replacement immediately,
+        # but leave the full statement deletion to the next step (which handles runs of
+        # connected statement-level icons without unlinking and re-linking them).
+        topDeletedIcons = set()
+        ignoreRemovedBlockEnds = set()
+        for topIcon in topIcons:
+            needReorder = []
+            stmtComment = topIcon.stmtComment if hasattr(topIcon, 'stmtComment') else None
+            remainingIcons, assembledDeletions = splitDeletedIcons(topIcon, deletedSet,
+                assembleDeleted, needReorder)
+            if remainingIcons is None:
+                newTopIcon = topIcon
+            else:
+                forSequence = topIcon.childAt('seqIn') or topIcon.childAt('seqOut')
+                newTopIcon = placeListToTopLevelIcon(remainingIcons, forSequence)
+            if isinstance(newTopIcon, listicons.TupleIcon) and newTopIcon.noParens and \
+                    len(newTopIcon.sites.argIcons) == 1:
+                # Deletion left an empty or single-element naked tuple: remove it (note
+                # that this step is skipped when assembling deleted icons later on,
+                # because users can't select or drag a naked tuple)
+                argIcon = newTopIcon.childAt('argIcons_0')
+                if argIcon is None:
+                    newTopIcon = None
+                else:
+                    newTopIcon.replaceChild(None, 'argIcons_0')
+                    newTopIcon = argIcon
+            newTopIcon = reorderMarkedExprs(newTopIcon, needReorder)
+            if assembleDeleted:
+                if assembledDeletions is None:
+                    addToDelSeq = topIcon
+                else:
+                    delTree = placeListToTopLevelIcon(assembledDeletions, False)
+                    addToDelSeq = delTree if delTree is not None else None
+                addToDelSeq = reorderMarkedExprs(addToDelSeq, needReorder)
+                if addToDelSeq is not None:
+                    deletedSeqList[iconToSeqId[topIcon]].append(addToDelSeq)
+                if stmtComment in deletedSet and addToDelSeq is not topIcon:
+                    stmtComment.detachStmtComment()
+                    if addToDelSeq is None:
+                        deletedSeqList[iconToSeqId[topIcon]].append(stmtComment)
+                    else:
+                        stmtComment.attachStmtComment(addToDelSeq)
+            if newTopIcon is None:
+                if stmtComment is not None and stmtComment not in deletedSet:
+                    stmtComment = topIcon.stmtComment
+                    stmtComment.detachStmtComment()
+                    if hasattr(topIcon, 'blockEnd'):
+                        ignoreRemovedBlockEnds.add(topIcon.blockEnd)
+                    self.replaceTop(topIcon, stmtComment)
+                else:
+                    topDeletedIcons.add(topIcon)
+            elif newTopIcon is not topIcon:
+                if stmtComment is not None and stmtComment not in deletedSet:
+                    stmtComment = topIcon.stmtComment
+                    stmtComment.detachStmtComment()
+                    stmtComment.attachStmtComment(newTopIcon)
+                if hasattr(topIcon, 'blockEnd'):
+                    ignoreRemovedBlockEnds.add(topIcon.blockEnd)
+                self.replaceTop(topIcon, newTopIcon)
+        # Unlink runs of deleted statement-level icons. Note that order is important,
+        # here.  .removeTop() must be called before disconnecting the icon sequences, and
+        # .addTop() must be called after connecting them.  Therefore, the first step is
+        # to remove deleted top-level icons from the .topIcon and .sequences lists.
+        topDeletedIcons -= ignoreRemovedBlockEnds
+        self.removeTop(topDeletedIcons)
+        detachList = set()
+        reconnectList = []
         affectedTopIcons = set()
-        for topIcon in findTopIcons(icons):
+        for topIcon in topDeletedIcons:
             affectedTopIcons.add(topIcon)
             prevIcon = topIcon.prevInSeq()
             if prevIcon is not None:
@@ -2498,77 +2605,60 @@ class Window:
             nextIcon = topIcon.nextInSeq()
             if nextIcon is not None:
                 affectedTopIcons.add(nextIcon)
-        for ic in icons:
-            affectedTopIcons.add(ic.topLevelParent())
-            if isStmtComment(ic):
-                affectedTopIcons.add(ic.attachedToStmt)
         for topIcon in affectedTopIcons:
             nextIcon = topIcon.nextInSeq()
             if nextIcon is not None:
-                if topIcon in deletedSet and nextIcon not in deletedSet:
+                if topIcon in topDeletedIcons and nextIcon not in topDeletedIcons:
                     detachList.add((topIcon, nextIcon))
                     topIcon.markLayoutDirty()
-                if topIcon not in deletedSet and nextIcon in deletedSet:
+                if topIcon not in topDeletedIcons and nextIcon in topDeletedIcons:
                     detachList.add((topIcon, nextIcon))
                     topIcon.markLayoutDirty()
                     while True:
                         nextIcon = nextIcon.nextInSeq()
                         if nextIcon is None:
                             break
-                        if nextIcon not in deletedSet:
-                            seqReconnectList.append((topIcon, nextIcon))
+                        if nextIcon not in topDeletedIcons:
+                            reconnectList.append((topIcon, nextIcon))
                             break
-            for ic in topIcon.traverse():
-                for child in ic.children():
-                    if ic in deletedSet and child not in deletedSet:
-                        detachList.add((ic, child))
-                        if child not in reconnectList:
-                            addTopIcons.add(child)
-                        self.requestRedraw(child.hierRect())
-                    elif ic not in deletedSet and child in deletedSet:
-                        detachList.add((ic, child))
-                        if ic.siteOf(child) == 'attrIcon':
-                            for i in icon.traverseAttrs(ic, includeStart=False):
-                                if i not in deletedSet:
-                                    reconnectList[i] = (ic, 'attrIcon')
-                                    break
-            if hasattr(topIcon, 'stmtComment'):
-                stmtComment = topIcon.stmtComment
-                if stmtComment in deletedSet and topIcon not in deletedSet:
-                    stmtComment.detachStmtComment()
-                    topIcon.markLayoutDirty()
-                elif stmtComment not in deletedSet and topIcon in deletedSet:
-                    #... this is not properly handled, yet (like all other such deletions)
-                    stmtComment.detachStmtComment()
-                    addTopIcons.add(stmtComment)
         for ic, child in detachList:
             ic.replaceChild(None, ic.siteOf(child))
-        for outIcon, inIcon in seqReconnectList:
+        for outIcon, inIcon in reconnectList:
             outIcon.replaceChild(inIcon, 'seqOut')
-        for outIcon, (inIcon, site) in reconnectList.items():
-            inIcon.replaceChild(outIcon, site)
-        # Add those icons that are now on the top level as a result of deletion of their
-        # parents (and bring those to front via ordering of .sequences page list)
-        self.addTop(addTopIcons)
-        # Remove unsightly "naked tuples" left behind empty or with a single element
-        # by deletion of their children
-        for ic, child in detachList:
-            if child in deletedSet and isinstance(ic, listicons.TupleIcon) and \
-             ic.noParens and len(ic.sites.argIcons) <= 1 and ic.parent() is None and \
-             ic in self.topIcons:
-                self.requestRedraw(ic.rect)
-                argIcon = ic.childAt('argIcons_0')
-                if argIcon is None:  #... Not sure what happens here when no icons are left
-                    nextIc = ic.nextInSeq()
-                    prevIc = ic.prevInSeq()
-                    ic.replaceChild(None, 'seqOut')
-                    ic.replaceChild(None, 'seqIn')
-                    self.removeTop(ic)
-                    if prevIc is not None:
-                        prevIc.replaceChild(nextIc, 'seqOut')
-                else:
-                    ic.replaceChild(None, 'argIcons_0')
-                    self.replaceTop(ic, argIcon)
+        if assembleDeleted:
+            # Link the deleted sequences from deletedSeqList (which holds deleted top
+            # level icons already ordered and categorized by sequence), leaving alone
+            # those that are already correctly linked.  This code also checks that the
+            # deleted icons that need to be linked to a sequence, can be, and if not,
+            # adds a placeholder icon to hold them. This is necessary, because we created
+            # the entries for the list with placeListToTopLevelIcon with forSequence set
+            # to False, as we did not yet know if the deleted list would form a sequence
+            # (and, typically, users would not intentionally create a sequence of, for
+            # xample, attributes), but it can still happen.
+            deletedSeqs = [s for s in deletedSeqList if len(s) > 0]
+            for seqList in deletedSeqs:
+                if len(seqList) >= 2:
+                    prevIc = None
+                    for i, ic in enumerate(seqList):
+                        if not ic.hasSite('seqIn'):
+                            # When we
+                            entryIc = entryicon.EntryIcon(window=self)
+                            entryIc.appendPendingArgs([ic])
+                            ic = entryIc
+                            seqList[i] = entryIc
+                        if prevIc is not None and ic is not prevIc.childAt('seqOut'):
+                            prevIc.replaceChild(ic, 'seqOut')
+                        prevIc = ic
+            # If any rearrangement happened among the deleted icons, mark the top icon in
+            # the statement as dirty, since the layout code requires this to find dirty
+            # icons, and the normal mechanism for marking it does not work for these.
+            for seqList in deletedSeqs:
+                for topIc in seqList:
+                    for ic in topIc.traverse(inclStmtComment=True):
+                        if ic.layoutDirty:
+                            topIc.layoutDirty = True
+            return deletedSeqs
+        return None
 
     def saveFile(self, filename):
         _base, ext = os.path.splitext(filename)
@@ -3392,10 +3482,35 @@ def clipboardRepr(icons, offset):
         seqLists.append([ic.clipboardRepr(offset, iconsToCopy)])
     return repr(seqLists)
 
+def orderTopIcons(topIcons):
+    """Given a list of top icons, returns a list of groups of those icons that appear on
+    the same sequence, in the order in which they appear in that sequence."""
+    unsequenced = set(topIcons)
+    sequences = []
+    for topIc in topIcons:
+        if topIc not in unsequenced:
+            continue
+        # The code, below runs just once for each sequence found, so it only costs order
+        # N for each sequence.  Unfortunately, that's still wasteful as N is the length
+        # of the sequence (probably the entire module), not of the length of topIcons, so
+        # this could be improved.
+        sequence = []
+        seqStart = icon.findSeqStart(topIc)
+        for ic in icon.traverseSeq(seqStart):
+            if ic in unsequenced:
+                sequence.append(ic)
+                unsequenced.remove(ic)
+        sequences.append(sequence)
+    return sequences
+
 def findSeries(icons):
     """Returns a list of groups of icons that appear on the same sequence, list, tuple,
     set, parameter list, or dictionary(disregarding intervening icons not in "icons", in
     the order that they appear in the series, and tagged with the type of series."""
+    #... This function can be significantly pruned, now that it is no longer responsible
+    #    for reassembling icons on deletion, and is only used for finding sequences in
+    #    pasted icons.  I'm not bothering, yet, because the code for pasting from the
+    #    clipboard is due for rewrite
     # Sequences
     series = {}
     topIcons = findTopIcons(icons)
@@ -3449,24 +3564,6 @@ def findSeries(icons):
     series['individual'] = list(individuals)
     return series
 
-def restoreSeries(series):
-    """Connect icons into sequences and lists according to "sequences" in the format
-     generated by findSeries"""
-    for sequence in series['sequences']:
-        prevIcon = None
-        for ic in sequence:
-            if ic.hasSite('seqOut'):
-                ic.replaceChild(prevIcon, 'seqIn')
-            prevIcon = ic
-    newIcons = []
-    for icons in series['lists']:
-        newTuple = listicons.TupleIcon(icons[0].window, noParens=True,
-         location=icons[0].rect[:2])
-        newTuple.insertChildren(icons, 'argIcons', 0)
-        newTuple.select(icons[0].isSelected())
-        newIcons.append(newTuple)
-    return newIcons
-
 def parseText(text, window, source="Pasted text", forImport=False):
     segments = filefmt.parseText(window.macroParser, text, source, forImport)
     if segments is None:
@@ -3486,6 +3583,302 @@ def parseText(text, window, source="Pasted text", forImport=False):
     if len(icons) == 0:
         return None
     return icons
+
+def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder):
+    """Remove icons in set, toDelete, from ic and the icons below it in the hierarchy,
+    and return a pair of results, the first representing the icons remaining in the tree
+    and the second representing the icons removed from the tree (if assembleDeleted is
+    True).  A value of None indicates that ic remains in the corresponding tree.  If not
+    None, the value will be a placement-list (see icon.placeArgs) style list (possibly
+    empty), representing the remaining icons that need to replace it in the corresponding
+    tree.  If ic itself appears in toDelete, it will appear in the deleted icon placement
+    list but will not be detached from its parent. The function calls itself recursively,
+    creating a single tree (or placement list of trees) out of the remaining icons and
+    (if requested via assembleDeleted), a single tree or list out of the deleted icons.
+    If necessary, it inserts placeholder icons to retain icons that cannot otherwise be
+    attached to incompatible sites."""
+    # Note that this code can be confusing to read, because rather than keep the deleted
+    # and non-deleted trees separate, it immediately categorizes them into the tree that
+    # will remain attached to ic (withIc) and the tree that will be detached from it
+    # (splitFromIc).  This reduces duplication in the code but also adds an extra layer
+    # of indirection.
+    icDeleted = ic in toDelete
+    splitList = []
+    for siteOrSeries in ic.sites.traverseLexical():
+        if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+            # Site series
+            removedCprhSites = [] if siteOrSeries.type == 'cprhIn' else None
+            splitSeriesList = []
+            for site in list(siteOrSeries):
+                if site.att is None:
+                    # Empty sites are considered an attribute of the icon (as we can't
+                    # delete the absence of something), so stay with it, deleted or not.
+                    continue
+                if icDeleted:
+                    splitFromIc, withIc = splitDeletedIcons(site.att, toDelete,
+                        assembleDeleted, needReorder)
+                else:
+                    withIc, splitFromIc = splitDeletedIcons(site.att, toDelete,
+                        assembleDeleted, needReorder)
+                if splitFromIc is None:
+                    if assembleDeleted or icDeleted:
+                        splitSeriesList.append([site.att])
+                else:
+                    if len(splitFromIc) > 0 and (assembleDeleted or icDeleted):
+                        splitSeriesList.append(splitFromIc)
+                if withIc is not None:
+                    # The attached icon needs to be removed.  Reduce the replacement list
+                    # (unless it's a simple deletion as indicated by an empty list) to a
+                    # series and splice the resulting icons into the series.  The code
+                    # uses the fact that sites are renamed on insert and delete, to get
+                    # the current series index regardless of prior inserts/deletes)
+                    seriesIcons = placeListToSeries(withIc)
+                    if len(seriesIcons) == 0:
+                        ic.replaceChild(None, site.name)
+                    elif removedCprhSites is not None:
+                        removedCprhSites.append((site, seriesIcons))
+                    else:
+                        ic.replaceChild(seriesIcons[0], site.name)
+                        name, idx = iconsites.splitSeriesSiteId(site.name)
+                        ic.insertChildren(seriesIcons[1:], name, idx+1)
+            if removedCprhSites is not None and len(removedCprhSites) > 0:
+                # Comprehensions were removed from ic
+                if len(removedCprhSites) == len(siteOrSeries) - 1:
+                    # All comprehensions removed: turn back in to a list
+                    for site, siteIcons in removedCprhSites:
+                        ic.replaceChild(None, site.name)
+                    toInsert = [i for il in removedCprhSites for i in il[1]]
+                    ic.insertChildren(toInsert, 'argIcons', 1)
+                else:
+                    # A rare and horrible mix of comprehensions and other icons resulting
+                    # from the deletion of the comprehension without deleting its args.
+                    # Create  placeholder icons to hang all non-matching bits from either
+                    # the rightmost site of the comprehension target or of the remaining
+                    # prior comprehension
+                    attachToSites = []
+                    removedIdxs = set()
+                    for site, siteIcons in removedCprhSites:
+                        _, siteIdx = iconsites.splitSeriesSiteId(site.name)
+                        for idx in range(siteIdx-1, -1, -1):
+                            if idx not in removedIdxs:
+                                attachToSites.append(ic.sites.cprhIcons[idx])
+                                break
+                        else:
+                            attachToSites.append(ic.sites.argIcons[0])
+                        removedIdxs.add(siteIdx)
+                    for site, _ in removedCprhSites:
+                        ic.replaceChild(None, site.name)
+                    attachToEntryIcs = {}
+                    for (_, siteIcons), attachToSite in zip(removedCprhSites,
+                            attachToSites):
+                        if attachToSite in attachToEntryIcs:
+                            entryIc = attachToEntryIcs[attachToSite]
+                        else:
+                            entryAttachIc, entryAttachSite = icon.rightmostFromSite(ic,
+                                attachToSite.name)
+                            entryIc = entryicon.EntryIcon(window=ic.window)
+                            entryAttachIc.replaceChild(entryIc, entryAttachSite)
+                            attachToEntryIcs[attachToSite] = entryIc
+                        entryIc.appendPendingArgs(siteIcons)
+            if assembleDeleted or icDeleted:
+                if len(splitSeriesList) == 1:
+                    appendToPlaceList(splitList, splitSeriesList[0], needReorder)
+                elif len(splitSeriesList) > 1:
+                    for p in splitSeriesList:
+                        appendToPlaceList(splitList, [placeListToSeries(p)], needReorder)
+        elif siteOrSeries.att is not None:
+            # Individual site
+            if icDeleted:
+                splitFromIc, withIc = splitDeletedIcons(siteOrSeries.att, toDelete,
+                    assembleDeleted, needReorder)
+            else:
+                withIc, splitFromIc = splitDeletedIcons(siteOrSeries.att, toDelete,
+                    assembleDeleted, needReorder)
+            if assembleDeleted or icDeleted:
+                if splitFromIc is None:
+                    appendToPlaceList(splitList, [siteOrSeries.att], needReorder)
+                elif len(splitFromIc) > 0:
+                    appendToPlaceList(splitList, splitFromIc, needReorder)
+            if withIc is not None:
+                # Deletion resulted in a placement list (though it may be empty).  Reduce
+                # it to a single icon and replace the existing attached icon with it.
+                singleIcon = placeListToSingleIcon(withIc, siteOrSeries.type)
+                ic.replaceChild(singleIcon, siteOrSeries.name)
+    return (splitList, None) if icDeleted else (None, splitList)
+
+def placeListToTopLevelIcon(placeList, forSequence):
+    """Create an icon tree from a placement-list-format list of icons (placeList).
+    Specify forSequence if the icon will need to be part of a sequence (for which icons
+    that attach only to attribute and comprehension sites need a placeholder icon to
+    adapt)."""
+    # Since we can make a reasonable top level icon by creating a naked tuple, we can use
+    # placeListToSeries to do most of the work.  However, if the placement list contains
+    # just one icon, and that one icon is not compatible with an input site and the icon
+    # is not destined to be part of a sequence, placeListToSeries would create an
+    # unnecessary placeholder icon, so handle this case first and separately.
+    if not forSequence and len(placeList) == 1 and \
+            not isinstance(placeList[0], (list, tuple)) and \
+            'output' not in placeList[0].sites.parentSites():
+        return placeList[0]
+    # Use placeListToSeries, to transform the list.  This is reasonable even for single
+    # icons, since placement lists are not allowed to contain statement-level icons, and
+    # anything else that needs a placeholder icon to be part of a series, also needs one
+    # to be part of a sequence.
+    seriesIcons = placeListToSeries(placeList)
+    if len(seriesIcons) == 0:
+        return None
+    elif len(seriesIcons) == 1:
+        return seriesIcons[0]
+    firstIcon, _, _ = icon.firstPlaceListIcon(placeList)
+    if firstIcon is None:
+        return None
+    topIcon = listicons.TupleIcon(window=firstIcon.window, noParens=True)
+    topIcon.insertChildren(seriesIcons, 'argIcons', 0)
+    topIcon.rect = icon.moveRect(topIcon.rect, firstIcon.rect[:2])
+    return topIcon
+
+def placeListToSeries(placeList):
+    """Convert the place list to a list of icons to be represented as a series (while
+    we do have the concept of a series of comprehension sites, this call returns only
+    the normal input-site series type)."""
+    seriesIcons = []
+    for entry in placeList:
+        if isinstance(entry, (list, tuple)):
+            # Series are expected to be inputs, add entire series
+            seriesIcons += entry
+        elif entry is None or 'output' in (s.name for s in entry.sites.parentSites()):
+            # entry is icon that is compatible with an input
+            seriesIcons.append(entry)
+        else:
+            # entry is icon that is not compatible with an input site.  Since the
+            # deletion process merges icons into the placement list as it adds them, we
+            # know all possible merging is already done, and all we can do is create a
+            # placeholder icon.  The one exception is that we may have converted the
+            # prior icon to a placeholder (or it may already have been), in which case,
+            # we can just add the icon to the prior one's pending args.
+            if len(seriesIcons) > 0 and seriesIcons[-1] is not None and \
+                    isinstance(seriesIcons[-1], entryicon.EntryIcon):
+                entryIc = seriesIcons[-1]
+            else:
+                entryIc = entryicon.EntryIcon(window=entry.window)
+                seriesIcons.append(entryIc)
+            entryIc.appendPendingArgs([entry])
+    return seriesIcons
+
+def placeListToSingleIcon(placeList, requiredMatingSiteType):
+    """Create an icon tree with a single icon at the top from, a placement list
+    (placeList) for a site of type requiredMatingSite.  Adds placeholder icons as needed
+    to adapt the type and/or number of icons to the requested site type.  This code is
+    aggressive in trying to avoid adding placeholders, in that it will throw away empty
+    series sites (losing commas that the user typed) to get down to a single icon."""
+    firstIc = None
+    secondIc = None
+    for ic, _, _ in icon.placementListIter(placeList, includeEmptySeriesSites=False):
+        if firstIc is None:
+            firstIc = ic
+        else:
+            secondIc = ic
+            break
+    if firstIc is None:
+        return None
+    if secondIc is None:
+        requiredParentSiteType = iconsites.matingSiteType[requiredMatingSiteType]
+        if requiredParentSiteType in (s.type for s in firstIc.sites.parentSites()):
+            # There is only a single icon in placeList and it's a compatible type
+            return firstIc
+    # The list is not compatible, create an entry icon
+    entryIc = entryicon.EntryIcon(window=firstIc.window)
+    entryIc.appendPendingArgs(placeList)
+    return entryIc
+
+def appendToPlaceList(placeList, toAdd, needReorder):
+    """Lexically merge a placement list, toAdd, to the end of an existing one, placeList,
+    assuming that all of the intervening icons have been removed.  This is used for
+    reconstructing an icon hierarchy following deletion, with the end goal of creating
+    either a tree with a single icon at the root, or a series that can be merged in to a
+    parent series or become a naked tuple at the top level.  Since reducing the list to a
+    single icon or a series the goal, the call tries to merge everything that can be
+    merged.  In particular, it tries to eliminate loose attributes and empty sites on
+    the left or right of an operator.  The caller needs to supply a list (needReorder) to
+    receive icons to be reexamined after reassembly for arighmetic reordering based on
+    precedence."""
+    if len(toAdd) == 0:
+        return
+    if len(placeList) == 0:
+        placeList += toAdd
+        return
+    placeListEndsWithList = isinstance(placeList[-1], (list, tuple))
+    toAddStartsWithList = isinstance(toAdd[0], (list, tuple))
+    if placeListEndsWithList and toAddStartsWithList:
+        # Both the end of placeList and the start of toAdd are series.  Just join them
+        placeList[-1] += toAdd[0]
+        placeList += toAdd[1:]
+        return
+    if placeListEndsWithList:
+        lastPlaceListIc = placeList[-1][-1]
+    else:
+        lastPlaceListIc = placeList[-1]
+    rightmostIc, rightmostSiteId = icon.rightmostSite(lastPlaceListIc)
+    firstToAddIc = toAdd[0][0] if isinstance(toAdd[0], (list, tuple)) else toAdd[0]
+    matingType = iconsites.matingSiteType[rightmostIc.typeOf(rightmostSiteId)]
+    if isinstance(firstToAddIc, entryicon.EntryIcon) or matingType in \
+            [s.type for s in firstToAddIc.sites.parentSites()]:
+        # We can attach the left icon from toAdd to the right icon from placeList
+        rightmostIc.replaceChild(firstToAddIc, rightmostSiteId)
+        checkReorder(rightmostIc, needReorder)
+        if toAddStartsWithList:
+            toAdd[0] = placeList[-1]
+            placeList[-1] = toAdd[0]
+            placeList += toAdd[1:]
+        else:
+            placeList += toAdd[1:]
+        return
+    firstIcCoincSite = firstToAddIc.hasCoincidentSite()
+    if firstIcCoincSite and \
+            not firstToAddIc.childAt(firstToAddIc.sites.firstCursorSite()) and \
+            icon.validateCompatibleChild(lastPlaceListIc, firstToAddIc, firstIcCoincSite):
+        # There's an empty site on the left of the left icon added, combine
+        firstToAddIc.replaceChild(lastPlaceListIc, firstIcCoincSite)
+        checkReorder(firstToAddIc, needReorder)
+        if placeListEndsWithList:  # and toAdd does not start with list, per above
+            return
+        placeList[-1] = toAdd[0]
+        placeList += toAdd[1:]
+        return
+    else:
+        placeList += toAdd
+
+def checkReorder(ic, needReorder):
+    """Deletion from expressions is done lexically, but the deletion operation itself is
+    done blindly on the icon hierarchy, so when a deletion operation reorders an
+    expression, it calls this to mark potentially affected icons to recheck the
+    precedence relationships to see if the new lexical order needs to cause rearrangement
+    of the hierarchy.  It marks them by adding the potentially affected icons to the list,
+    needReorder."""
+    if isinstance(ic, (opicons.UnaryOpIcon, opicons.BinOpIcon, opicons.IfExpIcon)):
+        needReorder.append(ic)
+
+def reorderMarkedExprs(topIcon, exprsNeedingReorder):
+    """Reorder the hierarchy of arithmetic expressions below topIcon, whose relative
+    precedences may have changed due to deletion of the icons around them.  The deletion
+    code marks expressions that need to be checked by adding icons to the list passed as
+    exprsNeedReorder.  The function reorders the icon hierarchy to match what it looks
+    like (lexically), rather than what the hierarchy itself implies.  Even though the
+    deletion code restarts this list for every top icon involved in deletion, we do a
+    second check that the icon is within the hierarchy of topIcon.  This is done beaause
+    the same routine is used for processing both the remaining icons in the expression
+    and the new tree of deleted icons that is (optionally) assembled by removeIcons.
+    Returns the (possibly replaced) top top icon of the statement."""
+    reorderExprTops = set()
+    for ic in exprsNeedingReorder:
+        if ic.topLevelParent() == topIcon:
+            reorderExprTops.add(reorderexpr.highestAffectedExpr(ic))
+    modifiedTopIcon = topIcon
+    for ic in reorderExprTops:
+        newTopIc = reorderexpr.reorderArithExpr(ic, skipReplaceTop=True)
+        if ic is topIcon and newTopIc is not ic:
+            modifiedTopIcon = newTopIc
+    return modifiedTopIcon
 
 #... Move to OS-dependent module (once that's created)
 class POINT(ctypes.Structure):

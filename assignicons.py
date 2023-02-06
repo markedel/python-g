@@ -68,6 +68,7 @@ class AssignIcon(icon.Icon):
         valueSitesX = tgtSitesX + icon.EMPTY_ARG_WIDTH + opWidth
         self.valueList = iconlayout.ListLayoutMgr(self, 'values', valueSitesX, siteY,
                 simpleSpine=True)
+        self.dragSiteDrawn = False
         if location is None:
             x = y = 0
         else:
@@ -79,14 +80,8 @@ class AssignIcon(icon.Icon):
             self.addTargetGroup(i)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=None):
-        if toDragImage is None:
-            temporaryDragSite = False
-        else:
-            # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site unless it is in a sequence and not the start.
-            self.drawList = None
-            temporaryDragSite = self.prevInSeq() is None
-        if self.drawList is None:
+        needDragSite = toDragImage is not None and self.prevInSeq() is None
+        if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             self.drawList = []
             siteY = self.sites.seqInsert.yOffset
             # Left site (seq site bar + 1st target input or drag-insert site
@@ -94,7 +89,7 @@ class AssignIcon(icon.Icon):
             tgtSiteX = self.sites.targets0[0].xOffset
             if leftTgtHasSpine:
                 tgtSiteX -= icon.OUTPUT_SITE_DEPTH
-            if temporaryDragSite:
+            if needDragSite:
                 y = siteY - assignDragImage.height // 2
                 self.drawList.append(((0, y), assignDragImage))
             elif not leftTgtHasSpine:
@@ -124,8 +119,7 @@ class AssignIcon(icon.Icon):
             self.drawList += self.valueList.drawListCommas(tgtSiteX, siteY)
             self.drawList += self.valueList.drawSimpleSpine(tgtSiteX, siteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        if temporaryDragSite:
-            self.drawList = None
+        self.dragSiteDrawn = needDragSite
 
     def addTargetGroup(self, idx):
         if idx < 0 or idx > len(self.tgtLists):
@@ -407,6 +401,42 @@ class AssignIcon(icon.Icon):
             listicons.backspaceComma(self, siteId, evt)
             return
 
+    def touchesPosition(self, x, y):
+        # Base class method can figure out from our drawList whether x, y touches the
+        # drawn part of the icon, but it can't identify the icon sub-part because our
+        # draw-list is unstable (since we sometimes draw a left input site).
+        if not icon.pointInRect((x, y), self.rect):
+            return None
+        if self.drawList is None:
+            print('Missing drawlist (%s)?' % self.dumpName())
+        partId = 0
+        for imgOffset, img in self.drawList:
+            if img.width <= assignDragImage.width:
+                continue
+            partId += 1
+            left, top = icon.addPoints(self.rect[:2], imgOffset)
+            imgX = x - left
+            imgY = y - top
+            if icon.pointInRect((imgX, imgY), (0, 0, img.width, img.height)):
+                pixel = img.getpixel((imgX, imgY))
+                return partId if pixel[3] > 128 else None
+        return None
+
+    def offsetOfPart(self, partId):
+        if self.drawList is None or len(self.drawList) == 0:
+            print('assign icon offsetOfPart failed 1')
+            return 0, 0
+        iconPartId = 0
+        for imgOffset, img in self.drawList:
+            if img.width <= assignDragImage.width:
+                continue
+            iconPartId += 1
+            if partId <= iconPartId:
+                print('assign icon offsetOfPart succeeded:', imgOffset)
+                return imgOffset
+        print('assign icon offsetOfPart failed 2')
+        return self.drawList[-1][0]
+
 class AugmentedAssignIcon(icon.Icon):
     def __init__(self, op, window, location=None):
         icon.Icon.__init__(self, window)
@@ -568,6 +598,10 @@ class AugmentedAssignIcon(icon.Icon):
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty
             listicons.backspaceComma(self, siteId, evt)
+
+    def offsetOfPart(self, partId):
+        width, _ = self.bodySize
+        return self.sites.values[0].xOffset - width, 0
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
         if clickPos is not None:
