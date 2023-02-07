@@ -2315,17 +2315,17 @@ class Window:
         if filterRedundantParens:
             self.redundantParenFilterRequested = True
 
-    def refreshDirty(self, addUndoBoundary=False, minimizePendingArgs=True):
+    def refreshDirty(self, addUndoBoundary=False, minimizePendingArgs=True,
+            redrawCursor=True):
         """Refresh any icons whose layout is marked as dirty (via the markLayoutDirty
         method of the icon), and redraw and refresh any window areas marked as needing
         redraw (via window method requestRedraw).  If nothing is marked as dirty, no
-        redrawing will be done.  If addUndoBoundary is True, also add an undo boundary
-        (even if nothing is dirty).  While undo boundaries have nothing to do with window
-        redrawing, both need doing after almost every user operation, so combining the
-        two shortens the code and serves as a reminder to do them both.  By default, if
-        the cursor is set to an entry icon, this will also call the entry icon's method
-        for optimizing pending arguments.  To suppress this call, set minimizePendingArgs
-        to False."""
+        redrawing will be done.  The function serves a more general purpose of finishing
+        any user operation that may have altered the icon structure (including simple
+        cursor movement because focus changes can also alter the icon structure).  As
+        such, it also includes clean-up for entry icon pending args (minimizePendingArgs),
+        cursor redraw and hold (redrawCursor), and optionally adding an undo boundary
+        (addUndoBoundary)."""
         if minimizePendingArgs and self.cursor.type == "text" and \
                 isinstance(self.cursor.icon, entryicon.EntryIcon):
             self.cursor.icon.minimizePendingArgs()
@@ -2337,6 +2337,9 @@ class Window:
             self.undo.addBoundary()
         self.refreshRequests.clear()
         self.redundantParenFilterRequested = False
+        if redrawCursor:
+            self.cursor.erase()
+            self.cursor.drawAndHold()
 
     def drawImage(self, image, location, subImage=None):
         """Draw an arbitrary image anywhere in the window, ignoring the window image.
@@ -3241,6 +3244,11 @@ class Window:
     def contentToImageRect(self, contentRect):
         return comn.offsetRect(contentRect, -self.scrollOrigin[0], -self.scrollOrigin[1])
 
+    def resetBlinkTimer(self, holdTime=CURSOR_BLINK_RATE):
+        """Stop pending cursor blink event and reschedule it for holdTime milliseconds in
+        the future."""
+        appData.resetBlinkTimer(holdTime=holdTime)
+
 class Page:
     """The fact that icons know their own window positions becomes problematic for very
     large files, because tiny edits can relocate every single icon below them in the
@@ -3419,11 +3427,12 @@ class App:
         self.root.withdraw()
         self.newWindow()
         self.frameCount = 0
+        self.blinkCancelId = None
         #self.animate()
 
     def mainLoop(self):
         # self.root.after(2000, self.animate)
-        self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
+        self.blinkCancelId = self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
         self.root.mainloop()
 
     def animate(self):
@@ -3440,13 +3449,20 @@ class App:
         window = Window(self.root, filename)
         self.windows.append(window)
 
+    def resetBlinkTimer(self, holdTime=CURSOR_BLINK_RATE):
+        """Cancel the next cursor blink and reschedule it for holdTime milliseconds in
+        the future."""
+        if self.blinkCancelId is not None:
+            self.root.after_cancel(self.blinkCancelId)
+        self.blinkCancelId = self.root.after(holdTime, self._blinkCursor)
+
     def _blinkCursor(self):
         focusWidget = self.root.focus_get()
         for window in self.windows:
             if window.top == focusWidget:
                 window.cursor.blink()
                 break
-        self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
+        self.blinkCancelId = self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
 
     def findWindowWithFile(self, filename):
         for window in self.windows:
