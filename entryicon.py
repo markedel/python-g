@@ -278,7 +278,6 @@ class EntryIcon(icon.Icon):
             # overstep its bounds and merge text that we probably don't want merged
             # (though maybe the right way to do this would be to explicitly stop those
             # particular commands from doing it, rather than to stop everything)
-            print('*** unifying')
             entryIc = argList[0]
             pendingArgs = entryIc.listPendingArgs()
             entryIc.popPendingArgs('all')
@@ -518,6 +517,32 @@ class EntryIcon(icon.Icon):
         lowestIc.replaceChild(outIc, lowestSite)
         reorderexpr.reorderArithExpr(pendingArg)
         self.recolorPending()
+
+    def pruneEmptyPendingArgSites(self):
+        """Removes any pending arg sites with no icons attached.  If empty sites are
+        found, also compress the site numbering that was used to signal empty arguments
+        in the original icons that were disassembled (once the user starts tearing down
+        the list, we assume that they're not expecting focus-out to re-build the original
+        icon as it was."""
+        # Find empty sites
+        sitesToRemove = []
+        for siteOrSeries in list(self.iteratePendingSiteList()):
+            if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+                for site in siteOrSeries:
+                    if site.att is not None:
+                        break
+                else:
+                    sitesToRemove.append(siteOrSeries)
+            elif siteOrSeries.att is None:
+                sitesToRemove.append(siteOrSeries)
+        if len(sitesToRemove) == 0:
+            return  # Don't compress site numbering if nothing was removed
+        # Remove them
+        for site in sitesToRemove:
+            self.removePendingArgSite(site.order)
+        # Renumber the remaining sites to remove gaps in numbering
+        for i, site in enumerate(list(self.iteratePendingSiteList())):
+            self.renamePendingArgSite(site.order, i)
 
     def iteratePendingSiteList(self):
         """Iterate over pending arguments in the site list, yielding site list entries
@@ -2209,7 +2234,6 @@ class EntryIcon(icon.Icon):
         differently based on whether it's attached to an attribute or an output)."""
         if siteId not in ('seqOut', 'seqIn'):
             return False
-        print(f'snapFn accepted: {ic.dumpName()}, {siteId}')
         return True
 
     def snapLists(self, forCursor=False):
@@ -2303,6 +2327,11 @@ class EntryIcon(icon.Icon):
             layout.width = width
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
+
+    def select(self, select=True):
+        icon.Icon.select(self, select)
+        if hasattr(self, 'blockEnd'):
+            icon.Icon.select(self.blockEnd, select)
 
     def backspace(self, siteId, evt):
         if siteId == self.sites.firstCursorSite():

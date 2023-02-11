@@ -611,7 +611,7 @@ class Cursor:
                     self.setToText(ic)
                     return
                 elif isinstance(ic.childAt(site), entryicon.EntryIcon):
-                    ic.setCursorPos(0)
+                    ic.childAt(site).setCursorPos(0)
                     self.setToText(ic.childAt(site))
                     return
             cursorType = 'icon'

@@ -1567,6 +1567,17 @@ class Window:
         # the important job of re-building deleted icons into a set of dragable sequences
         # and hierarchies.
         draggingSequences = self.removeIcons(icons, assembleDeleted=True)
+        # removeIcons will remove placeholder icons that no longer hold anything, so if
+        # one of those just happens to be the icon that the user dragged, we 1) need make
+        # sure that there's still something to drag, and 2) stop using the icon as a
+        # reference for positioning the dragged icons
+        if isinstance(self.buttonDownIcon, entryicon.EntryIcon) and \
+                not self.buttonDownIcon.hasPendingArgs() and \
+                len(self.buttonDownIcon.text) == 0:
+            if len(draggingSequences) == 0:
+                draggingSequences = [[self.buttonDownIcon]]
+            else:
+                btnDownIcPartPos = None
         # Note that the icons we'll actually drag may not be identical to the function
         # parameter (icons) because removeIcons may have added placeholders or naked
         # tuples to reassemble the icons based on the expressions and sequences to which
@@ -1598,11 +1609,12 @@ class Window:
             icon.drawSeqRule(ic, image=self.dragImage)
         # Fine-tune the positioning of the drag image based on the specific part of the
         # icon that the user dragged (for example, a right paren)
-        newPartPos = icon.addPoints(icon.addPoints(self.buttonDownIcon.rect[:2],
-            self.buttonDownIcon.offsetOfPart(self.buttonDownIcPart)), (el, et))
-        if newPartPos != btnDownIcPartPos:
-            newPartOffset = icon.subtractPoints(btnDownIcPartPos, newPartPos)
-            self.dragImageOffset = icon.addPoints(self.dragImageOffset, newPartOffset)
+        if btnDownIcPartPos is not None:
+            newPartPos = icon.addPoints(icon.addPoints(self.buttonDownIcon.rect[:2],
+                self.buttonDownIcon.offsetOfPart(self.buttonDownIcPart)), (el, et))
+            if newPartPos != btnDownIcPartPos:
+                newPartOffset = icon.subtractPoints(btnDownIcPartPos, newPartPos)
+                self.dragImageOffset = icon.addPoints(self.dragImageOffset, newPartOffset)
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons
         draggingOutputs = []
@@ -1790,6 +1802,21 @@ class Window:
                 icon.insertSeq(movIcon, statIcon)
             elif siteType == 'seqIn':
                 icon.insertSeq(movIcon, statIcon, before=True)
+        # Dropping an entry icon on the top level outside of a sequence may allow it to
+        # be removed, since placeholders are not needed
+        unsequencedEntryIcons = [ic for ic in topDraggedIcons \
+            if isinstance(ic, entryicon.EntryIcon) and ic.parent() is None and \
+            ic.childAt('seqIn') is None and ic.childAt('seqOut') is None and ic.text == '']
+        for ic in unsequencedEntryIcons:
+            pendingArgs = ic.listPendingArgs()
+            nonEmptyArgs = list(icon.placementListIter(pendingArgs,
+                includeEmptySeriesSites=False))
+            if len(nonEmptyArgs) == 0:
+                topDraggedIcons.remove(ic)
+            if len(nonEmptyArgs) == 1:
+                topDraggedIcons.remove(ic)
+                ic.popPendingArgs("all")
+                topDraggedIcons.append(nonEmptyArgs[0][0])
         self.addTop(topDraggedIcons)
         self.dragging = None
         self.snapped = None
@@ -2528,7 +2555,7 @@ class Window:
             topIcons = orderedTopIcons
         else:
             deletedSeqList = None
-        # Recursively call the icon  deletion code to build up a replacement tree for
+        # Recursively call splitDeletedIcons to build up a replacement tree for
         # each of those top-level icons.  The deletion code will return either 1) None
         # indicating no change (leave current icon), 2) Empty list (fully delete),
         # 3) a list, in placement list format (call appropriate translation code to
@@ -2637,14 +2664,13 @@ class Window:
             # the entries for the list with placeListToTopLevelIcon with forSequence set
             # to False, as we did not yet know if the deleted list would form a sequence
             # (and, typically, users would not intentionally create a sequence of, for
-            # xample, attributes), but it can still happen.
+            # example, attributes), but it can still happen.
             deletedSeqs = [s for s in deletedSeqList if len(s) > 0]
             for seqList in deletedSeqs:
                 if len(seqList) >= 2:
                     prevIc = None
                     for i, ic in enumerate(seqList):
                         if not ic.hasSite('seqIn'):
-                            # When we
                             entryIc = entryicon.EntryIcon(window=self)
                             entryIc.appendPendingArgs([ic])
                             ic = entryIc
@@ -3620,6 +3646,7 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder):
     # of indirection.
     icDeleted = ic in toDelete
     splitList = []
+    argsDetached = False
     for siteOrSeries in ic.sites.traverseLexical():
         if isinstance(siteOrSeries, iconsites.IconSiteSeries):
             # Site series
@@ -3648,6 +3675,7 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder):
                     # series and splice the resulting icons into the series.  The code
                     # uses the fact that sites are renamed on insert and delete, to get
                     # the current series index regardless of prior inserts/deletes)
+                    argsDetached = True
                     seriesIcons = placeListToSeries(withIc)
                     if len(seriesIcons) == 0:
                         ic.replaceChild(None, site.name)
@@ -3718,9 +3746,35 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder):
             if withIc is not None:
                 # Deletion resulted in a placement list (though it may be empty).  Reduce
                 # it to a single icon and replace the existing attached icon with it.
+                argsDetached = True
                 singleIcon = placeListToSingleIcon(withIc, siteOrSeries.type)
                 ic.replaceChild(singleIcon, siteOrSeries.name)
-    return (splitList, None) if icDeleted else (None, splitList)
+    subsList = None
+    if isinstance(ic, entryicon.EntryIcon):
+        if argsDetached:
+            ic.pruneEmptyPendingArgSites()
+        if ic.text == '':
+            # The icon is a placeholder entry icon.  If the there's just one pending
+            # argument and it's compatible with the site: get rid of the placeholder.
+            pendingArgs = ic.listPendingArgs()
+            nonEmptyArgs = [ic for ic, _, _ in icon.placementListIter(pendingArgs,
+                includeEmptySeriesSites=False)]
+            if len(nonEmptyArgs) == 0:
+                # Everything has been stripped off of placeholder icon, get rid of it
+                subsList = []
+            elif len(nonEmptyArgs) == 1 and ic.attachedIcon() is not None and \
+                    iconsites.matingSiteType[ic.attachedSiteType()] in \
+                    (s.type for s in nonEmptyArgs[0].sites.parentSites()):
+                # Entry icon has a single pending arg that's compatible with parent site.
+                # remove the entry icon.  (Note that this is stupidly testing against the
+                # original parent.  Testing the new parent is more complicated, so we do
+                # this and let the parent iteration recreate the placeholder if we're
+                # wrong.  This will also miss some opportunities for cleanup, though, in
+                # practice I haven't found any cases not handled by other placeholder-
+                # trimming code)
+                ic.popPendingArgs('all')
+                subsList = [nonEmptyArgs[0]]
+    return (splitList, subsList) if icDeleted else (subsList, splitList)
 
 def placeListToTopLevelIcon(placeList, forSequence):
     """Create an icon tree from a placement-list-format list of icons (placeList).
@@ -3733,7 +3787,7 @@ def placeListToTopLevelIcon(placeList, forSequence):
     # is not destined to be part of a sequence, placeListToSeries would create an
     # unnecessary placeholder icon, so handle this case first and separately.
     if not forSequence and len(placeList) == 1 and \
-            not isinstance(placeList[0], (list, tuple)) and \
+            not isinstance(placeList[0], (list, tuple, entryicon.EntryIcon)) and \
             'output' not in placeList[0].sites.parentSites():
         return placeList[0]
     # Use placeListToSeries, to transform the list.  This is reasonable even for single
@@ -3762,6 +3816,21 @@ def placeListToSeries(placeList):
         if isinstance(entry, (list, tuple)):
             # Series are expected to be inputs, add entire series
             seriesIcons += entry
+        elif isinstance(entry, entryicon.EntryIcon) and entry.text == '':
+            # entry is an entry icon.  If it's all inputs, it can be dropped, and if
+            # it's not, it's still a valid series member.
+            pendingArgs = entry.listPendingArgs()
+            nonEmptyArgs = [ic for ic, _, _ in icon.placementListIter(pendingArgs,
+                includeEmptySeriesSites=False)]
+            if len(nonEmptyArgs) == 0:
+                continue
+            for ic in nonEmptyArgs:
+                if 'output' not in (s.name for s in ic.sites.parentSites()):
+                    seriesIcons.append(entry)
+                    break
+            else:
+                entry.popPendingArgs('all')
+                seriesIcons += nonEmptyArgs
         elif entry is None or 'output' in (s.name for s in entry.sites.parentSites()):
             # entry is icon that is compatible with an input
             seriesIcons.append(entry)
@@ -3816,7 +3885,7 @@ def appendToPlaceList(placeList, toAdd, needReorder):
     single icon or a series the goal, the call tries to merge everything that can be
     merged.  In particular, it tries to eliminate loose attributes and empty sites on
     the left or right of an operator.  The caller needs to supply a list (needReorder) to
-    receive icons to be reexamined after reassembly for arighmetic reordering based on
+    receive icons to be reexamined after reassembly for arithmetic reordering based on
     precedence."""
     if len(toAdd) == 0:
         return
