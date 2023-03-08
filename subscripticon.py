@@ -132,7 +132,7 @@ class SubscriptIcon(icon.Icon):
         return subscriptLBktImage.width + sum(self.argWidths) + \
          rBrktWidth + icon.ATTR_SITE_DEPTH, subscriptLBktImage.height
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
             leftBoxX = icon.dimAttrOutImage.width - 1
             leftBoxWidth, leftBoxHeight = subscriptLBktImage.size
@@ -166,6 +166,8 @@ class SubscriptIcon(icon.Icon):
                     rBrktImg = subscriptRBktImage
                 self.drawList.append(((x, 0), rBrktImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        if not hasattr(self.sites, 'upperIcon') and not hasattr(self.sites, 'stepIcon'):
+            self._drawEmptySites(toDragImage, clip)
 
     def doLayout(self,  attrSiteX,  attrSiteY, layout):
         self.argWidths = layout.argWidths
@@ -194,7 +196,7 @@ class SubscriptIcon(icon.Icon):
                 if hasattr(self.sites, 'upperIcon'):
                     indexWidth = SLICE_EMPTY_ARG_WIDTH
                 else:
-                    indexWidth = icon.LIST_EMPTY_ARG_WIDTH  # Emphasize missing argument(s)
+                    indexWidth = icon.EMPTY_ARG_WIDTH  # Emphasize missing argument(s)
             else:
                 indexWidth = indexLayout.width - 1
             if upperLayout is None:
@@ -378,6 +380,16 @@ class SubscriptIcon(icon.Icon):
         # Typeover for end-brackets is handled by hard-coded parsing because
         # closing of matching open brackets needs to take precedence
         return None
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        # Color just the paren if the list is not closed, not the content
+        self.errHighlight = not self.closed
+        for ic in self.children():
+            ic.highlightErrors(None)
+        return
 
     def setTypeover(self, idx, site=None):
         self.drawList = None

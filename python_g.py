@@ -241,16 +241,6 @@ class Window:
         self.frame.grid_columnconfigure(0, weight=1)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
-        self.popup = tk.Menu(self.imgFrame, tearoff=0)
-        self.popup.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
-        self.popup.add_command(label="Redo", command=self._redoCb, accelerator="Ctrl+Y")
-        self.popup.add_separator()
-        self.popup.add_command(label="Cut", command=self._cutCb, accelerator="Ctrl+X")
-        self.popup.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
-        self.popup.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
-        self.popup.add_command(label="Delete", command=self._deleteCb,
-         accelerator="Delete")
-
         self.listPopup = tk.Menu(self.imgFrame, tearoff=0)
         self.listPopupVal = tk.StringVar()
         self.listPopup.add_radiobutton(label="Tuple", variable=self.listPopupVal,
@@ -263,7 +253,6 @@ class Window:
          command=self._listPopupCb, value="p")
         self.listPopup.entryconfig("Set", state=tk.DISABLED)
         self.listPopup.entryconfig("Params", state=tk.DISABLED)
-        self.listPopupIcon = None
 
         self.buttonDownTime = None
         self.buttonDownLoc = None
@@ -280,6 +269,7 @@ class Window:
         self.inStmtSelect = False
         self.lastStmtHighlightRects = None
         self.rectSelectInitialStates = {}
+        self.popupIcon = None
 
         self.margin = 800
 
@@ -456,28 +446,32 @@ class Window:
 
     def _btn3Cb(self, evt):
         x, y = self.imageToContentCoord(evt.x, evt.y)
-        ic = self.findIconAt(x, y)
-        if ic is not None and not self.isSelected(ic):
-            self._select(self.findIconAt(x, y))
+        self.popupIcon = self.findIconAt(x, y)
 
     def _btn3ReleaseCb(self, evt):
-        selectedIcons = self.selectedIcons()
-        lastMenuEntry = self.popup.index(tk.END)
+        popup = tk.Menu(self.imgFrame, tearoff=0)
+        popup.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
+        popup.add_command(label="Redo", command=self._redoCb, accelerator="Ctrl+Y")
+        popup.add_separator()
+        popup.add_command(label="Cut", command=self._cutCb, accelerator="Ctrl+X")
+        popup.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
+        popup.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
+        popup.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
+
         # Add context-sensitive items to pop-up menu
-        if len(selectedIcons) == 1:
-            selIcon = selectedIcons[0]
-            if isinstance(selIcon, listicons.ListTypeIcon):
-                self.listPopupIcon = selIcon
-                self.listPopupVal.set('(' if isinstance(selIcon,
+        if self.popupIcon is not None:
+            if isinstance(self.popupIcon, listicons.ListTypeIcon):
+                self.listPopupVal.set('(' if isinstance(self.popupIcon,
                         listicons.TupleIcon) else '[')
-                self.popup.add_separator()
-                self.popup.add_cascade(label="Change To", menu=self.listPopup)
+                popup.add_separator()
+                popup.add_cascade(label="Change To", menu=self.listPopup)
+            if self.popupIcon.errHighlight is not None:
+                popup.add_command(label="Why Highlighted...", command=self._showSyntaxErr)
         # Pop it up
-        self.popup.tk_popup(evt.x_root, evt.y_root, 0)
-        # Remove context-sensitive items
-        newLastMenuEntry = self.popup.index(tk.END)
-        if newLastMenuEntry != lastMenuEntry:
-            self.popup.delete(lastMenuEntry+1, newLastMenuEntry)
+        try:
+            popup.tk_popup(evt.x_root, evt.y_root, 0)
+        finally:
+            popup.grab_release()
 
     def _newCb(self, evt=None):
         appData.newWindow()
@@ -671,9 +665,7 @@ class Window:
                 # Reached the end of the typeover text or user typed something
                 # non-matching, move to site after
                 self.cursor.setToIconSite(ic, siteAfter)
-            ic.draw()
-            # No need to layout or redraw, just refresh the icon with the typeover
-            self.refresh(ic.rect, redraw=False, clear=False)
+            self.refresh(ic.rect, redraw=True)
             return
         else:
             # If there's an appropriate selection, use that
@@ -819,8 +811,7 @@ class Window:
                     if idx is not None and idx != 0:
                         ic.setTypeover(0, siteAfter)
                         if draw:
-                            ic.draw()
-                            self.refresh(ic.rect, redraw=False, clear=False)
+                            self.refresh(ic.rect, redraw=True)
 
     def _refreshTypeovers(self, toPreserve, draw=True):
         """Clears all typeovers except those represented by an (icon, siteAfter) pair in
@@ -840,8 +831,7 @@ class Window:
             if topParent is not None and topParent in self.topIcons:
                 ic.setTypeover(None, siteAfter)
                 if draw:
-                    ic.draw()
-                    self.refresh(ic.rect, redraw=False, clear=False)
+                    self.refresh(ic.rect, redraw=True)
         for ic in iconsToRemove:
             self.activeTypeovers.remove(ic)
 
@@ -1392,7 +1382,7 @@ class Window:
 
     def _listPopupCb(self):
         char = self.listPopupVal.get()
-        fromIcon = self.listPopupIcon
+        fromIcon = self.popupIcon
         if char == "[" and not isinstance(fromIcon, listicons.ListIcon):
             ic = listicons.ListIcon(fromIcon.window)
         elif char == "(" and not isinstance(fromIcon, listicons.TupleIcon):
@@ -1602,7 +1592,7 @@ class Window:
         self.lastDragImageRegion = None
         for ic in self.dragging:
             ic.rect = comn.offsetRect(ic.rect, -el, -et)
-            ic.draw(self.dragImage, style="outline")
+            ic.draw(self.dragImage, style=icon.STYLE_OUTLINE)
             # Looks better without connectors, but not willing to remove permanently, yet
             # icon.drawSeqSiteConnection(ic, image=self.dragImage)
         for ic in topDraggingIcons:
@@ -1863,7 +1853,7 @@ class Window:
             if ic.isSelected() != newSelect:
                 ic.select(newSelect)
                 redrawRegion.add(ic.rect)
-        self.refresh(redrawRegion.get(), clear=False, redraw=True)
+        self.refresh(redrawRegion.get(), redraw=True)
         l, t, r, b = self.contentToImageRect(newRect)
         hLineImg = Image.new('RGB', (r - l, 1), color=RECT_SELECT_COLOR)
         vLineImg = Image.new('RGB', (1, b - t), color=RECT_SELECT_COLOR)
@@ -1948,7 +1938,7 @@ class Window:
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
                 redrawRegion.add(eraseRect)
-        self.refresh(redrawRegion.get(), clear=False, redraw=True)
+        self.refresh(redrawRegion.get(), redraw=True)
         # Draw the selection shading
         for drawRect in drawRects:
             drawImgRect = self.contentToImageRect(drawRect)
@@ -1965,7 +1955,7 @@ class Window:
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
                 redrawRegion.add(eraseRect)
-        self.refresh(redrawRegion.get(), clear=False, redraw=True)
+        self.refresh(redrawRegion.get(), redraw=True)
         self.lastStmtHighlightRects = None
 
     def recordCursorPositionInData(self, topIcon):
@@ -2182,7 +2172,7 @@ class Window:
                 excepIcon = self.iconIds[tb.tb_lineno]
         iconRect = excepIcon.hierRect()
         for ic in excepIcon.traverse():
-            style = "error" if ic==excepIcon else None
+            style = icon.STYLE_EXEC_ERR if ic==excepIcon else 0
             ic.draw(clip=iconRect, style=style)
         self.refresh(iconRect, redraw=False)
         message = excep.__class__.__name__ + ': ' + str(excep)
@@ -2190,6 +2180,11 @@ class Window:
         for ic in excepIcon.traverse():
             ic.draw(clip=iconRect)
         self.refresh(iconRect, redraw=False)
+
+    def _showSyntaxErr(self, _evt=None):
+        errHighlight = self.popupIcon.errHighlight
+        if errHighlight is not None:
+            tkinter.messagebox.showerror("Syntax Error", message=errHighlight.text, )
 
     def _select(self, ic, op='select'):
         """Change the selection.  Options are 'select': selects single icon, 'toggle':
@@ -2244,12 +2239,16 @@ class Window:
             refreshRegion.add(ic.rect)
         self.clearSelection()
         if refreshRegion.get() is not None:
-            self.refresh(refreshRegion.get(), clear=False, redraw=True)
+            self.refresh(refreshRegion.get(), redraw=True)
 
     def redraw(self, region=None, clear=True, showOutlines=False):
         """Cause all icons to redraw to the pseudo-framebuffer (call refresh to transfer
         from there to the display).  Setting clear to False suppresses clearing the
-        region to the background color before redrawing."""
+        region to the background color before redrawing.  Note that the "clear" keyword
+        is reserved for the small number of cases where the background is already known
+        to be cleared (in earlier versions, this flag could be used more liberally, but
+        the drawing model now allows for transparency via alpha blending, so clearing is
+        required to stop transparent regions from building-up with repeated drawing)."""
         left, top = self.scrollOrigin
         width, height = self.image.size
         right, bottom = left + width, top + height
@@ -2265,10 +2264,9 @@ class Window:
         # on ordering so overlaps happen properly, so this is subtly dependent on the
         # order returned from findIconsInRegion.  Sequence lines must be drawn on top of
         # the icons they connect but below any icons that might be placed on top of them.
-        drawStyle = "outline" if showOutlines else None
+        drawStyle = icon.STYLE_OUTLINE if showOutlines else 0
         for ic in self.findIconsInRegion(region, inclSeqRules=True):
-            ic.draw(clip=region, style=ic.highlight if drawStyle is None and
-                hasattr(ic, "highlight") else drawStyle)
+            ic.draw(clip=region, style=drawStyle)
             # Looks better without connectors, but not willing to remove permanently, yet:
             # if region is None or icon.seqConnectorTouches(topIcon, region):
             #     icon.drawSeqSiteConnection(topIcon, clip=region)

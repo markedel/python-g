@@ -79,7 +79,7 @@ class AssignIcon(icon.Icon):
         for i in range(1, numTargets):
             self.addTargetGroup(i)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needDragSite = toDragImage is not None and self.prevInSeq() is None
         if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             self.drawList = []
@@ -119,6 +119,7 @@ class AssignIcon(icon.Icon):
             self.drawList += self.valueList.drawListCommas(tgtSiteX, siteY)
             self.drawList += self.valueList.drawSimpleSpine(tgtSiteX, siteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
         self.dragSiteDrawn = needDragSite
 
     def addTargetGroup(self, idx):
@@ -299,8 +300,9 @@ class AssignIcon(icon.Icon):
 
     def calcLayouts(self):
         opWidth, opHeight = self.opSize
-        tgtListsLayouts = [tgtList.calcLayouts() for tgtList in self.tgtLists]
-        valueLayouts = self.valueList.calcLayouts()
+        tgtListsLayouts = [tgtList.calcLayouts(argRequired=True)
+            for tgtList in self.tgtLists]
+        valueLayouts = self.valueList.calcLayouts(argRequired=True)
         layouts = []
         for valueLayout, *tgtLayouts in iconlayout.allCombinations(
                 (valueLayouts, *tgtListsLayouts)):
@@ -322,23 +324,17 @@ class AssignIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, numTargets=len(self.tgtLists))
 
-    def textEntryHandler(self, entryIc, text, onAttr):
-        # Allow star (*) directly in targets sites.  This should eventually also provide
-        # more enforcement of valid targets, but this gets complicated and should
-        # probably wait for the more general target validation that will go along with
-        # error highlighting.
-        siteId = self.siteOf(entryIc)
-        if siteId is None or siteId[:7] != 'targets':
-            return None
-        if text[0] == '*' and entryIc.parent() == self:
-            if text == '*':
-                return listicons.StarIcon(self.window), None
-            textStripped = text[:-1]
-            delim = text[-1]
-            if textStripped == '*' and entryicon.opDelimPattern.match(delim):
-                return listicons.StarIcon(self.window), delim
-            return None
-        return None
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        for tgtList in self.tgtLists:
+            tgtSeries = getattr(self.sites, tgtList.siteSeriesName)
+            listicons.highlightSeriesErrorsForContext(tgtSeries, 'store')
+        for site in self.sites.values:
+            if site.att is not None:
+                site.att.highlightErrors(None)
 
     def textRepr(self):
         text = ""
@@ -389,9 +385,10 @@ class AssignIcon(icon.Icon):
                     destIdx = len(getattr(self.sites, destSite))
                     cursorIdx = destIdx
                 argIcons = [s.att for s in getattr(self.sites, srcSite)]
-                for i, arg in enumerate(argIcons):
-                    self.replaceChild(None, self.siteOf(arg))
-                    self.insertChild(arg, destSite, destIdx + i)
+                removeFromSite = iconsites.makeSeriesSiteId(srcSite, 0)
+                for _ in argIcons:
+                    self.replaceChild(None, removeFromSite)
+                self.insertChildren(argIcons, destSite, destIdx)
                 self.removeTargetGroup(removetgtGrpIdx)
                 cursorSite = iconsites.makeSeriesSiteId(destSite, cursorIdx)
                 win.cursor.setToIconSite(self, cursorSite)
@@ -424,7 +421,6 @@ class AssignIcon(icon.Icon):
 
     def offsetOfPart(self, partId):
         if self.drawList is None or len(self.drawList) == 0:
-            print('assign icon offsetOfPart failed 1')
             return 0, 0
         iconPartId = 0
         for imgOffset, img in self.drawList:
@@ -432,7 +428,6 @@ class AssignIcon(icon.Icon):
                 continue
             iconPartId += 1
             if partId <= iconPartId:
-                print('assign icon offsetOfPart succeeded:', imgOffset)
                 return imgOffset
         print('assign icon offsetOfPart failed 2')
         return self.drawList[-1][0]
@@ -459,7 +454,7 @@ class AugmentedAssignIcon(icon.Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -496,6 +491,7 @@ class AugmentedAssignIcon(icon.Icon):
             # Commas
             self.drawList += self.valuesList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
         if temporaryDragSite:
             self.drawList = None
 
@@ -529,7 +525,7 @@ class AugmentedAssignIcon(icon.Icon):
 
     def calcLayouts(self):
         bodyWidth, bodyHeight = self.bodySize
-        valueListLayouts = self.valuesList.calcLayouts()
+        valueListLayouts = self.valuesList.calcLayouts(argRequired=True)
         targetIcon = self.sites.targetIcon.att
         tgtLayouts = [None] if targetIcon is None else targetIcon.calcLayouts()
         layouts = []
@@ -558,6 +554,16 @@ class AugmentedAssignIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.op)
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            self.errHighlight = None
+            listicons.highlightErrorsForContext(self.sites.targetIcon, "store")
+            for site in self.sites.values:
+                if site.att is not None:
+                    site.att.highlightErrors(None)
+        else:
+            icon.Icon.highlightErrors(self, errHighlight)
 
     def execute(self):
         return None  #... no idea what to do here, yet.

@@ -11,6 +11,7 @@ import opicons
 import blockicons
 import assignicons
 import parenicon
+import subscripticon
 import entryicon
 import infixicon
 import reorderexpr
@@ -437,7 +438,7 @@ class ListTypeIcon(icon.Icon):
         if closed:
             self.close(typeover)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -477,6 +478,7 @@ class ListTypeIcon(icon.Icon):
                 parenX = self.sites.cprhIcons[-1].xOffset
                 self.drawList.append(((parenX, 0), rightImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
 
     def isComprehension(self):
         return len(self.sites.cprhIcons) > 1
@@ -659,13 +661,6 @@ class ListTypeIcon(icon.Icon):
         seriesName, seriesIdx = iconsites.splitSeriesSiteId(listSiteId)
         textStripped = text[:-1]
         delim = text[-1]
-        # Star operator (must be directly on the list site)
-        if text[0] == '*' and entryIc.parent() == self and seriesName == 'argIcons':
-            if text == '*':
-                return StarIcon(self.window), None
-            if textStripped == '*' and entryicon.opDelimPattern.match(delim):
-                return StarIcon(self.window), delim
-            return None
         # Comprehension
         if len(self.sites.argIcons) == 1 and onAttr and seriesName in ('argIcons',
                 'cprhIcons') and text[0] in ('f', 'a', 'i'):
@@ -701,6 +696,19 @@ class ListTypeIcon(icon.Icon):
                 return CprhIfIcon(window=self.window), delim
             return None
         return None
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        # Color just the paren if the list is not closed, not the content
+        if self.closed:
+            self.errHighlight = None
+        else:
+            self.errHighlight = icon.ErrorHighlight("Unmatched open bracket/brace/paren")
+        for ic in self.children():
+            ic.highlightErrors(None)
+        return
 
     def setTypeover(self, idx, site=None):
         self.drawList = None
@@ -1191,6 +1199,38 @@ class DictIcon(ListTypeIcon):
             return StarStarIcon(self.window), text[2]
         return None
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        if self.closed:
+            self.errHighlight = None
+        else:
+            self.errHighlight = icon.ErrorHighlight("Unmatched open brace")
+        nonEmptyArgs = [site.att for site in self.sites.argIcons if site.att is not None]
+        if len(nonEmptyArgs) > 1:
+            dictElemCount = nonDictCount = 0
+            for ic in nonEmptyArgs:
+                if isinstance(ic, DictElemIcon):
+                    dictElemCount += 1
+                else:
+                    nonDictCount += 1
+            if dictElemCount > nonDictCount:
+                isDict = True
+            elif dictElemCount < nonDictCount:
+                isDict = False
+            else:
+                isDict = isinstance(nonEmptyArgs[0], DictElemIcon)
+            for ic in nonEmptyArgs:
+                isDictElem = isinstance(ic, DictElemIcon)
+                if isDict and not isDictElem or not isDict and isDictElem:
+                    ic.highlightErrors(icon.ErrorHighlight(
+                        "Mixed set/dict elements within braces"))
+                else:
+                    ic.highlightErrors(None)
+        if self.closed and self.sites.attrIcon.att is not None:
+            self.sites.attrIcon.att.highlightErrors(None)
+
     def compareData(self, data, compareContent=False):
         if self.object is None or data is not self.object:
             return False
@@ -1276,7 +1316,7 @@ class CallIcon(icon.Icon):
             width += self.argList.width
         return width, height
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
             # Left paren/bracket/brace
             lParenImg = fnLParenImage if self.closed else fnLParenOpenImage
@@ -1306,6 +1346,7 @@ class CallIcon(icon.Icon):
                 rParenImg.paste(icon.attrInImage, (attrInXOff, attrInYOff))
                 self.drawList.append(((parenX, 0), rParenImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
 
     def argIcons(self):
         return [site.att for site in self.sites.argIcons]
@@ -1482,6 +1523,28 @@ class CallIcon(icon.Icon):
         # closing of matching open parens/brackets/braces needs to take precedence
         return None
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        # Highlight the paren itself if not closed, but don't propagate
+        if self.closed:
+            self.errHighlight = None
+        else:
+            self.errHighlight = icon.ErrorHighlight("Unmatched open paren")
+        # Highlight out-of-order use of positional arguments after keywords
+        kwArgEncountered = False
+        for arg in (site.att for site in self.sites.argIcons if site.att is not None):
+            if isinstance(arg, (StarStarIcon, ArgAssignIcon)):
+                kwArgEncountered = True
+                errHighlight = None
+            elif kwArgEncountered:
+                errHighlight = icon.ErrorHighlight(
+                    "Positional argument follows keyword argument")
+            else:
+                errHighlight = None
+            arg.highlightErrors(errHighlight)
+
     def setTypeover(self, idx, site=None):
         self.drawList = None
         if idx is None or idx > 0:
@@ -1520,9 +1583,9 @@ class CprhIfIcon(icon.Icon):
         self.sites.add('testIcon', 'input', bodyWidth-1 - icon.OUTPUT_SITE_DEPTH,
                 siteYOffset)
         x, y = (0, 0) if location is None else location
-        self.rect = (x, y, x + bodyWidth, y + bodyHeight)
+        self.rect = (x, y, x + bodyWidth + icon.EMPTY_ARG_WIDTH, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
             bodyWidth, bodyHeight = self.bodySize
             img = Image.new('RGBA', (bodyWidth, bodyHeight), color=(0, 0, 0, 0))
@@ -1534,11 +1597,12 @@ class CprhIfIcon(icon.Icon):
             img.paste(icon.inSiteImage, (self.sites.testIcon.xOffset, inImageY))
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
 
     def doLayout(self, cprhX, cprhY, layout):
         width, height = self.bodySize
         top = cprhY - height // 2
-        self.rect = (cprhX, top, cprhX + width, top + height)
+        self.rect = (cprhX, top, cprhX + width + icon.EMPTY_ARG_WIDTH, top + height)
         layout.doSubLayouts(self.sites.cprhOut, cprhX, cprhY)
         self.layoutDirty = False
 
@@ -1552,6 +1616,9 @@ class CprhIfIcon(icon.Icon):
         for testIconLayout in testIconLayouts:
             layout = iconlayout.Layout(self, width, height, height // 2)
             layout.addSubLayout(testIconLayout, 'testIcon', width-1, 0)
+            testWidth = icon.EMPTY_ARG_WIDTH if testIconLayout is None else \
+                testIconLayout.width
+            layout.width = width + testWidth - 1
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
@@ -1639,11 +1706,11 @@ class CprhForIcon(icon.Icon):
         self.sites.add('cprhOut', 'cprhOut', 0, siteYOffset)
         iterX = bodyWidth-1 + self.tgtList.width-1 + inWidth-1
         self.sites.add('iterIcon', 'input', iterX, siteYOffset)
-        totalWidth = iterX
+        totalWidth = iterX + icon.EMPTY_ARG_WIDTH
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
             bodyWidth, bodyHeight, inWidth = self.bodySize
             img = Image.new('RGBA', (bodyWidth, bodyHeight),
@@ -1674,6 +1741,7 @@ class CprhForIcon(icon.Icon):
             inOffset = bodyWidth - 1 + self.tgtList.width - 1
             self.drawList.append(((inOffset, bodyTopY), img))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -1684,7 +1752,7 @@ class CprhForIcon(icon.Icon):
     def doLayout(self, cprhX, cprhY, layout):
         self.tgtList.doLayout(layout)
         bodyWidth, bodyHeight, inWidth = self.bodySize
-        width = bodyWidth-1 + self.tgtList.width-1 + inWidth
+        width = bodyWidth-1 + self.tgtList.width-1 + inWidth + icon.EMPTY_ARG_WIDTH
         heightAbove = bodyHeight // 2
         heightBelow = bodyHeight - heightAbove
         if self.tgtList.simpleSpineWillDraw():
@@ -1701,7 +1769,7 @@ class CprhForIcon(icon.Icon):
         self.layoutDirty = False
 
     def calcLayouts(self):
-        tgtListLayouts = self.tgtList.calcLayouts()
+        tgtListLayouts = self.tgtList.calcLayouts(argRequired=True)
         if self.sites.iterIcon.att is None:
             iterLayouts = (None,)
         else:
@@ -1715,7 +1783,7 @@ class CprhForIcon(icon.Icon):
             tgtListLayout.mergeInto(layout, tgtXOff, 0)
             iterXOff = bodyWidth - 1 + tgtListLayout.width - 1 + inWidth - 1
             layout.addSubLayout(iterLayout, 'iterIcon', iterXOff, 0)
-            iterWidth = 0 if iterLayout is None else iterLayout.width
+            iterWidth = icon.EMPTY_ARG_WIDTH if iterLayout is None else iterLayout.width
             layout.width = iterXOff + iterWidth
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
@@ -1732,14 +1800,6 @@ class CprhForIcon(icon.Icon):
             return None
         name, idx = iconsites.splitSeriesSiteId(siteId)
         if name != 'targets':
-            return None
-        if text[0] == '*' and entryIc.parent() == self:
-            if text == '*':
-                return StarIcon(self.window), None
-            textStripped = text[:-1]
-            delim = text[-1]
-            if textStripped == '*' and delim in entryicon.delimitChars:
-                return StarIcon(self.window), delim
             return None
         if idx != len(self.sites.targets)-1:
             return None
@@ -1989,6 +2049,27 @@ class ArgAssignIcon(infixicon.InfixIcon):
                 [(*snapData, 'output', snapFn) for snapData in outSites]
         return snapLists
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        leftArg = self.leftArg()
+        if leftArg is not None:
+            if isinstance(leftArg, nameicons.IdentifierIcon):
+                leftArg.errHighlight = None
+                attr = leftArg.sites.attrIcon.att
+                if attr is not None:
+                    attr.highlightErrors(icon.ErrorHighlight("Left side of "
+                        "argument assignment ('=') must be unqualified name"))
+            else:
+                errHighlight = icon.ErrorHighlight(
+                    "Left side of argument assignment ('=') must be name")
+                leftArg.highlightErrors(errHighlight)
+        rightArg = self.rightArg()
+        if rightArg is not None:
+            rightArg.highlightErrors(None)
+
     def execute(self):
         if self.sites.leftArg.att is None:
             raise icon.IconExecException(self, "Missing argument name")
@@ -1999,6 +2080,8 @@ class ArgAssignIcon(infixicon.InfixIcon):
         return self.sites.leftArg.att.name, self.sites.rightArg.att.execute()
 
 class StarIcon(opicons.UnaryOpIcon):
+    individualAllowedParents = (CallIcon, blockicons.DefIcon, ListIcon, TupleIcon)
+
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '*', window, location)
 
@@ -2009,17 +2092,41 @@ class StarIcon(opicons.UnaryOpIcon):
         if forCursor:
             return snapLists
         def matingIcon(ic, siteId):
-            siteName, idx = iconsites.splitSeriesSiteId(siteId)
-            if ic.__class__ in (CallIcon, blockicons.DefIcon, ListIcon, TupleIcon):
-                return siteName == "argIcons"
-            if ic.__class__ is assignicons.AssignIcon:
-                return siteName is not None and siteName[:7] in ("targets", "values")
-            return False
+            # Allow snapping to any series site (Python does not allow * in most contexts
+            # without other elements, but it's necessary as an intermediate form for ease
+            # of editing, and will be highlighted as a syntax error)
+            return iconsites.isSeriesSiteId(siteId)
         outSites = snapLists['output']
         snapLists['output'] = []
         snapLists['conditional'] = \
                 [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        # I apologize for the awful hack below to support the star in "from x import *".
+        # There is not yet a mechanism for swapping icons based on snap context, so
+        # instead, we have a star icon that temporarily turns off its argument site
+        # (through the questionable means of directly manipulating the cursorOnly field
+        # of the site object).
+        if isinstance(self.parent(), nameicons.ImportFromIcon):
+            self.sites.argIcon.cursorOnly = True
+        elif hasattr(self.sites.argIcon, 'cursorOnly'):
+            del self.sites.argIcon.cursorOnly
+        return opicons.UnaryOpIcon.doLayout(self, outSiteX, outSiteY, layout)
+
+    def calcLayouts(self):
+        # suppressEmptyArgHighlight is an ugly mechanism to dynamically control empty
+        # argument highlighting, made even uglier, here by doing so inside of the layout
+        # calculation.  It's done here because the context in which the star icon appears
+        # informs whether its argument is required or optional, and thus whether it needs
+        # extra width for the highlight.  StarIcon really should not be inheriting from
+        # UnaryOpIcon and should implement its own calcLayouts, doLayout and draw
+        # functions.
+        if isinstance(self.parent(), (blockicons.DefIcon, nameicons.ImportFromIcon)):
+            self.suppressEmptyArgHighlight = True
+        elif hasattr(self, 'suppressEmptyArgHighlight'):
+            del self.suppressEmptyArgHighlight
+        return opicons.UnaryOpIcon.calcLayouts(self)
 
     def createAst(self):
         if self.arg() is None:
@@ -2031,10 +2138,31 @@ class StarIcon(opicons.UnaryOpIcon):
         # Parent UnaryOp specifies op keyword, which this does not have
         return self._serialize(offset, iconsToCopy)
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            parent = self.parent()
+            if parent is not None:
+                parentSiteId = parent.siteOf(self)
+                if iconsites.isSeriesSiteId(parentSiteId):
+                    siteName, siteIdx = iconsites.splitSeriesSiteId(parentSiteId)
+                    parentSiteSeries = getattr(parent.sites, siteName)
+                    if len(parentSiteSeries) == 1:
+                        if not isinstance(parent, self.individualAllowedParents):
+                            errHighlight = icon.ErrorHighlight("Can only use starred "
+                            "expression here in the context of a list")
+                else:
+                    errHighlight = icon.ErrorHighlight(
+                        "Can't use starred expression in this context")
+        self.errHighlight = errHighlight
+        for ic in self.children():
+            ic.highlightErrors(errHighlight)
+
     def dumpName(self):
         return "star"
 
 class StarStarIcon(opicons.UnaryOpIcon):
+    allowedParents = (CallIcon, blockicons.DefOrClassIcon, DictIcon)
+
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '**', window, location)
 
@@ -2053,6 +2181,14 @@ class StarStarIcon(opicons.UnaryOpIcon):
         snapLists['conditional'] = \
                 [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            parent = self.parent()
+            if parent is not None and not isinstance(parent, self.allowedParents):
+                errHighlight = icon.ErrorHighlight(
+                    "Can't use dictionary expansion ('**') in this context")
+        icon.Icon.highlightErrors(self, errHighlight)
 
     def clipboardRepr(self, offset, iconsToCopy):
         # Superclass UnaryOp specifies op keyword, which this does not have
@@ -2524,6 +2660,62 @@ def backspaceComma(ic, cursorSite, evt, joinOccupied=True):
         entryIcon.appendPendingArgs([childAtCursor])
     win.cursor.setToText(entryIcon, drawNew=False)
     return True
+
+def highlightSeriesErrorsForContext(series, ctx):
+    if isinstance(series[0], StarIcon) and (ctx == 'del' or len(series) <= 1):
+        errHighlight = icon.ErrorHighlight("Starred expression not allowed here")
+        ic = series[0].att
+        if ic is not None:
+            ic.highlightErrors(errHighlight)
+        return
+    for site in series:
+        highlightErrorsForContext(site, ctx)
+
+def highlightErrorsForContext(site, ctx):
+    ic = site.att
+    if ic is None:
+        return
+    attr = None
+    if isinstance(ic, nameicons.IdentifierIcon):
+        attr = ic.sites.attrIcon.att
+        ic.errHighlight = None
+    elif isinstance(ic, StarIcon):
+        if ctx == "del":
+            ic.highlightErrors(icon.ErrorHighlight(
+                "Starred expression not allowed in del context"))
+        else:
+            ic.errHighlight = None
+            highlightErrorsForContext(ic.sites.argIcon, ctx)
+    elif isinstance(ic, (TupleIcon, ListIcon)):
+        if ic.isComprehension():
+            ic.highlightErrors(icon.ErrorHighlight(
+                "Comprehension not allowed in store context"))
+        elif len(ic.sites.argIcons) == 1 and ic.sites.argIcons[0].att is None:
+            ic.highlightErrors(icon.ErrorHighlight(
+                "Cannot store to empty list or tuple"))
+        else:
+            ic.errHighlight = None
+            highlightSeriesErrorsForContext(ic.sites.argIcons, ctx)
+            if ic.closed:
+                attr = ic.sites.attrIcon.att
+    elif isinstance(ic, parenicon.CursorParenIcon):
+        ic.errHighlight = None
+        highlightErrorsForContext(ic.sites.argIcon, ctx)
+        if ic.closed:
+            attr = ic.sites.attrIcon.att
+    else:
+        ic.highlightErrors(icon.ErrorHighlight(
+            "Not a valid target for store"))
+    while attr is not None:
+        nextAttr = attr.sites.attrIcon.att if attr.hasSite('attrIcon')  else None
+        if isinstance(attr, CallIcon) and nextAttr is None:
+            attr.highlightErrors(icon.ErrorHighlight(
+                "Function call not valid in a store context"))
+            break
+        elif isinstance(attr, subscripticon.SubscriptIcon):
+            attr.highlightErrors(None)
+        attr.errHighlight = None
+        attr = nextAttr
 
 def composeAttrAstIf(ic, icAst, skipAttr):
     """Wrapper for icon.composeAttrAst, giving it a disable flag (skipAttr), to simplify

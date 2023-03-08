@@ -87,7 +87,7 @@ class CommentIcon(icon.Icon):
             x, y = location
         self.rect = (x, y, x + width + 4, y + height)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None or self.attachedToStmt is not None:
             temporaryDragSite = False
         else:
@@ -526,7 +526,7 @@ class VerticalBlankIcon(icon.Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:

@@ -219,7 +219,7 @@ class ListLayoutMgr:
     def wrapped(self):
         return self.bodySitePositions == 1
 
-    def calcLayouts(self):
+    def calcLayouts(self, argRequired=False):
         # Avoiding combinatorial explosion with all the possible layouts, is extremely
         # challenging.  Simply exploring all combinations of sublayouts for all possible
         # list dimensions, can explode far beyond keypress time for even short lists.  The
@@ -228,10 +228,13 @@ class ListLayoutMgr:
         # develops.
         siteSeries = self.icon.sites.getSeries(self.siteSeriesName)
         if len(siteSeries) == 1 and siteSeries[0].att is None:
-            # Empty Argument list leaves no space: (), [], {}
+            # Empty argument list
             layout = ListMgrLayout(self.siteSeriesName, ())
             layout.addSubLayout(None,  siteSeries[0].name, 0, 0)
-            layout.width = 1
+            if argRequired:  # If user must supply an arg, leave room for highlight
+                layout.width = icon.LIST_EMPTY_ARG_WIDTH
+            else:  # Non-required lists get no space: (), [], {}
+                layout.width = 1
             layout.height = icon.minTxtIconHgt
             layout.parentSiteOffset = icon.minTxtIconHgt // 2
             return [layout]

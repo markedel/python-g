@@ -96,7 +96,7 @@ class StringIcon(icon.Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
             self.sites.seqOut.att is None or toDragImage is not None)

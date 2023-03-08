@@ -57,16 +57,23 @@ SHOW_OUTLINE_TINT = (220, 220, 220, 255)
 
 KEYWORD_COLOR = (48, 0, 128, 255)
 TYPEOVER_COLOR = (220, 220, 220, 255)
-SELECT_TINT = (0, 0, 255, 0)
-ERR_TINT = (255, 0, 0, 0)
-PENDING_TINT = (255, 192, 192, 192)
+SELECT_TINT = (0, 0, 255, 40)
+EXEC_ERR_TINT = (255, 0, 0, 100)
+SYNTAX_ERR_TINT = (255, 64, 64, 40)
 PENDING_REMOVE_TINT = (255, 32, 32, 32)
 BLACK = (0, 0, 0, 255)
 SEQ_RULE_COLOR = (165, 180, 165, 255)
 SEQ_CONNECT_COLOR = (70, 100, 70, 255)
+EMPTY_ARG_COLOR = (255, 0, 0, 30)
 
 EMPTY_ARG_WIDTH = 11
-LIST_EMPTY_ARG_WIDTH = 4
+LIST_EMPTY_ARG_WIDTH = 8
+
+# Options for (post layout) icon drawing
+STYLE_OUTLINE = 1
+STYLE_SELECTED = 2
+STYLE_SYNTAX_ERR = 4
+STYLE_EXEC_ERR = 8
 
 # Pixels below input/output site to place function/list/tuple icons insertion site
 INSERT_SITE_X_OFFSET = 2
@@ -329,6 +336,7 @@ class Icon:
         self.drawList = None
         self.sites = iconsites.IconSiteList()
         self.id = None if window is None else self.window.makeId(self)
+        self.errHighlight = None
         window.undo.registerIconCreated(self)
 
     def draw(self, image=None, location=None, clip=None):
@@ -451,7 +459,32 @@ class Icon:
                 STMT_COMMENT_OFFSET
             self.stmtComment.doLayout(self.rect[0]+xOff, y-bestLayout.parentSiteOffset,
                 bestLayout.stmtCommentLayout)
+        # Traverse the hierarchy and recalculate .errHighlight flag per icon
+        self.highlightErrors(None)
         return bestLayout
+
+    def highlightErrors(self, errHighlight):
+        """Set the .errHighlight field (recursively) for the icon and its children, based
+        on the error state requested by the parent (errHighlight parameter), and the per-
+        icon error calculation by those that implement the method.  The .errHighlight
+        field of the icon represents both icon coloring and textual description of the
+        error for allowed syntax errors in the icon structure, such as incorrect context,
+        or being the child of an entry icon.  The errHighlight parameter can either be
+        None, or and ErrorHighlight object.  If errHighlight is not None, the method
+        should do nothing but forward it on to all of its children (meaning the top error
+        description wins, even if a lower one happens to be more egregious).  If
+        errHighlight is None, the icon should do whatever special error processing it
+        needs to do to determine if it, or in some cases, which of its children, needs
+        highlighting (for example, it's easier for "as" or "**" icons to process their
+        own highlighting, but for icons that care about storage context, such as
+        assignment and del to dictate their children's highlighting.  Because this (the
+        superclass version of the method) simply calls the highlightErrors methods of the
+        icon's children and propagates the errHighlight value to them, it is also often
+        delegated-to by subclass methods to set the same error status on the icon and all
+        of its children."""
+        self.errHighlight = errHighlight
+        for ic in self.children():
+            ic.highlightErrors(errHighlight)
 
     def traverse(self, order="draw", includeSelf=True, inclStmtComment=False):
         """Iterator for traversing the tree below this icon.  Traversal can be in either
@@ -908,9 +941,72 @@ class Icon:
         else:
             outImg = toDragImage
             x, y = location
+        if self.isSelected():
+            style |= STYLE_SELECTED
+        if self.errHighlight:
+            style |= STYLE_SYNTAX_ERR
         for (imgOffsetX, imgOffsetY), img in self.drawList:
-            pasteImageWithClip(outImg, tintSelectedImage(img, self.isSelected(), style),
+            pasteImageWithClip(outImg, tintSelectedImage(img, style),
              (x + imgOffsetX, y + imgOffsetY), clip)
+
+    def _drawEmptySites(self, toDragImage, clip, skip=None, hilightEmptySeries=False):
+        """Draws highlighting for empty sites.  Since empty site width is standardized
+        across icons, and Python syntax is fairly consistent in not allowing stray empty
+        fields, most icons can just call this method to find and highlight the sites
+        that need highlighting.  An icon that has sites that are allowed to be empty, or
+        that needs to do something different with a particular site, can specify a list
+        of sites (IconSite or IconSiteSeries objects) to skip in parameter "skip"."""
+        # Note that empty sites are drawn as transparent via alpha-blending, which
+        # required a change to the basic drawing model.  Prior versions of the code
+        # allowed redraw without clearing, which was used for operations that didn't
+        # change the icon layout (selection and cursor drawing in particular).  If
+        # empty site highlighting turns dark-red, look for old code making multiple icon
+        # drawing calls without clearing.
+        if skip is None:
+            skip = ()
+        sitesToDraw = []
+        for siteOrSeries in self.sites.allSites(expandSeries=False):
+            if siteOrSeries.name in skip:
+                continue
+            if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+                if len(siteOrSeries) > 1 or hilightEmptySeries:
+                    for site in siteOrSeries:
+                        if site.att is None and site.type == 'input':
+                            sitesToDraw.append((site, True))
+            elif siteOrSeries.att is None and siteOrSeries.type == 'input':
+                sitesToDraw.append((siteOrSeries, False))
+        if len(sitesToDraw) == 0:
+            return
+        iconX, iconY, _, _ = self.rect
+        outImg = toDragImage if toDragImage is not None else self.window.image
+        if clip is None:
+            clip = 0, 0, outImg.width, outImg.height
+        draw = alpha = None
+        if toDragImage is None:
+            iconX, iconY = self.window.contentToImageCoord(iconX, iconY)
+            clipLeft, clipTop, clipRight, clipBottom = comn.offsetRect(clip,
+                -self.window.scrollOrigin[0], -self.window.scrollOrigin[1])
+            alpha = EMPTY_ARG_COLOR[3] / 255.0
+        else:
+            clipLeft, clipTop, clipRight, clipBottom = clip
+            draw = ImageDraw.Draw(outImg)
+        height = minTxtIconHgt - 2
+        for site, isSeriesSite in sitesToDraw:
+            width = (LIST_EMPTY_ARG_WIDTH if isSeriesSite else EMPTY_ARG_WIDTH) - 2
+            x = iconX + site.xOffset + inSiteImage.width
+            y = iconY + site.yOffset - height // 2
+            l = max(x, clipLeft)
+            r = min(l + width, clipRight)
+            t = max(y, clipTop)
+            b = min(y + height, clipBottom)
+            if r - l > 0 and b - t > 0:
+                if toDragImage:
+                    draw.rectangle((l, t, r-1, b-1), fill=EMPTY_ARG_COLOR)
+                else:
+                    tintImg = Image.new('RGB', (r-l, b-t), EMPTY_ARG_COLOR)
+                    contentImg = outImg.crop((l, t, r, b))
+                    compositeImg = Image.blend(contentImg, tintImg, alpha)
+                    outImg.paste(compositeImg, (l, t))
 
     def _serialize(self, offset, iconsToCopy, **args):
         currentSeries = None
@@ -1150,7 +1246,7 @@ class BlockEnd(Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + branchFootImage.width, y + branchFootImage.height)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
             self.drawList = [((0, 0), branchFootImage)]
         self._drawFromDrawList(toDragImage, location, clip, style)
@@ -1194,7 +1290,7 @@ class ImageIcon(Icon):
             x, y = location
         self.rect = (x, y, x + image.width, y + image.height)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
             self.drawList = [((0, 0), self.image)]
         self._drawFromDrawList(toDragImage, location, clip, style)
@@ -1219,6 +1315,16 @@ class ImageIcon(Icon):
 
     def dumpName(self):
         return "image"
+
+class ErrorHighlight:
+    """Attached to errHighlight field of icons which need to receive error highlighting
+    (pink tint), and contain information needed to construct explanation dialog."""
+    # Note that while this currently contains only a reasonText field, it is defined
+    # as a class because future versions will likely add more information, such as
+    # different coloring or highlight style for other types of errors, and possibly a
+    # way to refer to other icon(s) involved in the error.
+    def __init__(self, reasonText):
+        self.text = reasonText
 
 def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
     """clipping rectangle is in the coordinate system of the destination image"""
@@ -1245,30 +1351,35 @@ def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
     # Paste the cropped image in the drawn area
     dstImage.paste(croppedImage, box=(dl, dt), mask=croppedImage)
 
-def tintSelectedImage(image, selected, style):
-    if style == "outline":
+def tintSelectedImage(image, style):
+    if style & STYLE_OUTLINE:
         alphaImg = image.getchannel('A')
         outlineMask = ImageMath.eval("convert(a*255, 'L')", a=alphaImg)
+    else:
+        outlineMask = None
+    color = None
+    # Note that the order of the if clauses below determines the relative priority of
+    # each of the color highlights (rather than blending, we choose the most important)
+    if style & STYLE_EXEC_ERR:
+        color = EXEC_ERR_TINT
+    elif style & STYLE_SELECTED:
+        color = SELECT_TINT
+    elif style & STYLE_SYNTAX_ERR:
+        color = SYNTAX_ERR_TINT
+    elif outlineMask is None:  # No outline and no additional coloring
+        return image
+    if color is not None:
+        alphaImg = image.getchannel('A')
+        colorImg = Image.new('RGBA', (image.width, image.height), color=color)
+        colorImg.putalpha(alphaImg)
+        image = Image.blend(image, colorImg, color[3] / 255.0)
+    if outlineMask is not None:
         outlineImg = Image.new('RGBA', (image.width, image.height),
                 color=SHOW_OUTLINE_TINT)
         outlineImg.putalpha(outlineMask)
         outlineImg.paste(image, mask=image)
         return outlineImg
-    elif style == "error":
-        color = ERR_TINT
-    elif selected:
-        color = SELECT_TINT
-    elif style == "highlightPend":
-        color = PENDING_TINT
-    elif style == "highlightDel":
-        color = PENDING_REMOVE_TINT
-    else:  # No outline and no additional coloring
-        return image
-    alphaImg = image.getchannel('A')
-    colorImg = Image.new('RGBA', (image.width, image.height), color=color)
-    colorImg.putalpha(alphaImg)
-    selImg = Image.blend(image, colorImg, .15)
-    return selImg
+    return image
 
 def incorporateStmtCommentLayouts(layouts, commentLayouts, margin):
     """extend each layout in the list (layouts) to incorporate the best matching
@@ -1630,14 +1741,16 @@ def addArgSaveText(saveText, breakLevel, site, cont, export):
     break-level as is being passed to argSaveText."""
     saveText.concat(breakLevel, argSaveText(breakLevel, site, cont, export), cont)
 
-def seriesSaveText(breakLevel, seriesSite, cont, export, allowTrailingComma=False):
+def seriesSaveText(breakLevel, seriesSite, cont, export, allowTrailingComma=False,
+        allowEmpty=True):
     """Create a filefmt.SegmentedText string representing a series of arguments.  If
     any but the first argument of a single-entry list has no icon, place the $Empty$
     macro at the site.  If allowTrailingComma is specified, the second position of a
     two-element series will not be marked with $Empty$ if it is empty (used when the
-    series can represent a non-parenthesized tuple, such as =, for, return, and yield)."""
+    series can represent a non-parenthesized tuple, such as =, for, return, and yield).
+    if allowEmpty is set to False, a completely empty series will get a $Empty$ macro."""
     if len(seriesSite) == 0 or len(seriesSite) == 1 and seriesSite[0].att is None:
-        return filefmt.SegmentedText(None)
+        return filefmt.SegmentedText(None if allowEmpty else '$Empty$')
     args = [argSaveText(breakLevel, site, cont, export) for site in seriesSite]
     combinedText = args[0]
     if allowTrailingComma and len(args) == 2 and seriesSite[1].att is None:
@@ -1649,14 +1762,14 @@ def seriesSaveText(breakLevel, seriesSite, cont, export, allowTrailingComma=Fals
     return combinedText
 
 def addSeriesSaveText(saveText, breakLevel, seriesSite, cont, export,
-        allowTrailingComma=False):
+        allowTrailingComma=False, allowEmpty=True):
     """Convenience function to append the result of seriesSaveText to saveText at the
     same break-level as is being passed to seriesSaveText.  If allowTrailingComma is
     specified, the second position of a two-element series will not be marked with
     $Empty$ if it is empty (used when the series can represent a non-parenthesized tuple,
     such as =, for, return, and yield)."""
     saveText.concat(breakLevel, seriesSaveText(breakLevel, seriesSite, cont, export,
-        allowTrailingComma=allowTrailingComma), cont)
+        allowTrailingComma=allowTrailingComma, allowEmpty=allowEmpty), cont)
 
 def addAttrSaveText(saveText, ic, parentBreakLevel, cont, export):
     """If the given icon has an attribute attached, compose and append the text from the

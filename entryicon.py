@@ -20,8 +20,8 @@ import commenticon
 import cursors
 import reorderexpr
 
-PLAIN_BG_COLOR = (255, 245, 245, 255)
-FOCUS_BG_COLOR = (255, 230, 230, 255)
+PLAIN_BG_COLOR = (255, 255, 255, 255)
+FOCUS_BG_COLOR = (255, 242, 242, 255)
 OUTLINE_COLOR = (230, 230, 230, 255)
 
 # Gap to be left between the entry icon and next icons to the right of it
@@ -118,7 +118,6 @@ class EntryIcon(icon.Icon):
         remaining internal state based on attachments and passed text."""
         self.text = text
         self.setCursorPos('end')
-        self.recolorPending()
         self.markLayoutDirty()
 
     def _width(self, boxOnly=False):
@@ -133,7 +132,7 @@ class EntryIcon(icon.Icon):
             return boxWidth
         return boxWidth + self.penOffset()
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None or self.focusChanged:
             boxWidth = self._width(boxOnly=True) - 1
             img = Image.new('RGBA', (comn.rectWidth(self.rect), self.height))
@@ -308,10 +307,8 @@ class EntryIcon(icon.Icon):
             if isinstance(arg, (tuple, list)):
                 for insertIdx, ic in enumerate(arg):
                     self.insertChild(ic, siteName, insertIdx)
-                    _addHighlights(ic, 'highlightPend')
             else:
                 self.replaceChild(arg, siteName)
-                _addHighlights(arg, 'highlightPend')
 
     def popPendingArgs(self, argIdx, seriesIdx=None):
         """Remove pending arguments and sites from the left of the list.  argIdx is the
@@ -333,7 +330,6 @@ class EntryIcon(icon.Icon):
                     # remove initial elements of list up to and including seriesIdx
                     removeSiteId = f'pendingArg{siteOrSeries.order}_0'
                     for i in range(seriesIdx + 1):
-                        _removeHighlights(self.childAt(removeSiteId))
                         self.replaceChild(None, removeSiteId)
                     if sum(1 for s in siteOrSeries if s.att is not None) == 0:
                         # No remaining children in the series, remove the site series
@@ -343,11 +339,9 @@ class EntryIcon(icon.Icon):
                     # Remove entire list
                     for i in range(len(siteOrSeries)):
                         removeSiteId = f'pendingArg{siteOrSeries.order}_{i}'
-                        _removeHighlights(self.childAt(removeSiteId))
                         self.replaceChild(None, removeSiteId, leavePlace=True)
             else:
                 removeSiteId = f'pendingArg{siteOrSeries.order}'
-                _removeHighlights(self.childAt(removeSiteId))
                 self.replaceChild(None, removeSiteId)
             sitesToRemove.append(siteOrSeries)
         # Remove the sites holding the icons to be returned (removePendingArgSite will
@@ -452,13 +446,9 @@ class EntryIcon(icon.Icon):
             pendSeriesName, _ = iconsites.splitSeriesSiteId(pendSiteId)
             recipient = transferToParentList(self, 1, self, seriesSiteName=pendSeriesName)
             if recipient is not None:
-                # Unhighlight the pending args transferToParentList removed
-                transferredArgs = pendingArgs[-1][1:]
-                for ic in transferredArgs:
-                    _removeHighlights(ic)
                 # Turn the series to a single input site containing just the first element
                 firstArg = pendingArgs[-1][0]
-                lastArg = transferredArgs[-1]
+                lastArg = pendingArgs[-1][-1]
                 self.popPendingArgs("all")
                 self.appendPendingArgs(pendingArgs[:-1] + [firstArg])
                 if recipient is not self.parent():
@@ -476,7 +466,6 @@ class EntryIcon(icon.Icon):
                     recipient.replaceChild(right, lastArgSite)
                     reorderexpr.reorderArithExpr(left)
                     reorderexpr.reorderArithExpr(right)
-                    self.recolorPending()
         # Check if the entry icon can be moved lower in the expression hierarchy.  If so,
         # rearrange expression to make that happen
         if len(pendingArgs) != 1 or not self.hasSite('pendingArg0') or \
@@ -506,7 +495,6 @@ class EntryIcon(icon.Icon):
             # lowestSite is not empty, can move just the expression above it
             if lowestIc is pendingArg:
                 return
-            _removeHighlights(pendingArg)
             lowestIc.replaceChild(None, lowestSite)
             self.replaceChild(lowestArg, 'pendingArg0')
         if self.attachedSiteType() == 'attrIn':
@@ -516,7 +504,6 @@ class EntryIcon(icon.Icon):
         outIc.replaceWith(pendingArg)
         lowestIc.replaceChild(outIc, lowestSite)
         reorderexpr.reorderArithExpr(pendingArg)
-        self.recolorPending()
 
     def pruneEmptyPendingArgSites(self):
         """Removes any pending arg sites with no icons attached.  If empty sites are
@@ -642,9 +629,6 @@ class EntryIcon(icon.Icon):
                 # may go through bad states to get to good ones.
                 self.text = newText
                 self.cursorPos = newCursorPos
-        if self.window.cursor.type == "text" and self.window.cursor.icon is self:
-            # Currently we're not coloring based on text, but may want to restore later
-            self.recolorPending()
         self.markLayoutDirty()
 
     def backspaceInText(self, evt=None):
@@ -1117,7 +1101,9 @@ class EntryIcon(icon.Icon):
         else:  # Currently no other cursor places, must be expr
             parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=False)
             if parseResult is None:
-                parseResult = parseExprText(newText, self.window)
+                forSeries = self.attachedIcon() is not None and \
+                    iconsites.isSeriesSiteId(self.attachedSite())
+                parseResult = parseExprText(newText, self.window, forSeriesSite=forSeries)
         if parseResult == "reject" and self.attachedSiteType() == 'input':
             coincidentSite = self.attachedIcon().hasCoincidentSite()
             if coincidentSite is not None and coincidentSite == self.attachedSite() and \
@@ -1726,15 +1712,6 @@ class EntryIcon(icon.Icon):
         attIcon = icon.findAttrOutputSite(self.attachedIcon())
         attIconClass = attIcon.__class__
         isAugmentedAssign = assignIcon.__class__ is assignicons.AugmentedAssignIcon
-        if not (attIconClass is assignicons.AssignIcon or
-                attIconClass is listicons.TupleIcon and attIcon.noParens or
-                self.attachedToAttribute() and attIconClass in (nameicons.IdentifierIcon,
-                 listicons.TupleIcon, listicons.ListIcon, listicons.DictIcon,
-                 nameicons.AttrIcon, parenicon.CursorParenIcon) or
-                isinstance(self.attachedIcon(), assignicons.AssignIcon)):
-            # The icon to which the entry icon is attached cannot support adding
-            # an assignment
-            return False
         if self.attachedToAttribute():
             highestCoincidentIcon = iconsites.highestCoincidentIcon(attIcon)
             if highestCoincidentIcon in self.window.topIcons:
@@ -1753,21 +1730,21 @@ class EntryIcon(icon.Icon):
         return False
 
     def insertAssign(self, assignIcon):
+        # (note that this never called with the entry icon attached to nothing)
         attIcon = icon.findAttrOutputSite(self.attachedIcon())
-        attIconClass = attIcon.__class__
         isAugmentedAssign = assignIcon.__class__ is assignicons.AugmentedAssignIcon
-        if not (attIconClass is assignicons.AssignIcon or
-                attIconClass is listicons.TupleIcon and attIcon.noParens or
-                self.attachedToAttribute() and attIconClass in (nameicons.IdentifierIcon,
-                 listicons.TupleIcon, listicons.ListIcon, listicons.DictIcon,
-                 nameicons.AttrIcon, parenicon.CursorParenIcon) or
-                isinstance(self.attachedIcon(), assignicons.AssignIcon)):
-            return None, None
+        # Older versions had code here to prevent typing '=' after unacceptable targets.
+        # This turned out to interfere with typing flow, since the user probably wanted
+        # the = and we were throwing out their keystroke and forcing them to go back and
+        # correct code we had *already accepted* before they could continue.  Now that
+        # we're highlighting bad targets, instead of inexplicably rejecting a keystroke,
+        # we can both let them proceed unhindered and *show* them exactly what they need
+        # to correct at their later convenience.
         if self.attachedToAttribute():
             highestCoincidentIcon = iconsites.highestCoincidentIcon(attIcon)
             if highestCoincidentIcon in self.window.topIcons:
-                # The cursor is attached to an attribute of a top-level icon of a type
-                # appropriate as a target. Insert assignment icon and make it the target.
+                # The cursor is attached to an attribute of a top-level icon. Insert the
+                # assignment icon and make it the target.
                 self.attachedIcon().replaceChild(None, self.attachedSite())
                 self.window.replaceTop(highestCoincidentIcon, assignIcon)
                 if highestCoincidentIcon is not attIcon:
@@ -1797,14 +1774,14 @@ class EntryIcon(icon.Icon):
                 else:
                     assignIcon.replaceChild(attIcon, "targets0_0")
                 return cursorIcon, cursorSite
-        topParent = (attIcon if attIcon is not None else self.attachedIcon()).topLevelParent()
+        topParent = self.attachedIcon().topLevelParent()
         if topParent.__class__ is listicons.TupleIcon and topParent.noParens:
             # There is a no-paren tuple at the top level waiting to be converted in to an
             # assignment statement.  Do the conversion.
             targetIcons = topParent.argIcons()
             if isAugmentedAssign:
-                # Augmented (i.e. +=) assigns have just one target, but it is possible
-                # to delete out a comma and be left with a single value in the tuple
+                # Augmented (i.e. +=) assigns have just one target, but can have multiple
+                # values, so it possible to insert one after the first entry.
                 if len(targetIcons) != 1:
                     return None, None
                 self.attachedIcon().replaceChild(None, self.attachedSite())
@@ -1820,7 +1797,8 @@ class EntryIcon(icon.Icon):
                 else:
                     insertSiteId = topParent.siteOf(attIcon, recursive=True)
                 for tgtIcon in targetIcons:
-                    topParent.replaceChild(None, topParent.siteOf(tgtIcon))
+                    if tgtIcon is not None:
+                        topParent.replaceChild(None, topParent.siteOf(tgtIcon))
                 seriesName, seriesIdx = iconsites.splitSeriesSiteId(insertSiteId)
                 splitIdx = seriesIdx + (0 if topParent is attachedIcon else 1)
                 assignIcon.insertChildren(targetIcons[:splitIdx], 'targets0', 0)
@@ -1848,15 +1826,18 @@ class EntryIcon(icon.Icon):
                 newTgtGrpIdx = len(topParent.tgtLists)
                 cursorSite = 'values_0'
                 iconsToMove = [site.att for site in topParent.sites.values][:splitIdx]
+                removeFromSite = iconsites.makeSeriesSiteId('values', 0)
+                for _ in range(splitIdx):
+                    topParent.replaceChild(None, removeFromSite)
             else:  # = was typed in a target series
                 newTgtGrpIdx = int(seriesName[7:]) + 1
                 cursorSite = 'targets%d_0' % newTgtGrpIdx
                 series = getattr(topParent.sites, seriesName)
                 iconsToMove = [site.att for site in series][splitIdx:]
+                removeFromSite = iconsites.makeSeriesSiteId(seriesName, splitIdx)
+                for _ in range(splitIdx, len(series)):
+                    topParent.replaceChild(None, removeFromSite)
             topParent.addTargetGroup(newTgtGrpIdx)
-            for tgtIcon in iconsToMove:
-                if tgtIcon is not None:
-                    topParent.replaceChild(None, topParent.siteOf(tgtIcon))
             topParent.insertChildren(iconsToMove, 'targets%d' % newTgtGrpIdx, 0)
             # The removed code, below inserts a useless comma and I haven't found any
             # cases where it was needed (preserved temporarily for documentation).
@@ -2341,7 +2322,6 @@ class EntryIcon(icon.Icon):
                 iconsites.splitSeriesSiteId(siteId)[1] != 0:
             # Cursor is on a comma
             listicons.backspaceComma(self, siteId, evt)
-            self.recolorPending()
         else:
             # Backspace from a pending arg site.  These sites are coincident and should
             # probably be marked as cursor-prohibited once that is supported.  For now,
@@ -2367,15 +2347,24 @@ class EntryIcon(icon.Icon):
         penImgWidth = attrPenImage.width if self.attachedToAttribute() else penImage.width
         return penImgWidth - PEN_MARGIN
 
-    def recolorPending(self):
-        highlight = 'highlightPend'
-        #... Todo: should we be dark-highlighting anything?
-        children = self.children()
-        if len(children) == 0:
-            return
-        for ic in children:
-            _addHighlights(ic, highlight)
-        self.markLayoutDirty()
+    def highlightErrors(self, errHighlight):
+        self.errHighlight = errHighlight
+        if errHighlight is None and not self.hasFocus:
+            if self.hasPendingArgs() and self.text != "":
+                err = "holding incomplete (unparsed) text and unprocessed argument code"
+            elif self.hasPendingArgs():
+                err = "holding code that is incompatible with the code to which it is " \
+                      "attached"
+            elif self.text != "":
+                err = "holding incomplete (unparsed) text"
+            else:
+                err = "pending text entry: type backspace to remove"
+            self.errHighlight = icon.ErrorHighlight("This is an entry icon " + err)
+        if errHighlight is None:
+            errHighlight = icon.ErrorHighlight(
+                "Icon is disconnected from surrounding code")
+        for ic in self.children():
+            ic.highlightErrors(errHighlight)
 
     def cursorWindowPos(self):
         x, y = self.rect[:2]
@@ -2517,7 +2506,7 @@ def parseAttrText(text, window):
         return "colon"
     op = text[:-1]
     delim = text[-1]
-    if attrPattern.fullmatch(op):
+    if attrPattern.fullmatch(op) and op[1:] not in keywords:
         return nameicons.AttrIcon(op[1:], window), delim
     if delim in delimitChars:
         # While these trigger, above, without delimiters, backspacing or alt+clicking
@@ -2542,7 +2531,7 @@ def parseAttrText(text, window):
         return assignicons.AssignIcon(1, window), delim
     return "reject"
 
-def parseExprText(text, window):
+def parseExprText(text, window, forSeriesSite=False):
     if len(text) == 0:
         return "accept"
     if text in unaryNonKeywordOps:
@@ -2566,6 +2555,8 @@ def parseExprText(text, window):
         return "colon"
     if text == '=':
         return assignicons.AssignIcon(1, window), None
+    if text == '*' and forSeriesSite:
+        return listicons.StarIcon(window), None
     if stringPattern.fullmatch(text):
         return stringicon.StringIcon(initReprStr=text+text[-1], window=window,
             typeover=True), None
@@ -2578,6 +2569,8 @@ def parseExprText(text, window):
     if opDelimPattern.match(delim):
         if text in unaryOperators:
             return opicons.UnaryOpIcon(text, window), delim
+        if text == '*' and forSeriesSite:
+            return listicons.StarIcon(window), delim
     if text == 'lambda':
         if delim not in ' *:':
             return 'reject'
@@ -3010,6 +3003,7 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
         if parent is splitTo:
             break
         if isinstance(parent, opicons.UnaryOpIcon):
+            parent.replaceChild(leftArg, 'argIcon')
             leftArg = parent
         elif childSiteType == 'input' and (isinstance(parent, infixicon.InfixIcon) or
                 parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and not
@@ -3058,32 +3052,6 @@ def _canCloseParen(entryIc):
                     entryIc.siteOf(rightmostIc, recursive=True) is None:
                 return False
     return True
-
-def _removeHighlights(icTree):
-    """Remove highlight property from icons in icTree.  This is called automatically by
-    setProperty, but is sometimes invoked explicitly when the existing pending arg may
-    have already been linked somewhere else."""
-    if icTree is not None and not isinstance(icTree, EntryIcon):
-        _removeHighlight(icTree)
-        for ic in icTree.children():
-            _removeHighlights(ic)
-
-def _removeHighlight(ic):
-    if ic is not None and hasattr(ic, 'highlight'):
-        ic.window.undo.registerCallback(_addHighlight, ic, ic.highlight)
-        del ic.highlight
-
-def _addHighlight(ic, highlight):
-    if ic is not None:
-        ic.highlight = highlight
-        ic.window.undo.registerCallback(_removeHighlight, ic)
-
-def _addHighlights(icTree, highlight):
-    """Add highlight property to icTree and all of its children"""
-    if icTree is not None:
-        _addHighlight(icTree, highlight)
-        for ic in icTree.children():
-            _addHighlights(ic, highlight)
 
 def _appendOperator(newOpIcon, onIcon, onSite):
     """Stitch a binary operator in at onIcon, onSite and reorder the surrounding

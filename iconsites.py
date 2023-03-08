@@ -143,14 +143,18 @@ class IconSiteList:
     def isSeries(self, siteId):
         return self.getSeries(siteId) is not None
 
-    def allSites(self):
-        """Traverse all sites in the list (generator)"""
+    def allSites(self, expandSeries=True):
+        """Traverse all sites in the list (generator).  If expandSeries is set to False,
+        yields an IconSeries object instead of enumerating the sites of the series."""
         for siteNames in self._typeDict.values():
             for name in siteNames:
-                site =getattr(self, name)
+                site = getattr(self, name)
                 if isinstance(site, IconSiteSeries):
-                    for s in site.sites:
-                        yield s
+                    if expandSeries:
+                        for s in site.sites:
+                            yield s
+                    else:
+                        yield site
                 elif isinstance(site, IconSite):
                     yield site
 

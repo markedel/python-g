@@ -32,7 +32,7 @@ class CursorParenIcon(icon.Icon):
         if closed:
             self.close()
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -77,6 +77,7 @@ class CursorParenIcon(icon.Icon):
                 draw.line((bodyLeft, outSiteY, inSiteX, outSiteY),
                  fill=comn.ICON_BG_COLOR, width=3)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         layout.updateSiteOffsets(self.sites.output)
@@ -189,6 +190,19 @@ class CursorParenIcon(icon.Icon):
                     isAsync=True), delim
             return None
         return None
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        # Color just the paren if the list is not closed, not the content
+        if self.closed:
+            self.errHighlight = None
+        else:
+            self.errHighlight = icon.ErrorHighlight("Unmatched open paren")
+        for ic in self.children():
+            ic.highlightErrors(None)
+        return
 
     def backspace(self, siteId, evt):
         win = self.window

@@ -17,6 +17,7 @@ delimitOperators = (':')
 class InfixIcon(icon.Icon):
     def __init__(self, op, opImg=None, isKwd=False, window=None, location=None):
         icon.Icon.__init__(self, window)
+        self.precedence = -1
         self.operator = op
         if opImg is None:
             if isKwd:
@@ -31,7 +32,7 @@ class InfixIcon(icon.Icon):
         self.opImg = opImg
         self.leftArgWidth = icon.EMPTY_ARG_WIDTH
         x, y = (0, 0) if location is None else location
-        width = self.leftArgWidth - 1 + opImg.width
+        width = self.leftArgWidth - 1 + opImg.width + icon.EMPTY_ARG_WIDTH
         self.rect = (x, y, x + width, y + opImg.height)
         siteYOffset = opImg.height // 2
         self.sites.add('output', 'output', 0, siteYOffset)
@@ -42,7 +43,7 @@ class InfixIcon(icon.Icon):
         # Indicates that input site falls directly on top of output site
         self.coincidentSite = 'leftArg'
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         atTop = self.parent() is None
         suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
         temporaryOutputSite = suppressSeqSites and atTop and \
@@ -68,6 +69,7 @@ class InfixIcon(icon.Icon):
             # Body
             self.drawList.append(((leftArgX + self.leftArgWidth - 1, 0), self.opImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         if temporaryOutputSite or suppressSeqSites:
             self.drawList = None  # Don't keep after drawing (see above)
 
@@ -76,7 +78,7 @@ class InfixIcon(icon.Icon):
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         opWidth, height = self.opImg.size
-        width = opWidth + self.leftArgWidth - 1
+        width = opWidth + self.leftArgWidth - 1 + icon.EMPTY_ARG_WIDTH
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
         self.rect = (x, y, x + width, y + height)
@@ -203,7 +205,7 @@ class InfixIcon(icon.Icon):
         return entryIcon
 
 class AsIcon(InfixIcon):
-    allowableSnaps = {"WithIcon": "values", "ImportIcon": "values",
+    allowableParents = {"WithIcon": "values", "ImportIcon": "values",
         "ImportFromIcon": "importsIcons", "ExceptIcon": "typeIcon"}
 
     def __init__(self, window=None, location=None):
@@ -219,7 +221,7 @@ class AsIcon(InfixIcon):
                 siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
             else:
                 siteName = siteId
-            allowable = self.allowableSnaps.get(ic.__class__.__name__)
+            allowable = self.allowableParents.get(ic.__class__.__name__)
             return allowable is not None and allowable == siteName
         outSites = snapLists['output']
         snapLists['output'] = []
@@ -232,3 +234,24 @@ class AsIcon(InfixIcon):
         text.add(None, " as ")
         icon.addArgSaveText(text, brkLvl, self.sites.rightArg, contNeeded, export)
         return text
+    
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            parent = self.parent()
+            if parent is not None:
+                parentClass = parent.__class__.__name__
+                if parentClass in self.allowableParents:
+                    parentSite = parent.siteOf(self)
+                    if iconsites.isSeriesSiteId(parentSite):
+                        siteName, siteIdx = iconsites.splitSeriesSiteId(parentSite)
+                    else:
+                        siteName = parentSite
+                    if siteName != self.allowableParents[parentClass]:
+                        errHighlight = icon.ErrorHighlight(
+                            'An "as" statement is not allowed in this context')
+                else:
+                    errHighlight = icon.ErrorHighlight(
+                        'An "as" statement is not allowed in this context')
+        self.errHighlight = errHighlight
+        for ic in self.children():
+            ic.highlightErrors(errHighlight)

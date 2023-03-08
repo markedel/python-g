@@ -17,6 +17,8 @@ STMT_COMMENT_INDENT = 4
 # Attach per-icon comments as statement comments until display/edit code catches up
 NO_ICON_COMMENTS = True
 
+EMPTY_IDENT_NAME = 'xxx_empty_arg_xxx'
+
 posMacroPattern = re.compile("(([-+])\\d*)(([-+])\\d*)")
 
 class MacroParser:
@@ -25,7 +27,7 @@ class MacroParser:
         "\\+|-|/|%|\\*|<|>|\\||\\^|&|is|in|and|or|if|=|!=|\\(|\\.|\\[")
 
     def __init__(self):
-        self.macroList = {'Empty': ('xxx_empty_arg_xxx', lambda n, w: None)}
+        self.macroList = {'Empty': (EMPTY_IDENT_NAME, lambda n, w: None)}
 
     def addMacro(self, name, subs="", iconCreateFn=None):
         """Add a macro to annotate and extend the save-file and pasted-text format beyond

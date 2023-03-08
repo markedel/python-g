@@ -3,6 +3,7 @@ from PIL import Image
 import ast
 import numbers
 import inspect
+import re
 import comn
 import iconlayout
 import iconsites
@@ -40,7 +41,7 @@ class TextIcon(icon.Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -205,7 +206,7 @@ class AttrIcon(icon.Icon):
             x, y = location
         self.rect = (x, y, x + bodyWidth + icon.attrOutImage.width, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
             img = Image.new('RGBA', (comn.rectWidth(self.rect),
              comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
@@ -305,7 +306,7 @@ class NoArgStmtIcon(icon.Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -392,10 +393,11 @@ class BreakIcon(NoArgStmtIcon):
         return ast.Break(lineno=self.id, col_offset=0)
 
 class SeriesStmtIcon(icon.Icon):
-    def __init__(self, stmt, window, seqIndent=False, location=None):
+    def __init__(self, stmt, window, seqIndent=False, requireArg=False, location=None):
         icon.Icon.__init__(self, window)
         self.stmt = stmt
         self.drawIndent = seqIndent
+        self.requireArg = requireArg
         bodyWidth = icon.getTextSize(stmt, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = icon.minTxtIconHgt
         self.bodySize = (bodyWidth, bodyHeight)
@@ -406,12 +408,14 @@ class SeriesStmtIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqX + seqOutIndent, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         totalWidth = icon.dragSeqImage.width + bodyWidth
+        if self.requireArg:
+            totalWidth += icon.LIST_EMPTY_ARG_WIDTH
         self.valueList = iconlayout.ListLayoutMgr(self, 'values', bodyWidth+1,
                 siteYOffset, simpleSpine=True)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -446,6 +450,7 @@ class SeriesStmtIcon(icon.Icon):
             # Commas
             self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=self.requireArg)
         if temporaryDragSite:
             self.drawList = None
 
@@ -461,6 +466,8 @@ class SeriesStmtIcon(icon.Icon):
         heightAbove = bodyHeight // 2
         heightBelow = bodyHeight - heightAbove
         width = icon.dragSeqImage.width - 1 + bodyWidth + self.valueList.width + 2
+        if self.requireArg:
+            width += icon.LIST_EMPTY_ARG_WIDTH
         if self.valueList.simpleSpineWillDraw():
             heightAbove = max(heightAbove, self.valueList.spineTop)
             heightBelow = max(heightBelow, self.valueList.spineHeight -
@@ -477,7 +484,7 @@ class SeriesStmtIcon(icon.Icon):
 
     def calcLayouts(self):
         bodyWidth, bodyHeight = self.bodySize
-        valueListLayouts = self.valueList.calcLayouts()
+        valueListLayouts = self.valueList.calcLayouts(argRequired=self.requireArg)
         layouts = []
         for valueListLayout in valueListLayouts:
             layout = iconlayout.Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
@@ -550,7 +557,15 @@ class ReturnIcon(SeriesStmtIcon):
 
 class DelIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
-        SeriesStmtIcon.__init__(self, "del", window, location=location)
+        SeriesStmtIcon.__init__(self, "del", window, requireArg=True, location=location)
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            self.errHighlight = None
+            valuesSeries = getattr(self.sites, 'values')
+            listicons.highlightSeriesErrorsForContext(valuesSeries, 'del')
+        else:
+            icon.Icon.highlightErrors(self, errHighlight)
 
     def createAst(self):
         for site in self.sites.values:
@@ -561,7 +576,8 @@ class DelIcon(SeriesStmtIcon):
 
 class GlobalIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
-        SeriesStmtIcon.__init__(self, "global", window, location=location)
+        SeriesStmtIcon.__init__(self, "global", window, requireArg=True,
+            location=location)
 
     def createAst(self):
         for site in self.sites.values:
@@ -572,9 +588,45 @@ class GlobalIcon(SeriesStmtIcon):
         names = [site.att.name for site in self.sites.values]
         return ast.Global(names, lineno=self.id, col_offset=0)
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId[:6] != 'values':
+            return None
+        if text == ',':
+            return "comma"
+        elif onAttr:
+            return "reject"
+        elif text.isidentifier():
+            return "accept"
+        elif text[-1] in ' ,' and text[:-1].isidentifier() and \
+                text[:-1] not in entryicon.keywords:
+            return IdentifierIcon(text[:-1], self.window), text[-1]
+        return 'reject'
+
+    def highlightErrors(self, errHighlight):
+        # textEntryHandler prohibits typing of anything but correct syntax, but we
+        # (currently) allow snapping of illegal stuff for users to edit later.
+        self.errHighlight = errHighlight
+        if errHighlight is not None:
+            for ic in self.children():
+                ic.highlightErrors(errHighlight)
+            return
+        for ic in (site.att for site in self.sites.values if site.att is not None):
+            if isinstance(ic, IdentifierIcon):
+                ic.errHighlight = None
+                attr = ic.childAt('attrIcon')
+                if attr is not None:
+                    attr.highlightErrors(icon.ErrorHighlight(
+                        "Variable name may not have anything attached."))
+                    continue
+            else:
+                ic.highlightErrors(icon.ErrorHighlight(
+                    "Not a valid variable name (identifier)"))
+
 class NonlocalIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
-        SeriesStmtIcon.__init__(self, "nonlocal", window, location=location)
+        SeriesStmtIcon.__init__(self, "nonlocal", window, requireArg=True,
+            location=location)
 
     def createAst(self):
         for site in self.sites.values:
@@ -585,9 +637,45 @@ class NonlocalIcon(SeriesStmtIcon):
         names = [site.att.name for site in self.sites.values]
         return ast.Nonlocal(names, lineno=self.id, col_offset=0)
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId[:6] != 'values':
+            return None
+        if text == ',':
+            return "comma"
+        elif onAttr:
+            return "reject"
+        elif text.isidentifier():
+            return "accept"
+        elif text[-1] in ' ,' and text[:-1].isidentifier() and \
+                text[:-1] not in entryicon.keywords:
+            return IdentifierIcon(text[:-1], self.window), text[-1]
+        return 'reject'
+
+    def highlightErrors(self, errHighlight):
+        # textEntryHandler prohibits typing of anything but correct syntax, but we
+        # (currently) allow snapping of illegal stuff for users to edit later.
+        self.errHighlight = errHighlight
+        if errHighlight is not None:
+            for ic in self.children():
+                ic.highlightErrors(errHighlight)
+            return
+        for ic in (site.att for site in self.sites.values if site.att is not None):
+            if isinstance(ic, IdentifierIcon):
+                ic.errHighlight = None
+                attr = ic.childAt('attrIcon')
+                if attr is not None:
+                    attr.highlightErrors(icon.ErrorHighlight(
+                        "Variable name may not have anything attached"))
+                    continue
+            else:
+                ic.highlightErrors(icon.ErrorHighlight(
+                    "Not a valid variable name (identifier)"))
+
 class ImportIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
-        SeriesStmtIcon.__init__(self, "import", window, location=location)
+        SeriesStmtIcon.__init__(self, "import", window, requireArg=True,
+            location=location)
 
     def createAst(self):
         for site in self.sites.values:
@@ -600,7 +688,7 @@ class ImportIcon(SeriesStmtIcon):
                 nameIcon = importIcon.sites.leftArg.att
                 if nameIcon is None:
                     raise icon.IconExecException(importIcon, "Missing import name")
-                moduleName = _moduleNameFromAttrs(nameIcon)
+                moduleName = moduleNameFromIcons(nameIcon)
                 if moduleName is None:
                     raise icon.IconExecException(nameIcon,
                         "Improper module name in import")
@@ -615,7 +703,7 @@ class ImportIcon(SeriesStmtIcon):
             else:
                 if importIcon is None:
                     raise icon.IconExecException(importIcon, "Missing import name")
-                moduleName = _moduleNameFromAttrs(importIcon)
+                moduleName = moduleNameFromIcons(importIcon)
                 if moduleName is None:
                     raise icon.IconExecException(importIcon,
                         "Improper module name in import")
@@ -625,31 +713,96 @@ class ImportIcon(SeriesStmtIcon):
 
     def textEntryHandler(self, entryIc, text, onAttr):
         siteId = self.siteOf(entryIc, recursive=True)
-        if siteId[:6] == 'values':
-            parent = entryIc.parent()
-            if isinstance(parent, infixicon.AsIcon):
-                # Enforce identifiers-only on right argument of "as"
-                name = text.rstrip(' ')
-                if name == ',':
-                    return "comma"
-                name = name.rstrip(',')
-                if not name.isidentifier():
-                    return "reject"
-                if text[-1] in (' ', ','):
-                    return IdentifierIcon(name, self.window), text[-1]
-                return "accept"
-            elif text == ',':
+        if siteId[:6] != 'values':
+            return None
+        parent = entryIc.parent()
+        if isinstance(parent, infixicon.AsIcon):
+            # Enforce identifiers-only on right argument of "as"
+            name = text.rstrip(' ')
+            if name == ',':
                 return "comma"
-            elif onAttr:
-                # Allow "as" to be typed
-                if text == 'a':
-                    return "accept"
-                elif text in ('as', 'as '):
-                    return infixicon.AsIcon(self.window), None
-        return None
+            name = name.rstrip(',')
+            if not name.isidentifier():
+                return "reject"
+            if text[-1] in (' ', ','):
+                if text[:-1] in entryicon.keywords:
+                    return "reject"
+                return IdentifierIcon(name, self.window), text[-1]
+            return "accept"
+        elif text == ',':
+            return "comma"
+        elif onAttr:
+            # Allow only "as" or simple attribute to be typed
+            if text in '.a':
+                return "accept"
+            elif text in ('as', 'as '):
+                return infixicon.AsIcon(self.window), ' ' if text == 'as ' else None
+            elif text[0] != '.':
+                return "reject"
+            elif text[1:].isidentifier():
+                return "accept"
+            elif text[-1] in ' .,' and text[1:-1].isidentifier():
+                return AttrIcon(text[:-1], self.window), text[-1]
+        elif text.isidentifier():
+            return "accept"
+        elif text[-1] in ' .,' and text[:-1].isidentifier() and \
+                text[:-1] not in entryicon.keywords:
+            return IdentifierIcon(text[:-1], self.window), text[-1]
+        return 'reject'
+
+    def highlightErrors(self, errHighlight):
+        # textEntryHandler prohibits typing of anything but correct syntax, but we
+        # (currently) allow snapping of illegal stuff for users to edit later.
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        for ic in (site.att for site in self.sites.values if site.att is not None):
+            if isinstance(ic, IdentifierIcon):
+                ic.errHighlight = None
+                attr = ic.childAt('attrIcon')
+                while attr is not None:
+                    if not isinstance(attr, AttrIcon):
+                        attr.highlightErrors(icon.ErrorHighlight(
+                            "Not a valid format for a module name for import"))
+                        break
+                    attr.errHighlight = None
+                    attr = attr.childAt('attrIcon')
+            elif isinstance(ic, infixicon.AsIcon):
+                ic.errHighlight = None
+                leftArg = ic.leftArg()
+                if leftArg is not None:
+                    if not isinstance(leftArg, IdentifierIcon):
+                        leftArg.highlightErrors(icon.ErrorHighlight(
+                            "Not a valid module name for import"))
+                        continue
+                    attr = leftArg.childAt('attrIcon')
+                    while attr is not None:
+                        if not isinstance(attr, AttrIcon):
+                            attr.highlightErrors(icon.ErrorHighlight(
+                                "Not a valid format for a module name for import"))
+                            break
+                        attr.errHighlight = None
+                        attr = attr.childAt('attrIcon')
+                rightArg = ic.rightArg()
+                if rightArg is not None:
+                    if not isinstance(rightArg, IdentifierIcon):
+                        rightArg.highlightErrors(icon.ErrorHighlight(
+                            "Import alias must be an identifier"))
+                        continue
+                    rightArg.errHighlight = None
+                    rightArgAttr = rightArg.childAt('attrIcon')
+                    if rightArgAttr is not None:
+                        rightArgAttr.highlightErrors(icon.ErrorHighlight(
+                            "Import alias must be a valid identifier"))
+                        continue
+            else:
+                ic.highlightErrors(icon.ErrorHighlight(
+                    "Not a valid module name for import"))
 
 class ImportFromIcon(icon.Icon):
     hasTypeover = True
+    relDelimPattern = re.compile('[a-zA-Z ]')
 
     def __init__(self, window=None, typeover=False, location=None):
         icon.Icon.__init__(self, window)
@@ -675,11 +828,11 @@ class ImportFromIcon(icon.Icon):
         self.importsList = iconlayout.ListLayoutMgr(self, 'importsIcons', importsX,
             siteYOffset, simpleSpine=True)
         self.dragSiteDrawn = False
-        totalWidth = importsX + self.importsList.width - 1
+        totalWidth = importsX + self.importsList.width - 1 + icon.EMPTY_ARG_WIDTH
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needDragSite = toDragImage is not None and self.prevInSeq() is None
         if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight, importWidth = self.bodySize
@@ -711,6 +864,7 @@ class ImportFromIcon(icon.Icon):
             self.drawList += self.importsList.drawListCommas(listOffset, cntrSiteY)
             self.drawList += self.importsList.drawSimpleSpine(listOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
         self.dragSiteDrawn = needDragSite
 
     def snapLists(self, forCursor=False):
@@ -724,7 +878,7 @@ class ImportFromIcon(icon.Icon):
         self.importsList.doLayout(layout)
         bodyWidth, bodyHeight, importWidth = self.bodySize
         width = icon.dragSeqImage.width-1 + bodyWidth-1 + self.moduleNameWidth-1 + \
-            importWidth-1 + self.importsList.width
+            importWidth-1 + self.importsList.width + icon.EMPTY_ARG_WIDTH
         heightAbove = max(bodyHeight // 2, self.importsList.spineTop)
         heightBelow = max(bodyHeight - bodyHeight // 2,
             self.importsList.spineHeight - self.importsList.spineTop)
@@ -754,8 +908,8 @@ class ImportFromIcon(icon.Icon):
                 else moduleLayout.width
             layout.moduleNameWidth = moduleNameWidth
             argXOff = bodyWidth - 1 + moduleNameWidth - 1 + importWidth + 1
+            layout.width = argXOff + icon.EMPTY_ARG_WIDTH
             importListLayout.mergeInto(layout, argXOff - icon.OUTPUT_SITE_DEPTH, 0)
-            layout.width = argXOff + importListLayout.width + importWidth - 2
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
@@ -770,7 +924,7 @@ class ImportFromIcon(icon.Icon):
         icon.addArgSaveText(text, brkLvl, self.sites.moduleIcon, contNeeded, export)
         text.add(brkLvl, " import ", contNeeded)
         icon.addSeriesSaveText(text, brkLvl, self.sites.importsIcons, contNeeded,
-            export)
+            export, allowEmpty=False)
         return text
 
     def dumpName(self):
@@ -780,7 +934,7 @@ class ImportFromIcon(icon.Icon):
         moduleIcon = self.sites.moduleIcon.att
         if moduleIcon is None:
             raise icon.IconExecException(self, "Import-from missing module name")
-        moduleName = _moduleNameFromAttrs(moduleIcon)
+        moduleName = moduleNameFromIcons(moduleIcon)
         if moduleName is None:
             raise icon.IconExecException(moduleIcon, "Improper module name in import")
         imports = []
@@ -824,31 +978,46 @@ class ImportFromIcon(icon.Icon):
     def textEntryHandler(self, entryIc, text, onAttr):
         siteId = self.siteOf(entryIc, recursive=True)
         if siteId == 'moduleIcon':
-            name = text.lstrip('.')
-            level = len(text) - len(name)
-            name = name.rstrip(' ')
-            if not name.isidentifier() and level < 1:
-                # The only valid text for the module site is an identifier with optional
-                # preceding dots
-                return "reject"
-            iconOnModuleSite = self.sites.moduleIcon.att
-            if iconOnModuleSite is entryIc:
-                # Nothing but the entry icon is at the site, allow for typing leading
-                # dots by explicitly accepting
-                if text[-1] == ' ':
-                    if level > 0:
-                        return ModuleNameIcon(level * '.' + name, self.window), ' '
-                    return IdentifierIcon(name, self.window), ' '
+            if self.sites.moduleIcon.att is entryIc:
+                if text[0] == '.':
+                    delim = text.lstrip('.')
+                    if delim == '':
+                        return 'accept'
+                    if not self.relDelimPattern.fullmatch(delim):
+                        return "reject"
+                    return RelativeImportIcon(len(text) - len(delim), self.window), delim
+            if self.sites.moduleIcon.att is entryIc or isinstance(entryIc.parent(),
+                    RelativeImportIcon):
+                name = text.rstrip(' .')
+                if not name.isidentifier():
+                    # The only valid text for the module site itself, is an identifier
+                    return "reject"
+                if text[-1] in ' .':
+                    if name in entryicon.keywords:
+                        return "reject"
+                    else:
+                        return IdentifierIcon(name, self.window), text[-1]
                 return "accept"
-            rightmostIc, rightmostSite = icon.rightmostSite(iconOnModuleSite)
-            if rightmostIc is entryIc and text == "i":
-                return "typeover"
             if onAttr:
-                # No attributes or operators of any kind are allowed on module names
-                return "reject"
-            return None
+                rightmostIc, rightmostSite = icon.rightmostSite(self.sites.moduleIcon.att)
+                if rightmostIc is entryIc and text == "i":
+                    return "typeover"
+                # Allow only simple attributes to be typed
+                if text[0] != '.':
+                    return "reject"
+                elif text == '.' or text[1:].isidentifier():
+                    return "accept"
+                elif text[-1] in ' .' and text[1:-1].isidentifier():
+                    return AttrIcon(text[1:-1], self.window), text[-1]
+            return "reject"
         elif siteId[:12] == 'importsIcons':
             parent = entryIc.parent()
+            if isinstance(parent, listicons.StarIcon):
+                return "reject"
+            if parent is self and len(self.sites.importsIcons) == 1 and text == '*':
+                return listicons.StarIcon(self.window), None
+            if parent is self and text in ('as ', 'as,'):
+                return infixicon.AsIcon(self.window), text[-1]
             if parent is self or isinstance(parent, infixicon.AsIcon):
                 name = text.rstrip(' ')
                 if name == ',':
@@ -857,16 +1026,94 @@ class ImportFromIcon(icon.Icon):
                 if not name.isidentifier():
                     return "reject"
                 if text[-1] in (' ', ','):
-                    return IdentifierIcon(name, self.window), text[-1]
+                    if name in entryicon.keywords:
+                        return "reject"
+                    else:
+                        return IdentifierIcon(name, self.window), text[-1]
                 return "accept"
             elif text == ',':
                 return "comma"
+            elif onAttr and text[0] == 'a':
+                if isinstance(parent, IdentifierIcon) and parent.parent() is self:
+                    if text == 'as':
+                        return infixicon.AsIcon(self.window), None
+                    if text == 'a':
+                        return "accept"
+            return "reject"
+        return None
+
+    def highlightErrors(self, errHighlight):
+        # textEntryHandler prohibits typing of anything but correct syntax, but we
+        # (currently) allow snapping of illegal stuff for users to edit later.
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        moduleNameIcon = self.childAt('moduleIcon')
+        if isinstance(moduleNameIcon, RelativeImportIcon):
+            moduleNameIcon.errHighlight = None
+            moduleNameIcon = moduleNameIcon.childAt('argIcon')
+        if isinstance(moduleNameIcon, IdentifierIcon):
+            moduleNameIcon.errHighlight = None
+            attr = moduleNameIcon.childAt('attrIcon')
+            while attr is not None:
+                if not isinstance(attr, AttrIcon):
+                    attr.highlightErrors(icon.ErrorHighlight(
+                        "Not a valid format for a module name for import"))
+                    break
+                attr.errHighlight = None
+                attr = attr.childAt('attrIcon')
+        elif moduleNameIcon is not None:
+            moduleNameIcon.highlightErrors(icon.ErrorHighlight(
+                "Not a valid format for a module name for import"))
+        for ic in (site.att for site in self.sites.importsIcons if site.att is not None):
+            if isinstance(ic, IdentifierIcon):
+                ic.errHighlight = None
+                attr = ic.childAt('attrIcon')
+                if attr is not None:
+                    attr.highlightErrors(icon.ErrorHighlight(
+                        "Name must be an individual identifier (dotted "
+                            "names are not allowed)"))
+                    continue
+            elif isinstance(ic, infixicon.AsIcon):
+                ic.errHighlight = None
+                leftArg = ic.leftArg()
+                if leftArg is not None:
+                    if not isinstance(leftArg, IdentifierIcon):
+                        leftArg.highlightErrors(icon.ErrorHighlight(
+                            "Not a valid module name for import"))
+                        continue
+                    attr = leftArg.childAt('attrIcon')
+                    if attr is not None:
+                        attr.highlightErrors(icon.ErrorHighlight(
+                            "Name must be an individual identifier (dotted "
+                            "names are not allowed)"))
+                        continue
+                rightArg = ic.rightArg()
+                if rightArg is not None:
+                    if not isinstance(rightArg, IdentifierIcon):
+                        rightArg.highlightErrors(icon.ErrorHighlight(
+                            "Import alias must be an identifier"))
+                        continue
+                    rightArg.errHighlight = None
+                    rightArgAttr = rightArg.childAt('attrIcon')
+                    if rightArgAttr is not None:
+                        rightArgAttr.highlightErrors(icon.ErrorHighlight(
+                            "Import alias must be a valid identifier"))
+                        continue
+            elif isinstance(ic, listicons.StarIcon):
+                if len(self.sites.importsIcons) > 1:
+                    ic.highlightErrors(icon.ErrorHighlight(
+                        "* must stand alone (can not be part of list)"))
+                    continue
+                ic.errHighlight = None
+                arg = ic.arg()
+                if arg is not None:
+                    arg.highlightErrors(icon.ErrorHighlight(
+                            "* cannot be qualified"))
             else:
-                if text == 'a':
-                    return "accept"
-                elif text in ('as', 'as '):
-                    return infixicon.AsIcon(self.window), None
-                return "reject"
+                ic.highlightErrors(icon.ErrorHighlight(
+                    "Not a valid module name for import"))
 
     def setTypeover(self, idx, site=None):
         self.drawList = None  # Force redraw
@@ -950,9 +1197,9 @@ class ImportFromIcon(icon.Icon):
                 self.replaceChild(None, self.siteOf(imp))
         # Put the module name and imports in to separate pending arguments on the
         # entry icon
-        if importsIcons is None:
+        if moduleIcon is not None and importsIcons == [None]:
             entryIcon.appendPendingArgs([moduleIcon])
-        else:
+        elif importsIcons != [None]:
             entryIcon.appendPendingArgs([moduleIcon, importsIcons])
         return entryIcon
 
@@ -971,10 +1218,26 @@ class ImportFromIcon(icon.Icon):
             return self._becomeEntryIcon()
         return None
 
-class ModuleNameIcon(TextIcon):
-    def __init__(self, name, window=None, location=None):
-        TextIcon.__init__(self, name, window, location)
-        self.name = name
+class RelativeImportIcon(opicons.UnaryOpIcon):
+    def __init__(self, level, window=None, location=None):
+        opicons.UnaryOpIcon.__init__(self, '. ' * level, window, location)
+        self.level = level
+        self.suppressEmptyArgHighlight = True
+
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        # We lied to the UnaryOpIcon superclass about the text content to make it more
+        # readable  (. . . vs. ...), but we don't want that to go in to the entry icon
+        entryIcon, curWinPos = opicons.UnaryOpIcon.becomeEntryIcon(self, clickPos,
+            siteAfter)
+        entryIcon.text = '.' * self.level
+        entryIcon.setCursorPos((entryIcon.cursorPos + 1) // 2)
+        return entryIcon, curWinPos
+
+    def backspace(self, siteId, evt):
+        # We lied to the UnaryOpIcon superclass about the text content to make it more
+        # readable  (. . . vs. ...), but we don't want that to go in to the entry icon
+        self.window.backspaceIconToEntry(evt, self, self.level * '.',
+            pendingArgSite=siteId)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent site belonging to an ImportFrom icon
@@ -988,8 +1251,19 @@ class ModuleNameIcon(TextIcon):
         snapLists['conditional'] = [(*snapData, 'output', snapFn)]
         return snapLists
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("." * self.level)
+        arg = self.sites.argIcon.att
+        if arg is None:
+            return text
+        argText = arg.createSaveText(brkLvl, contNeeded, export)
+        text.concat(None, argText, contNeeded)
+        return text
+
     def clipboardRepr(self, offset, iconsToCopy):
-        return self._serialize(offset, iconsToCopy, name=self.name)
+        # Superclass UnaryOp specifies op keyword, which this does not have
+        return self._serialize(offset, iconsToCopy)
 
 class YieldIcon(icon.Icon):
     def __init__(self, window=None, location=None):
@@ -1009,7 +1283,7 @@ class YieldIcon(icon.Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -1037,6 +1311,7 @@ class YieldIcon(icon.Icon):
             # Commas
             self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -1190,12 +1465,12 @@ class RaiseIcon(icon.Icon):
             fromX = totalWidth - icon.OUTPUT_SITE_DEPTH
             self.sites.add('causeIcon', 'input', fromX, siteYOffset)
         else:
-            totalWidth = exceptOffset + icon.OUTPUT_SITE_DEPTH
+            totalWidth = exceptOffset + icon.OUTPUT_SITE_DEPTH + icon.EMPTY_ARG_WIDTH
         self.dragSiteDrawn = False
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needDragSite = toDragImage is not None and self.prevInSeq() is None
         if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight, fromWidth = self.bodySize
@@ -1224,6 +1499,7 @@ class RaiseIcon(icon.Icon):
                 importOffset = bodyOffset + bodyWidth - 1 + self.exceptWidth - 1
                 self.drawList.append(((importOffset, self.sites.seqIn.yOffset - 1), img))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         self.dragSiteDrawn = needDragSite
 
     def addFrom(self):
@@ -1251,7 +1527,7 @@ class RaiseIcon(icon.Icon):
     def doLayout(self, left, top, layout):
         self.exceptWidth = layout.exceptWidth
         bodyWidth, bodyHeight, fromWidth = self.bodySize
-        width = icon.dragSeqImage.width - 1 + bodyWidth
+        width = icon.dragSeqImage.width - 1 + bodyWidth + icon.EMPTY_ARG_WIDTH
         if self.hasFrom:
             width += -1 + self.exceptWidth-1 + fromWidth
         self.rect = (left, top, left + width, top + bodyHeight)
@@ -1489,7 +1765,7 @@ class DecoratorIcon(icon.Icon):
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -1617,19 +1893,51 @@ def seriesStmtToEntryIcon(ic, text):
         ic.replaceWith(entryIcon)
     return entryIcon
 
-def _moduleNameFromAttrs(identOrAttrIcon):
-    isIdentifier = identOrAttrIcon.__class__ in (IdentifierIcon, ModuleNameIcon)
-    isAttribute = isinstance(identOrAttrIcon, AttrIcon)
-    if not isIdentifier and not isAttribute:
+def moduleNameFromIcons(ic):
+    if isinstance(ic, RelativeImportIcon):
+        arg = ic.arg()
+        icName = ic.level * '.'
+    elif isinstance(ic, IdentifierIcon):
+        arg = ic.sites.attrIcon.att
+        icName = ic.name
+    elif isinstance(ic, AttrIcon):
+        arg = ic.sites.attrIcon.att
+        icName = '.' + ic.Name
+    else:
+        return None  # Bad icon type
+    if arg is None:
+        return icName
+    argName = moduleNameFromIcons(arg)
+    if argName is None:
+        return None  # Bad icon type somewhere within arg
+    return icName + argName
+
+def moduleNameToIcons(name, level, window):
+    if name is None:
+        baseIdentifier = None
+    else:
+        components = name.split('.')
+        baseIdentName = components[0]
+        baseIdentifier = moduleIdToIdentIcon(baseIdentName, window)
+        rightIc = baseIdentifier
+        for component in components[1:]:
+            attr = AttrIcon(component, window)
+            rightIc.replaceChild(attr, 'attrIcon')
+            rightIc = attr
+    if level == 0:
+        return baseIdentifier
+    relativeIcon = RelativeImportIcon(level, window)
+    relativeIcon.replaceChild(baseIdentifier, 'argIcon')
+    return relativeIcon
+
+def moduleIdToIdentIcon(name, window):
+    """Module names aren't ast nodes.  They're just components of the Import and
+    ImportFrom nodes, so the $Empty$ macro function doesn't get executed for
+    them, which is what normally substitutes "None"."""
+    if name == filefmt.EMPTY_IDENT_NAME:
         return None
-    name = ("." + identOrAttrIcon.name) if isAttribute else identOrAttrIcon.name
-    attrIcon = identOrAttrIcon.sites.attrIcon.att
-    if attrIcon is None:
-        return name
-    attrString = _moduleNameFromAttrs(identOrAttrIcon.sites.attrIcon.att)
-    if attrString is None:
-        return None
-    return name + attrString
+    else:
+        return IdentifierIcon(name, window)
 
 # Getting resources (particularly icon class definitions) from other icon files requires
 # circular imports, unfortunately.  Here, the import is deferred far enough down the file
@@ -1700,11 +2008,11 @@ def createImportIconFromAst(astNode, window):
     aliases = []
     for alias in astNode.names:
         if alias.asname is None:
-            aliases.append(IdentifierIcon(alias.name, window))
+            aliases.append(moduleNameToIcons(alias.name, 0, window))
         else:
             asIcon = infixicon.AsIcon(window)
-            asIcon.replaceChild(IdentifierIcon(alias.name, window), 'leftArg')
-            asIcon.replaceChild(IdentifierIcon(alias.asname, window), 'rightArg')
+            asIcon.replaceChild(moduleNameToIcons(alias.name, 0, window), 'leftArg')
+            asIcon.replaceChild(moduleIdToIdentIcon(alias.asname, window), 'rightArg')
             aliases.append(asIcon)
     topIcon.insertChildren(aliases, "values", 0)
     return topIcon
@@ -1712,20 +2020,16 @@ icon.registerIconCreateFn(ast.Import, createImportIconFromAst)
 
 def createImportFromIconFromAst(astNode, window):
     topIcon = ImportFromIcon(window)
-    if astNode.level != 0:
-        moduleName = "" if astNode.module is None else astNode.module
-        moduleNameIcon = ModuleNameIcon((astNode.level * '.') + moduleName, window)
-    else:
-        moduleNameIcon = IdentifierIcon(astNode.module, window)
+    moduleNameIcon = moduleNameToIcons(astNode.module, astNode.level, window)
     topIcon.replaceChild(moduleNameIcon, 'moduleIcon')
     aliases = []
     for alias in astNode.names:
         if alias.asname is None:
-            aliases.append(IdentifierIcon(alias.name, window))
+            aliases.append(moduleIdToIdentIcon(alias.name, window))
         else:
             asIcon = infixicon.AsIcon(window)
-            asIcon.replaceChild(IdentifierIcon(alias.name, window), 'leftArg')
-            asIcon.replaceChild(IdentifierIcon(alias.asname, window), 'rightArg')
+            asIcon.replaceChild(moduleIdToIdentIcon(alias.name, window), 'leftArg')
+            asIcon.replaceChild(moduleIdToIdentIcon(alias.asname, window), 'rightArg')
             aliases.append(asIcon)
     topIcon.insertChildren(aliases, "importsIcons", 0)
     return topIcon

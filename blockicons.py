@@ -154,7 +154,7 @@ class WithIcon(icon.Icon):
         seqOutIndent = comn.BLOCK_INDENT
         self.sites.add('seqOut', 'seqOut', seqX + seqOutIndent, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
-        totalWidth = icon.dragSeqImage.width + bodyWidth
+        totalWidth = icon.dragSeqImage.width + bodyWidth + icon.LIST_EMPTY_ARG_WIDTH
         self.valueList = iconlayout.ListLayoutMgr(self, 'values', bodyWidth+1,
                 siteYOffset, simpleSpine=True)
         x, y = (0, 0) if location is None else location
@@ -164,7 +164,7 @@ class WithIcon(icon.Icon):
             self.blockEnd = icon.BlockEnd(self, window)
             self.sites.seqOut.attach(self, self.blockEnd)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -196,6 +196,7 @@ class WithIcon(icon.Icon):
             # Commas
             self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
         if temporaryDragSite:
             self.drawList = None
 
@@ -227,7 +228,7 @@ class WithIcon(icon.Icon):
 
     def calcLayouts(self):
         bodyWidth, bodyHeight = self.bodySize
-        valueListLayouts = self.valueList.calcLayouts()
+        valueListLayouts = self.valueList.calcLayouts(argRequired=True)
         layouts = []
         for valueListLayout in valueListLayouts:
             layout = iconlayout.Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
@@ -254,31 +255,61 @@ class WithIcon(icon.Icon):
     def textEntryHandler(self, entryIc, text, onAttr):
         siteId = self.siteOf(entryIc, recursive=True)
         if siteId[:6] == 'values':
-            parent = entryIc.parent()
-            if isinstance(parent, infixicon.AsIcon):
+            siteIcon = self.childAt(siteId)
+            if isinstance(siteIcon, infixicon.AsIcon):
                 # Enforce identifiers-only on right argument of "as"
-                name = text.rstrip(' ')
-                if name == ',':
-                    return "comma"
-                name = name.rstrip(',')
-                if not name.isidentifier():
-                    return "reject"
-                if text[-1] in (' ', ','):
-                    return nameicons.IdentifierIcon(name, self.window), text[-1]
-                return "accept"
+                asSiteId = siteIcon.siteOf(entryIc, recursive=True)
+                if asSiteId == 'rightArg':
+                    if text == ',':
+                        return "comma"
+                    if entryIc.parent() is not siteIcon:
+                        return "reject"
+                    name = text.rstrip(' ,')
+                    if not name.isidentifier():
+                        return "reject"
+                    if text[-1] in (' ', ','):
+                        return nameicons.IdentifierIcon(name, self.window), text[-1]
+                    return "accept"
+                else:  # Right arg of as can be an arbitrary expression, allow anything
+                    return None
             elif text == ',':
                 return "comma"
-            elif onAttr:
+            elif siteIcon is entryIc or \
+                    onAttr and entryicon.findEnclosingSite(entryIc)[0] is self:
                 # Allow "as" to be typed
-                if text == 'a':
-                    return "accept"
-                elif text == 'as':
+                if text == 'as' and onAttr:
                     return infixicon.AsIcon(self.window), None
                 delim = text[-1]
                 text = text[:-1]
                 if text == 'as' and delim in entryicon.emptyDelimiters:
                     return infixicon.AsIcon(self.window), delim
         return None
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        for ic in (site.att for site in self.sites.values if site.att is not None):
+            if isinstance(ic, infixicon.AsIcon):
+                ic.errHighlight = None
+                leftArg = ic.leftArg()
+                if leftArg is not None:
+                    leftArg.highlightErrors(None)  # Allow any expression
+                rightArg = ic.rightArg()
+                if rightArg is not None:
+                    if not isinstance(rightArg, nameicons.IdentifierIcon):
+                        rightArg.highlightErrors(icon.ErrorHighlight(
+                            "Must be an identifier"))
+                        continue
+                    rightArg.errHighlight = None
+                    rightArgAttr = rightArg.childAt('attrIcon')
+                    if rightArgAttr is not None:
+                        rightArgAttr.highlightErrors(icon.ErrorHighlight(
+                            "Must be an identifier with nothing attached"))
+                        continue
+            else:
+                ic.highlightErrors(None)  # Allow any expression
 
     def backspace(self, siteId, evt):
         siteName, index = iconsites.splitSeriesSiteId(siteId)
@@ -373,13 +404,14 @@ class WhileIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqX + comn.BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         x, y = (0, 0) if location is None else location
-        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width-1, y + bodyHeight)
+        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width-1 + \
+            icon.EMPTY_ARG_WIDTH, y + bodyHeight)
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
             self.sites.seqOut.attach(self, self.blockEnd)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -404,6 +436,7 @@ class WhileIcon(icon.Icon):
                         (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         if temporaryDragSite:
             self.drawList = None
 
@@ -413,7 +446,7 @@ class WhileIcon(icon.Icon):
 
     def doLayout(self, left, top, layout):
         width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1
+        width += icon.dragSeqImage.width - 1 + icon.EMPTY_ARG_WIDTH
         self.rect = (left, top, left + width, top + height)
         layout.updateSiteOffsets(self.sites.seqInsert)
         layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
@@ -514,7 +547,7 @@ class ForIcon(icon.Icon):
             self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
             self.sites.seqOut.attach(self, self.blockEnd)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needDragSite = toDragImage is not None and self.prevInSeq() is None
         if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight, inWidth = self.bodySize
@@ -550,6 +583,7 @@ class ForIcon(icon.Icon):
             self.drawList += self.iterList.drawListCommas(iterOffset, cntrSiteY)
             self.drawList += self.iterList.drawSimpleSpine(iterOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
         self.dragSiteDrawn = needDragSite
 
     def snapLists(self, forCursor=False):
@@ -584,8 +618,8 @@ class ForIcon(icon.Icon):
 
     def calcLayouts(self):
         bodyWidth, bodyHeight, inWidth = self.bodySize
-        tgtListLayouts = self.tgtList.calcLayouts()
-        iterListLayouts = self.iterList.calcLayouts()
+        tgtListLayouts = self.tgtList.calcLayouts(argRequired=True)
+        iterListLayouts = self.iterList.calcLayouts(argRequired=True)
         layouts = []
         for tgtListLayout, iterListLayout in iconlayout.allCombinations((tgtListLayouts,
                 iterListLayouts)):
@@ -670,14 +704,6 @@ class ForIcon(icon.Icon):
         name, idx = iconsites.splitSeriesSiteId(siteId)
         if name != 'targets':
             return None
-        if text[0] == '*' and entryIc.parent() == self:
-            if text == '*':
-                return listicons.StarIcon(self.window), None
-            textStripped = text[:-1]
-            delim = text[-1]
-            if textStripped == '*' and entryicon.opDelimPattern.match(delim):
-                return listicons.StarIcon(self.window), delim
-            return None
         if idx != len(self.sites.targets)-1:
             return None
         iconOnTgtSite = self.sites.targets[idx].att
@@ -689,6 +715,13 @@ class ForIcon(icon.Icon):
         if rightmostIc is entryIc and text == "i" and self.typeoverIdx == 0:
             return "typeover"
         return None
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            self.errHighlight = None
+            listicons.highlightSeriesErrorsForContext(self.sites.targets, 'store')
+        else:
+            icon.Icon.highlightErrors(self, errHighlight)
 
     def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
         return self._placeArgsCommon(placeList, startSiteId, True)
@@ -840,14 +873,15 @@ class IfIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqX + comn.BLOCK_INDENT, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         x, y = (0, 0) if location is None else location
-        width = max(seqX + comn.BLOCK_INDENT + 1, bodyWidth + icon.dragSeqImage.width-1)
+        width = max(seqX + comn.BLOCK_INDENT + 1, bodyWidth +
+            icon.dragSeqImage.width-1 + icon.EMPTY_ARG_WIDTH)
         self.rect = (x, y, x + width, y + bodyHeight)
         self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
             self.sites.seqOut.attach(self, self.blockEnd)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -856,7 +890,7 @@ class IfIcon(icon.Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
+            img = Image.new('RGBA', (comn.rectWidth(self.rect) - icon.EMPTY_ARG_WIDTH,
                     comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             boxLeft = icon.dragSeqImage.width - 1
             txtImg = icon.iconBoxedText("if", icon.boldFont, icon.KEYWORD_COLOR)
@@ -871,6 +905,7 @@ class IfIcon(icon.Icon):
                         (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         if temporaryDragSite:
             self.drawList = None
 
@@ -881,7 +916,8 @@ class IfIcon(icon.Icon):
     def doLayout(self, left, top, layout):
         layout.updateSiteOffsets(self.sites.seqInsert)
         width, height = self.bodySize
-        width = max(comn.BLOCK_INDENT + 3, width) + icon.dragSeqImage.width - 1
+        width = max(comn.BLOCK_INDENT + 3, width) + icon.dragSeqImage.width - 1 + \
+            icon.EMPTY_ARG_WIDTH
         self.rect = (left, top, left + width, top + height)
         layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
         self.layoutDirty = False
@@ -961,10 +997,11 @@ class ElifIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
         self.sites.add('seqInsert', 'seqInsert', seqX, siteYOffset)
         x, y = (0, 0) if location is None else location
-        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
+        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1 +
+            icon.EMPTY_ARG_WIDTH, y + bodyHeight)
         self.parentIf = None
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -988,12 +1025,13 @@ class ElifIcon(icon.Icon):
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         if temporaryDragSite:
             self.drawList = None
 
     def doLayout(self, left, top, layout):
         width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1
+        width += icon.dragSeqImage.width - 1 + icon.EMPTY_ARG_WIDTH
         self.rect = (left, top, left + width, top + height)
         dedentAdj = icon.dragSeqImage.width + ELSE_DEDENT
         layout.updateSiteOffsets(self.sites.seqInsert, parentSiteDepthAdj=-dedentAdj)
@@ -1092,7 +1130,7 @@ class ElseIcon(icon.Icon):
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -1209,7 +1247,7 @@ class TryIcon(icon.Icon):
             self.sites.seqOut.attach(self, self.blockEnd)
         self.exceptIcons = []
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -1309,7 +1347,7 @@ class ExceptIcon(icon.Icon):
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -1438,7 +1476,7 @@ class FinallyIcon(icon.Icon):
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
             temporaryDragSite = False
         else:
@@ -1551,7 +1589,7 @@ class DefOrClassIcon(icon.Icon):
             self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
             self.sites.seqOut.attach(self, self.blockEnd)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needDragSite = toDragImage is not None and self.prevInSeq() is None
         if self.drawList is None or self.dragSiteDrawn and not needDragSite:
             bodyWidth, bodyHeight = self.bodySize
@@ -1590,6 +1628,7 @@ class DefOrClassIcon(icon.Icon):
                     self.argList.spineHeight)
                 self.drawList.append(((rParenOffset, 0), rParenImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         self.dragSiteDrawn = needDragSite
 
     def argIcons(self):
@@ -1750,7 +1789,8 @@ class DefOrClassIcon(icon.Icon):
         elif siteId[:8] == 'argIcons':
             if text == '*' and not onAttr:
                 return "accept"
-            if text[0] == '*' and len(text) == 2 and (text[1].isalnum() or text[1] == ' '):
+            if text[0] == '*' and len(text) == 2 and (text[1].isalnum() or
+                    text[1] in ' ,'):
                 return listicons.StarIcon(self.window), text[1]
             if text[:2] == '**':
                 return listicons.StarStarIcon(self.window), None
@@ -1954,14 +1994,56 @@ class ClassDefIcon(DefOrClassIcon):
             # Let the parent handler enforce name
             return DefOrClassIcon.textEntryHandler(self, entryIc, text, onAttr)
         elif siteId[:8] == 'argIcons':
-            # Enforce names only
-            if not (text.isidentifier() or text in "), " or text[:-1].isidentifier() and \
-                    text[-1] in "), "):
-                # The only valid arguments are identifier and comma
-                return "reject"
+            entryOnIc = entryIc.parent() is self
+            if entryOnIc and text == '*':
+                return "accept"
+            if entryOnIc and text[0] == '*' and len(text) == 2 and \
+                    (text[1].isalnum() or text[1] == ' '):
+                return listicons.StarIcon(self.window), text[1]
+            if entryOnIc and text[:2] == '**':
+                return listicons.StarStarIcon(self.window), None
+            if isinstance(entryIc.parent(), nameicons.IdentifierIcon) and \
+                    text[0] == '=' and len(text) <= 2 and onAttr:
+                delim = text[1] if len(text) == 2 else None
+                if delim is None or delim in entryicon.emptyDelimiters:
+                    attachedIc = entryIc.attachedIcon()
+                    if isinstance(attachedIc, nameicons.IdentifierIcon) and \
+                            attachedIc.parent() is self:
+                        return listicons.ArgAssignIcon(self.window), delim
             # Typeover for end-paren is handled by the general code
             return None
         return None
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        nameIcon = self.sites.nameIcon.att
+        if nameIcon is not None:
+            if isinstance(nameIcon, nameicons.IdentifierIcon):
+                nameIcon.errHighlight = None
+                attr = nameIcon.sites.attrIcon.att
+                if attr is not None:
+                    attr.highlightErrors(icon.ErrorHighlight(
+                        "Class definition name field must be unqualified name"))
+            else:
+                errHighlight = icon.ErrorHighlight(
+                    "Class definition name field must be identifier")
+                nameIcon.highlightErrors(errHighlight)
+        if self.argList is not None:
+            # Highlight out-of-order use of positional arguments after keywords
+            kwArgEncountered = False
+            for arg in (site.att for site in self.sites.argIcons if site.att is not None):
+                if isinstance(arg, (listicons.StarStarIcon, listicons.ArgAssignIcon)):
+                    kwArgEncountered = True
+                    errHighlight = None
+                elif kwArgEncountered:
+                    errHighlight = icon.ErrorHighlight(
+                        "Positional argument follows keyword argument")
+                else:
+                    errHighlight = None
+                arg.highlightErrors(errHighlight)
 
     def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
         # Sleazy hack: temporarily add argIcons site and then the method used for DefIcon
@@ -2018,6 +2100,79 @@ class DefIcon(DefOrClassIcon):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
          createBlockEnd=False)
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        nameIcon = self.sites.nameIcon.att
+        if nameIcon is not None:
+            if isinstance(nameIcon, nameicons.IdentifierIcon):
+                nameIcon.errHighlight = None
+                attr = nameIcon.sites.attrIcon.att
+                if attr is not None:
+                    attr.highlightErrors(icon.ErrorHighlight(
+                        "Function def name field must be unqualified name"))
+            else:
+                errHighlight = icon.ErrorHighlight(
+                    "Function def name field must be identifier")
+                nameIcon.highlightErrors(errHighlight)
+        if self.argList is not None:
+            endOfPositionalArgs = processedStar = processedStarStar = False
+            for arg in (site.att for site in self.sites.argIcons if site.att is not None):
+                checkIdentifier = None
+                if processedStarStar:
+                    arg.highlightErrors(icon.ErrorHighlight(
+                        "** ends function parameter list"))
+                    continue
+                if isinstance(arg, listicons.StarStarIcon):
+                    if processedStarStar:
+                        arg.highlightErrors(icon.ErrorHighlight(
+                            "Only one ** operator allowed"))
+                        continue
+                    endOfPositionalArgs = True
+                    processedStarStar = True
+                    checkIdentifier = arg.arg()
+                elif isinstance(arg, listicons.ArgAssignIcon):
+                    endOfPositionalArgs = True
+                    checkIdentifier = arg.leftArg()
+                    if arg.rightArg() is not None:
+                        arg.rightArg().highlightErrors(None)
+                elif isinstance(arg, listicons.StarIcon):
+                    if processedStar:
+                        arg.highlightErrors(icon.ErrorHighlight(
+                            "Only one * operator allowed in function def parameters"))
+                        continue
+                    if endOfPositionalArgs:
+                        arg.highlightErrors(icon.ErrorHighlight(
+                            "Positional arguments (as processed by '*') cannot follow "
+                            "optional arguments"))
+                        continue
+                    checkIdentifier = arg.arg()
+                    endOfPositionalArgs = True
+                    processedStar = True
+                elif isinstance(arg, nameicons.IdentifierIcon):
+                    if endOfPositionalArgs:
+                        arg.highlightErrors(icon.ErrorHighlight(
+                            "Positional arguments cannot follow optional arguments or *"))
+                        continue
+                    checkIdentifier = arg
+                else:
+                    arg.highlightErrors(icon.ErrorHighlight(
+                        "Function def parameter must be name"))
+                    continue
+                arg.errHighlight = None
+                if checkIdentifier is not None:
+                    if not isinstance(checkIdentifier, nameicons.IdentifierIcon):
+                        checkIdentifier.highlightErrors(icon.ErrorHighlight(
+                            "Function def parameter must be name"))
+                        continue
+                    checkIdentifier.errHighlight = None
+                    attr = checkIdentifier.sites.attrIcon.att
+                    if attr is not None:
+                        attr.highlightErrors(icon.ErrorHighlight(
+                            "Function def parameter must be unqualified name"))
+
     def createAst(self):
         nameIcon = self.sites.nameIcon.att
         if nameIcon is None:
@@ -2060,12 +2215,12 @@ class LambdaIcon(icon.Icon):
         argX = icon.inSiteImage.width - 1 + bodyWidth
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, siteYOffset,
             simpleSpine=True)
-        totalWidth = argX + self.argList.width + self.colonWidth
+        totalWidth = argX + self.argList.width + self.colonWidth + icon.EMPTY_ARG_WIDTH
         self.sites.add('exprIcon', 'input', totalWidth, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
                 self.sites.seqOut.att is None or toDragImage is not None)
@@ -2096,6 +2251,7 @@ class LambdaIcon(icon.Icon):
             colonX = bodyLeft + bodyWidth - 1 + self.argList.width - 1
             self.drawList.append(((colonX, bodyTopY), colonImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
 
     def argIcons(self):
         return [site.att for site in self.sites.argIcons]
@@ -2117,7 +2273,7 @@ class LambdaIcon(icon.Icon):
         heightAbove = bodyHeight // 2
         heightBelow = bodyHeight - heightAbove
         width = icon.outSiteImage.width - 1 + bodyWidth - 1 + self.argList.width - 1 + \
-            self.colonWidth - 1
+            self.colonWidth + icon.EMPTY_ARG_WIDTH
         if self.argList.simpleSpineWillDraw():
             heightAbove = max(heightAbove, self.argList.spineTop)
             heightBelow = max(heightBelow, self.argList.spineHeight -

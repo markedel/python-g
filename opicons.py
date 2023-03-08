@@ -94,8 +94,7 @@ binOpPrecedence = {'+':10, '-':10, '*':11, '/':11, '//':11, '%':11, '**':14,
  '<<':9, '>>':9, '|':6, '^':7, '&':8, '@':11, 'and':3, 'or':2, 'in':5, 'not in':5,
  'is':5, 'is not':5, '<':5, '<=':5, '>':5, '>=':5, '==':5, '!=':5, '=':-1, ':':-1}
 
-unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4, '*':-1, '**':-1, 'yield from':-1,
- 'await':-1}
+unaryOpPrecedence = {'+':12, '-':12, '~':13, 'not':4}
 
 unaryOpFn = {'+':operator.pos, '-':operator.neg, '~':operator.inv, 'not':operator.not_,
  '*':lambda a:a, '**': lambda a:a, 'await': lambda a:a}
@@ -132,7 +131,7 @@ class UnaryOpIcon(icon.Icon):
     def __init__(self, op, window, location=None):
         icon.Icon.__init__(self, window)
         self.operator = op
-        self.precedence = unaryOpPrecedence[op]
+        self.precedence = unaryOpPrecedence.get(op, -1)
         if isKwdPattern.fullmatch(op):
             self.font = icon.boldFont
             self.color = icon.KEYWORD_COLOR
@@ -154,20 +153,18 @@ class UnaryOpIcon(icon.Icon):
             x, y = 0, 0
         else:
             x, y = location
-        self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width, y + bodyHeight)
+        self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width + icon.EMPTY_ARG_WIDTH,
+            y + bodyHeight)
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-             comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
-#            width, height = icon.getTextSize(self.operator, self.font)
+            img = Image.new('RGBA', (comn.rectWidth(self.rect) - icon.EMPTY_ARG_WIDTH,
+                comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyLeft = icon.outSiteImage.width - 1
             bodyWidth, bodyHeight = self.bodySize
-#            bodyWidth = width + 2 * icon.TEXT_MARGIN
-#            bodyHeight = height + 2 * icon.TEXT_MARGIN
             draw = ImageDraw.Draw(img)
             draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth  - 1, bodyHeight - 1),
              fill=comn.ICON_BG_COLOR, outline=comn.OUTLINE_COLOR)
@@ -189,6 +186,8 @@ class UnaryOpIcon(icon.Icon):
             draw.text((textLeft, textTop), self.operator, font=self.font, fill=self.color)
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
+        if not hasattr(self, 'suppressEmptyArgHighlight'):
+            self._drawEmptySites(toDragImage, clip)
 
     def arg(self):
         return self.sites.argIcon.att
@@ -197,7 +196,7 @@ class UnaryOpIcon(icon.Icon):
         width, height = self.bodySize
         width += icon.outSiteImage.width - 1
         top = outSiteY - height // 2
-        self.rect = (outSiteX, top, outSiteX + width, top + height)
+        self.rect = (outSiteX, top, outSiteX + width + icon.EMPTY_ARG_WIDTH, top + height)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         self.layoutDirty = False
 
@@ -211,7 +210,7 @@ class UnaryOpIcon(icon.Icon):
         for argLayout in argLayouts:
             layout = iconlayout.Layout(self, width, height, height // 2)
             layout.addSubLayout(argLayout, 'argIcon', width-1, 0)
-            if argLayout is None:
+            if argLayout is None and not hasattr(self, 'suppressEmptyArgHighlight'):
                 layout.width += icon.EMPTY_ARG_WIDTH
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
@@ -303,7 +302,7 @@ class BinOpIcon(icon.Icon):
         self.depthWidth = 0
         x, y = (0, 0) if location is None else location
         width, height = self._size()
-        self.rect = (x, y, x + width, y + height)
+        self.rect = (x, y, x + width + icon.EMPTY_ARG_WIDTH, y + height)
         siteYOffset = opHeight // 2
         self.sites.add('output', 'output', 0, siteYOffset)
         self.sites.add('leftArg', 'input', 0, siteYOffset)
@@ -332,7 +331,7 @@ class BinOpIcon(icon.Icon):
     def rightArg(self):
         return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         atTop = self.parent() is None
         suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
         temporaryOutputSite = suppressSeqSites and atTop and self.leftArg() is None
@@ -383,6 +382,7 @@ class BinOpIcon(icon.Icon):
                 rParenY = siteY - rParenImage.height // 2
                 self.drawList.append(((rParenX, rParenY), rParenImage))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         if temporaryOutputSite or suppressSeqSites:
             self.drawList = None  # Don't keep after drawing (see above)
 
@@ -432,7 +432,7 @@ class BinOpIcon(icon.Icon):
         width, height = self._size()
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
-        self.rect = (x, y, x + width, y + height)
+        self.rect = (x, y, x + width + icon.EMPTY_ARG_WIDTH, y + height)
         self.drawList = None
         self.layoutDirty = False
 
@@ -689,7 +689,7 @@ class DivideIcon(icon.Icon):
         height = topHeight + bottomHeight + 3
         return width, height
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needSeqSites = self.parent() is None and toDragImage is None
         needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
          self.sites.seqOut.att is None or toDragImage is not None)
@@ -725,6 +725,7 @@ class DivideIcon(icon.Icon):
                 img.paste(icon.outSiteImage, (0, cntrY - icon.outSiteImage.height//2))
             self.drawList.append(((0, bodyTop), img))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.topArgSize = layout.topArgSize
@@ -878,7 +879,7 @@ class IfExpIcon(icon.Icon):
         self.depthWidth = 0
         x, y = (0, 0) if location is None else location
         width, height = self._size()
-        self.rect = (x, y, x + width, y + height)
+        self.rect = (x, y, x + width + icon.EMPTY_ARG_WIDTH, y + height)
         siteYOffset = height // 2
         self.sites.add('output', 'output', 0, siteYOffset)
         self.sites.add('trueExpr', 'input', 0, siteYOffset)
@@ -912,7 +913,7 @@ class IfExpIcon(icon.Icon):
     def rightArg(self):
         return self.sites.falseExpr.att
 
-    def draw(self, toDragImage=None, location=None, clip=None, style=None):
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
         atTop = self.parent() is None
         suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
         temporaryOutputSite = suppressSeqSites and atTop and self.leftArg() is None
@@ -979,6 +980,7 @@ class IfExpIcon(icon.Icon):
                 rParenX = elseX + elseWidth-1 + self.falseExprWidth-1
                 self.drawList.append(((rParenX, 0), rParenImage))
         self._drawFromDrawList(toDragImage, location, clip, style)
+        self._drawEmptySites(toDragImage, clip)
         if temporaryOutputSite or suppressSeqSites:
             self.drawList = None  # Don't keep after drawing (see above)
 
@@ -1030,7 +1032,7 @@ class IfExpIcon(icon.Icon):
         width, height = self._size()
         x = outSiteX - self.sites.output.xOffset
         y = outSiteY - self.sites.output.yOffset
-        self.rect = (x, y, x + width, y + height)
+        self.rect = (x, y, x + width + icon.EMPTY_ARG_WIDTH, y + height)
         self.drawList = None
         self.layoutDirty = False
 
