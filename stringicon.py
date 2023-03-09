@@ -745,7 +745,7 @@ class StringIcon(icon.Icon):
             quote = self.strType[1] + (self.quote if len(self.quote) == 1 else 'x')
         text = quote + self.string
         currentHeight = 0
-        startWidth = len(text)
+        startWidth = min(len(text), int(self.window.margin // charWidth))
         minWidth = min(int(math.sqrt(startWidth)), (self.window.margin // charWidth) // 2)
         minWidth = max(min(15, startWidth), minWidth)
         words = comn.splitWords(text)
@@ -755,7 +755,7 @@ class StringIcon(icon.Icon):
         else:
             widths = []
             lineLists = []
-            for width in range(len(text)+1, minWidth-1, -1):
+            for width in range(startWidth+1, minWidth-1, -1):
                 lines = comn.wordWrap(words, width)
                 if len(lines) > currentHeight:
                     for i in range(len(lines) - currentHeight):
