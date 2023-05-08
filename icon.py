@@ -1886,13 +1886,18 @@ def createFromAst(astNode, window):
     # If the ast has property iconCreationFunction, a user-defined macro has attached
     # its own function for creating an icon.  Pass the node to that function instead of
     # the normal one for creating icons for the given AST type
-    if hasattr(astNode, 'iconCreationFunction'):
-        return astNode.iconCreationFunction(astNode, window)
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        if iconCreateFn is not None:
+            return iconCreateFn(astNode, macroArgs, argAsts, window)
     # Look up the creation function for the given AST type, call it, and return the result
     creationFn = astCreationFunctions.get(astNode.__class__)
     if creationFn is None:
         return astDecodeFallback(astNode, window)
     return creationFn(astNode, window)
+
+def createIconsFromBodyAsts(bodyAsts, window):
+    return astCreationFunctions["bodyAsts"](bodyAsts, window)
 
 def placementListIter(placeList, stopAfterIdx=None, stopAfterSeriesIdx=None,
         includeEmptySites=False, includeEmptySeriesSites=True):

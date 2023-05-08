@@ -2,9 +2,10 @@ import ast, astpretty
 import re
 import io
 import tokenize
-import textwrap
 import numbers
+import tkinter.messagebox
 import comn
+import icon
 
 SINGLE_QUOTE_STRING = 1
 DOUBLE_QUOTE_STRING = 2
@@ -17,17 +18,40 @@ STMT_COMMENT_INDENT = 4
 # Attach per-icon comments as statement comments until display/edit code catches up
 NO_ICON_COMMENTS = True
 
-EMPTY_IDENT_NAME = 'xxx_empty_arg_xxx'
+# Base name for identifier substituted for $Entry$ and $Ctx$ macros
+PLACEHOLDER_NAME_TEMPLATE = "___pyg_placeholder_ident_"
+placeholderNamePattern = re.compile("%s(\\d+)" % PLACEHOLDER_NAME_TEMPLATE)
 
-posMacroPattern = re.compile("(([-+])\\d*)(([-+])\\d*)")
+# Variable names used for faking out the Python parser to parse free attributes,
+# function call, and comprehensions
+ATTR_PARSE_STUB = '___pyg_attr_parse_stub'
+FN_CALL_PARSE_STUB = '___pyg_fn_call_parse_stub'
+CPRH_PARSE_STUB = '___pyg_cprh_parse_stub'
+
+# Letter codes used in Ctx, Entry, and @ macros; to drive parsing of macro-paren-enclosed
+# code (code that Python considers incompatible with the parent context and would not
+# be able to parse):
+#   a   attribute
+#   s   as clause
+#   d   dictionary element
+#   e   expression
+#   f   function argument assignment or **
+# In Ctx and Entry macros, omitting the parse context type implies 'e'.
+macroArgContextTypes = {'a', 's', 'd', 'c', 'e', 'f'}
+
+# Dark Unicode arrow for inserting in code lines to show the location of errors in error
+# dialogs (Python's normal method using a caret is problmatic due to proportional fonts).
+ERR_START_ARROW = '\U0001F882'
+ERR_END_ARROW = '\U0001F880'
 
 class MacroParser:
-    macroPattern = re.compile("\\$[^$]+\\$")
-    leftArgOpRe = re.compile(
+    macroPattern = re.compile("\\$([^$]+)\\$")
+    posMacroPattern = re.compile("@(([-+])\\d*)(([-+])\\d*)(:([asdcen])?)?(\\()?")
+    leftArgOpPattern = re.compile(
         "\\+|-|/|%|\\*|<|>|\\||\\^|&|is|in|and|or|if|=|!=|\\(|\\.|\\[")
 
     def __init__(self):
-        self.macroList = {'Empty': (EMPTY_IDENT_NAME, lambda n, w: None)}
+        self.macroList = {}
 
     def addMacro(self, name, subs="", iconCreateFn=None):
         """Add a macro to annotate and extend the save-file and pasted-text format beyond
@@ -49,41 +73,56 @@ class MacroParser:
         To reference a python construct inserted by the macro, the substitution text
         should place a '$' character before the item to be marked.  The '$' will be
         removed in the substitution process, and the macro data will be associated
-        with the python code that followed it in the inserted text.  iconCreateFn
-        should be a function with parameters for astNode and window.  Macro name and
-        macro arguments are attached to astNode as properties (macroName, macroArgs)
-        (see ... for details)"""
+        with the python code that followed it in the inserted text.  Some macros can also
+        accept code arguments.  Code arguments are introduced by adding a right paren
+        before the ending $, and then either continued with $)($ or terminated with a
+        matching $)$.  Code arguments are passed to the icon creation function in
+        (annotated) AST form.  iconCreateFn should be a function with parameters for
+        astNode, macroArgs, argAsts, and window."""
         self.macroList[name] = subs, iconCreateFn
 
-    def expandMacros(self, text):
-        """Takes text in python_g clipboard/save-file text format, expands macros and
-        returns three items:
+    def expandMacros(self, text, startIdx=0, startLineNum=1):
+        """Takes text in python_g clipboard/save-file text format, expands macros until
+        either the end of text or $($ or $@$ macro.  Returns four items:
             1) The macro-expanded text
             2) An object for looking up macro annotation (name, arguments, and icon
                creation function) given an AST node resulting from parsing the text.
-            3) A list whose index is line numbers in the macro-expanded version of the
-               text and whose content is the corresponding line number in the original
-               text (before expansion)."""
+            3) A list whose index is line number in the macro-expanded version of the
+               text and whose content is line number in the original ext (before
+               expansion).
+            4) The ending index (end of text or start of $@$ or $)$ macro).
+            5) The line number where parsing stopped.
+        Raises MacroFailException on failure, as well as parsing exceptions for code
+        args, which are parsed to AST form before returning.  It is worth emphasizing,
+        because I'm sure this is going to cause confusion, that for macro code arguments,
+        this *also* does Python AST parsing and annotation.  From a user perspective this
+        may cause somewhat unexpected ordering of error messages, and from an internal
+        code perspective, an unexpected order of execution.  This is done because the
+        surrounding code is parsed in a single pass, so macro arguments must therefore be
+        processed either before or after.  Parsing here is simpler because it avoids
+        having to package and index the data for annotation and line-number translation
+        that would be needed to do it after macro expansion."""
         annotations = AnnotationList()
-        lineNumTranslate = []
+        lineNumTranslate = [startLineNum]
         origLineStarts = [0]
-        origLineNum = 1
+        origLineNum = startLineNum
         modLineNum = 1
         modColNum = 0
         modTextFrags = []
-        modFragStart = 0
-        origIdx = 0
+        modFragStart = startIdx
+        origIdx = startIdx
         inString = None
         inComment = False
+        stopIdx = len(text)
         while origIdx < len(text):
             origChar = text[origIdx]
             if origChar == '\t' and not inComment and inString is None:
-                macroFailDialog(text, origIdx, origLineNum, "Tab characters not allowed")
-                return None, None, []
+                raise MacroFailException(text, origIdx, origLineNum,
+                    "Tab characters not allowed")
             if origChar == '\n':
                 inComment = False
-                lineNumTranslate.append(origLineNum)
                 origLineNum += 1
+                lineNumTranslate.append(origLineNum)
                 modLineNum += 1
                 modColNum = 0
                 origLineStarts.append(origIdx+1)
@@ -92,21 +131,18 @@ class MacroParser:
                 # Macro found.  Process it and get replacement text
                 match = self.macroPattern.match(text, origIdx)
                 if match is None:
-                    macroFailDialog(text, origIdx, origLineNum)
-                    return None, None, []
-                macroEndIdx = origIdx + len(match.group(0))
-                replaceText = self._processMacro(modLineNum, modColNum, text, origIdx,
-                    macroEndIdx, annotations)
-                if replaceText is None:
-                    macroFailDialog(text, origIdx, origLineNum)
-                    return None, None, []
+                    raise MacroFailException(text, origIdx, origLineNum)
+                if match.group(1)[0] in '@)':
+                    stopIdx = origIdx
+                    break
+                replaceText, macroEndIdx, origLineNum = self._processMacro(modLineNum,
+                    modColNum, text, origIdx, origLineNum, annotations)
                 # Copy the text between the last macro and this one in to the output list
                 textToCopy = text[modFragStart:origIdx]
                 modTextFrags.append(textToCopy)
                 # Copy the macro's replacement text in to the output list
                 modTextFrags.append(replaceText)
-                # Adjust line counts for newlines in macro or replaced text
-                origLineNum += text[origIdx:macroEndIdx].count('\n')
+                # Advance line and col for macro-substituted text (modLines, modColNum)
                 modLines = replaceText.split('\n')
                 for i in range(len(modLines) - 1):
                     modLineNum += 1
@@ -159,38 +195,69 @@ class MacroParser:
                 modColNum += 1
                 origIdx += 1
         # Copy the text between the last macro and the end of the input text to the output
-        modTextFrags.append(text[modFragStart:])
+        modTextFrags.append(text[modFragStart:stopIdx])
         # Consolidate the output fragments in to a single string, and return it and the
         # annotation dictionary and line number translation list
-        return "".join(modTextFrags), annotations, lineNumTranslate
+        return "".join(modTextFrags), annotations, lineNumTranslate, origIdx, origLineNum
 
-    def _processMacro(self, modLineNum, modColNum, origText, macroStartIdx, macroEndIdx,
+    def _processMacro(self, modLineNum, modColNum, origText, macroStartIdx, origLineNum,
             annotations):
         """Process a macro in origText between macroStartIdx and macroEndIdx, adding
         entries to annotations object for associating data from the named macro and the
         argument string with appropriate AST node.  Returns text to substitute for the
-        macro before passing it on to the Python parser."""
-        macroText = origText[macroStartIdx+1:macroEndIdx-1]
-        macroName, macroArgs = self._parseMacro(macroText)
+        macro before passing it on to the Python parser, and the next index and line
+        number within origText after the macro.  Raises MacroFailException on error"""
+        # Parse the macro.  In the case of a macro that surrounds code, here we parse
+        # just the initial macro ending in '($'.
+        match = self.macroPattern.match(origText, macroStartIdx)
+        macroEndIdx = macroStartIdx + len(match.group(0))
+        macroText = match.group(1)
+        macroName, macroArgs, macroArgCodeType = self._parseMacro(macroText)
         if macroName is None:
-            return None
+            raise MacroFailException(origText, macroStartIdx, origLineNum,
+                message='Bad macro format')
+        # If the macro ended in a (, process until matching $)$
+        if macroArgCodeType is None:
+            macroArgCodeList = None
+        else:
+            macroArgCodeList, macroEndIdx, origLineNum = self._parseMacroArgCode(
+                origText, macroEndIdx, macroArgCodeType, origLineNum)
+        # Look up the macro in the macro list (or recognize hard-coded no-name and @
+        # macros) to get or synthesize its replacement text and icon creation function.
+        # Note special cases for $Empty$ and $Ctx$ macros, which encode the line+col in
+        # in the stand-in name for situations where the Python parser doesn't associate
+        # an AST node with the item (usually a name, such as in def, class, import...),
+        # or doesn't tag it with a line and column (such as keyword assignment).
         if macroName == "":
             replaceText = ""
             iconFn = None
         elif macroName == "@":
             replaceText = "pass"
             iconFn = None
+        elif macroName == "Empty":
+            replaceText = makePlaceholderName(modLineNum, modColNum)
+            iconFn = lambda node, args, argAsts, win: None
+        elif macroName == "Ctx":
+            if macroArgCodeType not in (None, 'e', 'd', 's', 'f') or \
+                    macroArgs not in (None, ''):
+                raise MacroFailException(origText, macroStartIdx, origLineNum,
+                    message='Ctx macro only allows code argument types e, d, f, or s')
+            replaceText = makePlaceholderName(modLineNum, modColNum)
+            iconFn = ctxMacroFn
         else:
-            macroData = self.macroList[macroName]
+            macroData = self.macroList.get(macroName)
             if macroData is None:
-                return None
+                raise MacroFailException(origText, macroStartIdx, origLineNum,
+                    message='Macro %s not defined' % macroName)
             subs, iconFn, = macroData
             if callable(subs):
                 replaceText = subs(macroArgs)
             else:
                 replaceText = subs
-        # Translate the dollar sign marker in the replacement text to an offset
-        # and remove it from the text
+        # If the replacement text contained a $, use that as the reference position for
+        # locating the ast (and eventually, icon) to get the macro data.  Start by
+        # Translating the dollar sign marker in the replacement text to an offset and
+        # removing it from the text
         astMarker = replaceText.find("$")
         if astMarker == -1:
             astMarker = 0
@@ -201,7 +268,8 @@ class MacroParser:
         # Associate the line and column of the text that will generate the AST with the
         # macro data we want to attach to it
         adjLine, adjCol = countLinesAndCols(replaceText, astMarker, modLineNum, modColNum)
-        annotations.indexByStartPos(adjLine, adjCol, (macroName, macroArgs, iconFn))
+        ann = macroName, macroArgs, iconFn, macroArgCodeList
+        annotations.indexByStartPos(adjLine, adjCol, ann)
         # AST nodes with arguments on the left report line and column of their leftmost
         # argument (not of their own text), which is not useful for corresponding them
         # with the text that generated them.  For binary operations and assignments
@@ -209,10 +277,10 @@ class MacroParser:
         # record, also, the rightmost position of their left argument
         if astMarker >= len(replaceText):
             # Marked AST is after macro
-            isLeftArgOp = self.leftArgOpRe.match(origText, macroEndIdx)
+            isLeftArgOp = self.leftArgOpPattern.match(origText, macroEndIdx)
         else:
             # Marked AST is within macro
-            isLeftArgOp = self.leftArgOpRe.match(replaceText, astMarker)
+            isLeftArgOp = self.leftArgOpPattern.match(replaceText, astMarker)
         if isLeftArgOp:
             # Look backward from op through the expanded macro text to find the last
             # non-whitespace character
@@ -223,8 +291,8 @@ class MacroParser:
             if adjLine == -1:
                 adjLine, adjCol = self._leftArgLineCol(modLineNum, modColNum, origText,
                     macroStartIdx)
-            annotations.indexByLeftArgEnd(adjLine, adjCol, (macroName, macroArgs, iconFn))
-        return replaceText
+            annotations.indexByLeftArgEnd(adjLine, adjCol, ann)
+        return replaceText, macroEndIdx, origLineNum
 
     @staticmethod
     def _leftArgLineCol(modLineNum, modColNum, text, idx):
@@ -254,36 +322,148 @@ class MacroParser:
 
     @staticmethod
     def _parseMacro(macroText):
-        """Split a macro into name and argument components and check for legal name.
-        macroName returns None on error, and an empty string for legal but unnamed."""
+        """Split a macro into name and argument components and check for legal name and
+        and presence or absence of a macro paren and associated type code.  Returns tuple
+        of macroName, macroArgs, and parenCtxType.  macroName returns None on parse error,
+        and an empty string for a legal but unnamed macro.  macroArgs returns any macro
+        content following a colon and preceding '(' and optional context type code.
+        parenCtxType returns one of macroArgContextTypes for macros ending in an open
+        paren (but still also includes the context type in macroArgs)."""
+        if macroText[-1] == '(':
+            if len(macroText) > 1 and macroText[-2] in macroArgContextTypes:
+                macroArgCtxType = macroText[-2]
+                endIdx = len(macroText) - 2
+            else:
+                macroArgCtxType = 'e'
+                endIdx = len(macroText) - 1
+        else:
+            macroArgCtxType = None
+            endIdx = len(macroText)
         if macroText[0] == '@':
             # Segment position macro
-            return '@', macroText[1:]
+            return '@', macroText[1:endIdx], macroArgCtxType
         if macroText[0] == ':':
             # Annotation-only for built-in Python syntax
-            return "", macroText[1:]
+            return "", macroText[1:endIdx], macroArgCtxType
         # Split name from arguments at :
-        for i, c in enumerate(macroText):
+        for i, c in enumerate(macroText[:endIdx]):
             if c == ":":
-                return macroText[:i], macroText[i+1:]
+                return macroText[:i], macroText[i+1:endIdx], macroArgCtxType
             if not c.isalnum() and c != '_':
-                return None, None
+                return None, None, None
         # No arguments found
-        return macroText, None
+        return macroText[:endIdx], None, macroArgCtxType
+
+    def _parseMacroArgCode(self, origText, startIdx, parseCtxType, lineNum):
+        """Parse text from startIdx through matching $)$ doing both macro expansion and
+        conversion to Python AST.  Returns a list of top-level AST nodes and the index
+        and line number where parsing stopped.  On failure, raises MacroFailException
+        or ReprocSyntaxErrExcept."""
+        #... Note that entry icons have multiple arguments, and this will need to be
+        #    extended to recongnize $)($ form.
+        # Do macro text substitution and index macro data into annotations structure.
+        # Note that annotations (indexed by line and column) are relative to expanded
+        # text, extracted from the macro argument, *not* the entire text buffer.
+        expandedText, annotations, lineNumTranslate, endIdx, lineNum = self.expandMacros(
+            origText, startIdx, lineNum)
+        if endIdx + 3 > len(origText) or origText[endIdx: endIdx + 3] != '$)$':
+            raise MacroFailException(origText, startIdx, lineNum,
+                message='Expected end of macro argument code "$)$"')
+        endIdx += 3
+        # Strip leading spaces from first line.  We support whitespace padding around
+        # macro arguments even though we don't normally write them that way (we do in the
+        # case of a wrap between the macro and the arg, and users who hand-edit the file
+        # will also expect this to work).  The Python parser, however, will see leading
+        # whitespace as indent (at least in the expression case where we're not doctoring
+        # it based on parseCtxType) so we need to strip it off.  We leave the newlines in
+        # but prefix them with line a continuation character ('\') to help correspond
+        # input lines with output lines.
+        prefixNewlines = ''
+        argLineNum = 1
+        nStripped = 0
+        for i, c in enumerate(expandedText):
+            if c == '\n':
+                prefixNewlines += '\\\n'
+                argLineNum += 1
+                nStripped = 0
+            elif c != ' ':
+                break
+            else:
+                nStripped += 1
+        else:
+            return (), endIdx, lineNum
+        if i != 0:
+            # Replace the stripped spaces and newlines with continuation newlines
+            expandedText = prefixNewlines + expandedText[i:]
+            # Adjust the annotations to reflect the edit (just the line containing text)
+            annotations.offsetLineColIds(-nStripped, argLineNum)
+        # Pass the macro-expanded text through the Python parser to convert to AST form.
+        argAst = parseExpandedTextToAsts(expandedText, origText, annotations,
+            lineNumTranslate, False, parseCtxType, 'macro argument')
+        return (argAst,), endIdx, lineNum
+
+    def parsePosMacro(self, text, startIdx, startLineNum):
+        """Called during parsing of files or pasted text when parsing has stopped (currently
+        parsing only stops at @ (pos) macro, unmatched $)$ or EOF.  Both EOF and leading
+        space are handled by the parent, so all this should ever see is either $@... or
+        $)...  On error raises MacroFailException or ReprocSyntaxErrExcept (when the @
+        macro has a context argument).  Returns:
+           1) (x, y) position of code, (0, 0) for module-associated sequence
+           2) ASTS for macro code arguments (specified with by including open paren in
+              macro)
+           3) Index in to text where parsing should resume after the macro
+           4) Line number of index where parsing should resume."""
+        endLineNum = startLineNum
+        match = self.macroPattern.match(text, startIdx)
+        if match is None:
+            raise MacroFailException(text, startIdx, message='Parsing error')
+        endIdx = startIdx + len(match.group(0))
+        macroText = match.group(1)
+        if macroText[0] != '@':
+            message = 'Unmatched $)$' if macroText[0] == ')' else 'Unexpected macro'
+            raise MacroFailException(text, startIdx, message=message)
+        match = self.posMacroPattern.fullmatch(macroText)
+        if match is None:
+            raise MacroFailException(text, startIdx,
+                message="Bad format for @ (segment position) macro")
+        if match.group(7) == '(':
+            # the macro a code argument
+            parseCtx = match.group(6)
+            if parseCtx is None:
+                parseCtx = 'e'
+            macroArgCodeList, endIdx, endLineNum = self._parseMacroArgCode(
+                text, endIdx, parseCtx, startLineNum)
+        else:
+            macroArgCodeList = None
+        x = int(match.group(1))
+        y = int(match.group(3))
+        return (x, y), macroArgCodeList, endIdx, endLineNum
 
 class AnnotationList:
-    """Associate macros with the ast nodes they generated."""
+    """Associate macros with the ast nodes they marked."""
     def __init__(self):
         self.byStartPos = {}
         self.byLeftArgEnd = {}
+        self.offsets = {}
 
     def indexByStartPos(self, line, col, annotation):
-        self.byStartPos[(line << 16) + col] = annotation
+        """Associate macro data (annotation) with an AST whose recorded lineno and
+        col_offset attributes match line and col.  Note, of course, that since the Python
+        parser is run on macro expanded code, line an col are relative to that as opposed
+        to relative to the original source file or text."""
+        self.byStartPos[makeLineColId(line, col)] = annotation
 
     def indexByLeftArgEnd(self, line, col, annotation):
-        self.byLeftArgEnd[(line << 16) + col] = annotation
+        """Associate macro data (annotation) with an (infix operator) AST whose left
+        argument ends (per  its end_lineno and end_col_offset attributes) at line and
+        col.  line and col are relative to the macro-expanded text passed to the Python
+        parser."""
+        self.byLeftArgEnd[makeLineColId(line, col)] = annotation
 
-    def get(self, node):
+    def getAnnotations(self, node):
+        """Look up macro data associated with a given AST node, based on the type of
+        AST node and its reported position in the macro-expanded text passed to the
+        Python parser."""
         leftNode = None
         nodeClass = node.__class__
         if nodeClass is ast.Expr:
@@ -302,16 +482,67 @@ class AnnotationList:
             leftNode = node.body
         if leftNode:
             if hasattr(leftNode, 'end_lineno') and hasattr(leftNode, 'end_col_offset'):
-                line = leftNode.end_lineno
-                col = leftNode.end_col_offset
-                return self.byLeftArgEnd.get((line << 16) + col)
+                return self.getByLeftArgEnd(leftNode.end_lineno, leftNode.end_col_offset)
         else:
             if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
-                return self.byStartPos.get((node.lineno << 16) + node.col_offset)
+                return self.getByLineAndCol(node.lineno, node.col_offset)
         return None
 
+    def offsetLineColIds(self, numChars, lineNum=1):
+        """If parsing required some sort of set-up (such as for a dictionary element,
+        'as' clause, or comprehension) or adjustment (removing leading spaces from an
+        expression), macro annotations will be off by the number of characters prepended
+        or removed from the parse string.  Call this function to apply an offset to
+        recorded column numbers coded in the lookup-keys for a given line (defaults to
+        first line).  As with the AnnotationList in general, lineNum should be the line
+        number of the macro-expanded text, not the original source text.  Note that this
+        offset is not applied to column numbers extracted from placeholder identifiers,
+        because these are (presumably) substituted before parsing."""
+        if lineNum in self.offsets:
+            self.offsets[lineNum] += numChars
+        else:
+            self.offsets[lineNum] = numChars
+
+    def getFieldAnnotations(self, node):
+        """For icons that contain fields for which the ast tree does not record line and
+        column, we fall back on encoding them in the stand-in name.  Unfortunately, this
+        will only work for macros that substitute such a stand-in. ($Empty$, $Ctx$ and
+        $Entry$).  User-defined macros at these locations would fail, but should never
+        appear directly in these fields, because the save code for icons representing
+        these AST nodes will wrap anything that is not a simple identifier with a $Ctx$
+        macro."""
+        nodeClass = node.__class__
+        if nodeClass in (ast.Global, ast.Nonlocal):
+            fieldNames = node.names
+        elif nodeClass in (ast.FunctionDef, ast.ClassDef):
+            fieldNames = (node.name,)
+        elif nodeClass is ast.ImportFrom:
+            fieldNames = (node.module,)  # Stand-in is never dotted
+        elif nodeClass is ast.alias:
+            fieldNames = (node.name, node.asname)
+        elif nodeClass is ast.arg:
+            fieldNames = (node.arg,)
+        elif nodeClass is ast.keyword:
+            fieldNames = (node.arg,)
+        else:
+            return None
+        lineColIds = [getPlaceholderId(n) for n in fieldNames]
+        for lineColId in lineColIds:
+            if lineColId is not None:
+                break
+        else:  # There are no placeholder names in the fields
+            return None
+        return [None if id is None else self.byStartPos[id] for id in lineColIds]
+
     def getByLineAndCol(self, line, col):
-        return self.byStartPos.get((line << 16) + col)
+        if line in self.offsets:
+            col -= self.offsets[line]
+        return self.byStartPos.get(makeLineColId(line, col))
+
+    def getByLeftArgEnd(self, line, col):
+        if line in self.offsets:
+            col -= self.offsets[line]
+        return self.byLeftArgEnd.get(makeLineColId(line, col))
 
     def dump(self):
         print("annotations byStartPos")
@@ -321,54 +552,215 @@ class AnnotationList:
         for key, val in self.byLeftArgEnd.items():
             print("   ", key >> 16, key & 0xffff, repr(val))
 
-def parseText(macroParser, text, fileName="Pasted Text", forImport=False):
-    """Parse save-file format (from clipboard or file) and return a list of tuples
-    pairing a window position with a list of AST nodes to form a sequence.  If the
-    position is None, the segment should be attached to the window module sequence point.
-    On parse failure, posts up a dialog describing the failure and returns None."""
-    # Expand macros
-    expandedText, annotations, lineNumTranslate = macroParser.expandMacros(text)
-    if expandedText is None:
+def makeLineColId(line, col):
+    """Returns an integer identifier encoding both a line and column value."""
+    return (line << 16) + col
+
+def getLineColFromId(lineColId):
+    """Decode line and column from a lineColId."""
+    return lineColId >> 16, lineColId & 0xffff
+
+def makePlaceholderName(line, col):
+    """Create a stand-in name to substitute for $Ctx$, $Empty$ or $Entry$ macros, where
+    the Python parser would otherwise reject the content we want to put there.  These are
+    coded with an ID based on line an column for situations where the parser does not
+    tag an associated AST node with them, we can recover the corresponding macro data."""
+    return PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col))
+
+def getPlaceholderId(placeholderStr):
+    """Validate and decode a placeholder name.  If valid, returns the numeric ID
+    generated from the line and column (used to look up corresponding macro data in the
+    macro annotations dictionary.  Otherwise, returns None."""
+    if placeholderStr is None:
         return None
+    match = placeholderNamePattern.fullmatch(placeholderStr)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+def parseTextToIcons(text, window, source="Pasted text", forImport=False):
+    """Parse the given text in either .pyg (forImport=False), or .py (forImport=True)
+    format, and return the created icons in a single list.  Note that this does not
+    lay-out icons, but does set the position (.rect[:2]) of the first icon, which will
+    be used by the layout code to position the sequence.  On error, pops up a dialog
+    describing the error.  "source" is the name to use in the error dialog as the file
+    (or other source) from which the text originated.  Returns list of top-level icons
+    on success and None on failure."""
+    pos = 0, 0
+    topLevelIcons = []
+    startIdx = 0
+    lineNum = 1
+    while True:
+        # In normal operation, this loop calls _parseTextToIcons to process code until
+        # it reaches an @ (pos) macro, and repeats the process, adding the position
+        # offsets from the pos macro to the first icon of each resulting sequence.
+        # During this operation parsing errors will manifest through exceptions in
+        # _parseTextToIcons, but also in parsePosMacro where the pos macro can process
+        # its own code argument (for loose code fragments that would not parse as
+        # statements or expressions), and in the syntax of the pos macro itself.  Because
+        # _parseTextToIcons will also terminate on an unmatched $)$, parsePosMacro also
+        # specifically looks for that pattern on failure, and generates a message more
+        # appropriate to that particular syntax error.
+        try:
+            icons, parseEndIdx, lineNum = _parseTextToIcons(text, startIdx, lineNum,
+                window, source, forImport)
+        except ReprocSyntaxErrExcept as excep:
+            tkinter.messagebox.showerror("Syntax Error", message=str(excep))
+            return None
+        except MacroFailException as excep:
+            tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep))
+            return None
+        if len(icons) > 0:
+            icons[0].rect = icon.moveRect(icons[0].rect, pos)
+            topLevelIcons += icons
+        if parseEndIdx == len(text):
+            return topLevelIcons
+        try:
+            pos, argCode, parseEndIdx, lineNum = window.macroParser.parsePosMacro(text,
+                parseEndIdx, lineNum)
+        except ReprocSyntaxErrExcept as excep:
+            tkinter.messagebox.showerror("Syntax Error", message=str(excep))
+            return None
+        except MacroFailException as excep:
+            tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep))
+            return None
+        if argCode is not None:
+            # @ (pos) macro had an argument.  Such arguments either can't be part of a
+            # series (attributes and comprehensions), or can but shouldn't (dictionary
+            # elements and "as" clauses).  Build icons for the argument and make sure
+            # that nothing follows the macro but another pos macro.
+            topIcon = icon.createFromAst(argCode[0], window)
+            topIcon.rect = icon.moveRect(topIcon.rect, pos)
+            topLevelIcons.append(topIcon)
+            while True:
+                if parseEndIdx >= len(text):
+                    return topLevelIcons
+                c = text[parseEndIdx]
+                if c == '\n':
+                    lineNum += 1
+                elif not c.isspace():
+                    break
+                parseEndIdx += 1
+            if text[parseEndIdx:parseEndIdx+2] != "$@":
+                tkinter.messagebox.showerror("Error Parsing Macros",
+                    message=formatMacroFailMessage(text, parseEndIdx, lineNum,
+                    "@ macro with code argument cannot be followed by code"))
+                return None
+        startIdx = parseEndIdx
+
+def _parseTextToIcons(text, startIdx, startLineNum, window, source, forImport):
+    """Internal version of parseTextToIcons that returns an additional value of the
+    text index at which parsing stopped (EOF or $@$ or $)$ macros), and takes an
+    additional parameter (startIdx) of the text index at which to start parsing."""
+    stmtList, endIdx, endLineNum = parseTextToAsts(window.macroParser, text, startIdx,
+        startLineNum, source, forImport)
+    if stmtList is None:
+        return [], endIdx, endLineNum
+    return icon.createIconsFromBodyAsts(stmtList, window), endIdx, endLineNum
+
+def parseTextToAsts(macroParser, text, startIdx, startLineNum, source="Pasted Text",
+            forImport=False):
+    """Parse save-file format (from clipboard or file) starting at startIdx and reading
+    either to the end of text or to $@$ or $)$ macro.  Returns a list of ast nodes and
+    the index and line number at which parsing stopped (either the end of text, or the
+    start of a $@$ or $($ macro).  On failure, raises MacroFailException or
+    ReprocSyntaxErrExcept."""
+    expandedText, annotations, lineNumTranslate, endIdx, endLineNum =\
+        macroParser.expandMacros(text, startIdx, startLineNum)
+    if expandedText == '' or expandedText.isspace():
+        return None, endIdx, endLineNum
     #print('expanded Text:\n%s' % expandedText)
     #print('lineNumTranslate', lineNumTranslate)
     #annotations.dump()
-    # Parse expanded text
+    return parseExpandedTextToAsts(expandedText, text, annotations, lineNumTranslate,
+        forImport, None, source), endIdx, endLineNum
+
+def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslate,
+        forImport, parseCtx, source):
+    """Call the Python parser to parse macro-expanded text into AST form.  After parsing,
+    it back-annotates the resulting AST nodes with macro data and information from the
+    original text that the Python parser does not record, such as comments elifs, and
+    original forms of strings and numeric constants that the parser canonicalizes.
+    parseCtx should be set to None for parsing an entire code block, or the single-
+    character designator used in Ctx and Entry macros (see macroArgContextTypes for
+    description) for parsing an individual expression or code component.  Note the
+    subtle difference in defaulting behavior from the macros themselves, which allow the
+    context to be omitted when the argument is an expression.  Here you must pass 'e' if
+    you want the body list and ast.Expr node stripped off from the return value)."""
+    if parseCtx == 'a':
+        maskLen = len(ATTR_PARSE_STUB)
+        ctxMask = (maskLen, 0)
+        expandedText = ATTR_PARSE_STUB + expandedText
+        annotations.offsetLineColIds(maskLen)
+    elif parseCtx == 's':
+        ctxMask = (5, 5)
+        expandedText = 'with ' + expandedText + ':pass'
+        annotations.offsetLineColIds(5)
+    elif parseCtx == 'd':
+        ctxMask = (1, 1)
+        expandedText = "{" + expandedText + "}"
+        annotations.offsetLineColIds(1)
+    elif parseCtx == 'f':
+        maskLen = len(FN_CALL_PARSE_STUB) + 1
+        ctxMask = (maskLen, 1)
+        expandedText = FN_CALL_PARSE_STUB + '(' + expandedText + ')'
+        annotations.offsetLineColIds(maskLen)
+    elif parseCtx == 'c':
+        #... The 'c' parse context should be removed once icon substitution is capable
+        #    of changing comprehension clauses back and forth with for and if stmts
+        if expandedText[:3] == 'if ':
+            ctxMask = (0, 5)
+            expandedText += ':pass'
+        else:
+            maskLen = len(CPRH_PARSE_STUB) + 2
+            ctxMask = (maskLen, 1)
+            expandedText = '[' + CPRH_PARSE_STUB + ' ' + expandedText + ']'
+            annotations.offsetLineColIds(maskLen)
+    elif parseCtx in ('e', None):
+        ctxMask = None
+    else:
+        ctxMask = None
+        print('Unrecognized parse context passed to parseExpandedTextToAsts')
     try:
-        modAst = ast.parse(expandedText, fileName)
+        modAst = ast.parse(expandedText, source)
     except SyntaxError as excep:
-        syntaxErrDialog(excep, lineNumTranslate, text)
-        return None
+        raise ReprocSyntaxErrExcept(excep, lineNumTranslate, origText, ctxMask)
     except Exception as excep:
-        parseFailDialog(excep)
-        return None
+        raise ReprocSyntaxErrExcept(excep, ctxMask=ctxMask)
     if not isinstance(modAst, ast.Module) or len(modAst.body) == 0:
         print("Unexpected AST returned from ast.parse")
         return None
     # Ast parsing tosses comments, but we need them
     _transferCommentsToAst(expandedText, modAst, annotations, forImport)
-    # Annotate the nodes in the tree per the annotations list
+    # Annotate the nodes in the tree per the annotations list.  the attached tuple
+    # format is: (macroName, macroArgs, iconCreateFn, macroArgIcons)
     for node in ast.walk(modAst):
-        ann = annotations.get(node)
+        ann = annotations.getAnnotations(node)
         if ann is not None:
-            macroName, macroArgs, iconCreateFn = ann
-            if macroName is not None and macroName != "":
-                node.macroName = macroName
-            if macroArgs is not None:
-                node.macroArgs = macroArgs
-            if iconCreateFn is not None:
-                node.iconCreationFunction = iconCreateFn
-    # Split the parse results in to separately positioned segments
-    currentSegment = []
-    segments = [(None, currentSegment)]
-    for node in modAst.body:
-        ann = annotations.get(node)
-        if ann is not None and ann[0] == "@":
-            currentSegment = []
-            segments.append((_parsePosMacro(ann[1]), currentSegment))
+            node.macroAnnotations = ann
+        fieldAnn = annotations.getFieldAnnotations(node)
+        if fieldAnn is not None:
+            # For ast node fields that are full-blown icon sites in Python-g but are just
+            # a string (or list of strings) in the ast node structure, we annotate the
+            # node with 'fieldMacroAnnotations'.
+            node.fieldMacroAnnotations = fieldAnn
+    if parseCtx is None:
+        return modAst.body
+    stmtAst = modAst.body[0]
+    if parseCtx == 's':
+        return stmtAst.items[0]
+    elif parseCtx == 'd':
+        return DictElemFakeAst(stmtAst.value.keys[0], stmtAst.value.values[0])
+    elif parseCtx == 'f':
+        return ArgAssignFakeAst(stmtAst.value.keywords[0])
+    elif parseCtx == 'c':
+        if isinstance(stmtAst, ast.If):
+            return CprhIfFakeAst(stmtAst.test)
         else:
-            currentSegment.append(node)
-    return segments
+            cprh = stmtAst.value.generators[0]
+            return CprhForFakeAst(cprh.target, cprh.iter, cprh.is_async)
+    else:  # parseCtx in ('a', 'e'):
+        return stmtAst.value
 
 def _transferCommentsToAst(text, moduleAst, annotations, forImport):
     """Parse comments out of text and annotate the appropriate AST nodes so we can find
@@ -1187,57 +1579,98 @@ def _breakSuffix(breakValue):
     strType, quote, needsCont = _decodeStringBreakType(breakType)
     return strType + quote
 
-def _parsePosMacro(macroArgs):
-    match = posMacroPattern.match(macroArgs)
-    if match is None:
-        print("Bad format for @ (segment position) macro")
-        return 0, 0
-    x = int(match.group(1))
-    y = int(match.group(3))
-    return x,y
+class ReprocSyntaxErrExcept(Exception):
+    lineNumRe = re.compile('.*(line \\d*\\))')
 
-def loadFile(macroParser, fileName, forImport=False):
-    with open(fileName, "r") as f:
-        return parseText(macroParser, f.read(), fileName, forImport)
+    def __init__(self, excep, lineNumTranslate=None, originalText=None, ctxMask=None):
+        excepMsg = str(excep)
+        if lineNumTranslate is None:
+            message = "%s: %s" % (excep.__class__.__name__, excepMsg)
+        else:
+            caretLine = excep.text[:excep.offset-1] + ERR_START_ARROW + \
+                excep.text[excep.offset-1:]
+            if ctxMask is not None:
+                caretLine = caretLine[ctxMask[0]:len(caretLine)-ctxMask[1]]
+            origLineNum = lineNumTranslate[excep.lineno - 1]
+            origLine = numberedLine(originalText, origLineNum)
+            macrosPossible = origLine != excep.text.rstrip('\n')
+            lineNumMatch = self.lineNumRe.fullmatch(excepMsg)
+            if lineNumMatch:
+                message = excepMsg[:lineNumMatch.start(1)] + 'line %d)\n%s' % \
+                    (origLineNum, caretLine)
+                if macrosPossible:
+                    message += "\nExpanded from input file line:\n" + origLine
+            else:
+                message = "%s\n%s" % (excepMsg, caretLine)
+                message += "\nExpanded from input file line %d" % origLineNum
+                if macrosPossible:
+                    message += ":\n" + origLine
+        super().__init__(message)
 
-def syntaxErrDialog(excep, lineNumTranslate, originalText):
-    caretLine = " " * (excep.offset-1) + "^"
-    message = "%s: %s\n%s%s\n" % (excep.__class__.__name__,
-            str(excep), excep.text, caretLine)
-    origLineNum = lineNumTranslate[excep.lineno-1]
-    message += "Expanded from input file line %d:\n%s" % (origLineNum,
-            numberedLine(originalText, origLineNum))
-    print(message)
+class MacroFailException(Exception):
+    def __init__(self, text, idx, lineNum=None, message=None):
+        super().__init__(formatMacroFailMessage(text, idx, lineNum, message))
 
-def parseFailDialog(excep):
-    message = "Parsing failed %s: %s" % (excep.__class__.__name__, str(excep))
-    print(message)
-
-def macroFailDialog(text, idx, lineNum, message=None):
+def formatMacroFailMessage(text, idx, lineNum, message):
+    macroEnd = -1
     if message is None:
         macroEnd = text.find('$', idx + 1)
         if macroEnd == -1:
-            macro = text[idx:idx+10] + '...'
+            macro = text[idx:idx + 10] + '...'
         elif macroEnd - idx > 100:
-            macro = text[idx:idx+100] + '...'
+            macro = text[idx:idx + 100] + '...'
         else:
-            macro = text[idx:macroEnd+1]
-        message = "Unrecognized macro on line %d: %s" % (lineNum, macro)
+            macroEnd += 1
+            macro = text[idx:macroEnd]
+        if lineNum is None:
+            message = "Unrecognized macro: %s" % macro
+        else:
+            message = "Unrecognized macro on line %d: %s" % (lineNum, macro)
     else:
-        message = "%s, line %d" % (message, lineNum)
+        if lineNum is not None:
+            message = "%s, line %d" % (message, lineNum)
     for i in range(idx, -1, -1):
         if text[i] == '\n':
             lineStart = i + 1
             break
     else:
         lineStart = 0
-    caretLine = " " * (idx - lineStart) + "^"
     lineEnd = text.find('\n', idx)
     if lineEnd == -1:
         lineEnd = len(text)
-    lineText = text[lineStart:lineEnd]
-    message += "\n%s\n%s" % (lineText, caretLine)
-    print(message)
+    if macroEnd != -1 and macroEnd <= lineEnd:
+        message += '\n' + text[lineStart:idx] + ERR_START_ARROW + \
+                   text[idx:macroEnd] + ERR_END_ARROW + text[macroEnd:lineEnd]
+    else:
+        message += '\n' + text[lineStart:idx] + ERR_START_ARROW + text[idx:lineEnd]
+    return message
+
+def ctxMacroFn(astNode, macroArgs, argAsts, window):
+    if argAsts is None:
+        return None
+    return icon.createFromAst(argAsts[0], window)
+
+def isAttrParseStub(astNode):
+    return isinstance(astNode, ast.Name) and astNode.id == ATTR_PARSE_STUB
+
+class DictElemFakeAst:
+    def __init__(self, keyAst, valueAst):
+        self.key = keyAst
+        self.value = valueAst
+
+class ArgAssignFakeAst:
+    def __init__(self, keywordAst):
+        self.keywordAst = keywordAst
+
+class CprhForFakeAst:
+    def __init__(self, target, iter, isAsync):
+        self.target = target
+        self.iter = iter
+        self.isAsync = isAsync
+
+class CprhIfFakeAst:
+    def __init__(self, cmp):
+        self.cmp = cmp
 
 def numberedLine(text, lineNum):
     """Return a single line (lineNum) from text.  Note, that this inefficiently scans
@@ -1286,9 +1719,7 @@ def _moduleTest():
     macroParser.addMacro("testDollar", 'nert.asdf$.wang.thing(wang)')
     macroParser.addMacro("testDollarEnd", "3+$")
     macroParser.addMacro("if", "if a == $2:\n        pass")
-    text="""$@-1+34$
-$:v$[a, b, c]
-$@+2+34$
+    text="""$:v$[a, b, c]
 $:for$for i in range(3):
     print(i $:v$+ 1 $:h$* $testDollarEnd$42)
     $testSubs$
@@ -1307,25 +1738,20 @@ $:for$for i in range(3):
 l2$pass
 """
     print('original text:\n%s\n' % text)
-    segments = parseText(macroParser, text, 'nurdle.py')
-
-    if segments is not None:
-        for segment in segments:
-            pos, stmtList = segment
-            print(repr(pos))
-            for stmt in stmtList:
-                for node in ast.walk(stmt):
-                    macroName = macroArgs = iconCreateFn = None
-                    if hasattr(node, 'macroName'):
-                        print('annotated node %s with macro name %s' %
-                            (node.__class__.__name__, node.macroName))
-                    if hasattr(node, 'macroArgs'):
-                        print('annotated node %s with macro args %s' %
-                              (node.__class__.__name__, node.macroArgs))
-                    if hasattr(node, 'iconCreationFunction'):
-                        print('annotated node %s with icon creation function %s' %
-                              (node.__class__.__name__, repr(node.iconCreationFunction)))
-                astpretty.pprint(stmt)
+    stmtList, _, _ = parseTextToAsts(macroParser, text, 0, 1, 'nurdle.py')
+    for stmt in stmtList:
+        for node in ast.walk(stmt):
+            macroName = macroArgs = iconCreateFn = None
+            if hasattr(node, 'macroName'):
+                print('annotated node %s with macro name %s' %
+                    (node.__class__.__name__, node.macroName))
+            if hasattr(node, 'macroArgs'):
+                print('annotated node %s with macro args %s' %
+                      (node.__class__.__name__, node.macroArgs))
+            if hasattr(node, 'iconCreationFunction'):
+                print('annotated node %s with icon creation function %s' %
+                      (node.__class__.__name__, repr(node.iconCreationFunction)))
+        astpretty.pprint(stmt)
 
 def outFormatTest():
     segText = SegmentedText("asdf")

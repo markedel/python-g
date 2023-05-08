@@ -610,6 +610,8 @@ def createSubscriptIconFromAst(astNode, window):
         subscriptIcon.replaceChild(icon.createFromAst(slice[1], window), "upperIcon")
     if nSlices >= 3 and slice[2] is not None:
         subscriptIcon.replaceChild(icon.createFromAst(slice[2], window), "stepIcon")
+    if filefmt.isAttrParseStub(astNode.value):
+        return subscriptIcon  # This is a free subscript on the top level
     topIcon = icon.createFromAst(astNode.value, window)
     parentIcon = icon.findLastAttrIcon(topIcon)
     parentIcon.replaceChild(subscriptIcon, "attrIcon")

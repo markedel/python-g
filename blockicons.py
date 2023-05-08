@@ -2762,7 +2762,7 @@ icon.registerIconCreateFn(ast.Try, createTryIconFromAst)
 def createDefIconFromAst(astNode, window):
     isAsync = astNode.__class__ is ast.AsyncFunctionDef
     defIcon = DefIcon(isAsync, window=window)
-    nameIcon = nameicons.IdentifierIcon(astNode.name, window)
+    nameIcon = nameicons.createIconForNameField(astNode, astNode.name, window)
     defIcon.replaceChild(nameIcon, 'nameIcon')
     _addFnDefArgs(defIcon, astNode.args)
     return defIcon
@@ -2784,41 +2784,41 @@ def _addFnDefArgs(defIcon, astNodeArgs):
         args = []
     nPosOnly = len(args)
     window = defIcon.window
-    defaults = [icon.createFromAst(e, window) for e in astNodeArgs.defaults]
-    if len(defaults) < len(astNodeArgs.args):
+    defaultAsts = astNodeArgs.defaults
+    defaultIcons = [icon.createFromAst(e, window) for e in astNodeArgs.defaults]
+    if len(defaultAsts) < len(astNodeArgs.args):
         # Weird rule in defaults list for ast that defaults can be shorter than args
-        defaults = ([None] * (len(astNodeArgs.args) - len(defaults))) + defaults
+        fill = [None] * (len(astNodeArgs.args) - len(defaultAsts))
+        defaultAsts = fill + defaultAsts
+        defaultIcons = fill + defaultIcons
     numArgs = 0
-    for i, arg in enumerate(arg.arg for arg in astNodeArgs.args):
-        default = defaults[i]
-        argNameIcon = nameicons.IdentifierIcon(arg, window)
+    for i, arg in enumerate(astNodeArgs.args):
+        argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
         if nPosOnly != 0 and numArgs == nPosOnly:
             posOnlyMarker = nameicons.PosOnlyMarkerIcon(window=window)
             defIcon.insertChild(posOnlyMarker, 'argIcons', numArgs)
             numArgs += 1
-        if default is None:
+        if defaultAsts[i] is None:
             defIcon.insertChild(argNameIcon, 'argIcons', numArgs)
         else:
-            defaultIcon = default
             argAssignIcon = listicons.ArgAssignIcon(window)
             argAssignIcon.replaceChild(argNameIcon, 'leftArg')
-            argAssignIcon.replaceChild(defaultIcon, 'rightArg')
+            argAssignIcon.replaceChild(defaultIcons[i], 'rightArg')
             defIcon.insertChild(argAssignIcon, "argIcons", numArgs)
         numArgs += 1
     varArg = astNodeArgs.vararg.arg if astNodeArgs.vararg is not None else None
     if varArg is not None:
-        argNameIcon = nameicons.IdentifierIcon(varArg, window)
+        argNameIcon = nameicons.createIconForNameField(astNodeArgs.vararg, varArg, window)
         starIcon = listicons.StarIcon(window)
         starIcon.replaceChild(argNameIcon, 'argIcon')
         defIcon.insertChild(starIcon, 'argIcons', numArgs)
         numArgs += 1
-    kwOnlyArgs = [arg.arg for arg in astNodeArgs.kwonlyargs]
     kwDefaults = [icon.createFromAst(e, window) for e in astNodeArgs.kw_defaults]
-    if len(kwOnlyArgs) > 0 and varArg is None:
+    if len(astNodeArgs.kwonlyargs) > 0 and varArg is None:
         defIcon.insertChild(listicons.StarIcon(window), 'argIcons', numArgs)
         numArgs += 1
-    for i, arg in enumerate(kwOnlyArgs):
-        argNameIcon = nameicons.IdentifierIcon(arg, window)
+    for i, arg in enumerate(astNodeArgs.kwonlyargs):
+        argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
         if kwDefaults[i] is None:
             defIcon.insertChild(argNameIcon, 'argIcons', i)
         else:
@@ -2827,9 +2827,10 @@ def _addFnDefArgs(defIcon, astNodeArgs):
             argAssignIcon.replaceChild(argNameIcon, 'leftArg')
             argAssignIcon.replaceChild(defaultIcon, 'rightArg')
             defIcon.insertChild(argAssignIcon, "argIcons", numArgs + i)
-    numArgs += len(kwOnlyArgs)
+    numArgs += len(astNodeArgs.kwonlyargs)
     if astNodeArgs.kwarg is not None:
-        argNameIcon = nameicons.IdentifierIcon(astNodeArgs.kwarg.arg, window)
+        argNameIcon = nameicons.createIconForNameField(astNodeArgs.kwarg,
+            astNodeArgs.kwarg.arg, window)
         starStarIcon = listicons.StarStarIcon(window)
         starStarIcon.replaceChild(argNameIcon, 'argIcon')
         defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
@@ -2837,14 +2838,14 @@ def _addFnDefArgs(defIcon, astNodeArgs):
 def createClassDefIconFromAst(astNode, window):
     hasArgs = len(astNode.bases) + len(astNode.keywords) > 0
     topIcon = ClassDefIcon(hasArgs, window=window)
-    nameIcon = nameicons.IdentifierIcon(astNode.name, window)
+    nameIcon = nameicons.createIconForNameField(astNode, astNode.name, window)
     topIcon.replaceChild(nameIcon, 'nameIcon')
     bases = [icon.createFromAst(base, window) for base in astNode.bases]
     topIcon.insertChildren(bases, "argIcons", 0)
     kwdIcons = []
     for idx, kwd in enumerate(astNode.keywords):
         argAssignIcon = listicons.ArgAssignIcon(window)
-        kwdIcon = nameicons.IdentifierIcon(kwd, window)
+        kwdIcon = nameicons.createIconForNameField(kwd, kwd.arg, window)
         valueIcon = icon.createFromAst(kwd.value, window)
         argAssignIcon.replaceChild(kwdIcon, 'leftArg')
         argAssignIcon.replaceChild(valueIcon, 'rightArg')
@@ -2857,22 +2858,25 @@ def createWithIconFromAst(astNode, window):
     isAsync = isinstance(astNode, ast.AsyncWith)
     topIcon = WithIcon(isAsync, window=window)
     for idx, item in enumerate(astNode.items):
-        contextIcon = icon.createFromAst(item.context_expr, window)
-        if item.optional_vars is None:
-            topIcon.insertChild(contextIcon, "values", idx)
-        else:
-            asIcon = infixicon.AsIcon(window)
-            asIcon.replaceChild(contextIcon, "leftArg")
-            asIcon.replaceChild(icon.createFromAst(item.optional_vars, window),
-                "rightArg")
-            topIcon.insertChild(asIcon, "values", idx)
+        asOrContextIcon = createWithAsIconFromAst(item, window)
+        topIcon.insertChild(asOrContextIcon, "values", idx)
     return topIcon
 icon.registerIconCreateFn(ast.With, createWithIconFromAst)
 icon.registerIconCreateFn(ast.AsyncWith, createWithIconFromAst)
 
-def createIconsFromBodyAst(bodyAst, window):
+def createWithAsIconFromAst(astNode, window):
+    contextIcon = icon.createFromAst(astNode.context_expr, window)
+    if astNode.optional_vars is None:
+        return contextIcon
+    asIcon = infixicon.AsIcon(window)
+    asIcon.replaceChild(contextIcon, "leftArg")
+    asIcon.replaceChild(icon.createFromAst(astNode.optional_vars, window), "rightArg")
+    return asIcon
+icon.registerIconCreateFn(ast.withitem, createWithAsIconFromAst)
+
+def createIconsFromBodyAsts(bodyAsts, window):
     icons = []
-    for stmt in bodyAst:
+    for stmt in bodyAsts:
         if isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
             # Process decorators
             for decorator in stmt.decorator_list:
@@ -2892,7 +2896,7 @@ def createIconsFromBodyAst(bodyAst, window):
             bodyIcons = None
         elif stmt.__class__ in blockStmts:
             stmtIcon = icon.createFromAst(stmt, window)
-            bodyIcons = createIconsFromBodyAst(stmt.body, window)
+            bodyIcons = createIconsFromBodyAsts(stmt.body, window)
             stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
             if isinstance(stmt, ast.Try):
                 # Process except blocks
@@ -2917,7 +2921,7 @@ def createIconsFromBodyAst(bodyAst, window):
                             exceptIcon.replaceChild(typeIcon, 'typeIcon')
                     bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], exceptIcon, 'seqIn')
                     bodyIcons.append(exceptIcon)
-                    exceptBlockIcons = createIconsFromBodyAst(handler.body, window)
+                    exceptBlockIcons = createIconsFromBodyAsts(handler.body, window)
                     exceptIcon.sites.seqOut.attach(exceptIcon, exceptBlockIcons[0], 'seqIn')
                     bodyIcons += exceptBlockIcons
             while stmt.__class__ is ast.If and len(stmt.orelse) == 1 and \
@@ -2931,7 +2935,7 @@ def createIconsFromBodyAst(bodyAst, window):
                     _addStmtComment(elifIcon, stmt.elsestmtcomment)
                 condIcon = icon.createFromAst(stmt.orelse[0].test, window)
                 elifIcon.replaceChild(condIcon, 'condIcon')
-                elifBlockIcons = createIconsFromBodyAst(stmt.orelse[0].body, window)
+                elifBlockIcons = createIconsFromBodyAsts(stmt.orelse[0].body, window)
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elifIcon, 'seqIn')
                 bodyIcons.append(elifIcon)
                 elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
@@ -2948,7 +2952,7 @@ def createIconsFromBodyAst(bodyAst, window):
                 elseIcon = ElseIcon(window)
                 if hasattr(stmt, 'elsestmtcomment'):
                     _addStmtComment(elseIcon, stmt.elsestmtcomment)
-                elseBlockIcons = createIconsFromBodyAst(stmt.orelse, window)
+                elseBlockIcons = createIconsFromBodyAsts(stmt.orelse, window)
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elseIcon, 'seqIn')
                 bodyIcons.append(elseIcon)
                 elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
@@ -2959,7 +2963,7 @@ def createIconsFromBodyAst(bodyAst, window):
                 finallyIcon = FinallyIcon(window)
                 if hasattr(stmt, 'finallystmtcomment'):
                     _addStmtComment(finallyIcon, stmt.finallystmtcomment)
-                finallyBlockIcons = createIconsFromBodyAst(stmt.finalbody, window)
+                finallyBlockIcons = createIconsFromBodyAsts(stmt.finalbody, window)
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], finallyIcon, 'seqIn')
                 bodyIcons.append(finallyIcon)
                 finallyIcon.sites.seqOut.attach(finallyIcon, finallyBlockIcons[0], 'seqIn')
@@ -2982,6 +2986,7 @@ def createIconsFromBodyAst(bodyAst, window):
         if bodyIcons is not None:
             icons += bodyIcons
     return icons
+icon.registerIconCreateFn("bodyAsts", createIconsFromBodyAsts)
 
 def _createDecoratorIconFromAst(decoratorAst, window):
     if isinstance(decoratorAst, ast.Name):

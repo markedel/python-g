@@ -2013,10 +2013,11 @@ class DictElemIcon(infixicon.InfixIcon):
         def snapFn(ic, siteId):
             siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
             return isinstance(ic, DictIcon) and siteName == "argIcons"
-        outSites = snapLists['output']
-        snapLists['output'] = []
-        snapLists['conditional'] = \
-                [(*snapData, 'output', snapFn) for snapData in outSites]
+        if 'output' in snapLists:
+            outSites = snapLists['output']
+            snapLists['output'] = []
+            snapLists['conditional'] = \
+                    [(*snapData, 'output', snapFn) for snapData in outSites]
         return snapLists
 
     def execute(self):
@@ -2096,10 +2097,11 @@ class StarIcon(opicons.UnaryOpIcon):
             # without other elements, but it's necessary as an intermediate form for ease
             # of editing, and will be highlighted as a syntax error)
             return iconsites.isSeriesSiteId(siteId)
-        outSites = snapLists['output']
-        snapLists['output'] = []
-        snapLists['conditional'] = \
-                [(*snapData, 'output', matingIcon) for snapData in outSites]
+        if 'output' in snapLists:
+            outSites = snapLists['output']
+            snapLists['output'] = []
+            snapLists['conditional'] = \
+                    [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
 
     def doLayout(self, outSiteX, outSiteY, layout):
@@ -2176,10 +2178,11 @@ class StarStarIcon(opicons.UnaryOpIcon):
             siteName, idx = iconsites.splitSeriesSiteId(siteId)
             return ic.__class__ in (CallIcon, blockicons.DefIcon, DictIcon) and \
                    siteName == "argIcons"
-        outSites = snapLists['output']
-        snapLists['output'] = []
-        snapLists['conditional'] = \
-                [(*snapData, 'output', matingIcon) for snapData in outSites]
+        if 'output' in snapLists:
+            outSites = snapLists['output']
+            snapLists['output'] = []
+            snapLists['conditional'] = \
+                    [(*snapData, 'output', matingIcon) for snapData in outSites]
         return snapLists
 
     def highlightErrors(self, errHighlight):
@@ -2757,6 +2760,17 @@ def createDictIconFromAst(astNode, window):
     return topIcon
 icon.registerIconCreateFn(ast.Dict, createDictIconFromAst)
 
+def createDictElemFromFakeAst(astNode, window):
+    # The filefmt module provides its own "fake" ast node to represent a free (on the
+    # top level, or inside a Ctx or Entry macro) dictionary element.  Translate to icon.
+    dictElem = DictElemIcon(window)
+    key = icon.createFromAst(astNode.key, window)
+    dictElem.replaceChild(key, "leftArg")
+    value = icon.createFromAst(astNode.value, window)
+    dictElem.replaceChild(value, "rightArg")
+    return dictElem
+icon.registerIconCreateFn(filefmt.DictElemFakeAst, createDictElemFromFakeAst)
+
 def createSetIconFromAst(astNode, window):
     topIcon = DictIcon(window)
     childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
@@ -2775,7 +2789,8 @@ def createCallIconFromAst(astNode, window):
             argIcons.append(starStarIcon)
         else:
             kwIcon = ArgAssignIcon(window)
-            kwIcon.replaceChild(nameicons.IdentifierIcon(key.arg, window), 'leftArg')
+            nameIcon = nameicons.createIconForNameField(key, key.arg, window)
+            kwIcon.replaceChild(nameIcon, 'leftArg')
             kwIcon.replaceChild(valueIcon, 'rightArg')
             argIcons.append(kwIcon)
     callIcon.insertChildren(argIcons, "argIcons", 0)
@@ -2783,11 +2798,30 @@ def createCallIconFromAst(astNode, window):
 
 def createFnIconFromAst(astNode, window):
     callIcon = createCallIconFromAst(astNode, window)
+    if filefmt.isAttrParseStub(astNode.func):
+        return callIcon  # This is a free call paren on the top level
     topIcon = icon.createFromAst(astNode.func, window)
     parentIcon = icon.findLastAttrIcon(topIcon)
     parentIcon.replaceChild(callIcon, "attrIcon")
     return topIcon
 icon.registerIconCreateFn(ast.Call, createFnIconFromAst)
+
+def createArgAssignIconFromFakeAst(astNode, window):
+    # The filefmt module provides its own "fake" ast node to represent an argument
+    # assignment expression outside of the the context of a call or function def.
+    # Translate it to an icon.
+    assignIcon = ArgAssignIcon(window)
+    kwdAst = astNode.keywordAst
+    valueIcon = icon.createFromAst(kwdAst.value, window)
+    if kwdAst.arg is None:
+        starStarIcon = StarStarIcon(window)
+        starStarIcon.replaceChild(valueIcon, 'argIcon')
+        return starStarIcon
+    nameIcon = nameicons.createIconForNameField(kwdAst, kwdAst.arg, window)
+    assignIcon.replaceChild(nameIcon, 'leftArg')
+    assignIcon.replaceChild(valueIcon, 'rightArg')
+    return assignIcon
+icon.registerIconCreateFn(filefmt.ArgAssignFakeAst, createArgAssignIconFromFakeAst)
 
 def createComprehensionIconFromAst(astNode, window):
     if astNode.__class__ is ast.DictComp:
@@ -2828,6 +2862,24 @@ icon.registerIconCreateFn(ast.ListComp, createComprehensionIconFromAst)
 icon.registerIconCreateFn(ast.DictComp, createComprehensionIconFromAst)
 icon.registerIconCreateFn(ast.SetComp, createComprehensionIconFromAst)
 icon.registerIconCreateFn(ast.GeneratorExp, createComprehensionIconFromAst)
+
+def createCprhIfFromFakeAst(astNode, window):
+    ifIcon = CprhIfIcon(window)
+    testIcon = icon.createFromAst(astNode.cmp, window)
+    ifIcon.replaceChild(testIcon, 'testIcon')
+    return ifIcon
+icon.registerIconCreateFn(filefmt.CprhIfFakeAst, createCprhIfFromFakeAst)
+
+def createCprhForFromFakeAst(astNode, window):
+    forIcon = CprhForIcon(astNode.isAsync, window=window)
+    if isinstance(astNode.target, ast.Tuple):
+        tgtIcons = [icon.createFromAst(t, window) for t in astNode.target.elts]
+        forIcon.insertChildren(tgtIcons, "targets", 0)
+    else:
+        forIcon.insertChild(icon.createFromAst(astNode.target, window), "targets", 0)
+    forIcon.replaceChild(icon.createFromAst(astNode.iter, window), 'iterIcon')
+    return forIcon
+icon.registerIconCreateFn(filefmt.CprhForFakeAst, createCprhForFromFakeAst)
 
 def createStarIconFromAst(astNode, window):
     topIcon = StarIcon(window)

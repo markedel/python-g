@@ -168,7 +168,7 @@ class Window:
         menu.add_command(label="Save As...", accelerator="Ctrl+Shift+S",
             command=self._saveAsCb)
         menu.add_separator()
-        menu.add_command(label="Close", command=self.top.destroy)
+        menu.add_command(label="Close", command=self.close)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu, underline=0)
         menu.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
@@ -314,20 +314,21 @@ class Window:
         # sometimes do when the Alt key is released
         self.suppressAltReleaseAction = False
 
-        # If a filename was specified, open it
-        print("before open file")
-        if filename is not None:
-            self.openFile(filename)
-
     def openFile(self, filename):
+        """Open a .pyg or .py file in the window.  Uses file type to determine whether to
+        parse as Python or Python-g.  Returns True if the file was successfully opened.
+        Note that an empty file returns success."""
         print("reading file...", end="")
         with open(filename) as f:
             text = f.read()
         print("done")
         _base, ext = os.path.splitext(filename)
-        icons = parseText(text, self, source=filename, forImport=ext!=".pyg")
-        if icons is None or len(icons) == 0:
-            return None
+        icons = filefmt.parseTextToIcons(text, self, source=filename,
+            forImport=ext!=".pyg")
+        if icons is None:
+            return False
+        if len(icons) == 0:
+            return True
         self.addTop(icons)
         print('start layout', time.monotonic())
         redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
@@ -337,6 +338,10 @@ class Window:
         print('finish draw', time.monotonic())
         self.refresh(redrawRect, clear=False, redraw=False)
         self.undo.addBoundary()
+        return True
+
+    def close(self):
+        self.top.destroy()
 
     def selectedIcons(self):
         """Return a list of the icons in the window that are currently selected."""
@@ -1185,7 +1190,7 @@ class Window:
                 text = None
             # Try to parse the string as Python code
             if text is not None:
-                pastedIcons = parseText(text, self)
+                pastedIcons = filefmt.parseTextToIcons(text, self)
                 # Not usable python code, put in to single icon as string
                 if pastedIcons is None:
                     pastedIcons = [nameicons.TextIcon(repr(text), self, (0, 0))]
@@ -2153,9 +2158,9 @@ class Window:
         elif isinstance(obj, complex):
             # Complex should probably be a numeric icon subtype or a specialty icon of
             # its own, or maybe just left as an object type.
-            ic = parseText(f'complex({obj.real}, {obj.imag})', self)[0]
+            ic = filefmt.parseTextToIcons(f'complex({obj.real}, {obj.imag})', self)[0]
         else:
-            ic = parseText(repr(obj), self)[0]
+            ic = filefmt.parseTextToIcons(repr(obj), self)[0]
         return ic
 
     def _handleExecErr(self, excep, executedIcon=None):
@@ -2420,6 +2425,7 @@ class Window:
                         if inclSeqRules and seqRuleSeed is None and topIc.rect[1] >= top:
                             seqRuleSeed = topIc
         if inclSeqRules and seqRuleSeed is not None:
+            alreadyCollected = set(iconsInRegion)
             # Follow code blocks up to the top of the sequence to find the start for each
             # sequence rule left of seqRuleSeed
             blockStart = seqRuleSeed
@@ -2428,14 +2434,16 @@ class Window:
                 if blockStart is None:
                     break
                 if icon.seqRuleTouches(blockStart, rect):
-                    iconsInRegion.append(blockStart)
+                    if blockStart not in alreadyCollected:
+                        iconsInRegion.append(blockStart)
                     page = self.topIcons[blockStart]
                     page.applyOffset()
             # Follow code within the y range down from seqRule seed to the bottom of rect
             # to find any icons whose sequence rules need to be drawn
             for ic in icon.traverseSeq(seqRuleSeed):
                 if icon.seqRuleTouches(ic, rect):
-                    iconsInRegion.append(ic)
+                    if ic not in alreadyCollected:
+                        iconsInRegion.append(ic)
                     page = self.topIcons[ic]
                     page.applyOffset()
                 if ic.rect[1] > bottom:
@@ -3472,6 +3480,11 @@ class App:
     def newWindow(self, filename=None):
         window = Window(self.root, filename)
         self.windows.append(window)
+        if filename is None:
+            return
+        print("before open file")
+        if not window.openFile(filename):
+            window.close()
 
     def resetBlinkTimer(self, holdTime=CURSOR_BLINK_RATE):
         """Cancel the next cursor blink and reschedule it for holdTime milliseconds in
@@ -3603,26 +3616,6 @@ def findSeries(icons):
     series['lists'] = listSeries
     series['individual'] = list(individuals)
     return series
-
-def parseText(text, window, source="Pasted text", forImport=False):
-    segments = filefmt.parseText(window.macroParser, text, source, forImport)
-    if segments is None:
-        return None
-    icons = []
-    if segments is not None:
-        for segment in segments:
-            pos, stmtList = segment
-            if len(stmtList) == 0:
-                continue
-            print(repr(pos))
-            segIcons = blockicons.createIconsFromBodyAst(stmtList, window)
-            if pos is not None:
-                segIcons[0].rect = icon.moveRect(segIcons[0].rect, pos)
-            icons += segIcons
-
-    if len(icons) == 0:
-        return None
-    return icons
 
 def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder):
     """Remove icons in set, toDelete, from ic and the icons below it in the hierarchy,

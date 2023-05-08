@@ -1918,7 +1918,7 @@ def moduleNameToIcons(name, level, window):
     else:
         components = name.split('.')
         baseIdentName = components[0]
-        baseIdentifier = moduleIdToIdentIcon(baseIdentName, window)
+        baseIdentifier = IdentifierIcon(baseIdentName, window)
         rightIc = baseIdentifier
         for component in components[1:]:
             attr = AttrIcon(component, window)
@@ -1930,14 +1930,33 @@ def moduleNameToIcons(name, level, window):
     relativeIcon.replaceChild(baseIdentifier, 'argIcon')
     return relativeIcon
 
-def moduleIdToIdentIcon(name, window):
-    """Module names aren't ast nodes.  They're just components of the Import and
-    ImportFrom nodes, so the $Empty$ macro function doesn't get executed for
-    them, which is what normally substitutes "None"."""
-    if name == filefmt.EMPTY_IDENT_NAME:
-        return None
-    else:
-        return IdentifierIcon(name, window)
+def createIconForNameField(astNode, nameFieldString, window, fieldIdx=0):
+    """Same as plural version of the call for a single field (the more common case)."""
+    icons = createIconsForNameFields(astNode, (nameFieldString,), window, fieldIdx)
+    return icons[0]
+
+def createIconsForNameFields(astNode, nameFieldStrings, window, startIdx=0):
+    """For AST nodes that have text fields where we allow arbitrary icons, a macro,
+    such as $Ctx$ or $Empty$ may provide something other than a name.  Look for a
+    .fieldMacroAnnotations annotation on the ast node, and if it exists, check if any
+    of the fields have corresponding macro data, and can be used to create the icon(s)
+    for the field.  If so, use that, otherwise, create an identifier for each field
+    annotation exists use the referenced macro(s) to create the icon(s).  Otherwise
+    just create an identifier icon the corresponding nameFieldString as its name.  If
+    startIdx is specified, skip the first startX fields"""
+    if not hasattr(astNode, 'fieldMacroAnnotations'):
+        return [IdentifierIcon(s, window) for s in nameFieldStrings]
+    icons = []
+    for name, ann in zip(nameFieldStrings, astNode.fieldMacroAnnotations[startIdx:]):
+        if ann is None:
+            icons.append(IdentifierIcon(name, window))
+        else:
+            macroName, macroArgs, iconCreateFn, argAsts = ann
+            if iconCreateFn is not None:
+                icons.append(iconCreateFn(None, macroArgs, argAsts, window))
+            else:
+                icons.append(IdentifierIcon(name, window))
+    return icons
 
 # Getting resources (particularly icon class definitions) from other icon files requires
 # circular imports, unfortunately.  Here, the import is deferred far enough down the file
@@ -2007,12 +2026,26 @@ def createImportIconFromAst(astNode, window):
     topIcon = ImportIcon(window)
     aliases = []
     for alias in astNode.names:
-        if alias.asname is None:
-            aliases.append(moduleNameToIcons(alias.name, 0, window))
+        if alias.name.find('.') != -1:
+            # Assume a macro won't inject a dotted name just to reprocess it, and avoid
+            # calling createIconForNameField, which would create a dotted identifier.
+            nameIcon = moduleNameToIcons(alias.name, 0, window)
+            if alias.asname is None:
+                asNameIcon = None
+            else:
+                asNameIcon = createIconForNameField(alias, alias.asname, window, 1)
+        elif alias.asname is None:
+            nameIcon = createIconForNameField(alias, alias.name, window)
+            asNameIcon = None
+        else:
+            nameIcon, asNameIcon = createIconsForNameFields(alias,
+                (alias.name, alias.asname), window)
+        if asNameIcon is None:
+            aliases.append(nameIcon)
         else:
             asIcon = infixicon.AsIcon(window)
-            asIcon.replaceChild(moduleNameToIcons(alias.name, 0, window), 'leftArg')
-            asIcon.replaceChild(moduleIdToIdentIcon(alias.asname, window), 'rightArg')
+            asIcon.replaceChild(nameIcon, 'leftArg')
+            asIcon.replaceChild(asNameIcon, 'rightArg')
             aliases.append(asIcon)
     topIcon.insertChildren(aliases, "values", 0)
     return topIcon
@@ -2020,16 +2053,29 @@ icon.registerIconCreateFn(ast.Import, createImportIconFromAst)
 
 def createImportFromIconFromAst(astNode, window):
     topIcon = ImportFromIcon(window)
-    moduleNameIcon = moduleNameToIcons(astNode.module, astNode.level, window)
+    if astNode.module is None or astNode.level > 0 or astNode.module.find('.') != -1:
+        # If module name is missing or contains a dot, use moduleNameToIcons to create an
+        # attribute chain to represent the dots.  moduleNameToIcons will not process
+        # associated macros, but none of our macros operate on a dotted form, and we
+        # don't publicise that macros even work for fields that don't hold asts.
+        moduleNameIcon = moduleNameToIcons(astNode.module, astNode.level, window)
+    else:
+        moduleNameIcon = createIconForNameField(astNode, astNode.module, window)
     topIcon.replaceChild(moduleNameIcon, 'moduleIcon')
     aliases = []
     for alias in astNode.names:
         if alias.asname is None:
-            aliases.append(moduleIdToIdentIcon(alias.name, window))
+            nameIcon = createIconForNameField(alias, alias.name, window)
+            asNameIcon = None
+        else:
+            nameIcon, asNameIcon = createIconsForNameFields(alias,
+                (alias.name, alias.asname), window)
+        if asNameIcon is None:
+            aliases.append(nameIcon)
         else:
             asIcon = infixicon.AsIcon(window)
-            asIcon.replaceChild(moduleIdToIdentIcon(alias.name, window), 'leftArg')
-            asIcon.replaceChild(moduleIdToIdentIcon(alias.asname, window), 'rightArg')
+            asIcon.replaceChild(nameIcon, 'leftArg')
+            asIcon.replaceChild(asNameIcon, 'rightArg')
             aliases.append(asIcon)
     topIcon.insertChildren(aliases, "importsIcons", 0)
     return topIcon
@@ -2056,14 +2102,14 @@ icon.registerIconCreateFn(ast.Break, createBreakIconFromAst)
 
 def createGlobalIconFromAst(astNode, window):
     topIcon = GlobalIcon(window)
-    nameIcons = [IdentifierIcon(name, window) for name in astNode.names]
+    nameIcons = createIconsForNameFields(astNode, astNode.names, window)
     topIcon.insertChildren(nameIcons, "values", 0)
     return topIcon
 icon.registerIconCreateFn(ast.Global, createGlobalIconFromAst)
 
 def createNonlocalIconFromAst(astNode, window):
     topIcon = NonlocalIcon(window)
-    nameIcons = [IdentifierIcon(name, window) for name in astNode.names]
+    nameIcons = createIconsForNameFields(astNode, astNode.names, window)
     topIcon.insertChildren(nameIcons, "values", 0)
     return topIcon
 icon.registerIconCreateFn(ast.Nonlocal, createNonlocalIconFromAst)
@@ -2114,6 +2160,8 @@ def createAttrIconFromAst(astNode, window):
     # Note that the icon hierarchy and the AST hierarchy differ with respect to
     # attributes. ASTs put the attribute at the top, we put the root icon at the top.
     attrIcon = AttrIcon(astNode.attr, window)
+    if filefmt.isAttrParseStub(astNode.value):
+        return attrIcon    # This is a free attribute on the top level
     topIcon = icon.createFromAst(astNode.value, window)
     parentIcon = icon.findLastAttrIcon(topIcon)
     parentIcon.replaceChild(attrIcon, "attrIcon")
