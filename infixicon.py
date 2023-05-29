@@ -223,9 +223,11 @@ class AsIcon(InfixIcon):
                 siteName = siteId
             allowable = self.allowableParents.get(ic.__class__.__name__)
             return allowable is not None and allowable == siteName
-        outSites = snapLists['output']
-        snapLists['output'] = []
-        snapLists['conditional'] = [(*snapData, 'output', snapFn) for snapData in outSites]
+        if 'output' in snapLists:
+            outSites = snapLists['output']
+            snapLists['output'] = []
+            snapLists['conditional'] = \
+                [(*snapData, 'output', snapFn) for snapData in outSites]
         return snapLists
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):

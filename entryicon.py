@@ -110,8 +110,29 @@ class EntryIcon(icon.Icon):
         self.pendingArgListMgrs = {}
         # If the entry icon will own a code block, create a BlockEnd icon and link it in
         if willOwnBlock:
-            self.blockEnd = icon.BlockEnd(self, window)
-            self.sites.seqOut.attach(self, self.blockEnd)
+            self.addCodeBlock()
+
+    def addCodeBlock(self):
+        """Change the entry icon to its block-owning form (used for temporarily holding
+        the code block from a block-owning statement such as 'if' or 'for'."""
+        if hasattr(self, 'blockEnd'):
+            return
+        self.blockEnd = icon.BlockEnd(self, self.window)
+        self.sites.seqOut.attach(self, self.blockEnd)
+        self.window.undo.registerCallback(self.addCodeBlock)
+
+    def removeCodeBlock(self):
+        """Change the entry icon to its non-block-owning form (block-owning form is used
+        to temporarily hold a code block from a block-owning statement such as 'if')."""
+        if not hasattr(self, 'blockEnd'):
+            return
+        nextIc = self.nextInSeq()
+        if nextIc is not None and nextIc is not self.blockEnd:
+            print('Removing non-empty code block from entry icon!')
+        if nextIc is not None:
+            self.replaceChild(None, 'seqOut')
+        del self.blockEnd
+        self.window.undo.registerCallback(self.addCodeBlock)
 
     def restoreForUndo(self, text):
         """Undo restores all attachments and saves the displayed text.  Update the
@@ -1401,6 +1422,9 @@ class EntryIcon(icon.Icon):
                 print('Did I add ugly entry icon to undo? ...code improvement possible?')
             earlyBoundaryAdded = False
         if self.attachedIcon() is None:
+            # The entry icon needs to be restored.  If it formerly owned the code block
+            # below it, revert it to its non-block-owning form.
+            self.removeCodeBlock()
             cursorIcon.replaceChild(self, cursorSite)
         self.text = remainingText
         self.cursorPos = len(remainingText)
@@ -2365,6 +2389,8 @@ class EntryIcon(icon.Icon):
                 "Icon is disconnected from surrounding code")
         for ic in self.children():
             ic.highlightErrors(errHighlight)
+        if hasattr(self, 'blockEnd'):
+            blockicons.checkPseudoBlockHighlights(self)
 
     def cursorWindowPos(self):
         x, y = self.rect[:2]

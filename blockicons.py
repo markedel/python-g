@@ -286,6 +286,7 @@ class WithIcon(icon.Icon):
         return None
 
     def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -473,6 +474,10 @@ class WhileIcon(icon.Icon):
         icon.addArgSaveText(text, brkLvl, self.sites.condIcon, contNeeded, export)
         text.add(None, ":")
         return text
+
+    def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
+        icon.Icon.highlightErrors(self, errHighlight)
 
     def dumpName(self):
         return "while"
@@ -717,6 +722,7 @@ class ForIcon(icon.Icon):
         return None
 
     def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
         if errHighlight is None:
             self.errHighlight = None
             listicons.highlightSeriesErrorsForContext(self.sites.targets, 'store')
@@ -952,6 +958,10 @@ class IfIcon(icon.Icon):
     def execute(self):
         return None  #... no idea what to do here, yet.
 
+    def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
+        icon.Icon.highlightErrors(self, errHighlight)
+
     def createAst(self):
         if self.sites.condIcon.att is None:
             raise icon.IconExecException(self, "Missing condition in if statement")
@@ -1078,10 +1088,35 @@ class ElifIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText("elif ")
+        # See note about dependency on errHighlight in ElseIcon createSaveText
+        if self.errHighlight is None:
+            text = filefmt.SegmentedText("elif ", requiresTempDedent=True)
+        elif not export:
+            text = filefmt.SegmentedText("$XElif$ ")
         icon.addArgSaveText(text, brkLvl, self.sites.condIcon, contNeeded, export)
-        text.add(None, ":")
+        if self.errHighlight is None:
+            text.add(None, ":")
         return text
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        for ic in icon.traverseSeq(self, includeStartingIcon=False, reverse=True,
+                skipInnerBlocks=True):
+            if hasattr(ic, 'blockEnd'):
+                if not isinstance(ic, IfIcon):
+                    errHighlight = icon.ErrorHighlight(
+                        "elif can only appear in 'if' block")
+                break
+            if isinstance(ic, ElseIcon):
+                errHighlight = icon.ErrorHighlight("elif cannot follow else")
+        else:
+            errHighlight = icon.ErrorHighlight("elif is not allowed outside of if")
+        self.errHighlight = errHighlight
+        condIcon = self.childAt('condIcon')
+        if condIcon is not None:
+            condIcon.highlightErrors(errHighlight)
 
     def dumpName(self):
         return "elif"
@@ -1110,118 +1145,6 @@ class ElifIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'condIcon':
             return self.window.replaceIconWithEntry(self, 'elif', 'condIcon')
         return None
-
-class ElseIcon(icon.Icon):
-    def __init__(self, window, location=None):
-        icon.Icon.__init__(self, window)
-        bodyWidth, bodyHeight = icon.getTextSize("else", icon.boldFont)
-        bodyHeight = max(icon.minTxtHgt, bodyHeight)
-        bodyWidth += 2 * icon.TEXT_MARGIN + 1
-        bodyHeight += 2 * icon.TEXT_MARGIN + 1
-        self.bodySize = (bodyWidth, bodyHeight)
-        seqX = icon.dragSeqImage.width + ELSE_DEDENT
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
-        self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
-        self.sites.add('attrIcon', 'attrIn', bodyWidth,
-            bodyHeight // 2 + icon.ATTR_SITE_OFFSET,
-            cursorOnly=True)
-        x, y = (0, 0) if location is None else location
-        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
-        self.parentIf = None
-
-    def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        if toDragImage is None:
-            temporaryDragSite = False
-        else:
-            # When image is specified the icon is being dragged, and it must display
-            # its sequence-insert snap site unless it is in a sequence and not the start.
-            self.drawList = None
-            temporaryDragSite = self.prevInSeq() is None
-        if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = icon.iconBoxedText("else", icon.boldFont, icon.KEYWORD_COLOR)
-            boxLeft = icon.dragSeqImage.width - 1
-            img.paste(txtImg, (boxLeft, 0))
-            seqSiteX = self.sites.seqIn.xOffset-1
-            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqIn.yOffset-1))
-            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqOut.yOffset-1))
-            if temporaryDragSite:
-                img.paste(icon.dragSeqImage,
-                        (0, txtImg.height//2 - icon.dragSeqImage.height//2))
-            self.drawList = [((0, 0), img)]
-        self._drawFromDrawList(toDragImage, location, clip, style)
-        if temporaryDragSite:
-            self.drawList = None
-
-    def doLayout(self, left, top, layout):
-        width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1
-        self.rect = (left, top, left + width, top + height)
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        self.layoutDirty = False
-
-    def calcLayouts(self):
-        width, height = self.bodySize
-        layout = iconlayout.Layout(self, width, height, height // 2)
-        return [layout]
-
-    @staticmethod
-    def _snapFn(ic, siteId):
-        """Return True if sideId of ic is a sequence site within an if, for, or try block
-        (a site suitible for snapping an else icon"""
-        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
-            return False
-        if ic.__class__ in (IfIcon, ForIcon):
-            return True
-        seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
-        blockOwnerIcon = seqStartIc.childAt('seqIn')
-        return blockOwnerIcon.__class__ in (IfIcon, ForIcon, WhileIcon, TryIcon)
-
-    def snapLists(self, forCursor=False):
-        # Make snapping conditional on being within the block of an if, for, or try stmt
-        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
-        if forCursor:
-            return snapLists
-        seqInsertSites = snapLists.get('seqInsert')
-        if seqInsertSites is None:
-            return snapLists
-        snapLists['seqInsert'] = []
-        snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', self._snapFn)]
-        return snapLists
-
-    def backspace(self, siteId, evt):
-        if siteId != "attrIcon":
-            return None
-        self.window.backspaceIconToEntry(evt, self, "else")
-
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'else')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'else')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
-        if siteAfter is None or siteAfter == 'attrIcon':
-            return self.window.replaceIconWithEntry(self, 'else')
-        return None
-
-    def textRepr(self):
-        return "else:"
-
-    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        return filefmt.SegmentedText("else:")
-
-    def dumpName(self):
-        return "else"
-
-    def execute(self):
-        return None  # ... no idea what to do here, yet.
 
 class TryIcon(icon.Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
@@ -1314,6 +1237,10 @@ class TryIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         return filefmt.SegmentedText("try:")
+
+    def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
+        icon.Icon.highlightErrors(self, errHighlight)
 
     def dumpName(self):
         return "try"
@@ -1440,17 +1367,108 @@ class ExceptIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, 'except', 'typeIcon')
         return None
 
+    def textEntryHandler(self, entryIc, text, onAttr):
+        siteId = self.siteOf(entryIc, recursive=True)
+        if siteId != 'typeIcon':
+            return None
+        siteIcon = self.childAt(siteId)
+        if isinstance(siteIcon, infixicon.AsIcon):
+            # Enforce identifiers-only on right argument of "as"
+            asSiteId = siteIcon.siteOf(entryIc, recursive=True)
+            if asSiteId == 'rightArg':
+                if entryIc.parent() is not siteIcon:
+                    return "reject"
+                name = text.rstrip(' ')
+                if not name.isidentifier():
+                    return "reject"
+                if text[-1] == ' ':
+                    return nameicons.IdentifierIcon(name, self.window), text[-1]
+                return "accept"
+            else:  # Right arg of as can be an arbitrary expression, allow anything
+                return None
+        elif siteIcon is entryIc or \
+                onAttr and entryicon.findEnclosingSite(entryIc)[0] is self:
+            # Allow "as" to be typed
+            if text == 'as' and onAttr:
+                return infixicon.AsIcon(self.window), None
+            delim = text[-1]
+            text = text[:-1]
+            if text == 'as' and delim in entryicon.emptyDelimiters:
+                return infixicon.AsIcon(self.window), delim
+        return None
+
     def textRepr(self):
         return "except " + icon.argTextRepr(self.sites.typeIcon) + ":"
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        if self.sites.typeIcon.att is None:
-            return filefmt.SegmentedText("except:")
-        text = filefmt.SegmentedText("except ")
+        typeIcon = self.sites.typeIcon.att
+        if not self.errHighlight:
+            if typeIcon is None:
+                return filefmt.SegmentedText("except:", requiresTempDedent=True)
+            text = filefmt.SegmentedText("except ", requiresTempDedent=True)
+            icon.addArgSaveText(text, brkLvl, self.sites.typeIcon, contNeeded, export)
+            text.add(None, ":")
+            return text
+        # except stmt is out of context, create macro (unless for export to Python)
+        if export:
+            return filefmt.SegmentedText('pass')
+        if typeIcon is None:
+            return filefmt.SegmentedText('$XExcept$')
+        # Statement has an argument, which could be 'as'
+        macroArgs = ':s' if isinstance(typeIcon, infixicon.AsIcon) else ''
+        text = filefmt.SegmentedText('$XExcept%s($' % macroArgs)
         icon.addArgSaveText(text, brkLvl, self.sites.typeIcon, contNeeded, export)
-        text.add(None, ":")
+        text.add(None, '$)$', contNeeded)
         return text
+
+    def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        for ic in icon.traverseSeq(self, includeStartingIcon=False, reverse=True,
+                skipInnerBlocks=True):
+            if hasattr(ic, 'blockEnd'):
+                if not isinstance(ic, TryIcon):
+                    errHighlight = icon.ErrorHighlight(
+                        "except can only appear in if, for, while, or try")
+                break
+            if isinstance(ic, FinallyIcon):
+                errHighlight = icon.ErrorHighlight("except must precede finally")
+            elif isinstance(ic, ElseIcon):
+                errHighlight = icon.ErrorHighlight("except must precede else")
+        else:
+            errHighlight = icon.ErrorHighlight(
+                "except is not allowed outside of try block")
+        self.errHighlight = errHighlight
+        # We're done error checking if the except itself is in error (in which case just
+        # propagate it to the child icon), or there's either no child to check, or the
+        # child is not an "as" icon (in which case any valid expression is ok)
+        typeIcon = self.childAt('typeIcon')
+        if typeIcon is None:
+            return
+        if errHighlight is not None or not isinstance(typeIcon, infixicon.AsIcon):
+            # No more error checking is necessary
+            typeIcon.highlightErrors(errHighlight)
+            return
+        # The child icon is an "as" icon.  Ensure the right value is a simple identifier
+        typeIcon.errHighlight = None
+        leftArg = typeIcon.leftArg()
+        if leftArg is not None:
+            leftArg.highlightErrors(None)  # Left arg can be any expression
+        rightArg = typeIcon.rightArg()
+        if rightArg is None:
+            return
+        if not isinstance(rightArg, nameicons.IdentifierIcon):
+            rightArg.highlightErrors(icon.ErrorHighlight(
+                "Must be an identifier"))
+            return
+        rightArg.errHighlight = None
+        rightArgAttr = rightArg.childAt('attrIcon')
+        if rightArgAttr is not None:
+            rightArgAttr.highlightErrors(icon.ErrorHighlight(
+                "Must be an identifier with nothing attached"))
 
     def dumpName(self):
         return "except"
@@ -1537,10 +1555,188 @@ class FinallyIcon(icon.Icon):
         return "finally:"
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        return filefmt.SegmentedText("finally:")
+        if self.errHighlight is None:
+            text = filefmt.SegmentedText("finally:", requiresTempDedent=True)
+        else:
+            # finally is in a bad context
+            text = filefmt.SegmentedText("$XFinally$")
+        return text
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        for ic in icon.traverseSeq(self, includeStartingIcon=False, reverse=True,
+                skipInnerBlocks=True):
+            if hasattr(ic, 'blockEnd'):
+                if not isinstance(ic, TryIcon):
+                    self.errHighlight = icon.ErrorHighlight(
+                        "finally can only appear in try block")
+                break
+            if isinstance(ic, FinallyIcon):
+                self.errHighlight = icon.ErrorHighlight(
+                    "try block can have only one finally clause")
+        else:
+            self.errHighlight = icon.ErrorHighlight(
+                "finally is not allowed outside of try block")
+        checkPseudoBlockHighlights(self)
 
     def dumpName(self):
         return "finally"
+
+class ElseIcon(icon.Icon):
+    allowedBlocks = IfIcon, ForIcon, WhileIcon, TryIcon
+
+    def __init__(self, window, location=None):
+        icon.Icon.__init__(self, window)
+        bodyWidth, bodyHeight = icon.getTextSize("else", icon.boldFont)
+        bodyHeight = max(icon.minTxtHgt, bodyHeight)
+        bodyWidth += 2 * icon.TEXT_MARGIN + 1
+        bodyHeight += 2 * icon.TEXT_MARGIN + 1
+        self.bodySize = (bodyWidth, bodyHeight)
+        seqX = icon.dragSeqImage.width + ELSE_DEDENT
+        self.sites.add('seqIn', 'seqIn', seqX, 1)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
+        self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
+        self.sites.add('attrIcon', 'attrIn', bodyWidth,
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET,
+            cursorOnly=True)
+        x, y = (0, 0) if location is None else location
+        self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
+        self.parentIf = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
+        if toDragImage is None:
+            temporaryDragSite = False
+        else:
+            # When image is specified the icon is being dragged, and it must display
+            # its sequence-insert snap site unless it is in a sequence and not the start.
+            self.drawList = None
+            temporaryDragSite = self.prevInSeq() is None
+        if self.drawList is None:
+            img = Image.new('RGBA', (comn.rectWidth(self.rect),
+            comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
+            txtImg = icon.iconBoxedText("else", icon.boldFont, icon.KEYWORD_COLOR)
+            boxLeft = icon.dragSeqImage.width - 1
+            img.paste(txtImg, (boxLeft, 0))
+            seqSiteX = self.sites.seqIn.xOffset - 1
+            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqIn.yOffset - 1))
+            img.paste(icon.seqSiteImage, (seqSiteX, self.sites.seqOut.yOffset - 1))
+            if temporaryDragSite:
+                img.paste(icon.dragSeqImage,
+                    (0, txtImg.height // 2 - icon.dragSeqImage.height // 2))
+            self.drawList = [((0, 0), img)]
+        self._drawFromDrawList(toDragImage, location, clip, style)
+        if temporaryDragSite:
+            self.drawList = None
+
+    def doLayout(self, left, top, layout):
+        width, height = self.bodySize
+        width += icon.dragSeqImage.width - 1
+        self.rect = (left, top, left + width, top + height)
+        layout.updateSiteOffsets(self.sites.seqInsert)
+        self.layoutDirty = False
+
+    def calcLayouts(self):
+        width, height = self.bodySize
+        layout = iconlayout.Layout(self, width, height, height // 2)
+        return [layout]
+
+    @staticmethod
+    def _snapFn(ic, siteId):
+        """Return True if sideId of ic is a sequence site within an if, for, or try block
+        (a site suitible for snapping an else icon"""
+        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
+            return False
+        if isinstance(ic, ElseIcon.allowedBlocks):
+            return True
+        seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
+        blockOwnerIcon = seqStartIc.childAt('seqIn')
+        return isinstance(blockOwnerIcon, ElseIcon.allowedBlocks)
+
+    def snapLists(self, forCursor=False):
+        # Make snapping conditional on being within the block of an if, for, or try stmt
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor:
+            return snapLists
+        seqInsertSites = snapLists.get('seqInsert')
+        if seqInsertSites is None:
+            return snapLists
+        snapLists['seqInsert'] = []
+        snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', self._snapFn)]
+        return snapLists
+
+    def backspace(self, siteId, evt):
+        if siteId != "attrIcon":
+            return None
+        self.window.backspaceIconToEntry(evt, self, "else")
+
+    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        if clickPos is not None:
+            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
+            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
+            cursorTextIdx, cursorWindowPos = icon.cursorInText(
+                (textOriginX, textOriginY), clickPos, icon.boldFont, 'else')
+            if cursorTextIdx is None:
+                return None, None
+            entryIcon = self.window.replaceIconWithEntry(self, 'else')
+            entryIcon.setCursorPos(cursorTextIdx)
+            return entryIcon, cursorWindowPos
+        if siteAfter is None or siteAfter == 'attrIcon':
+            return self.window.replaceIconWithEntry(self, 'else')
+        return None
+
+    def textRepr(self):
+        return "else:"
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        # Note the dependency, here, of saving on error highlighting being up-to-date.
+        # I hope this doesn't cause issues, later, but reusing this info saves a lot of
+        # open-ended scanning up the code block to find the block owner and other elses.
+        # Also note that this cheat is not generally applicable to other situations, as
+        # anything that's not a top-level icon may be highlighted due to parent issues.
+        if self.errHighlight is None:
+            text = filefmt.SegmentedText("else:", requiresTempDedent=True)
+        else:
+            # else is in a bad context
+            text = filefmt.SegmentedText("$XElse$")
+        return text
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        blockOwner = None
+        followsExcept = False
+        for ic in icon.traverseSeq(self, includeStartingIcon=False, reverse=True,
+                skipInnerBlocks=True):
+            if hasattr(ic, 'blockEnd'):
+                if not isinstance(ic, self.allowedBlocks):
+                    errHighlight = icon.ErrorHighlight(
+                        "else can only appear in if, for, while, or try")
+                blockOwner = ic
+                break
+            if isinstance(ic, FinallyIcon):
+                errHighlight = icon.ErrorHighlight("else must precede finally")
+            elif isinstance(ic, ElseIcon):
+                errHighlight = icon.ErrorHighlight("Only one else clause allowed")
+            elif isinstance(ic, ExceptIcon):
+                followsExcept = True
+        else:
+            errHighlight = icon.ErrorHighlight(
+                "else is not allowed outside of if, for, while, or try")
+        if isinstance(blockOwner, TryIcon):
+            if not followsExcept:
+                errHighlight = icon.ErrorHighlight(
+                    "'try' statement must have an 'except' clause to use 'else'")
+        self.errHighlight = errHighlight
+        checkPseudoBlockHighlights(self)
+
+    def dumpName(self):
+        return "else"
+
+    def execute(self):
+        return None  # ... no idea what to do here, yet.
 
 class DefOrClassIcon(icon.Icon):
     hasTypeover = True
@@ -2015,6 +2211,7 @@ class ClassDefIcon(DefOrClassIcon):
         return None
 
     def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -2101,6 +2298,7 @@ class DefIcon(DefOrClassIcon):
          createBlockEnd=False)
 
     def highlightErrors(self, errHighlight):
+        checkPseudoBlockHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -2894,10 +3092,14 @@ def createIconsFromBodyAsts(bodyAsts, window):
         if isinstance(stmt, ast.Expr):
             stmtIcon = icon.createFromAst(stmt.value, window)
             bodyIcons = None
+        elif isinstance(stmt, ast.Pass) and hasattr(stmt, 'macroAnnotations') and \
+                stmt.macroAnnotations[1] is not None and 'x' in stmt.macroAnnotations[1]:
+            continue  # pass annotated with 'x' macro argument, meaning, omit
         elif stmt.__class__ in blockStmts:
             stmtIcon = icon.createFromAst(stmt, window)
             bodyIcons = createIconsFromBodyAsts(stmt.body, window)
-            stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
+            if len(bodyIcons) > 0:
+                stmtIcon.sites.seqOut.attach(stmtIcon, bodyIcons[0], 'seqIn')
             if isinstance(stmt, ast.Try):
                 # Process except blocks
                 for handlerIdx, handler in enumerate(stmt.handlers):
@@ -2919,10 +3121,13 @@ def createIconsFromBodyAsts(bodyAsts, window):
                             exceptIcon.replaceChild(asIcon, 'typeIcon')
                         else:
                             exceptIcon.replaceChild(typeIcon, 'typeIcon')
-                    bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], exceptIcon, 'seqIn')
+                    prevIcon = stmtIcon if len(bodyIcons) == 0 else bodyIcons[-1]
+                    prevIcon.sites.seqOut.attach(prevIcon, exceptIcon, 'seqIn')
                     bodyIcons.append(exceptIcon)
                     exceptBlockIcons = createIconsFromBodyAsts(handler.body, window)
-                    exceptIcon.sites.seqOut.attach(exceptIcon, exceptBlockIcons[0], 'seqIn')
+                    if len(exceptBlockIcons) > 0:
+                        exceptIcon.sites.seqOut.attach(exceptIcon, exceptBlockIcons[0],
+                            'seqIn')
                     bodyIcons += exceptBlockIcons
             while stmt.__class__ is ast.If and len(stmt.orelse) == 1 and \
                     stmt.orelse[0].__class__ is ast.If:
@@ -2936,7 +3141,8 @@ def createIconsFromBodyAsts(bodyAsts, window):
                 condIcon = icon.createFromAst(stmt.orelse[0].test, window)
                 elifIcon.replaceChild(condIcon, 'condIcon')
                 elifBlockIcons = createIconsFromBodyAsts(stmt.orelse[0].body, window)
-                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elifIcon, 'seqIn')
+                prevIcon = stmtIcon if len(bodyIcons) == 0 else bodyIcons[-1]
+                prevIcon.sites.seqOut.attach(prevIcon, elifIcon, 'seqIn')
                 bodyIcons.append(elifIcon)
                 elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
                 bodyIcons += elifBlockIcons
@@ -2953,7 +3159,8 @@ def createIconsFromBodyAsts(bodyAsts, window):
                 if hasattr(stmt, 'elsestmtcomment'):
                     _addStmtComment(elseIcon, stmt.elsestmtcomment)
                 elseBlockIcons = createIconsFromBodyAsts(stmt.orelse, window)
-                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], elseIcon, 'seqIn')
+                prevIcon = stmtIcon if len(bodyIcons) == 0 else bodyIcons[-1]
+                prevIcon.sites.seqOut.attach(prevIcon, elseIcon, 'seqIn')
                 bodyIcons.append(elseIcon)
                 elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
                 bodyIcons += elseBlockIcons
@@ -2969,7 +3176,8 @@ def createIconsFromBodyAsts(bodyAsts, window):
                 finallyIcon.sites.seqOut.attach(finallyIcon, finallyBlockIcons[0], 'seqIn')
                 bodyIcons += finallyBlockIcons
             blockEnd = stmtIcon.blockEnd
-            bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
+            if len(bodyIcons) > 0:
+                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
             bodyIcons.append(blockEnd)
         else:
             stmtIcon = icon.createFromAst(stmt, window)
@@ -3013,3 +3221,60 @@ def _addStmtComment(ic, comment):
     commentText = comment[1].replace('\\n', '\n')
     commenticon.CommentIcon(commentText, attachedToStmt=ic, window=ic.window,
         ann=comment[0])
+
+def checkPseudoBlockHighlights(blockOwner):
+    """Scan the top-level content of the block below blockOwner for pseudo-block-owning
+    icons (else, elif, except, finally) that have not been marked dirty (and whose
+    highlightErrors method would therefore not be called).  This needs to be done for
+    all dirty block-owning icons as well as for pseudo-block-owing icons (unfortunately),
+    because we have to both highlight and un-highlight misplaced else, elif, except, and
+    finally statements.  I suspect this wastes a lot of cycles. (... hopefully, an
+    overhaul of the sequence mechanism can someday address this)."""
+    nextIc = blockOwner.nextInSeq()
+    if nextIc is not None and nextIc is not isinstance(nextIc, icon.BlockEnd):
+        for ic in icon.traverseSeq(nextIc, includeStartingIcon=True,
+                skipInnerBlocks=True):
+            if isinstance(ic, icon.BlockEnd):
+                break
+            if isinstance(ic, (ElseIcon, ElifIcon, ExceptIcon, FinallyIcon)):
+                if not ic.layoutDirty:
+                    # Note that we're subtly depending upon layout proceeding in top to
+                    # bottom to avoid doing the highlighting twice.  However, even if
+                    # this were not the case, the highlightErrors method for top-level
+                    # statements is only ever called with an argument of None, so the
+                    # only consequence to calling it twice is (yet more) wasted cycles.
+                    ic.highlightErrors(None)
+
+def checkEmptyBlockNeedsPass(ic):
+    """Determine if block-owning or pseudo-block-owning (else, elif, except, finally)
+    icon, ic needs to be followed by a $:x$pass (or simply pass for Python export)."""
+    nextIc = ic.nextInSeq()
+    return nextIc is None or isinstance(nextIc, icon.BlockEnd) or isinstance(nextIc,
+            (ElifIcon, ElseIcon,  ExceptIcon, FinallyIcon)) and not nextIc.errHighlight
+
+def looseElseMacroIconCreationFn(astNode, macroArgs, argAsts, window):
+    return ElseIcon(window)
+filefmt.registerBuiltInMacro('XElse', 'pass', looseElseMacroIconCreationFn)
+
+def looseFinallyMacroIconCreationFn(astNode, macroArgs, argAsts, window):
+    return FinallyIcon(window)
+filefmt.registerBuiltInMacro('XFinally', 'pass', looseFinallyMacroIconCreationFn)
+
+def looseElifMacroIconCreationFn(astNode, macroArgs, argAsts, window):
+    elifIcon = ElifIcon(window)
+    condIcon = icon.createFromAst(astNode.operand, window)
+    elifIcon.replaceChild(condIcon, 'condIcon')
+    return elifIcon
+filefmt.registerBuiltInMacro('XElif', 'not', looseElifMacroIconCreationFn)
+
+def looseExceptMacroIconCreationFn(astNode, macroArgs, argAsts, window):
+    exceptIcon = ExceptIcon(window)
+    if argAsts is None or len(argAsts) == 0:
+        typeIcon = None
+    elif macroArgs is None or not 's' in macroArgs:
+        typeIcon = icon.createFromAst(argAsts[0], window)
+    else:
+        typeIcon = createWithAsIconFromAst(argAsts[0], window)
+    exceptIcon.replaceChild(typeIcon, 'typeIcon')
+    return exceptIcon
+filefmt.registerBuiltInMacro('XExcept', 'pass', looseExceptMacroIconCreationFn)

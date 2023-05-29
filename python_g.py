@@ -2561,6 +2561,15 @@ class Window:
             topIcons = orderedTopIcons
         else:
             deletedSeqList = None
+        # Before doing the deletion, waste some cycles to scan for else icons among the
+        # deleted icons, if one is found, mark the owner of the containing block, dirty
+        # so its highlightErrors method will re-scan and potentially clear else-related
+        # errors
+        for ic in topIcons:
+            if isinstance(ic, blockicons.ElseIcon):
+                blockOwner = icon.findBlockOwner(ic)
+                if blockOwner is not None:
+                    blockOwner.markLayoutDirty()
         # Recursively call splitDeletedIcons to build up a replacement tree for
         # each of those top-level icons.  The deletion code will return either 1) None
         # indicating no change (leave current icon), 2) Empty list (fully delete),
@@ -2700,14 +2709,10 @@ class Window:
         exportPython = ext != ".pyg"
         tabSize = 4
         print('Started save')
-        firstSeq = True
         with open(filename, "w") as f:
-            for seqStartPage in self.sequences:
+            for seqStartPage in sorted(self.sequences, key=self.seqSortKeyFn):
                 startIcon = seqStartPage.startIcon
                 left, top = startIcon.hierRect()[:2]
-                if not firstSeq:
-                    f.write('\n')
-                firstSeq = False
                 if not exportPython:
                     f.write("$@%+d%+d$\n" % (left, top))
                 branchDepth = 0
@@ -2715,8 +2720,8 @@ class Window:
                     if isinstance(ic, icon.BlockEnd):
                         branchDepth -= 1
                     else:
-                        if ic.__class__ in (blockicons.ElifIcon, blockicons.ElseIcon,
-                                blockicons.ExceptIcon, blockicons.FinallyIcon):
+                        saveText = ic.createSaveText(export=exportPython)
+                        if saveText.requiresTempDedent:
                             indent = tabSize * max(0, branchDepth - 1)
                         else:
                             indent = tabSize * max(0, branchDepth)
@@ -2725,7 +2730,6 @@ class Window:
                             branchDepth += 1
                         else:
                             continueIndent = tabSize
-                        saveText = ic.createSaveText(export=exportPython)
                         if hasattr(ic, 'stmtComment') and ic.stmtComment is not None:
                             saveText.addComment(ic.stmtComment.createSaveText(
                                 export=exportPython), isStmtComment=True)
@@ -2733,7 +2737,23 @@ class Window:
                             margin=100, export=exportPython)
                         f.write(stmtText)
                         f.write('\n')
+                        if (hasattr(ic, 'blockEnd') or saveText.requiresTempDedent) and \
+                                blockicons.checkEmptyBlockNeedsPass(ic):
+                            # Python requires a 'pass' statement for empty blocks
+                            f.write((tabSize * max(0, branchDepth)) * ' ')
+                            if not exportPython:
+                                f.write('$:x$')
+                            f.write('pass\n')
         print('Finished save')
+
+    @staticmethod
+    def seqSortKeyFn(seqStartPage):
+        """To make the save file format stable for use by version control systems and
+        diff/review tools, we need to order the sequence list consistently.  To do that,
+        we sort it by y, then by x coordinate. of the start of the sequence."""
+        startIcon = seqStartPage.startIcon
+        left, top = startIcon.hierRect()[:2]
+        return top, left
 
     def clearBgRect(self, rect=None):
         """Clear but don't refresh a rectangle of the window.  rect is in content
@@ -2837,6 +2857,13 @@ class Window:
         # be called after building them up.  This is important for undo, as well which
         # separately tracks icon attachments and add/remove from the window structures.
         nextInSeq = old.nextInSeq()
+        if isinstance(old, blockicons.ElseIcon):
+            # Waste cycles to mark the block-owner of a removed else, dirty.  Necessary
+            # because highlightError functions for block owners and else-icons can't
+            # detect a *removed* else.
+            blockOwner = icon.findBlockOwner(old)
+            if blockOwner is not None:
+                blockOwner.markLayoutDirty()
         if hasattr(old, 'blockEnd'):
             beforeBlockEnd = old.blockEnd.prevInSeq()
             if beforeBlockEnd is old:

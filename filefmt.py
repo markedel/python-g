@@ -44,6 +44,9 @@ macroArgContextTypes = {'a', 's', 'd', 'c', 'e', 'f'}
 ERR_START_ARROW = '\U0001F882'
 ERR_END_ARROW = '\U0001F880'
 
+# Macros for all windows pre-registered with registerBuiltInMacro
+builtInMacros = {}
+
 class MacroParser:
     macroPattern = re.compile("\\$([^$]+)\\$")
     posMacroPattern = re.compile("@(([-+])\\d*)(([-+])\\d*)(:([asdcen])?)?(\\()?")
@@ -51,7 +54,7 @@ class MacroParser:
         "\\+|-|/|%|\\*|<|>|\\||\\^|&|is|in|and|or|if|=|!=|\\(|\\.|\\[")
 
     def __init__(self):
-        self.macroList = {}
+        self.macroList = builtInMacros.copy()
 
     def addMacro(self, name, subs="", iconCreateFn=None):
         """Add a macro to annotate and extend the save-file and pasted-text format beyond
@@ -416,15 +419,16 @@ class MacroParser:
         endLineNum = startLineNum
         match = self.macroPattern.match(text, startIdx)
         if match is None:
-            raise MacroFailException(text, startIdx, message='Parsing error')
+            raise MacroFailException(text, startIdx, startLineNum,
+                message='Parsing error')
         endIdx = startIdx + len(match.group(0))
         macroText = match.group(1)
         if macroText[0] != '@':
             message = 'Unmatched $)$' if macroText[0] == ')' else 'Unexpected macro'
-            raise MacroFailException(text, startIdx, message=message)
+            raise MacroFailException(text, startIdx, startLineNum, message=message)
         match = self.posMacroPattern.fullmatch(macroText)
         if match is None:
-            raise MacroFailException(text, startIdx,
+            raise MacroFailException(text, startIdx, startLineNum,
                 message="Bad format for @ (segment position) macro")
         if match.group(7) == '(':
             # the macro a code argument
@@ -437,6 +441,12 @@ class MacroParser:
             macroArgCodeList = None
         x = int(match.group(1))
         y = int(match.group(3))
+        # If the macro is followed by a newline, consume that as well, to prevent it from
+        # being converted to an extraneous vertical blank icon.
+        while text[endIdx] == ' ':
+            endIdx += 1
+        if text[endIdx] == '\n':
+            endIdx += 1
         return (x, y), macroArgCodeList, endIdx, endLineNum
 
 class AnnotationList:
@@ -647,6 +657,11 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False):
                     "@ macro with code argument cannot be followed by code"))
                 return None
         startIdx = parseEndIdx
+
+def registerBuiltInMacro(name, subs="", iconCreateFn=None):
+    """Internal function for adding a universal macro that will automatically be added to
+    every window upon creation.  Parameters are same as MacroParser addMacro method."""
+    builtInMacros[name] = subs, iconCreateFn
 
 def _parseTextToIcons(text, startIdx, startLineNum, window, source, forImport):
     """Internal version of parseTextToIcons that returns an additional value of the
@@ -1070,7 +1085,7 @@ class SegmentedText:
     potential line breaks and their associated "level" in the hierarchy of the statement.
     Once collected, the wrapText method will produce an attractively (and compactly)
     wrapped version of the text."""
-    __slots__ = ('segments', 'stmtComment')
+    __slots__ = ('segments', 'stmtComment', 'requiresTempDedent')
     # Format for "segments" list is strings separated by numbers (break values).  break
     # values encapsulate the break "level", as well as how the break needs to be made
     # (with/without line continuation and string splitting).  Strings represent text to
@@ -1098,7 +1113,7 @@ class SegmentedText:
     #       52 = Newline break (mandatory) without dedent to left margin (help strings)
     #       53 = Non-newline break without dedent to left margin (help strings)
 
-    def __init__(self, initialString=None):
+    def __init__(self, initialString=None, requiresTempDedent=False):
         """Create a SegmentedText object.  initialString may be set to None or an empty
         string, to create an empty string, or to a normal text string.  It may also be
         set to a list of strings, and multiStringBreakLevel specified to initialize it
@@ -1108,6 +1123,7 @@ class SegmentedText:
         else:
             self.segments = [initialString]
         self.stmtComment = None
+        self.requiresTempDedent = requiresTempDedent
 
     def add(self, breakLevel, text, needsContinue=False):
         """Append a single string to the end of the accumulated text.  If breakLevel

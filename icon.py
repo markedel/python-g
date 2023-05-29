@@ -733,7 +733,7 @@ class Icon:
         parent = self.parent()
         if parent is None:
             if replacementIcon is None:
-                self.window.removeTop(self)
+                self.window.removeIcons(self)  # Curr. unused, untested, but should work
             else:
                 self.window.replaceTop(self, replacementIcon)
         else:
@@ -1531,6 +1531,8 @@ def drawSeqRule(ic, clip=None, image=None):
     draw.line((x, fromY, x, toY), SEQ_RULE_COLOR)
 
 def findSeqStart(ic, toStartOfBlock=False):
+    """Find the first icon of a sequence, either the very start (where it attaches to the
+    window (default) or to the top icon in its code block (toStartOfBlock=True)."""
     while True:
         if not hasattr(ic.sites, 'seqIn'):
             return ic
@@ -1543,6 +1545,11 @@ def findSeqStart(ic, toStartOfBlock=False):
         if isinstance(ic, BlockEnd):
             # Shortcut around blocks significantly improves performance
             ic = ic.primary
+
+def findBlockOwner(ic):
+    """Search up the sequence from ic to find and return the icon that owns its code
+    block.  Returns None if the block is in the outermost block of the sequence."""
+    return findSeqStart(ic, toStartOfBlock=True).prevInSeq()
 
 def findSeqEnd(ic, toEndOfBlock=False):
     while True:
