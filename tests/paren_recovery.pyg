@@ -1,0 +1,49 @@
+a*(fn(b))
+a*(fn(b,c))
+a*(fn())
+a*(a,)
+a*((a,))
+a = (3+4)*3
+b = (3*4)+3
+c = 1 or 2 or 3
+d = (1 or 2) or 3
+e = 1 or (2 or 3)
+f = (1 or 2 or 3)
+g = 1 or 2 or (3 or 4 or 5)
+h = 1 or (2 or 3) or 4
+i = (1 and 2 and 3)
+x = (3*2+4)
+x = ((3*2)+4)
+x = ((3+2)*4)
+fn(3*4+5/6*8-2|3)
+fn(((((((3*4)+5)/6)*8)-2)|3))
+a[(x):y]
+a * (b if (c) else d*(e+5)) + 3
+(a + b) < (c * 3) <(d|f)
+a<b<c
+(a<b) < (c<d)
+(a<b) or (c == d)
+a + b or c + d
+(a or b) < (c or d)
+return a,b,c
+return (a,b,c)
+yield a,b,c
+yield (a,b,c)
+for i in a,b,c: pass
+for i in (a,b,c): pass
+a = b,c,d
+a = (b,c,d)
+a,b = c,d
+(a,b) = c,d
+for i,j in a,b,c: pass
+for (i,j) in a,b,c: pass
+[a for a,b in c]
+[a for (a,b) in c]
+fn(f'asdf{i}asdf' 'nert')
+fn((f'asdf{i}asdf' 'nert'), (a))
+-(a+b)
+*(a+b)
+fn(**(a+b))
+fn(x = (a + b), **(a + b))
+a*fn(b)
+a*(fn(b))

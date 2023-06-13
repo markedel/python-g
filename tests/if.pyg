@@ -1,0 +1,29 @@
+$@+150+59$
+if a:
+    $:x$pass
+elif a*b:
+    c
+else:
+    b
+    $XElif$ c
+    $XElse$
+    d
+$@+355+316$
+for x in y:
+    $:x$pass
+else:
+    c
+    $XElif$ d
+$@+346+428$
+try:
+    x
+except y as z:
+    z
+except y:
+    $:x$pass
+while x:
+    $XExcept$
+    a
+    $XExcept($a + b$)$
+    b
+    $XExcept:s($a as b$)$

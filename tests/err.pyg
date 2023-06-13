@@ -1,0 +1,63 @@
+$@+30+30$
+import os.sys
+import os.sys as nert
+import $Empty$, nert.wang as mywang, sys
+from ..asdf import x
+from nert.wang import x
+from .. import *
+from nert import wang
+from ..a.b import c, d
+from . import x as y, z as q
+from $Empty$ import x
+from $Empty$ import x
+from $Empty$ import *
+from $Empty$ import $Empty$
+from $Empty$ import c, d
+from $Empty$ import $Empty$ as y, z as $Empty$
+def $Empty$ (x,y):
+    $:x$pass
+class $Empty$ (a):
+    pass
+#$@+10+300$
+global x, $Empty$, y
+global $Empty$
+global x, $Empty$
+nonlocal x, $Empty$, y
+nonlocal $Empty$
+nonlocal x, $Empty$
+def f($Empty$, y=$Empty$, $Empty$=z):
+    $XElse$
+def f($Empty$, y=3, $Empty$=z):
+    pass
+def f(**$Empty$):
+    pass
+fn(a=b, $Empty$=c, d=$Empty$, $Empty$=$Empty$)
+fn(**$Empty$)
+class C ($Empty$=b, c=$Empty$):
+    pass
+[$Ctx:e($$Empty$$)$]
+def $Ctx($3$)$ ():
+    pass
+$Ctx:d($a:b$)$
+$XElif$ a==b
+[$Ctx:f($a=b$)$]
+[$Ctx:f($$Empty$=b$)$]
+[$Ctx:f($a=$Empty$$)$]
+$@+400+100:a($
+    .a.b.c.d  $)$
+$@+400+200$
+$Ctx($ 4 $)$ = 3
+y=4
+#$Ctx:a($.nert$)$
+{$Empty$:b}
+def $Ctx:f($  in_=a_def  $)$ (): pass
+with a as b, c as d:pass
+for $Ctx:s($a as b$)$ in range(1):pass
+*a
+import $Ctx($a+3$)$
+fn($Ctx:d($a:b$)$=c)
+$Ctx:f($  **a  $)$
+$@+400+550:n($  a=b  $)$
+$@+400+580:s($  a as b  $)$
+$@+400+600:c($  for a in b  $)$
+$@+400+620:c($  if a in b*c $)$
