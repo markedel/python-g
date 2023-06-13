@@ -2310,10 +2310,10 @@ class DefIcon(DefOrClassIcon):
                 attr = nameIcon.sites.attrIcon.att
                 if attr is not None:
                     attr.highlightErrors(icon.ErrorHighlight(
-                        "Function def name field must be unqualified name"))
+                        "Function def name field must be an unqualified name"))
             else:
                 errHighlight = icon.ErrorHighlight(
-                    "Function def name field must be identifier")
+                    "Function def name field must be an identifier")
                 nameIcon.highlightErrors(errHighlight)
         if self.argList is not None:
             endOfPositionalArgs = processedStar = processedStarStar = False
@@ -2931,12 +2931,14 @@ icon.registerIconCreateFn(ast.While, createWhileIconFromAst)
 def createForIconFromAst(astNode, window):
     isAsync = astNode.__class__ is ast.AsyncFor
     topIcon = ForIcon(isAsync, window=window)
-    if isinstance(astNode.target, ast.Tuple):
+    if isinstance(astNode.target, ast.Tuple) and not \
+            hasattr(astNode.target, 'tupleHasParens'):
         tgtIcons = [icon.createFromAst(t, window) for t in astNode.target.elts]
         topIcon.insertChildren(tgtIcons, "targets", 0)
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.target, window), "targets_0")
-    if isinstance(astNode.iter, ast.Tuple):
+    if isinstance(astNode.iter, ast.Tuple) and not \
+            hasattr(astNode.iter, 'tupleHasParens'):
         iterIcons = [icon.createFromAst(i, window) for i in astNode.iter.elts]
         topIcon.insertChildren(iterIcons, "iterIcons", 0)
         if len(iterIcons) == 1:

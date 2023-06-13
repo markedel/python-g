@@ -745,8 +745,10 @@ def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslat
     if not isinstance(modAst, ast.Module) or len(modAst.body) == 0:
         print("Unexpected AST returned from ast.parse")
         return None
-    # Ast parsing tosses comments, but we need them
-    _transferCommentsToAst(expandedText, modAst, annotations, forImport)
+    # AST parsing tosses comments, redundant parens, and the original entry formats for
+    # various types of constants, but we need all of these.  Modify or annotate the AST
+    # tree to include the dropped information
+    _recoverTextDataOmittedFromAst(expandedText, modAst, annotations, forImport)
     # Annotate the nodes in the tree per the annotations list.  the attached tuple
     # format is: (macroName, macroArgs, iconCreateFn, macroArgIcons)
     for node in ast.walk(modAst):
@@ -777,30 +779,42 @@ def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslat
     else:  # parseCtx in ('a', 'e'):
         return stmtAst.value
 
-def _transferCommentsToAst(text, moduleAst, annotations, forImport):
-    """Parse comments out of text and annotate the appropriate AST nodes so we can find
-    them again when constructing the icon hierarchy from the AST."""
-    comments, elses, consts, commentOnlyLines = _extractTokens(text, annotations,
-        forImport)
+def _recoverTextDataOmittedFromAst(text, moduleAst, annotations, forImport):
+    """ASTs are really for execution, not editing.  The Python parser strips important
+    source information, such as comments, original forms of constants, and redundant
+    parens.  Process the original text and annotate AST nodes or add new ones to enable
+    the icon creation code to reproduce this information."""
+    comments, elses, consts, commentOnlyLines, posToLParen, posToRParen = _extractTokens(
+        text, annotations, forImport)
     _annotateAstWithComments(comments, elses, commentOnlyLines, moduleAst.body)
     _annotateAstConsts(consts, moduleAst)
+    _annotateUserParens(moduleAst, posToLParen, posToRParen)
 
 def _extractTokens(text, annotations, forImport):
-    """ Return four dictionaries: 1 mapping line numbers to comments, and 2 mapping
-    line numbers to else/elif/except/finally statements (the dictionary holds start
-    column number), 3 mapping line/col pairs to source strings for strings and numbers,
-    and 4 (a set, not a dict) records line numbers of lines that contain only a comment.
+    """ Return six dictionaries:
+        1. mapping line numbers to comment
+        2. mapping line numbers to else/elif/except/finally statements (the dictionary
+          holds start column number)
+        3. mapping line/col pairs to source strings for strings and numbers
+        4. (a set, not a dict) records line numbers of lines that contain only a comment
+        5. mapping line/col pairs to a list of integers uniquely identifying open/close
+           paren pairs whose open paren *precedes* the token starting at (line, col).
+        6. mapping line/col pairs to a list of integers uniquely identifying paren pairs
+           whose close paren follows the token ending at (line, col)
     annotations argument is used to attach comment macro annotations, and to know  how to
     interpret line breaks in the column (by interpreting the macro arguments to detect
     "w" argument indicating that the comment should be wrapped)."""
-    # While it seems wasteful to run a whole separate pass over the file to extract
-    # comments and detect the positioning of else statements, these are easier on
-    # tokenized code (which we can't do before macro substitution).  I suspect the
-    # tokenize module is C code, so folding this in with macro expansion might be less
-    # hackish, but not necessarily faster.
+    # The macro code already runs a processing pass on the entire source text, so it may
+    # seem wasteful to run a whole separate one over the file to extract this additional
+    # data.  However, this is much easier on tokenized code (which we can't do before
+    # macro substitution).  I also suspect tokenizing is done in C code, so folding this
+    # in with macro expansion might be less hackish, but not necessarily faster.
     lineNumToComment = {}
     lineNumToClause = {}
     posToConstSrcStr = {}
+    posToLParen = {}
+    posToRParen = {}
+    freeParenCount = 0
     commentOnlyLines = set()
     # The tokenize module won't just take a text string.  It needs a utf-8 coded
     # readline function
@@ -810,7 +824,9 @@ def _extractTokens(text, annotations, forImport):
         prevCommentCol = -1
         prevCommentContinuation = False
         prevKey = None
-        wrap = False
+        parenStack = []
+        parenLabel = 0
+        lastNonParenTokenEnd = None
         prevTokenWasString = None
         for token in tokens:
             if token.type == tokenize.COMMENT:
@@ -876,7 +892,50 @@ def _extractTokens(text, annotations, forImport):
                 # Note that specifically, we don't clear prevTokenWasString
             else:
                 prevTokenWasString = None
-    return lineNumToComment, lineNumToClause, posToConstSrcStr, commentOnlyLines
+            # Associate left parens with the next non-paren, non whitespace token
+            # and right parens with the previous non-paren, non whitespace token
+            # Paren pairs are labeled with an arbitrary integer ID so the code that
+            # inserts redundant parens can be absolutely sure it's acting on good
+            # information.
+            if token.type == tokenize.OP and token.exact_type == tokenize.RPAR:
+                if len(parenStack) == 0:
+                    print('Paren matching error in _extractTokens')
+                else:
+                    if lastNonParenTokenEnd is None:
+                        # Empty argument list or tuple gets pending open parens and
+                        # subsequent close parens keyed to left side of the close paren
+                        if freeParenCount > 0:
+                            posToLParen[token.start] = parenStack[-freeParenCount:]
+                            freeParenCount = 0
+                        lastNonParenTokenEnd = token.start
+                        posToRParen[lastNonParenTokenEnd] = []
+                    else:
+                        endParenList = posToRParen.get(lastNonParenTokenEnd)
+                        if endParenList is None:
+                            posToRParen[lastNonParenTokenEnd] = []
+                    matchLabel = parenStack.pop()
+                    posToRParen[lastNonParenTokenEnd].append(matchLabel)
+            elif token.type == tokenize.OP and token.exact_type == tokenize.LPAR:
+                parenStack.append(parenLabel)
+                parenLabel += 1
+                freeParenCount += 1
+                lastNonParenTokenEnd = None
+            elif token.type in (tokenize.INDENT, tokenize.DEDENT) or \
+                    token.type == tokenize.NEWLINE and token.exact_type != tokenize.NL:
+                if len(parenStack) > 0:
+                    print(f'Encountered unexpected token {token.type} within parens '
+                          'in _extractTokens')
+                    parenStack = []
+                    freeParenCount = 0
+                    lastNonParenTokenEnd = None
+            elif token.type != tokenize.NEWLINE and not (token.type == tokenize.OP and
+                    token.exact_type == tokenize.COMMA):
+                if freeParenCount > 0:
+                    posToLParen[token.start] = parenStack[-freeParenCount:]
+                    freeParenCount = 0
+                lastNonParenTokenEnd = token.end
+    return lineNumToComment, lineNumToClause, posToConstSrcStr, commentOnlyLines,\
+        posToLParen, posToRParen
 
 def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, startLine=0):
     elseCommentProperties = ('elselinecomments', 'elsestmtcomment')
@@ -1049,6 +1108,146 @@ class ConstAnnotator(ast.NodeVisitor):
 def _annotateAstConsts(astPosToSrcTable, astNode):
     annotator = ConstAnnotator(astPosToSrcTable)
     annotator.visit(astNode)
+
+def _annotateUserParens(astNode, posToLParen, posToRParen, allocated=None):
+    """Recursive function to traverse the AST tree annotating or adding synthetic AST
+    nodes for unnecessary parens in the source code (to be created as CursorParenIcons
+    or, in some cases by creating tuples instead of filling in series sites).  Uses
+    posToLParen and posToRParen dictionaries created by _extractTokens to find parens
+    enclosing the node.  If the node has both a left and a right paren, check that their
+    integer identifiers match and either annotate the AST node as surrounded by parens
+    (for Tuple nodes), or add a synthetic AST that will generate an inserted CursorParen
+    icon (for arithmetic parens).  Note that in the arithmetic paren case, while we do
+    filter out nodes that explicitly contain parens (tuples, calls, function and class
+    defs), we don't make the determination, here whether an arithmetic paren is necessary
+    or not, because calculating precedences is surprisingly complex and we can use code
+    that already exists for dealing with it the icon form."""
+    if allocated == None:
+        allocated = set()
+    lParenSet = set()
+    rParenSet = set()
+    if not isinstance(astNode, ast.AST):
+        return None, None, False
+    ownParensRemoved = False
+    for field, childNodes in ast.iter_fields(astNode):
+        if isinstance(childNodes, (list, tuple)):
+            isMultiArgField = True
+        else:
+            isMultiArgField = False
+            childNodes = [childNodes]
+        for i, childNode in enumerate(childNodes):
+            # Recursively follow tree down ... except in the case of a JoinedStr, which
+            # has incorrect line/col data on component nodes, that will inappropriately
+            # believe they own any parens surrounding the string.
+            if isinstance(astNode, ast.JoinedStr):
+                childLParenSet = childRParenSet = None
+                needsParens = False
+            else:
+                childLParenSet, childRParenSet, needsParens = _annotateUserParens(
+                        childNode, posToLParen, posToRParen, allocated)
+            # If the child node decided it needed parens, add them, unless we're
+            # processing an ast that includes parens and there's only one element in the
+            # parens.  In that case, assume they're ours and don't add parens
+            if needsParens:
+                if isinstance(astNode, (ast.Call, ast.Tuple, ast.FunctionDef,
+                        ast.ClassDef)) and len(childNodes) == 1:
+                    ownParensRemoved = True
+                else:
+                    userParen = UserParenFakeAst(childNode)
+                    if isMultiArgField:
+                        childNodes[i] = userParen
+                    else:
+                        setattr(astNode, field, userParen)
+            # Add the child's left and right paren sets to our own
+            if childLParenSet is not None:
+                lParenSet.update(childLParenSet - allocated)
+            if childRParenSet is not None:
+                rParenSet.update(childRParenSet - allocated)
+    # Find the parens that surround and/or belong to this AST node
+    foundOwnParens = False
+    if isinstance(astNode, (ast.FunctionDef, ast.ClassDef)):
+        # Block-owning statements, unfortunately, do not provide usable end_lineno or
+        # end_col_offset fields, because the Python parser includes the entire block.
+        # This means we can't recover paren data annotation for the no-argument case of
+        # function and class definitions.  Luckily, these are also top-level statements,
+        # and the parser will not allow users to surround them in parens, anyhow.  It
+        # only matters in that it ruins the chance to verify the attribution process by
+        # comparing the number of parens attributed to AST nodes with the number found
+        # by _extractTokens.
+        return None, None, False
+    elif isinstance(astNode, ast.Call):
+        # Open parens surrounding the call will be associated with the function name (and
+        # thus the starting row/col of the AST), but the parens of the call itself will
+        # either be associated with arguments, or (in the no-arg case), with the end
+        # paren of the function.
+        foundOwnParens = len(lParenSet.intersection(rParenSet) - allocated) > 0 and \
+            not ownParensRemoved
+        lParenList = posToLParen.get((astNode.lineno, astNode.col_offset))
+        if lParenList is not None:
+            lParenSet.update(set(lParenList) - allocated)
+        noArgLParenList = posToLParen.get((astNode.end_lineno, astNode.end_col_offset-1))
+        if noArgLParenList is not None:
+            noArgLParenList = set(noArgLParenList) - allocated
+            foundOwnParens = foundOwnParens or len(noArgLParenList) > 0 and \
+                not ownParensRemoved
+            lParenSet.update(noArgLParenList)
+        noArgRParenList = posToRParen.get((astNode.end_lineno, astNode.end_col_offset-1))
+        if noArgRParenList is not None:
+            rParenSet.update(set(noArgRParenList) - allocated)
+    elif isinstance(astNode, ast.Tuple):
+        # For the case of an empty tuple, both the open and close paren(s) will be
+        # associated with the left edge of the close-paren (when there is content in the
+        # tuple, the line/col position of the tuple itself is irrelevant, since the
+        # parens will be associated with the content).
+        foundTupleParens = len(lParenSet.intersection(rParenSet) - allocated) > 0
+        noArgLParenList = posToLParen.get((astNode.end_lineno, astNode.end_col_offset-1))
+        if noArgLParenList is not None:
+            noArgLParenList = set(noArgLParenList) - allocated
+            foundTupleParens = foundTupleParens or len(noArgLParenList) > 0
+            lParenSet.update(noArgLParenList)
+        noArgRParenList = posToRParen.get((astNode.end_lineno, astNode.end_col_offset-1))
+        if noArgRParenList is not None:
+            rParenSet.update(set(noArgRParenList) - allocated)
+        # Optional tuple parens are represented by setting an attribute on the tuple AST
+        # node telling the icon creation function to create an explicit tuple icon rather
+        # than splitting the tuple elements across the icon's series sites.  Therefore,
+        # these parens are excluded in the code below from generating arithmetic parens.
+        if foundTupleParens:
+            astNode.tupleHasParens = True
+        foundOwnParens = True  # Never add arithmetic parens
+    elif icon.astCreationFunctions.get(astNode.__class__) is not None:
+        # For remaining icons, look up associated parens via line/col offset of the start
+        # and end.  This will result in lots of duplication (for any icons with concident
+        # sites), but since this works recursively bottom to top, we mark everything
+        # that's already been accounted for in the 'allocated' set and don't use it
+        # again.  Also note (above) that we skip over nodes that don't have an associated
+        # icon creation function, which is a cheap way to eliminate intermediate AST
+        # structures that don't become icons.
+        if hasattr(astNode, 'col_offset'):
+            lParenList = posToLParen.get((astNode.lineno, astNode.col_offset))
+            if lParenList is not None:
+                lParenSet.update(set(lParenList) - allocated)
+            rParenList = posToRParen.get((astNode.end_lineno, astNode.end_col_offset))
+            if rParenList is not None:
+                rParenSet.update(set(rParenList) - allocated)
+    # Determine if user parens need to be reinserted.  Note that we don't care about
+    # the number of additional parens (the user could write '((((a))))' and we will
+    # reduce it to '(a)'), because Python-G is intentionally hostile toward that form
+    # and would eventually reduce it at a less controlled moment.
+    if len(lParenSet) > 0 and len(rParenSet) > 0:
+        commonParens = lParenSet.intersection(rParenSet)
+        lParenSet -= commonParens
+        rParenSet -= commonParens
+        allocated.update(commonParens)
+        if len(lParenSet) > 0 and len(rParenSet) > 0:
+            print('paren matching failure in _annotateUserParens',
+                astNode.__class__.__name__, 'line',
+                astNode.lineno if hasattr(astNode, 'lineno') else "none")
+            return None, None, False
+        if len(commonParens) == 1 and foundOwnParens:
+            return lParenSet, rParenSet, False
+        return lParenSet, rParenSet, True
+    return lParenSet, rParenSet, False
 
 def _commentLinesBetween(lineToCommentMap, startLine, endLine):
     commentList = None
@@ -1687,6 +1886,11 @@ class CprhForFakeAst:
 class CprhIfFakeAst:
     def __init__(self, cmp):
         self.cmp = cmp
+
+class UserParenFakeAst(ast.AST):
+    def __init__(self, argAst):
+        self._fields = ('arg',)
+        self.arg = argAst
 
 def numberedLine(text, lineNum):
     """Return a single line (lineNum) from text.  Note, that this inefficiently scans

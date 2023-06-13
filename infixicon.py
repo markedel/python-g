@@ -250,10 +250,10 @@ class AsIcon(InfixIcon):
                         siteName = parentSite
                     if siteName != self.allowableParents[parentClass]:
                         errHighlight = icon.ErrorHighlight(
-                            'An "as" statement is not allowed in this context')
+                            "An 'as' statement is not allowed, here")
                 else:
-                    errHighlight = icon.ErrorHighlight(
-                        'An "as" statement is not allowed in this context')
+                    errHighlight = icon.ErrorHighlight("'as' can only be used in "
+                            "the context of a 'with', 'import', or 'except' statement")
         self.errHighlight = errHighlight
         for ic in self.children():
             ic.highlightErrors(errHighlight)

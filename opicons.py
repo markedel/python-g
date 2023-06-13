@@ -1640,7 +1640,8 @@ def createUnaryOpIconFromAst(astNode, window):
             astNode.operand == ast.Num:
         return nameicons.NumericIcon(-astNode.operand.n, window)
     topIcon = UnaryOpIcon(unaryOps[astNode.op.__class__], window)
-    topIcon.replaceChild(icon.createFromAst(astNode.operand, window), "argIcon")
+    operandIcon = createOpArgFromAst(topIcon, 'argIcon', astNode.operand, window)
+    topIcon.replaceChild(operandIcon, "argIcon")
     return topIcon
 icon.registerIconCreateFn(ast.UnaryOp, createUnaryOpIconFromAst)
 
@@ -1651,32 +1652,60 @@ def createBinOpIconFromAst(astNode, window):
         topIcon.replaceChild(icon.createFromAst(astNode.right, window), "bottomArg")
         return topIcon
     topIcon = BinOpIcon(binOps[astNode.op.__class__], window)
-    topIcon.replaceChild(icon.createFromAst(astNode.left, window), "leftArg")
-    topIcon.replaceChild(icon.createFromAst(astNode.right, window), "rightArg")
+    leftArg = createOpArgFromAst(topIcon, 'leftArg', astNode.left, window)
+    rightArg = createOpArgFromAst(topIcon, 'rightArg',astNode.right, window)
+    topIcon.replaceChild(leftArg, "leftArg")
+    topIcon.replaceChild(rightArg, "rightArg")
     return topIcon
 icon.registerIconCreateFn(ast.BinOp, createBinOpIconFromAst)
 
 def createBoolOpIconFromAst(astNode, window):
     topIcon = BinOpIcon(boolOps[astNode.op.__class__], window)
-    topIcon.replaceChild(icon.createFromAst(astNode.values[0], window), "leftArg")
-    topIcon.replaceChild(icon.createFromAst(astNode.values[1], window), "rightArg")
+    leftArg = createOpArgFromAst(topIcon, 'leftArg', astNode.values[0], window)
+    rightArg = createOpArgFromAst(topIcon, 'rightArg', astNode.values[1], window)
+    topIcon.replaceChild(leftArg, "leftArg")
+    topIcon.replaceChild(rightArg, "rightArg")
     for value in astNode.values[2:]:
+        # Note that we don't call createOpArgFromAst to remove UserParenFakeAsts for
+        # auto-parens on the left argument, since it is an operator representing part of
+        # the single AST.  The Python parser would break it up if it were parenthesized.
         newTopIcon = BinOpIcon(boolOps[astNode.op.__class__], window)
         newTopIcon.replaceChild(topIcon, "leftArg")
-        newTopIcon.replaceChild(icon.createFromAst(value, window), "rightArg")
+        rightArg = createOpArgFromAst(topIcon, 'rightArg', value, window)
+        newTopIcon.replaceChild(rightArg, "rightArg")
         topIcon = newTopIcon
     return topIcon
 icon.registerIconCreateFn(ast.BoolOp, createBoolOpIconFromAst)
+
+def createOpArgFromAst(opIcon, binOpIconSite, astNode, window):
+    """The Python AST format throws out information about unnecessary parenthesis from
+    the file/clipboard text, which our loading code needs to recover and restore.  It
+    punts on determining whether an arithmetic paren is 'necessary' or not, because
+    processing precedence is complicated, and there's already code in the icon domain
+    to handle it.  This routine takes an ast node which could be a UserParenFakeAst,
+    and if so, decides whether to leave it in place as a cursor paren, or to remove it
+    because the argument icon will deploy its auto-parens in its place."""
+    if not isinstance(astNode, filefmt.UserParenFakeAst):
+        return icon.createFromAst(astNode, window)
+    parenArgIcon = icon.createFromAst(astNode.arg, window)
+    if isinstance(parenArgIcon, (BinOpIcon, IfExpIcon)) and \
+            needsParens(parenArgIcon, parent=opIcon, parentSite=binOpIconSite):
+        return parenArgIcon
+    parenIcon = parenicon.CursorParenIcon(closed=True, window=window)
+    parenIcon.replaceChild(parenArgIcon, 'argIcon')
+    return parenIcon
 
 def createCompareIconFromAst(astNode, window):
     compareIcons = [BinOpIcon(compareOps[op.__class__], window) for op in astNode.ops]
     topIcon = None
     for ic, compAst in zip(compareIcons, astNode.comparators):
         if topIcon is None:
-            ic.replaceChild(icon.createFromAst(astNode.left, window), 'leftArg')
+            leftArg = createOpArgFromAst(ic, 'leftArg', astNode.left, window)
+            ic.replaceChild(leftArg, 'leftArg')
         else:
             ic.replaceChild(topIcon, 'leftArg')
-        ic.replaceChild(icon.createFromAst(compAst, window), 'rightArg')
+        rightArg = createOpArgFromAst(ic, 'rightArg', compAst, window)
+        ic.replaceChild(rightArg, 'rightArg')
         topIcon = ic
     return topIcon
 icon.registerIconCreateFn(ast.Compare, createCompareIconFromAst)

@@ -673,12 +673,13 @@ class AugmentedAssignIcon(icon.Icon):
 def createAssignIconFromAst(astNode, window):
     topIcon = AssignIcon(len(astNode.targets), window)
     for i, tgt in enumerate(astNode.targets):
-        if isinstance(tgt, ast.Tuple):
+        if isinstance(tgt, ast.Tuple) and not hasattr(tgt, 'tupleHasParens'):
             tgtIcons = [icon.createFromAst(t, window) for t in tgt.elts]
         else:
             tgtIcons = [icon.createFromAst(tgt, window)]
         topIcon.insertChildren(tgtIcons, "targets%d" % i, 0)
-    if isinstance(astNode.value, ast.Tuple):
+    if isinstance(astNode.value, ast.Tuple) and not \
+            hasattr(astNode.value, 'tupleHasParens'):
         valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
         topIcon.insertChildren(valueIcons, "values", 0)
         if len(valueIcons) == 1:

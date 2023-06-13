@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw
 import comn
 import iconlayout
 import entryicon
-import iconsites
+import filefmt
 import listicons
 import icon
 import reorderexpr
@@ -114,6 +114,16 @@ class CursorParenIcon(icon.Icon):
                         icon.ATTR_SITE_OFFSET)
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        if self.closed:
+            text = filefmt.SegmentedText("(")
+        else:
+            text = filefmt.SegmentedText('$:u$(')
+        icon.addArgSaveText(text, brkLvl, self.sites.argIcon, contNeeded, export)
+        text.add(None, ")")
+        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
 
     def textRepr(self):
         if self.sites.argIcon.att is None:
@@ -268,3 +278,10 @@ class CursorParenIcon(icon.Icon):
                     win.cursor.setToIconSite(parent, parentSite)
                     reorderexpr.reorderArithExpr(content)
         win.requestRedraw(None, filterRedundantParens=True)
+
+def createCursorParenFromFakeAst(astNode, window):
+    parenIcon = CursorParenIcon(closed=True, window=window)
+    argIcon = icon.createFromAst(astNode.arg, window)
+    parenIcon.replaceChild(argIcon, 'argIcon')
+    return parenIcon
+icon.registerIconCreateFn(filefmt.UserParenFakeAst, createCursorParenFromFakeAst)

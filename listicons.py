@@ -478,7 +478,10 @@ class ListTypeIcon(icon.Icon):
                 parenX = self.sites.cprhIcons[-1].xOffset
                 self.drawList.append(((parenX, 0), rightImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip)
+        if isinstance(self, TupleIcon) and len(self.sites.argIcons) == 2:
+            self._drawEmptySites(toDragImage, clip, skip='argIcons_1')
+        else:
+            self._drawEmptySites(toDragImage, clip)
 
     def isComprehension(self):
         return len(self.sites.cprhIcons) > 1
@@ -2707,13 +2710,12 @@ def highlightErrorsForContext(site, ctx):
         if ic.closed:
             attr = ic.sites.attrIcon.att
     else:
-        ic.highlightErrors(icon.ErrorHighlight(
-            "Not a valid target for store"))
+        ic.highlightErrors(icon.ErrorHighlight("Not a valid target for store"))
     while attr is not None:
         nextAttr = attr.sites.attrIcon.att if attr.hasSite('attrIcon')  else None
         if isinstance(attr, CallIcon) and nextAttr is None:
             attr.highlightErrors(icon.ErrorHighlight(
-                "Function call not valid in a store context"))
+                "Function call cannot be used in a store context"))
             break
         elif isinstance(attr, subscripticon.SubscriptIcon):
             attr.highlightErrors(None)
@@ -2843,7 +2845,8 @@ def createComprehensionIconFromAst(astNode, window):
     clauseIdx = 0
     for gen in astNode.generators:
         forIcon = CprhForIcon(gen.is_async, window=window)
-        if isinstance(gen.target, ast.Tuple):
+        if isinstance(gen.target, ast.Tuple) and not \
+                hasattr(gen.target, 'tupleHasParens'):
             tgtIcons = [icon.createFromAst(t, window) for t in gen.target.elts]
             forIcon.insertChildren(tgtIcons, "targets", 0)
         else:
@@ -2872,7 +2875,8 @@ icon.registerIconCreateFn(filefmt.CprhIfFakeAst, createCprhIfFromFakeAst)
 
 def createCprhForFromFakeAst(astNode, window):
     forIcon = CprhForIcon(astNode.isAsync, window=window)
-    if isinstance(astNode.target, ast.Tuple):
+    if isinstance(astNode.target, ast.Tuple) and not \
+            hasattr(astNode.target, 'tupleHasParens'):
         tgtIcons = [icon.createFromAst(t, window) for t in astNode.target.elts]
         forIcon.insertChildren(tgtIcons, "targets", 0)
     else:

@@ -617,7 +617,7 @@ class GlobalIcon(SeriesStmtIcon):
                 attr = ic.childAt('attrIcon')
                 if attr is not None:
                     attr.highlightErrors(icon.ErrorHighlight(
-                        "Variable name may not have anything attached."))
+                        "Variable name may not have anything attached"))
                     continue
             else:
                 ic.highlightErrors(icon.ErrorHighlight(
@@ -670,7 +670,7 @@ class NonlocalIcon(SeriesStmtIcon):
                     continue
             else:
                 ic.highlightErrors(icon.ErrorHighlight(
-                    "Not a valid variable name (identifier)"))
+                    "This is not valid as a variable name (identifier)"))
 
 class ImportIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
@@ -2012,7 +2012,8 @@ def createReturnIconFromAst(astNode, window):
     topIcon = ReturnIcon(window)
     if astNode.value is None:
         return topIcon
-    if isinstance(astNode.value, ast.Tuple):
+    if isinstance(astNode.value, ast.Tuple) and not \
+            hasattr(astNode.value, 'tupleHasParens'):
         valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
         topIcon.insertChildren(valueIcons, "values", 0)
         if len(valueIcons) == 1:
@@ -2172,7 +2173,8 @@ def createYieldIconFromAst(astNode, window):
     topIcon = YieldIcon(window)
     if astNode.value is None:
         return topIcon
-    if isinstance(astNode.value, ast.Tuple):
+    if isinstance(astNode.value, ast.Tuple) and not \
+            hasattr(astNode.value, 'tupleHasParens'):
         valueIcons = [icon.createFromAst(v, window) for v in astNode.value.elts]
         topIcon.insertChildren(valueIcons, "values", 0)
         if len(valueIcons) == 1:
