@@ -1648,8 +1648,15 @@ icon.registerIconCreateFn(ast.UnaryOp, createUnaryOpIconFromAst)
 def createBinOpIconFromAst(astNode, window):
     if astNode.op.__class__ in (ast.Div, ast.FloorDiv):
         topIcon = DivideIcon(astNode.op.__class__ is ast.FloorDiv, window)
-        topIcon.replaceChild(icon.createFromAst(astNode.left, window), "topArg")
-        topIcon.replaceChild(icon.createFromAst(astNode.right, window), "bottomArg")
+        if isinstance(astNode.left, filefmt.UserParenFakeAst):
+            topIcon.replaceChild(icon.createFromAst(astNode.left.arg, window), "topArg")
+        else:
+            topIcon.replaceChild(icon.createFromAst(astNode.left, window), "topArg")
+        if isinstance(astNode.right, filefmt.UserParenFakeAst):
+            topIcon.replaceChild(icon.createFromAst(astNode.right.arg, window),
+                "bottomArg")
+        else:
+            topIcon.replaceChild(icon.createFromAst(astNode.right, window), "bottomArg")
         return topIcon
     topIcon = BinOpIcon(binOps[astNode.op.__class__], window)
     leftArg = createOpArgFromAst(topIcon, 'leftArg', astNode.left, window)

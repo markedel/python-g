@@ -1,8 +1,20 @@
+a(b(
+  "s"))
+fn(b(c=d))
 a*(fn(b))
+fn((a),b)
+fn(((a),(b)))
+(fn(((a),(b))))
+((fn(((a)),((b)))))
+fn((a,b))
 a*(fn(b,c))
 a*(fn())
 a*(a,)
 a*((a,))
+((a),)
+(((((((a)))),)))
+()
+(())
 a = (3+4)*3
 b = (3*4)+3
 c = 1 or 2 or 3
@@ -17,6 +29,10 @@ x = ((3*2)+4)
 x = ((3+2)*4)
 fn(3*4+5/6*8-2|3)
 fn(((((((3*4)+5)/6)*8)-2)|3))
+a/(b+c)
+a/b*c
+a/(b*c)
+((a+b))/c
 a[(x):y]
 a * (b if (c) else d*(e+5)) + 3
 (a + b) < (c * 3) <(d|f)
@@ -45,5 +61,13 @@ fn((f'asdf{i}asdf' 'nert'), (a))
 *(a+b)
 fn(**(a+b))
 fn(x = (a + b), **(a + b))
-a*fn(b)
-a*(fn(b))
+a*b.fn(b)
+a*(c[3].fn(b))
+def f(): pass
+def f(a):pass
+class C: pass
+class C (D):pass
+class C (D,E=(f)):pass
+fn(a.b(c=d))
+fn(b(c=d))
+fn(b(c))
