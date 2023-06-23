@@ -279,9 +279,15 @@ class CursorParenIcon(icon.Icon):
                     reorderexpr.reorderArithExpr(content)
         win.requestRedraw(None, filterRedundantParens=True)
 
-def createCursorParenFromFakeAst(astNode, window):
-    parenIcon = CursorParenIcon(closed=True, window=window)
-    argIcon = icon.createFromAst(astNode.arg, window)
-    parenIcon.replaceChild(argIcon, 'argIcon')
+def createCursorParenFromFakeAst(astNode, window, skipArgCreate=False):
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        closed = 'o' not in macroArgs
+    else:
+        closed = True
+    parenIcon = CursorParenIcon(closed=closed, window=window)
+    if not skipArgCreate:
+        argIcon = icon.createFromAst(astNode.arg, window)
+        parenIcon.replaceChild(argIcon, 'argIcon')
     return parenIcon
 icon.registerIconCreateFn(filefmt.UserParenFakeAst, createCursorParenFromFakeAst)

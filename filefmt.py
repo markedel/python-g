@@ -1203,8 +1203,8 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, allocated=None):
         else:
             newChild = childNodes
         while len(parensNeeded) > 0:
-            parenRowCol = parensNeeded.pop()
-            newChild = UserParenFakeAst(newChild, parenRowCol)
+            parenLineCol = parensNeeded.pop()
+            newChild = UserParenFakeAst(newChild, parenLineCol)
         if isinstance(childNodes, (list, tuple)):
             if newChild is not childNodes[idx]:
                 childNodes[idx] = newChild
@@ -1277,7 +1277,8 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, allocated=None):
             astNode.end_col_offset-1, allocated)
         if len(noArgRParenList) > 0:
             unmatchedRParens = unmatchedRParens + noArgRParenList
-        if len(unmatchedLParens) > 0 and len(unmatchedRParens) > 0:
+        if not ownParensRemoved and len(unmatchedLParens) > 0 and \
+                len(unmatchedRParens) > 0:
             if unmatchedLParens[-1] != unmatchedRParens[0]:
                 print('_annotateUserParens found un-matched parens around tuple')
                 return None, None, None
@@ -1959,12 +1960,12 @@ class CprhIfFakeAst:
         self.cmp = cmp
 
 class UserParenFakeAst(ast.AST):
-    def __init__(self, argAst, startRowCol):
+    def __init__(self, argAst, startLineCol):
         # Unlike the other fake asts, this one needs ast.walk to be able to traverse it
         self._fields = ('arg',)
         self.arg = argAst
-        self.lineno = startRowCol[0]
-        self.col_offset = startRowCol[1]
+        self.lineno = startLineCol[0]
+        self.col_offset = startLineCol[1]
 
 def numberedLine(text, lineNum):
     """Return a single line (lineNum) from text.  Note, that this inefficiently scans

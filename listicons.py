@@ -2731,21 +2731,36 @@ def composeAttrAstIf(ic, icAst, skipAttr):
     return icon.composeAttrAst(ic, icAst)
 
 def createListIconFromAst(astNode, window):
-    topIcon = ListIcon(window)
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        closed = 'o' not in macroArgs
+    else:
+        closed = True
+    topIcon = ListIcon(window, closed=closed)
     childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
     topIcon.insertChildren(childIcons, "argIcons", 0)
     return topIcon
 icon.registerIconCreateFn(ast.List, createListIconFromAst)
 
 def createTupleIconFromAst(astNode, window):
-    topIcon = TupleIcon(window)
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        closed = 'o' not in macroArgs
+    else:
+        closed = True
+    topIcon = TupleIcon(window, closed=closed)
     childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
     topIcon.insertChildren(childIcons, "argIcons", 0)
     return topIcon
 icon.registerIconCreateFn(ast.Tuple, createTupleIconFromAst)
 
 def createDictIconFromAst(astNode, window):
-    topIcon = DictIcon(window)
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        closed = 'o' not in macroArgs
+    else:
+        closed = True
+    topIcon = DictIcon(window, closed=closed)
     argIcons = []
     for i, key in enumerate(astNode.keys):
         value = icon.createFromAst(astNode.values[i], window)
@@ -2774,14 +2789,24 @@ def createDictElemFromFakeAst(astNode, window):
 icon.registerIconCreateFn(filefmt.DictElemFakeAst, createDictElemFromFakeAst)
 
 def createSetIconFromAst(astNode, window):
-    topIcon = DictIcon(window)
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        closed = 'o' not in macroArgs
+    else:
+        closed = True
+    topIcon = DictIcon(window, closed=closed)
     childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
     topIcon.insertChildren(childIcons, "argIcons", 0)
     return topIcon
 icon.registerIconCreateFn(ast.Set, createSetIconFromAst)
 
 def createCallIconFromAst(astNode, window):
-    callIcon = CallIcon(window)
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        closed = 'o' not in macroArgs
+    else:
+        closed = True
+    callIcon = CallIcon(window, closed=closed)
     argIcons = [icon.createFromAst(e, window) for e in astNode.args]
     for key in astNode.keywords:
         valueIcon = icon.createFromAst(key.value, window)

@@ -1,3 +1,19 @@
+((a,b))
+a*$:o$(fn(b))
+fn($:o$(a),b)
+yield $:o$(a,b,c)
+($:o$[a,b,c])
+$:o$[1,2]
+$:o${1,2}
+$:o${a:b,c:d}
+a.b[c]$:o$(d,e)
+fn$:o$()
+a.fn$:o$(b)
+fn$:o$(c,d)
+a$:o$[a]
+a.b$:o$[asdf$:o$(a)]
+$:o$(a*b)+c
+((a),b)
 a(b(
   "s"))
 fn(b(c=d))
@@ -45,6 +61,7 @@ return a,b,c
 return (a,b,c)
 yield a,b,c
 yield (a,b,c)
+yield $:o$(a,b,c)
 for i in a,b,c: pass
 for i in (a,b,c): pass
 a = b,c,d

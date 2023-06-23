@@ -603,7 +603,12 @@ def createSubscriptIconFromAst(astNode, window):
     else:
         return nameicons.TextIcon("**Unexpected slice type not supported***")
     nSlices = len(slice)
-    subscriptIcon = SubscriptIcon(nSlices, window)
+    if hasattr(astNode, 'macroAnnotations'):
+        macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
+        closed = 'o' not in macroArgs
+    else:
+        closed = True
+    subscriptIcon = SubscriptIcon(nSlices, window, closed=closed)
     if slice[0] is not None:
         subscriptIcon.replaceChild(icon.createFromAst(slice[0], window), "indexIcon")
     if nSlices >= 2 and slice[1] is not None:

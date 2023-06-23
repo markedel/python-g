@@ -1698,7 +1698,8 @@ def createOpArgFromAst(opIcon, binOpIconSite, astNode, window):
     if isinstance(parenArgIcon, (BinOpIcon, IfExpIcon)) and \
             needsParens(parenArgIcon, parent=opIcon, parentSite=binOpIconSite):
         return parenArgIcon
-    parenIcon = parenicon.CursorParenIcon(closed=True, window=window)
+    parenIcon = parenicon.createCursorParenFromFakeAst(astNode, window,
+        skipArgCreate=True)
     parenIcon.replaceChild(parenArgIcon, 'argIcon')
     return parenIcon
 
