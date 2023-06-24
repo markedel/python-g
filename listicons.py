@@ -640,7 +640,10 @@ class ListTypeIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText(self.leftText)
+        if self.closed:
+            text = filefmt.SegmentedText(self.leftText)
+        else:
+            text = filefmt.SegmentedText('$:o$' + self.leftText)
         argText = icon.seriesSaveText(brkLvl, self.sites.argIcons, False, export)
         text.concat(None, argText)
         cprhText = filefmt.SegmentedText(None)
@@ -649,7 +652,9 @@ class ListTypeIcon(icon.Icon):
             icon.addArgSaveText(cprhText, brkLvl, site, False, export)
         text.concat(brkLvl, cprhText, False)
         text.add(None, self.rightText)
-        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        if self.closed:
+            return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        return text
 
     def backspace(self, siteId, evt):
         backspaceListIcon(self, siteId, evt)
@@ -989,10 +994,12 @@ class TupleIcon(ListTypeIcon):
             return super().createSaveText(parentBreakLevel, contNeeded, export)
         # Process single-element tuple syntax, (x,), not handled by ListTypeIcon.
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText("(")
+        text = filefmt.SegmentedText('(' if self.closed else '$:o$(')
         icon.addArgSaveText(text, brkLvl, self.sites.argIcons[0], contNeeded, export)
         text.add(None, ",)")
-        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        if self.closed:
+            return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        return text
 
     def createAst(self):
         if not self.closed:
@@ -1435,11 +1442,13 @@ class CallIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText('(')
+        text = filefmt.SegmentedText('(' if self.closed else '$:o$(')
         argText = icon.seriesSaveText(brkLvl, self.sites.argIcons, False, export)
         text.concat(brkLvl, argText)
         text.add(None, ')')
-        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        if self.closed:
+            return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        return text
 
     def dumpName(self):
         return "call("  + (")" if self.closed else "")

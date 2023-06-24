@@ -120,10 +120,12 @@ class CursorParenIcon(icon.Icon):
         if self.closed:
             text = filefmt.SegmentedText("(")
         else:
-            text = filefmt.SegmentedText('$:u$(')
-        icon.addArgSaveText(text, brkLvl, self.sites.argIcon, contNeeded, export)
+            text = filefmt.SegmentedText('$:o$(')
+        icon.addArgSaveText(text, brkLvl, self.sites.argIcon, False, export)
         text.add(None, ")")
-        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        if self.closed:
+            return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        return text
 
     def textRepr(self):
         if self.sites.argIcon.att is None:

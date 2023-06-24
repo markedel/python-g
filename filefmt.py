@@ -1554,7 +1554,8 @@ class SegmentedText:
             for i in range(startIdx, bp, 2):
                 strings.append(self.segments[i])
             # If continuation and/or string splitting is needed, add it
-            strings.append(_breakPrefix(breakType))
+            endChar = None if len(strings) == 0 else strings[-1][-1]
+            strings.append(_breakPrefix(breakType, endChar))
             # Append the newline and continuation indent (triple quoted strings get
             # no indent, unless they are docstrings, which get startIndent)
             strings.append('\n')
@@ -1621,7 +1622,7 @@ class SegmentedText:
                     return lastAcceptableBreakPoint
             breakLevel, breakType = _decodeBreakValue(self.segments[i + 1])
             if breakLevel < levelCutoff:
-                stringRequiredWidth += len(_breakPrefix(breakType))
+                stringRequiredWidth += len(_breakPrefix(breakType, self.segments[i][-1]))
                 if textWidth + stringRequiredWidth > margin:
                     return lastAcceptableBreakPoint
                 lastAcceptableBreakPoint = i + 1
@@ -1847,10 +1848,17 @@ def _decodeStringBreakType(breakType):
     needsCont = quoteContDigit in (3, 4)
     return strType, quote, needsCont
 
-def _breakPrefix(breakValue):
+def _breakPrefix(breakValue, endChar=None):
+    """Return the appropriate line ending for a given break value.  Note that endChar is
+    only used for code breaks (breakValue==1) to determine whether to add or not add an
+    additional space before the backslash, and so not needed for string break types."""
     breakLvl, breakType = _decodeBreakValue(breakValue)
     if breakType < 10:
-        return '' if breakType == 0 else ' \\'
+        if breakType == 0:
+            return ''
+        elif endChar == ' ':
+            return '\\'
+        return ' \\'
     if breakType in (50, 52):
         return ''
     if breakType in (51, 53):

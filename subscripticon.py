@@ -297,7 +297,7 @@ class SubscriptIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText('[')
+        text = filefmt.SegmentedText('[' if self.closed else '$:o$[')
         if self.sites.indexIcon.att is not None:
             text.concat(brkLvl, self.sites.indexIcon.att.createSaveText(brkLvl,
                 False, export), False)
@@ -311,7 +311,8 @@ class SubscriptIcon(icon.Icon):
                 text.concat(brkLvl, self.sites.stepIcon.att.createSaveText(brkLvl,
                     False, export), False)
         text.add(None, ']')
-        icon.addAttrSaveText(text, self, brkLvl, contNeeded, export)
+        if self.closed:
+            return icon.addAttrSaveText(text, self, brkLvl, contNeeded, export)
         return text
 
     def clipboardRepr(self, offset, iconsToCopy):

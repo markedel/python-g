@@ -790,6 +790,14 @@ class DivideIcon(icon.Icon):
         return text
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        # The additional parens that might be needed to represent a divide icon in text
+        # form are added by the createSaveText methods of the argument icons, as
+        # determined in the needsParens function with forText=True.  Unfortunately, that
+        # determination will be wrong when the arguments are enclosed in cursor parens,
+        # because the cursor parens serve the same purpose as the divide icon does, of
+        # separating them from the surrounding expression. We actually need to write
+        # an additional layer of parens to preserve (redundant) parens added by the user
+        # if they are at the top level of the argument icon trees.
         hasParens = needsParens(self, forText=True)
         op = '//' if self.floorDiv else '/'
         brkLvl = parentBreakLevel + 1
@@ -801,15 +809,27 @@ class DivideIcon(icon.Icon):
                     brkLvl = parentBreakLevel
         if hasParens:
             contNeeded = False
-        leftArgText = icon.argSaveText(brkLvl, self.sites.topArg, contNeeded, export)
-        if hasParens:
             text = filefmt.SegmentedText('(')
-            text.concat(brkLvl, leftArgText, contNeeded)
         else:
-            text = leftArgText
+            text = filefmt.SegmentedText()
+        numContNeeded = contNeeded
+        if isinstance(self.sites.topArg.att, parenicon.CursorParenIcon):
+            numContNeeded = False
+            text.add(brkLvl, '(', contNeeded)
+        leftArgText = icon.argSaveText(brkLvl, self.sites.topArg, numContNeeded, export)
+        text.concat(brkLvl, leftArgText, numContNeeded)
+        if isinstance(self.sites.topArg.att, parenicon.CursorParenIcon):
+            text.add(brkLvl, ')', False)
         text.add(None, " " + op + " ", contNeeded)
-        rightArgText = icon.argSaveText(brkLvl, self.sites.bottomArg, contNeeded, export)
-        text.concat(brkLvl, rightArgText, contNeeded)
+        denomContNeeded = contNeeded
+        if isinstance(self.sites.bottomArg.att, parenicon.CursorParenIcon):
+            denomContNeeded = False
+            text.add(brkLvl, '(', contNeeded)
+        rightArgText = icon.argSaveText(brkLvl, self.sites.bottomArg, denomContNeeded,
+            export)
+        text.concat(brkLvl, rightArgText, denomContNeeded)
+        if isinstance(self.sites.bottomArg.att, parenicon.CursorParenIcon):
+            text.add(None, ')')
         if hasParens:
             text.add(None, ")")
         return text
@@ -1444,10 +1464,18 @@ def recalculateParens(topNode):
             ic.updateParens()
 
 def leftSiteOf(ic):
-    return 'trueExpr' if ic.__class__ == IfExpIcon else 'leftArg'
+    if isinstance(ic, IfExpIcon):
+        return 'trueExpr'
+    if isinstance(ic, DivideIcon):
+        return 'topArg'
+    return 'leftArg'
 
 def rightSiteOf(ic):
-    return 'falseExpr' if ic.__class__ == IfExpIcon else 'rightArg'
+    if isinstance(ic, IfExpIcon):
+        return 'falseExpr'
+    if isinstance(ic, DivideIcon):
+        return 'bottomArg'
+    return 'rightArg'
 
 # The ugly hack of not putting these at the top of the file allows the backspace code
 # to be in the same module as the icon definitions, and but not mess up initialization
