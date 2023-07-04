@@ -1908,7 +1908,8 @@ class DefOrClassIcon(icon.Icon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText(self.text + " ")
-        icon.addArgSaveText(text, brkLvl, self.sites.nameIcon, contNeeded, export)
+        text.concat(brkLvl, nameicons.createNameFieldSaveText(brkLvl,
+            self.sites.nameIcon, contNeeded, export), contNeeded)
         if not self.hasArgs:
             text.add(None, ":")
             return text
@@ -2316,60 +2317,7 @@ class DefIcon(DefOrClassIcon):
                     "Function def name field must be an identifier")
                 nameIcon.highlightErrors(errHighlight)
         if self.argList is not None:
-            endOfPositionalArgs = processedStar = processedStarStar = False
-            for arg in (site.att for site in self.sites.argIcons if site.att is not None):
-                checkIdentifier = None
-                if processedStarStar:
-                    arg.highlightErrors(icon.ErrorHighlight(
-                        "** ends function parameter list"))
-                    continue
-                if isinstance(arg, listicons.StarStarIcon):
-                    if processedStarStar:
-                        arg.highlightErrors(icon.ErrorHighlight(
-                            "Only one ** operator allowed"))
-                        continue
-                    endOfPositionalArgs = True
-                    processedStarStar = True
-                    checkIdentifier = arg.arg()
-                elif isinstance(arg, listicons.ArgAssignIcon):
-                    endOfPositionalArgs = True
-                    checkIdentifier = arg.leftArg()
-                    if arg.rightArg() is not None:
-                        arg.rightArg().highlightErrors(None)
-                elif isinstance(arg, listicons.StarIcon):
-                    if processedStar:
-                        arg.highlightErrors(icon.ErrorHighlight(
-                            "Only one * operator allowed in function def parameters"))
-                        continue
-                    if endOfPositionalArgs:
-                        arg.highlightErrors(icon.ErrorHighlight(
-                            "Positional arguments (as processed by '*') cannot follow "
-                            "optional arguments"))
-                        continue
-                    checkIdentifier = arg.arg()
-                    endOfPositionalArgs = True
-                    processedStar = True
-                elif isinstance(arg, nameicons.IdentifierIcon):
-                    if endOfPositionalArgs:
-                        arg.highlightErrors(icon.ErrorHighlight(
-                            "Positional arguments cannot follow optional arguments or *"))
-                        continue
-                    checkIdentifier = arg
-                else:
-                    arg.highlightErrors(icon.ErrorHighlight(
-                        "Function def parameter must be name"))
-                    continue
-                arg.errHighlight = None
-                if checkIdentifier is not None:
-                    if not isinstance(checkIdentifier, nameicons.IdentifierIcon):
-                        checkIdentifier.highlightErrors(icon.ErrorHighlight(
-                            "Function def parameter must be name"))
-                        continue
-                    checkIdentifier.errHighlight = None
-                    attr = checkIdentifier.sites.attrIcon.att
-                    if attr is not None:
-                        attr.highlightErrors(icon.ErrorHighlight(
-                            "Function def parameter must be unqualified name"))
+            _highlightFnDefArgs(self)
 
     def createAst(self):
         nameIcon = self.sites.nameIcon.att
@@ -2571,6 +2519,16 @@ class LambdaIcon(icon.Icon):
         return ast.Lambda(argumentAsts, exprIcon.createAst(),  lineno=self.id,
             col_offset=0)
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        self.errHighlight = None
+        _highlightFnDefArgs(self)
+        exprIcon = self.sites.exprIcon.att
+        if exprIcon is not None:
+            exprIcon.highlightErrors(None)
+
     def setTypeover(self, idx, site=None):
         self.drawList = None
         if site is None or site == 'exprIcon':
@@ -2713,7 +2671,7 @@ def _createFnDefArgsAst(argSiteList):
         if arg is None:
             if site.name == 'argIcons_0':
                 continue  # 1st site can be empty, meaning "no arguments"
-            raise icon.IconExecException(self, "Missing argument(s)")
+            raise icon.IconExecException(arg, "Missing argument(s)")
         if isinstance(arg, listicons.ArgAssignIcon):
             argIcon = arg.sites.leftArg.att
             defaultIcon = arg.sites.rightArg.att
@@ -2993,17 +2951,26 @@ def _addFnDefArgs(defIcon, astNodeArgs):
         defaultIcons = fill + defaultIcons
     numArgs = 0
     for i, arg in enumerate(astNodeArgs.args):
-        argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
         if nPosOnly != 0 and numArgs == nPosOnly:
             posOnlyMarker = nameicons.PosOnlyMarkerIcon(window=window)
             defIcon.insertChild(posOnlyMarker, 'argIcons', numArgs)
             numArgs += 1
         if defaultAsts[i] is None:
+            argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
             defIcon.insertChild(argNameIcon, 'argIcons', numArgs)
         else:
-            argAssignIcon = listicons.ArgAssignIcon(window)
-            argAssignIcon.replaceChild(argNameIcon, 'leftArg')
-            argAssignIcon.replaceChild(defaultIcons[i], 'rightArg')
+            if hasattr(arg, 'fieldMacroAnnotations'):
+                fieldName, macroArgs, iconCreateFn, argAsts = arg.fieldMacroAnnotations[0]
+            else:
+                fieldName = macroArgs = argAsts = None
+            if fieldName == 'Ctx' and 'K' in macroArgs:
+                # This is a Ctx macro with K (masquerade as keyword) argument, use macro arg
+                argAssignIcon = icon.createFromAst(argAsts[0], window)
+            else:
+                argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
+                argAssignIcon = listicons.ArgAssignIcon(window)
+                argAssignIcon.replaceChild(argNameIcon, 'leftArg')
+                argAssignIcon.replaceChild(defaultIcons[i], 'rightArg')
             defIcon.insertChild(argAssignIcon, "argIcons", numArgs)
         numArgs += 1
     varArg = astNodeArgs.vararg.arg if astNodeArgs.vararg is not None else None
@@ -3018,14 +2985,23 @@ def _addFnDefArgs(defIcon, astNodeArgs):
         defIcon.insertChild(listicons.StarIcon(window), 'argIcons', numArgs)
         numArgs += 1
     for i, arg in enumerate(astNodeArgs.kwonlyargs):
-        argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
         if kwDefaults[i] is None:
+            argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
             defIcon.insertChild(argNameIcon, 'argIcons', i)
         else:
-            defaultIcon = kwDefaults[i]
-            argAssignIcon = listicons.ArgAssignIcon(window)
-            argAssignIcon.replaceChild(argNameIcon, 'leftArg')
-            argAssignIcon.replaceChild(defaultIcon, 'rightArg')
+            if hasattr(arg, 'fieldMacroAnnotations'):
+                fieldName, macroArgs, iconCreateFn, argAsts = arg.fieldMacroAnnotations[0]
+            else:
+                fieldName = macroArgs = argAsts = None
+            if fieldName == 'Ctx' and 'K' in macroArgs:
+                # This is a Ctx macro with K (masquerade as keyword) argument, use macro arg
+                argAssignIcon = icon.createFromAst(argAsts[0], window)
+            else:
+                argNameIcon = nameicons.createIconForNameField(arg, arg.arg, window)
+                defaultIcon = kwDefaults[i]
+                argAssignIcon = listicons.ArgAssignIcon(window)
+                argAssignIcon.replaceChild(argNameIcon, 'leftArg')
+                argAssignIcon.replaceChild(defaultIcon, 'rightArg')
             defIcon.insertChild(argAssignIcon, "argIcons", numArgs + i)
     numArgs += len(astNodeArgs.kwonlyargs)
     if astNodeArgs.kwarg is not None:
@@ -3034,6 +3010,62 @@ def _addFnDefArgs(defIcon, astNodeArgs):
         starStarIcon = listicons.StarStarIcon(window)
         starStarIcon.replaceChild(argNameIcon, 'argIcon')
         defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
+
+def _highlightFnDefArgs(defIcon):
+    endOfPositionalArgs = processedStar = processedStarStar = False
+    for arg in (site.att for site in defIcon.sites.argIcons if site.att is not None):
+        checkIdentifier = None
+        if processedStarStar:
+            arg.highlightErrors(icon.ErrorHighlight(
+                "** ends function parameter list"))
+            continue
+        if isinstance(arg, listicons.StarStarIcon):
+            if processedStarStar:
+                arg.highlightErrors(icon.ErrorHighlight(
+                    "Only one ** operator allowed"))
+                continue
+            endOfPositionalArgs = True
+            processedStarStar = True
+            checkIdentifier = arg.arg()
+        elif isinstance(arg, listicons.ArgAssignIcon):
+            endOfPositionalArgs = True
+            checkIdentifier = arg.leftArg()
+            if arg.rightArg() is not None:
+                arg.rightArg().highlightErrors(None)
+        elif isinstance(arg, listicons.StarIcon):
+            if processedStar:
+                arg.highlightErrors(icon.ErrorHighlight(
+                    "Only one * operator allowed in function def parameters"))
+                continue
+            if endOfPositionalArgs:
+                arg.highlightErrors(icon.ErrorHighlight(
+                    "Positional arguments (as processed by '*') cannot follow "
+                    "optional arguments"))
+                continue
+            checkIdentifier = arg.arg()
+            endOfPositionalArgs = True
+            processedStar = True
+        elif isinstance(arg, nameicons.IdentifierIcon):
+            if endOfPositionalArgs:
+                arg.highlightErrors(icon.ErrorHighlight(
+                    "Positional arguments cannot follow optional arguments or *"))
+                continue
+            checkIdentifier = arg
+        else:
+            arg.highlightErrors(icon.ErrorHighlight(
+                "Function def parameter must be name"))
+            continue
+        arg.errHighlight = None
+        if checkIdentifier is not None:
+            if not isinstance(checkIdentifier, nameicons.IdentifierIcon):
+                checkIdentifier.highlightErrors(icon.ErrorHighlight(
+                    "Function def parameter must be name"))
+                continue
+            checkIdentifier.errHighlight = None
+            attr = checkIdentifier.sites.attrIcon.att
+            if attr is not None:
+                attr.highlightErrors(icon.ErrorHighlight(
+                    "Function def parameter must be unqualified name"))
 
 def createClassDefIconFromAst(astNode, window):
     hasArgs = len(astNode.bases) + len(astNode.keywords) > 0
@@ -3044,12 +3076,20 @@ def createClassDefIconFromAst(astNode, window):
     topIcon.insertChildren(bases, "argIcons", 0)
     kwdIcons = []
     for idx, kwd in enumerate(astNode.keywords):
-        argAssignIcon = listicons.ArgAssignIcon(window)
-        kwdIcon = nameicons.createIconForNameField(kwd, kwd.arg, window)
-        valueIcon = icon.createFromAst(kwd.value, window)
-        argAssignIcon.replaceChild(kwdIcon, 'leftArg')
-        argAssignIcon.replaceChild(valueIcon, 'rightArg')
-        kwdIcons.append(argAssignIcon)
+        if hasattr(kwd, 'fieldMacroAnnotations'):
+            fieldName, macroArgs, iconCreateFn, argAsts = kwd.fieldMacroAnnotations[0]
+        else:
+            fieldName = macroArgs = argAsts = None
+        if fieldName == 'Ctx' and 'K' in macroArgs:
+            # This is a Ctx macro with K (masquerade as keyword) argument, use macro arg
+            kwdIcons.append(icon.createFromAst(argAsts[0], window))
+        else:
+            argAssignIcon = listicons.ArgAssignIcon(window)
+            kwdIcon = nameicons.createIconForNameField(kwd, kwd.arg, window)
+            valueIcon = icon.createFromAst(kwd.value, window)
+            argAssignIcon.replaceChild(kwdIcon, 'leftArg')
+            argAssignIcon.replaceChild(valueIcon, 'rightArg')
+            kwdIcons.append(argAssignIcon)
     topIcon.insertChildren(kwdIcons, "argIcons", len(bases))
     return topIcon
 icon.registerIconCreateFn(ast.ClassDef, createClassDefIconFromAst)

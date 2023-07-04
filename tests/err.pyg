@@ -1,4 +1,13 @@
-$@+30+30$
+{a:b, $Ctx:D($c$)$}
+fn(a=b, $Ctx:K($c$)$)
+class C (a='asdf', $Ctx:K($c$)$):
+    pass
+def f(a=1, $Ctx:K($b$)$):
+    pass
+def f(*, a=1, $Ctx:K($b$)$):
+    pass
+lambda a=1, $Ctx:K($b$)$: a
+$@+120+100$
 import os.sys
 import os.sys as nert
 import $Empty$, nert.wang as mywang, sys
@@ -22,6 +31,9 @@ class $Empty$ (a):
 global x, $Empty$, y
 global $Empty$
 global x, $Empty$
+global $Ctx($a+b$)$
+global $Ctx($a+b$)$, $Ctx($c*d if g in h else i$)$
+nonlocal $Ctx($a+b$)$
 nonlocal x, $Empty$, y
 nonlocal $Empty$
 nonlocal x, $Empty$

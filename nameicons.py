@@ -603,6 +603,21 @@ class GlobalIcon(SeriesStmtIcon):
             return IdentifierIcon(text[:-1], self.window), text[-1]
         return 'reject'
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("global ")
+        valuesSites = self.sites.values
+        if len(valuesSites) == 0 or len(valuesSites) == 1 and valuesSites[0].att is None:
+            text.add(brkLvl, '$Empty$', contNeeded)
+            return text
+        args = [createNameFieldSaveText(brkLvl, site, contNeeded, export) for site in
+            valuesSites]
+        text.concat(brkLvl, args[0], contNeeded)
+        for arg in args[1:]:
+            text.add(None, ', ', contNeeded)
+            text.concat(brkLvl, arg, contNeeded)
+        return text
+
     def highlightErrors(self, errHighlight):
         # textEntryHandler prohibits typing of anything but correct syntax, but we
         # (currently) allow snapping of illegal stuff for users to edit later.
@@ -651,6 +666,21 @@ class NonlocalIcon(SeriesStmtIcon):
                 text[:-1] not in entryicon.keywords:
             return IdentifierIcon(text[:-1], self.window), text[-1]
         return 'reject'
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("nonlocal ")
+        valuesSites = self.sites.values
+        if len(valuesSites) == 0 or len(valuesSites) == 1 and valuesSites[0].att is None:
+            text.add(brkLvl, '$Empty$', contNeeded)
+            return text
+        args = [createNameFieldSaveText(brkLvl, site, contNeeded, export) for site in
+            valuesSites]
+        text.concat(brkLvl, args[0], contNeeded)
+        for arg in args[1:]:
+            text.add(None, ', ', contNeeded)
+            text.concat(brkLvl, arg, contNeeded)
+        return text
 
     def highlightErrors(self, errHighlight):
         # textEntryHandler prohibits typing of anything but correct syntax, but we
@@ -1957,6 +1987,17 @@ def createIconsForNameFields(astNode, nameFieldStrings, window, startIdx=0):
             else:
                 icons.append(IdentifierIcon(name, window))
     return icons
+
+def createNameFieldSaveText(brkLvl, site, needsCont, export):
+    """Create file/paste text to represent the content of a field where Python will only
+    accept a simple identifier, but is an input site in the icon representation and so
+    may contain any sort of expression.  Generates a $Ctx$ macro to hold anything that
+    is not an identifier."""
+    if site.att is None or isinstance(site.att, IdentifierIcon):
+        return icon.argSaveText(brkLvl, site, needsCont, export)
+    argText = icon.argSaveText(brkLvl+1, site, needsCont, export)
+    argText.wrapCtxMacro(brkLvl, parseCtx=None, needsContinue=needsCont)
+    return argText
 
 # Getting resources (particularly icon class definitions) from other icon files requires
 # circular imports, unfortunately.  Here, the import is deferred far enough down the file

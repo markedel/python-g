@@ -22,6 +22,8 @@ NO_ICON_COMMENTS = True
 PLACEHOLDER_NAME_TEMPLATE = "___pyg_placeholder_ident_"
 placeholderNamePattern = re.compile("%s(\\d+)" % PLACEHOLDER_NAME_TEMPLATE)
 
+ctxMacroPattern = re.compile('\\$Ctx[(:]')
+
 # Variable names used for faking out the Python parser to parse free attributes,
 # function call, and comprehensions
 ATTR_PARSE_STUB = '___pyg_attr_parse_stub'
@@ -243,14 +245,16 @@ class MacroParser:
             replaceText = "pass"
             iconFn = None
         elif macroName == "Empty":
-            replaceText = makePlaceholderName(modLineNum, modColNum)
+            replaceText = makeMacroPlaceholder(modLineNum, modColNum)
             iconFn = lambda node, args, argAsts, win: None
         elif macroName == "Ctx":
-            if macroArgCodeType not in (None, 'e', 'd', 's', 'f') or \
-                    macroArgs not in (None, ''):
+            if macroArgCodeType not in (None, 'e', 'd', 's', 'f'):
                 raise MacroFailException(origText, macroStartIdx, origLineNum,
                     message='Ctx macro only allows code argument types e, d, f, or s')
-            replaceText = makePlaceholderName(modLineNum, modColNum)
+            if macroArgs is not None and macroArgs not in "KDC":
+                raise MacroFailException(origText, macroStartIdx, origLineNum, message=\
+                    'Ctx macro only allows argument types e, d, f, s, D, K, and C')
+            replaceText = makeMacroPlaceholder(modLineNum, modColNum, macroArgs)
             iconFn = ctxMacroFn
         else:
             macroData = self.macroList.get(macroName)
@@ -527,7 +531,10 @@ class AnnotationList:
         these AST nodes will wrap anything that is not a simple identifier with a $Ctx$
         macro."""
         nodeClass = node.__class__
-        if nodeClass in (ast.Global, ast.Nonlocal):
+        if nodeClass is ast.Dict:
+            fieldNames = [key.id if isinstance(key, ast.Name) else None for key in
+                node.keys]
+        elif nodeClass in (ast.Global, ast.Nonlocal):
             fieldNames = node.names
         elif nodeClass in (ast.FunctionDef, ast.ClassDef):
             fieldNames = (node.name,)
@@ -575,11 +582,22 @@ def getLineColFromId(lineColId):
     """Decode line and column from a lineColId."""
     return lineColId >> 16, lineColId & 0xffff
 
-def makePlaceholderName(line, col):
+def makeMacroPlaceholder(line, col, ctxMacroArgs=None):
     """Create a stand-in name to substitute for $Ctx$, $Empty$ or $Entry$ macros, where
     the Python parser would otherwise reject the content we want to put there.  These are
     coded with an ID based on line an column for situations where the parser does not
-    tag an associated AST node with them, we can recover the corresponding macro data."""
+    tag an associated AST node with them, we can recover the corresponding macro data.
+    While Entry, Empty, and most Ctx macros substitute a simple identifier, Ctx macros
+    can also substitute keyword, dictionary, and comprehension syntax, if if their macro
+    arguments include K, D, or C, and therefore also need to provide ctxMacroArgs."""
+    if ctxMacroArgs is not None:
+        if 'K' in ctxMacroArgs:
+            return PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col)) + '=None'
+        if 'D' in ctxMacroArgs:
+            return PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col)) + ':None'
+        if 'C' in ctxMacroArgs:
+            return 'for' + PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col)) + \
+                'in None'
     return PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col))
 
 def getPlaceholderId(placeholderStr):
@@ -1418,6 +1436,31 @@ class SegmentedText:
             self.segments.append(breakValue)
             self.segments.append(text)
 
+    def wrapCtxMacro(self, breakLevel, parseCtx=None, needsContinue=False):
+        """Surround the segmented text string with a context macro ($Ctx($  $)$) with the
+        given parse context (defaults to expression).  Also checks that the existing
+        string is not an $Empty$ macro or already surrounded in a context macro. Checking
+        for doubling up, here, makes it easier for the calling code, since some context
+        needs are determined by the parent icon (such as a name or target context), and
+        some are determined by the child icon ("as", keyword assignment, dictionary
+        element).  Note that this method requires that the SegmentedText object be non-
+        empty and that breakLevel be a numeric (as opposed to None), as neither of these
+        would be desirable for a $Ctx$ macro.  Also note that if there is an existing
+        context macro, the parse context will not be changed (as the only way Ctx macros
+        would normally end up stacked is if the bottom one was imposed by the argument
+        icon and the top one by the parent icon whose field might be constrained to a
+        name or target)."""
+        if ctxMacroPattern.match(self.segments[0]) and self.segments[-1][-3:] != '$)$' \
+                or len(self.segments) == 1 and self.segments[0] == '$Empty$':
+            return  # Empty or already surrounded by context macro: leave as is
+        if parseCtx is None:
+            ctxMacro = '$Ctx($'
+        else:
+            ctxMacro = '$Ctx:%s($' % parseCtx
+        breakValue = _encodeBreakValue(breakLevel, 1 if needsContinue else 0)
+        self.segments[:0] = [ctxMacro, breakValue]
+        self.segments += [breakValue, '$)$']
+
     def concat(self, breakLevel, otherSegText, needsContinue=False):
         """Append another SegmentedText object to the end of the accumulated text.  If
         breakLevel is set to None, it will merge the first element of the appended
@@ -1943,6 +1986,11 @@ def formatMacroFailMessage(text, idx, lineNum, message):
 def ctxMacroFn(astNode, macroArgs, argAsts, window):
     if argAsts is None:
         return None
+    if macroArgs is not None:
+        if 'K' in macroArgs and not isinstance(astNode, ast.keyword):
+            return None
+        if 'D' in macroArgs:
+            return None
     return icon.createFromAst(argAsts[0], window)
 
 def isAttrParseStub(astNode):

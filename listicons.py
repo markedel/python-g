@@ -2771,9 +2771,18 @@ def createDictIconFromAst(astNode, window):
         closed = True
     topIcon = DictIcon(window, closed=closed)
     argIcons = []
+    fieldAnn = astNode.fieldMacroAnnotations if hasattr(astNode,
+        'fieldMacroAnnotations') else None
     for i, key in enumerate(astNode.keys):
         value = icon.createFromAst(astNode.values[i], window)
-        if key is None:
+        if fieldAnn is not None and fieldAnn[i] is not None:
+            macroName, macroArgs, iconCreateFn, argAsts = fieldAnn[i]
+        else:
+            macroName = macroArgs = argAsts = None
+        if macroName == 'Ctx' and 'D' in macroArgs:
+            # This is a Ctx macro with D (masquerade as dict elem) arg, use macro arg
+            argIcons.append(icon.createFromAst(fieldAnn[i][3][0], window))
+        elif key is None:
             starStar = StarStarIcon(window)
             starStar.replaceChild(value, "argIcon")
             argIcons.append(starStar)
@@ -2819,7 +2828,14 @@ def createCallIconFromAst(astNode, window):
     argIcons = [icon.createFromAst(e, window) for e in astNode.args]
     for key in astNode.keywords:
         valueIcon = icon.createFromAst(key.value, window)
-        if key.arg is None:
+        if hasattr(key, 'fieldMacroAnnotations'):
+            fieldName, macroArgs, iconCreateFn, argAsts = key.fieldMacroAnnotations[0]
+        else:
+            fieldName = macroArgs = argAsts = None
+        if fieldName == 'Ctx' and 'K' in macroArgs:
+            # This is a Ctx macro with K (masquerade as keyword) argument, use macro arg
+            argIcons.append(icon.createFromAst(argAsts[0], window))
+        elif key.arg is None:
             starStarIcon = StarStarIcon(window)
             starStarIcon.replaceChild(valueIcon, 'argIcon')
             argIcons.append(starStarIcon)
