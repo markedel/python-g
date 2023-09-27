@@ -8,6 +8,7 @@ import icon
 import filefmt
 import nameicons
 import listicons
+import parenicon
 import infixicon
 import entryicon
 import commenticon
@@ -257,21 +258,9 @@ class WithIcon(icon.Icon):
         if siteId[:6] == 'values':
             siteIcon = self.childAt(siteId)
             if isinstance(siteIcon, infixicon.AsIcon):
-                # Enforce identifiers-only on right argument of "as"
-                asSiteId = siteIcon.siteOf(entryIc, recursive=True)
-                if asSiteId == 'rightArg':
-                    if text == ',':
-                        return "comma"
-                    if entryIc.parent() is not siteIcon:
-                        return "reject"
-                    name = text.rstrip(' ,')
-                    if not name.isidentifier():
-                        return "reject"
-                    if text[-1] in (' ', ','):
-                        return nameicons.IdentifierIcon(name, self.window), text[-1]
-                    return "accept"
-                else:  # Right arg of as can be an arbitrary expression, allow anything
-                    return None
+                # Left argument of 'as' can be an arbitrary expression, and right can be
+                # any legal target (for which we allow arbitrary typing, but highlight)
+                return None
             elif text == ',':
                 return "comma"
             elif siteIcon is entryIc or \
@@ -297,18 +286,7 @@ class WithIcon(icon.Icon):
                 leftArg = ic.leftArg()
                 if leftArg is not None:
                     leftArg.highlightErrors(None)  # Allow any expression
-                rightArg = ic.rightArg()
-                if rightArg is not None:
-                    if not isinstance(rightArg, nameicons.IdentifierIcon):
-                        rightArg.highlightErrors(icon.ErrorHighlight(
-                            "Must be an identifier"))
-                        continue
-                    rightArg.errHighlight = None
-                    rightArgAttr = rightArg.childAt('attrIcon')
-                    if rightArgAttr is not None:
-                        rightArgAttr.highlightErrors(icon.ErrorHighlight(
-                            "Must be an identifier with nothing attached"))
-                        continue
+                listicons.highlightErrorsForContext(ic.sites.rightArg, 'store')
             else:
                 ic.highlightErrors(None)  # Allow any expression
 
@@ -588,7 +566,8 @@ class ForIcon(icon.Icon):
             self.drawList += self.iterList.drawListCommas(iterOffset, cntrSiteY)
             self.drawList += self.iterList.drawSimpleSpine(iterOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True,
+            allowTrailingComma=True)
         self.dragSiteDrawn = needDragSite
 
     def snapLists(self, forCursor=False):
@@ -645,8 +624,9 @@ class ForIcon(icon.Icon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText(self.stmt + ' ')
-        icon.addSeriesSaveText(text, brkLvl, self.sites.targets, contNeeded,
-            export)
+        tgtText = listicons.seriesSaveTextForContext(brkLvl, self.sites.targets,
+            contNeeded, export, 'store', allowTrailingComma=True)
+        text.concat(brkLvl, tgtText)
         text.add(brkLvl, " in ", contNeeded)
         icon.addSeriesSaveText(text, brkLvl, self.sites.iterIcons, contNeeded,
             export, allowTrailingComma=True)
@@ -1599,8 +1579,7 @@ class ElseIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 2)
         self.sites.add('seqInsert', 'seqInsert', seqX, bodyHeight // 2)
         self.sites.add('attrIcon', 'attrIn', bodyWidth,
-            bodyHeight // 2 + icon.ATTR_SITE_OFFSET,
-            cursorOnly=True)
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + bodyWidth + icon.dragSeqImage.width - 1, y + bodyHeight)
         self.parentIf = None
@@ -1905,19 +1884,6 @@ class DefOrClassIcon(icon.Icon):
             return text
         return text + "(" + icon.seriesTextRepr(self.sites.argIcons) + "):"
 
-    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText(self.text + " ")
-        text.concat(brkLvl, nameicons.createNameFieldSaveText(brkLvl,
-            self.sites.nameIcon, contNeeded, export), contNeeded)
-        if not self.hasArgs:
-            text.add(None, ":")
-            return text
-        text.add(None, "(")
-        icon.addSeriesSaveText(text, brkLvl, self.sites.argIcons, contNeeded, export)
-        text.add(None, "):")
-        return text
-
     def dumpName(self):
         return self.text
 
@@ -2211,6 +2177,37 @@ class ClassDefIcon(DefOrClassIcon):
             return None
         return None
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText(self.text + " ")
+        text.concat(brkLvl, nameicons.createNameFieldSaveText(brkLvl,
+            self.sites.nameIcon, contNeeded, export), contNeeded)
+        if not self.hasArgs:
+            text.add(None, ":")
+            return text
+        text.add(None, "(")
+        if len(self.sites.argIcons) > 1 or len(self.sites.argIcons) == 1 and \
+                self.sites.argIcons[0].att is not None:
+            kwArgEncountered = False
+            argTextList = []
+            for site in self.sites.argIcons:
+                needsCtx = False
+                if isinstance(site.att, (listicons.StarStarIcon, listicons.ArgAssignIcon)):
+                    kwArgEncountered = True
+                elif kwArgEncountered:
+                    needsCtx = True
+                argBrkLvl = brkLvl + (1 if needsCtx else 0)
+                argText = icon.argSaveText(argBrkLvl, site, contNeeded, export)
+                if needsCtx:
+                    argText.wrapCtxMacro(brkLvl, parentCtx='K', needsCont=contNeeded)
+                argTextList.append(argText)
+            text.concat(brkLvl, argTextList[0])
+            for argText in argTextList[1:]:
+                text.add(None, ', ', contNeeded)
+                text.concat(brkLvl, argText, contNeeded)
+        text.add(None, "):")
+        return text
+
     def highlightErrors(self, errHighlight):
         checkPseudoBlockHighlights(self)
         if errHighlight is not None:
@@ -2332,6 +2329,19 @@ class DefIcon(DefOrClassIcon):
              decorator_list=[], returns=None, lineno=self.id, col_offset=0)
         return ast.FunctionDef(nameIcon.name, argumentAsts, **bodyAsts,
          decorator_list=[], returns=None, lineno=self.id, col_offset=0)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText(self.text + " ")
+        text.concat(brkLvl, nameicons.createNameFieldSaveText(brkLvl,
+            self.sites.nameIcon, contNeeded, export), contNeeded)
+        if not self.hasArgs:
+            text.add(None, ":")
+            return text
+        text.add(None, "(")
+        text.concat(brkLvl, _fnDefArgSaveText(self, brkLvl, False, export), False)
+        text.add(None, "):")
+        return text
 
     def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
         return _defPlaceArgsCommon(self, placeList, startSiteId, overwriteStart,
@@ -2463,7 +2473,7 @@ class LambdaIcon(icon.Icon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText('lambda ')
-        icon.addSeriesSaveText(text, brkLvl, self.sites.argIcons, contNeeded, export)
+        text.concat(brkLvl, _fnDefArgSaveText(self, brkLvl, contNeeded, export), False)
         text.add(None, ": ")
         icon.addArgSaveText(text, brkLvl, self.sites.exprIcon, contNeeded, export)
         return text
@@ -2893,6 +2903,8 @@ def createForIconFromAst(astNode, window):
             hasattr(astNode.target, 'tupleHasParens'):
         tgtIcons = [icon.createFromAst(t, window) for t in astNode.target.elts]
         topIcon.insertChildren(tgtIcons, "targets", 0)
+        if len(tgtIcons) == 1:
+            topIcon.insertChild(None, 'targets', 1)
     else:
         topIcon.replaceChild(icon.createFromAst(astNode.target, window), "targets_0")
     if isinstance(astNode.iter, ast.Tuple) and not \
@@ -2980,7 +2992,8 @@ def _addFnDefArgs(defIcon, astNodeArgs):
         starIcon.replaceChild(argNameIcon, 'argIcon')
         defIcon.insertChild(starIcon, 'argIcons', numArgs)
         numArgs += 1
-    kwDefaults = [icon.createFromAst(e, window) for e in astNodeArgs.kw_defaults]
+    kwDefaults = [None if e is None else icon.createFromAst(e, window) for e in
+        astNodeArgs.kw_defaults]
     if len(astNodeArgs.kwonlyargs) > 0 and varArg is None:
         defIcon.insertChild(listicons.StarIcon(window), 'argIcons', numArgs)
         numArgs += 1
@@ -3010,6 +3023,50 @@ def _addFnDefArgs(defIcon, astNodeArgs):
         starStarIcon = listicons.StarStarIcon(window)
         starStarIcon.replaceChild(argNameIcon, 'argIcon')
         defIcon.insertChild(starStarIcon, 'argIcons', numArgs)
+
+def _fnDefArgSaveText(defIcon, brkLvl, needsCont, export):
+    if len(defIcon.sites.argIcons) == 0 or len(defIcon.sites.argIcons) == 1 and \
+            defIcon.sites.argIcons[0].att is None:
+        return filefmt.SegmentedText(None)
+    endOfPositionalArgs = processedStar = False
+    argTextList = []
+    for idx, site in enumerate(defIcon.sites.argIcons):
+        arg = site.att
+        parseCtx = None
+        parentCtx = None
+        needsCtx = False
+        if isinstance(arg, listicons.StarStarIcon):
+            if idx != len(defIcon.sites.argIcons) - 1:
+                needsCtx = True
+                parentCtx = 'K' if endOfPositionalArgs else None
+                parseCtx = 'f'
+        elif isinstance(arg, listicons.ArgAssignIcon):
+            endOfPositionalArgs = True
+        elif isinstance(arg, listicons.StarIcon):
+            if processedStar:
+                needsCtx = True
+                parentCtx = 'K'
+            endOfPositionalArgs = True
+            processedStar = True
+        elif isinstance(arg, nameicons.IdentifierIcon):
+            if endOfPositionalArgs:
+                needsCtx = True
+                parentCtx = 'K'
+        else:
+            needsCtx = True
+            parentCtx = 'K' if endOfPositionalArgs else None
+        if needsCtx:
+            argText = icon.argSaveText(brkLvl+1, site, needsCont, export)
+            argText.wrapCtxMacro(brkLvl, parseCtx=parseCtx, parentCtx=parentCtx,
+                needsCont=needsCont)
+        else:
+            argText = icon.argSaveText(brkLvl, site, needsCont, export)
+        argTextList.append(argText)
+    combinedText = argTextList[0]
+    for arg in argTextList[1:]:
+        combinedText.add(None, ', ')
+        combinedText.concat(brkLvl, arg)
+    return combinedText
 
 def _highlightFnDefArgs(defIcon):
     endOfPositionalArgs = processedStar = processedStarStar = False
@@ -3084,12 +3141,17 @@ def createClassDefIconFromAst(astNode, window):
             # This is a Ctx macro with K (masquerade as keyword) argument, use macro arg
             kwdIcons.append(icon.createFromAst(argAsts[0], window))
         else:
-            argAssignIcon = listicons.ArgAssignIcon(window)
-            kwdIcon = nameicons.createIconForNameField(kwd, kwd.arg, window)
             valueIcon = icon.createFromAst(kwd.value, window)
-            argAssignIcon.replaceChild(kwdIcon, 'leftArg')
-            argAssignIcon.replaceChild(valueIcon, 'rightArg')
-            kwdIcons.append(argAssignIcon)
+            if kwd.arg is None:
+                starStarIcon = listicons.StarStarIcon(window)
+                starStarIcon.replaceChild(valueIcon, 'argIcon')
+                kwdIcons.append(starStarIcon)
+            else:
+                argAssignIcon = listicons.ArgAssignIcon(window)
+                kwdIcon = nameicons.createIconForNameField(kwd, kwd.arg, window)
+                argAssignIcon.replaceChild(kwdIcon, 'leftArg')
+                argAssignIcon.replaceChild(valueIcon, 'rightArg')
+                kwdIcons.append(argAssignIcon)
     topIcon.insertChildren(kwdIcons, "argIcons", len(bases))
     return topIcon
 icon.registerIconCreateFn(ast.ClassDef, createClassDefIconFromAst)
@@ -3157,7 +3219,8 @@ def createIconsFromBodyAsts(bodyAsts, window):
                         typeIcon = icon.createFromAst(handler.type, window)
                         if handler.name is not None:
                             asIcon = infixicon.AsIcon(window)
-                            nameIcon = nameicons.IdentifierIcon(handler.name, window)
+                            nameIcon = nameicons.createIconForNameField(handler,
+                                handler.name, window)
                             asIcon.replaceChild(typeIcon, 'leftArg')
                             asIcon.replaceChild(nameIcon, 'rightArg')
                             exceptIcon.replaceChild(asIcon, 'typeIcon')

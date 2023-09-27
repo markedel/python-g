@@ -1,22 +1,85 @@
-{a:b, $Ctx:D($c$)$}
-fn(a=b, $Ctx:K($c$)$)
-class C (a='asdf', $Ctx:K($c$)$):
-    pass
-def f(a=1, $Ctx:K($b$)$):
-    pass
-def f(*, a=1, $Ctx:K($b$)$):
-    pass
-lambda a=1, $Ctx:K($b$)$: a
-$@+120+100$
+# This file contains test cases for all of the classes of bad syntax that Python-G allows but
+# highlights during development.  The environment needs to be able to 1) load the entire file
+# successfully, 2) highlight  all of the syntax errors in the loaded code, and 3) save the file
+# such that a text diff will show no differences between the original and the saved copy.
+pass
+$@+0+75$
+# The following statements
+# should not be highlighted
+from ...x import y
 import os.sys
 import os.sys as nert
-import $Empty$, nert.wang as mywang, sys
 from ..asdf import x
 from nert.wang import x
 from .. import *
 from nert import wang
 from ..a.b import c, d
 from . import x as y, z as q
+for a, *b in [1,2,3]:
+    pass
+for (((a, (b,c)))) in [1,2,3]:
+    pass
+for a, in [[2]]:
+    pass
+with a as b, c as d:
+    pass
+with 3 as a:  # *syntax* is ok
+    pass
+with a as (b,c[3]):
+    pass
+with a*b as (b,c,[d,e]), f:
+    pass
+try:
+    pass
+except:  # pass omitted
+    $:x$pass
+except a as b:
+    pass
+except 3 as b:  # *syntax* ok
+    pass
+else:
+    pass
+finally:
+    pass
+fn(a,*b, c=2)
+fn(a, **b, c=2)
+fn(*a, *b, **c, **d)
+class C:
+    pass
+class C(N, Y):
+    pass
+class C (n, y=3):
+    pass
+class C (*a, *b):
+    pass
+class C (a, **b, c=2):
+    pass
+class C (*a, *b, **c, **d):
+    pass
+*a
+y=4
+*a, b = 3
+a, = [3]
+a=[1,2,]
+(a) = 2
+((a)) = 3
+(*a,b),c=[(1,2),3]
+(((*a,b))) = [3,4,5]
+(((*a))),b = [3,4,5]
+(*a,) = [1,2,3]
+(((*a))),b = [3,4,5]
+a, = [2]
+a += 2
+{a+b:c+d}
+del a, (b, c, [d])
+
+$@+200+75$
+# The following statements
+# should have empty fields
+# highlighted
+{a,}
+{a:b, $Empty:D$}
+import $Empty$, a.b as c, sys
 from $Empty$ import x
 from $Empty$ import x
 from $Empty$ import *
@@ -27,49 +90,180 @@ def $Empty$ (x,y):
     $:x$pass
 class $Empty$ (a):
     pass
-#$@+10+300$
 global x, $Empty$, y
 global $Empty$
 global x, $Empty$
-global $Ctx($a+b$)$
-global $Ctx($a+b$)$, $Ctx($c*d if g in h else i$)$
-nonlocal $Ctx($a+b$)$
 nonlocal x, $Empty$, y
 nonlocal $Empty$
 nonlocal x, $Empty$
 def f($Empty$, y=$Empty$, $Empty$=z):
-    $XElse$
+    pass
 def f($Empty$, y=3, $Empty$=z):
     pass
 def f(**$Empty$):
     pass
+try:
+    pass
+except 3 as $Empty$:
+    pass
+except $Empty$ as a:
+    pass
 fn(a=b, $Empty$=c, d=$Empty$, $Empty$=$Empty$)
 fn(**$Empty$)
+fn()
 class C ($Empty$=b, c=$Empty$):
     pass
-[$Ctx:e($$Empty$$)$]
+[$Empty$,]
+{$Empty$:b}
+with $Empty$ as a:
+    pass
+with x as $Empty$:
+    pass
+with x as ($Empty$, b):
+    pass
+del a, $Empty$, b
+
+$@+400+75$
+# The following statements
+# should have highlighted
+# errors
+import $Ctx:s($3 as $Ctx($3$)$$)$
+import $Ctx:s($3 as b$)$
+$Ctx:i($...x$)$
+from $Ctx($[]$)$ import x
+from $Ctx($[]$)$ import $Ctx($3$)$
+return $Ctx:i($.x$)$
+{a:b, $Ctx:D($c$)$}
+a = $Ctx:d($c:d$)$
+a = $Ctx:f($c=d$)$
+[$Ctx:f($a=b$)$]
+global $Ctx($a+b$)$
+global $Ctx($a+b$)$, $Ctx($c*d if g in h else i$)$
+nonlocal $Ctx($a+b$)$
 def $Ctx($3$)$ ():
     pass
 $Ctx:d($a:b$)$
-$XElif$ a==b
-[$Ctx:f($a=b$)$]
+#$Ctx:a($.nert$)$
+def $Ctx:f($  in_=a_def  $)$ ():
+    pass
+with 3 as $Ctx(${}$)$:
+    pass
+with a as $Ctx($3$)$, b as $Ctx($4$)$:
+    pass
+with a as ($Ctx($3$)$,c[3]):
+    pass
+with a*b as (b,c,($Ctx($3$)$,e)), f:
+    pass
+for $Ctx:s($a as b$)$ in range(1):
+    pass
+import $Ctx($a+3$)$
+import a as $Ctx($3$)$
+$Ctx:f($  **a  $)$
+fn($Ctx:d($a:b$)$=c)
+fn(a=b, $Ctx:K($c$)$)
+fn(a=b, $Ctx:Kd($c:d$)$)
+fn(a=b, $Ctx:K($*c$)$)
+class C (a='asdf', $Ctx:K($c$)$):
+    pass
+class C (a=b, $Ctx:K($c$)$):
+    pass
+class C (a=b, $Ctx:Kd($c:d$)$):
+    pass
+class C (a=b, $Ctx:K($*c$)$):
+    pass
+def f(a=1, $Ctx:K($b$)$):
+    pass
+def f(*, a=1, $Ctx:K($b$)$):
+    pass
+def f ($Ctx:f($**a$)$, b):
+    pass
+def f (*a, $Ctx:K($b$)$):
+    pass
+def f (*, $Ctx:K($a$)$):
+    pass
+def f(*, a=1, $Ctx:Kd($b:c$)$):
+    pass
+def f(x, *y, a=1, $Ctx:K($b$)$, c=1):
+    pass
+def f(x, *y, $Ctx:K($*a$)$):
+    pass
+def f(x, *y, z=3, $Ctx:K($*a$)$):
+    pass
+def f(x, *y, $Ctx:Kf($**z$)$, $Ctx:K($*b$)$):
+    pass
+lambda a=1, $Ctx:K($b$)$: a
+lambda x, *y, $Ctx:Kf($**z$)$, $Ctx:K($*b$)$: a
+del *a, b
+del *a
+del $Ctx($ 1 $)$
+del $Ctx:d($a:b$)$
+del a, $Ctx:f($**a$)$
+del a, (b,c, $Ctx($ 3 $)$), d
+try:
+    pass
+except 3 as $Ctx($3$)$:
+    $:x$pass
+*a = 3
+*a, *b =[1,2,3]
+[*a, *b] = [1,2,3]
+(*a, *b) = [1,2,3]
+$Ctx($ 4 $)$ = 3
+$Ctx($ a+b $)$, = [3]
+($Ctx($ 1 $)$) = 2
+(($Ctx($ 2 $)$)) = 3
+*a, $Ctx($ 3 $)$,c=[(1,2),3]
+(*a,$Ctx($ 3 $)$),c=[(1,2),3]
+(((*a,$Ctx($ 4 $)$))) = [3,4,5]
+(((*$Ctx($ 5 $)$))),b = [3,4,5]
+(*$Ctx($ 6 $)$,) = [1,2,3]
+(*a, *$Ctx($ 7 $)$) = [1,2,3]
+(((*$Ctx($ 8 $)$))),$Ctx($ 9 $)$ = [3,4,5]
+$Ctx($1$)$ += 2
+for *a, *b in [1,2,3]:
+    pass
+for (((*a,$Ctx($ 4 $)$))) in [1,2,3]:
+    pass
+for a, (b, $Ctx($ 3 $)$), $Ctx($ 4 $)$ in range(3):
+    pass
+{a+b:c+d, $Ctx:D($ e $)$}
+$:o$(a,b)
+$:o$[a,b]
+$:o${a:b}
+$:o${a}
+$:o${a:b, c:d}
+$:o${a, b}
+$:o${a:b, c:$:o${d:e}}
+$:o${a, $:o${b}}
+$:o$($Empty$)
+$:o$([a,b])
+$:o$(a+b)
+[a, $:o$(c)]
+$@+600+75$
+# The following statements
+# should have both errors and
+# empty fields highlighted
+from $Ctx($[]$)$ import $Ctx($3$)$, $Empty$
 [$Ctx:f($$Empty$=b$)$]
 [$Ctx:f($a=$Empty$$)$]
-$@+400+100:a($
+
+# Statements with out-of-
+# order and out-of- context
+# clauses should be highlighted
+def f():
+    $XElse$
+while a:
+    $XExcept($x$)$
+$XElif$ a==b
+$XElse$
+$XExcept$
+$XFinally$
+$XExcept($ a $)$
+$XExcept:s($ a as b$)$
+
+$@+600+540:a($
     .a.b.c.d  $)$
-$@+400+200$
-$Ctx($ 4 $)$ = 3
-y=4
-#$Ctx:a($.nert$)$
-{$Empty$:b}
-def $Ctx:f($  in_=a_def  $)$ (): pass
-with a as b, c as d:pass
-for $Ctx:s($a as b$)$ in range(1):pass
-*a
-import $Ctx($a+3$)$
-fn($Ctx:d($a:b$)$=c)
-$Ctx:f($  **a  $)$
-$@+400+550:n($  a=b  $)$
-$@+400+580:s($  a as b  $)$
-$@+400+600:c($  for a in b  $)$
-$@+400+620:c($  if a in b*c $)$
+
+$@+600+560:f($  a=b  $)$
+$@+600+580:s($  a as b  $)$
+$@+600+600:c($  for a in b  $)$
+$@+600+620:c($  if a in b*c $)$

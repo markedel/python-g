@@ -579,3 +579,12 @@ class VerticalBlankIcon(icon.Icon):
                 self.window.cursor.setToIconSite(nextIcon, 'seqIn')
             else:
                 self.window.cursor.setToWindowPos(self.pos())
+
+# Note that most comment icons are not created by the (fake ast) method, below.  This is
+# only used for the case where there's statement to which to attach the comment, which
+# happens only for comments at the end of (or alone in) a file or @pos block
+def createCommentIconFromAst(astNode, window):
+    if astNode.text is None:
+        return VerticalBlankIcon(window)
+    return CommentIcon(astNode.text, ann=astNode.ann, window=window)
+icon.registerIconCreateFn(filefmt.CommentFakeAst, createCommentIconFromAst)

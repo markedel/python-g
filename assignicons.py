@@ -119,7 +119,8 @@ class AssignIcon(icon.Icon):
             self.drawList += self.valueList.drawListCommas(tgtSiteX, siteY)
             self.drawList += self.valueList.drawSimpleSpine(tgtSiteX, siteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True,
+            allowTrailingComma=True)
         self.dragSiteDrawn = needDragSite
 
     def addTargetGroup(self, idx):
@@ -242,12 +243,15 @@ class AssignIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = icon.seriesSaveText(brkLvl, getattr(self.sites,
-            self.tgtLists[0].siteSeriesName), contNeeded, export)
+        text = listicons.seriesSaveTextForContext(brkLvl, getattr(self.sites,
+            self.tgtLists[0].siteSeriesName), contNeeded, export, 'store',
+            allowTrailingComma=True)
         text.add(None, " = ")
         for tgtList in self.tgtLists[1:]:
-            icon.addSeriesSaveText(text, brkLvl,
-                getattr(self.sites, tgtList.siteSeriesName), contNeeded, export)
+            tgtText = listicons.seriesSaveTextForContext(brkLvl,
+                getattr(self.sites, tgtList.siteSeriesName), contNeeded, export, 'store',
+                allowTrailingComma=True)
+            text.concat(brkLvl, tgtText, contNeeded)
             text.add(None, " = ")
         icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
             allowTrailingComma=True)
@@ -558,7 +562,8 @@ class AugmentedAssignIcon(icon.Icon):
     def highlightErrors(self, errHighlight):
         if errHighlight is None:
             self.errHighlight = None
-            listicons.highlightErrorsForContext(self.sites.targetIcon, "store")
+            listicons.highlightErrorsForContext(self.sites.targetIcon, "store",
+                restrictToSingle=True)
             for site in self.sites.values:
                 if site.att is not None:
                     site.att.highlightErrors(None)
@@ -589,7 +594,8 @@ class AugmentedAssignIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = icon.argSaveText(brkLvl, self.sites.targetIcon, contNeeded, export)
+        text = listicons.argSaveTextForContext(brkLvl, self.sites.targetIcon, contNeeded,
+            export, 'store')
         text.add(None, " " + self.op + "= ")
         icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
             allowTrailingComma=True)
@@ -675,6 +681,8 @@ def createAssignIconFromAst(astNode, window):
     for i, tgt in enumerate(astNode.targets):
         if isinstance(tgt, ast.Tuple) and not hasattr(tgt, 'tupleHasParens'):
             tgtIcons = [icon.createFromAst(t, window) for t in tgt.elts]
+            if len(tgtIcons) == 1:
+                tgtIcons.append(None)  # Trailing comma syntax allowed w/o parens
         else:
             tgtIcons = [icon.createFromAst(tgt, window)]
         topIcon.insertChildren(tgtIcons, "targets%d" % i, 0)

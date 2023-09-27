@@ -115,13 +115,19 @@ class CursorParenIcon(icon.Icon):
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
-    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False, ctx=None):
+        # Parens can be used as save and del targets (necessitating the ctx argument).
+        # Note that if the icon has attributes, it becomes a source of data for those
+        # attributes, and we get called with ctx=None.  The attribute case is handled in
+        # argSaveTextForContext, so no additional code is needed, here.
         brkLvl = parentBreakLevel + 1
         if self.closed:
             text = filefmt.SegmentedText("(")
         else:
             text = filefmt.SegmentedText('$:o$(')
-        icon.addArgSaveText(text, brkLvl, self.sites.argIcon, False, export)
+        argText = listicons.argSaveTextForContext(brkLvl, self.sites.argIcon, False,
+            export, ctx)
+        text.concat(brkLvl, argText)
         text.add(None, ")")
         if self.closed:
             return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
@@ -167,14 +173,20 @@ class CursorParenIcon(icon.Icon):
         self.window.undo.registerCallback(self.close)
 
     def textEntryHandler(self, entryIc, text, onAttr):
-        # User can start typing a generator comprehension before conversion to tuple.
-        # All we need to do is recognize it.  Entry icon method insertCprh will do the
-        # work of conversion.  Note that the only comprehension supported is "for",
+        # User can start typing things that are only allowed in a tuple icon, such as
+        # a generator comprehension or a * operator.  In the generator case, all we need
+        # to do is recognize it.  Entry icon mechanisms for inserting those icons will do
+        # the work of conversion.  Note that the only comprehension supported is "for",
         # because "if" cannot be the first comprehension and therefore can only come
-        # after tuple conversion.
+        # after tuple conversion.  In the case of '*', we just play dumb and don't
+        # convert to a tuple, as the code is tolerant of anything that can be attached to
+        # an input site and will highlight it as an error until the user types the comma
+        # that will turn it to a tuple.
         listSiteId = self.siteOf(entryIc, recursive=True)
         if listSiteId != 'argIcon':
             return None
+        if text == '*' and self.sites.argIcon.att is entryIc:
+            return listicons.StarIcon(self.window), None
         textStripped = text[:-1]
         delim = text[-1]
         if onAttr and text[0] in ('f', 'a'):

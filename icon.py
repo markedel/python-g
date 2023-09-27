@@ -949,7 +949,8 @@ class Icon:
             pasteImageWithClip(outImg, tintSelectedImage(img, style),
              (x + imgOffsetX, y + imgOffsetY), clip)
 
-    def _drawEmptySites(self, toDragImage, clip, skip=None, hilightEmptySeries=False):
+    def _drawEmptySites(self, toDragImage, clip, skip=None, hilightEmptySeries=False,
+            allowTrailingComma=False):
         """Draws highlighting for empty sites.  Since empty site width is standardized
         across icons, and Python syntax is fairly consistent in not allowing stray empty
         fields, most icons can just call this method to find and highlight the sites
@@ -966,14 +967,16 @@ class Icon:
             skip = ()
         sitesToDraw = []
         for siteOrSeries in self.sites.allSites(expandSeries=False):
-            if siteOrSeries.name in skip:
-                continue
             if isinstance(siteOrSeries, iconsites.IconSiteSeries):
                 if len(siteOrSeries) > 1 or hilightEmptySeries:
                     for site in siteOrSeries:
+                        if site.name in skip or allowTrailingComma and site is \
+                                siteOrSeries[-1]:
+                            continue
                         if site.att is None and site.type == 'input':
                             sitesToDraw.append((site, True))
-            elif siteOrSeries.att is None and siteOrSeries.type == 'input':
+            elif siteOrSeries.att is None and siteOrSeries.type == 'input' and \
+                    siteOrSeries.name not in skip:
                 sitesToDraw.append((siteOrSeries, False))
         if len(sitesToDraw) == 0:
             return
@@ -1064,7 +1067,11 @@ class Icon:
         associativity binary operations) in calls to createSaveText for child icons.
         Likewise, continuationNeeded should either be passed unchanged to child calls,
         or set to False if the icon provides enclosing parens/brackets/braces that
-        remove the need for child text to get line continuation characters."""
+        remove the need for child text to get line continuation characters.  Icons that
+        are legal as store and del targets have an additional parameter (ctx=None) that
+        can provide that context, which they use both for checking validity to decide if
+        the save text needs to be wrapped in a $Ctx$ macro, and in some cases, to
+        propagate the context information to their own arguments."""
         return filefmt.SegmentedText("***No createSaveText method for icon %s" %
                                      self.dumpName())
 

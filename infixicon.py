@@ -3,10 +3,10 @@ import comn
 import iconlayout
 import iconsites
 import icon
-import filefmt
 import entryicon
+import nameicons
 import opicons
-import cursors
+import listicons
 
 # Self-delimiting infix operators, which respond to backspace by removing the
 # delimiting character.  This both mimics normal typing, and avoids having a pre-typed
@@ -231,10 +231,33 @@ class AsIcon(InfixIcon):
         return snapLists
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        brkLvl = parentBreakLevel + 1
+        parent = self.parent()
+        if parent is None:
+            needCtx = True
+            parentClass = None
+        else:
+            parentClass = parent.__class__.__name__
+            if parentClass in self.allowableParents:
+                parentSite = parent.siteOf(self)
+                if iconsites.isSeriesSiteId(parentSite):
+                    siteName, siteIdx = iconsites.splitSeriesSiteId(parentSite)
+                else:
+                    siteName = parentSite
+                needCtx = siteName != self.allowableParents[parentClass]
+            else:
+                needCtx = True
+        brkLvl = parentBreakLevel + (2 if needCtx else 1)
         text = icon.argSaveText(brkLvl, self.sites.leftArg, contNeeded, export)
         text.add(None, " as ")
-        icon.addArgSaveText(text, brkLvl, self.sites.rightArg, contNeeded, export)
+        if parentClass == 'WithIcon':
+            argText = listicons.argSaveTextForContext(brkLvl, self.sites.rightArg,
+                contNeeded, export, 'store')
+        else:
+            argText = nameicons.createNameFieldSaveText(brkLvl, self.sites.rightArg,
+                contNeeded, export)
+        text.concat(brkLvl, argText)
+        if needCtx:
+            text.wrapCtxMacro(parentBreakLevel+1, parseCtx='s', needsCont=contNeeded)
         return text
     
     def highlightErrors(self, errHighlight):

@@ -143,6 +143,18 @@ class IdentifierIcon(TextIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False, ctx=None):
+        # Identifiers are valid in delete and save contexts, hence the optional ctx
+        # parameter.  If ctx is not None, check that the attributes are legal in the
+        # given context, and wrap the identifier and its attribute chain in a $Ctx$ macro
+        # if it is not.
+        if ctx is None or listicons.attrValidForContext(self, ctx):
+            return TextIcon.createSaveText(self, parentBreakLevel, contNeeded, export)
+        #... I think this whole method can go away
+        text = TextIcon.createSaveText(self, parentBreakLevel+1, contNeeded, export)
+        text.wrapCtxMacro(parentBreakLevel, needsCont=contNeeded)
+        return text
+
     def compareData(self, data):
         # Identifiers are considered code and rejected.  However, currently our only
         # representation for complex numbers is complex(real, imag), and those are
@@ -393,11 +405,13 @@ class BreakIcon(NoArgStmtIcon):
         return ast.Break(lineno=self.id, col_offset=0)
 
 class SeriesStmtIcon(icon.Icon):
-    def __init__(self, stmt, window, seqIndent=False, requireArg=False, location=None):
+    def __init__(self, stmt, window, seqIndent=False, requireArg=False,
+            allowTrailingComma=False, location=None):
         icon.Icon.__init__(self, window)
         self.stmt = stmt
         self.drawIndent = seqIndent
         self.requireArg = requireArg
+        self.allowTrailingComma = allowTrailingComma
         bodyWidth = icon.getTextSize(stmt, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = icon.minTxtIconHgt
         self.bodySize = (bodyWidth, bodyHeight)
@@ -450,7 +464,8 @@ class SeriesStmtIcon(icon.Icon):
             # Commas
             self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=self.requireArg)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=self.requireArg,
+            allowTrailingComma=self.allowTrailingComma)
         if temporaryDragSite:
             self.drawList = None
 
@@ -527,7 +542,8 @@ class SeriesStmtIcon(icon.Icon):
 
 class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
-        SeriesStmtIcon.__init__(self, "return", window, location=location)
+        SeriesStmtIcon.__init__(self, "return", window, allowTrailingComma=True,
+            location=location)
 
     def createAst(self):
         if len(self.sites.values) == 1 and self.sites.values[0].att is None:
@@ -573,6 +589,14 @@ class DelIcon(SeriesStmtIcon):
                 raise icon.IconExecException(self, "Missing argument(s)")
         targetAsts = [site.att.createAst() for site in self.sites.values]
         return ast.Delete(targetAsts, lineno=self.id, col_offset=0)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText(self.stmt + " ")
+        tgtTxt = listicons.seriesSaveTextForContext(brkLvl, self.sites.values,
+            contNeeded, export, 'del')
+        text.concat(brkLvl, tgtTxt)
+        return text
 
 class GlobalIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
@@ -802,18 +826,18 @@ class ImportIcon(SeriesStmtIcon):
                 ic.errHighlight = None
                 leftArg = ic.leftArg()
                 if leftArg is not None:
-                    if not isinstance(leftArg, IdentifierIcon):
+                    if isinstance(leftArg, IdentifierIcon):
+                        attr = leftArg.childAt('attrIcon')
+                        while attr is not None:
+                            if not isinstance(attr, AttrIcon):
+                                attr.highlightErrors(icon.ErrorHighlight(
+                                    "Not a valid format for a module name for import"))
+                                break
+                            attr.errHighlight = None
+                            attr = attr.childAt('attrIcon')
+                    else:
                         leftArg.highlightErrors(icon.ErrorHighlight(
                             "Not a valid module name for import"))
-                        continue
-                    attr = leftArg.childAt('attrIcon')
-                    while attr is not None:
-                        if not isinstance(attr, AttrIcon):
-                            attr.highlightErrors(icon.ErrorHighlight(
-                                "Not a valid format for a module name for import"))
-                            break
-                        attr.errHighlight = None
-                        attr = attr.childAt('attrIcon')
                 rightArg = ic.rightArg()
                 if rightArg is not None:
                     if not isinstance(rightArg, IdentifierIcon):
@@ -829,6 +853,54 @@ class ImportIcon(SeriesStmtIcon):
             else:
                 ic.highlightErrors(icon.ErrorHighlight(
                     "Not a valid module name for import"))
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        text = filefmt.SegmentedText('import ')
+        args = []
+        for ic in (site.att for site in self.sites.values):
+            parseCtx = None
+            if isinstance(ic, IdentifierIcon):
+                ic.errHighlight = None
+                attr = ic.childAt('attrIcon')
+                needsCtx = False
+                while attr is not None:
+                    if not isinstance(attr, AttrIcon):
+                        needsCtx = True
+                        break
+                    attr = attr.childAt('attrIcon')
+            elif isinstance(ic, infixicon.AsIcon):
+                # 'as' icon enforces identifier as right arg, but does not enforce
+                # left arg constraints specific to import
+                needsCtx = False
+                leftArg = ic.leftArg()
+                if leftArg is not None:
+                    if isinstance(leftArg, IdentifierIcon):
+                        attr = leftArg.childAt('attrIcon')
+                        while attr is not None:
+                            if not isinstance(attr, AttrIcon):
+                                needsCtx = True
+                                break
+                            attr.errHighlight = None
+                            attr = attr.childAt('attrIcon')
+                    else:
+                        needsCtx = True
+                        parseCtx = 's'
+            elif ic is not None:
+                needsCtx = True
+            if ic is None:
+                args.append(filefmt.SegmentedText('$Empty$'))
+            else:
+                brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+                arg = ic.createSaveText(brkLvl, contNeeded, export)
+                if needsCtx:
+                    arg.wrapCtxMacro(parentBreakLevel+1, needsCont=contNeeded,
+                        parseCtx=parseCtx)
+                args.append(arg)
+        text.concat(parentBreakLevel, args[0], contNeeded)
+        for arg in args[1:]:
+            text.add(None, ', ', contNeeded)
+            text.concat(parentBreakLevel+1, arg, contNeeded)
+        return text
 
 class ImportFromIcon(icon.Icon):
     hasTypeover = True
@@ -949,12 +1021,69 @@ class ImportFromIcon(icon.Icon):
         return "from " + moduleText + " import " + importsText
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText("from ")
-        icon.addArgSaveText(text, brkLvl, self.sites.moduleIcon, contNeeded, export)
-        text.add(brkLvl, " import ", contNeeded)
-        icon.addSeriesSaveText(text, brkLvl, self.sites.importsIcons, contNeeded,
-            export, allowEmpty=False)
+        needsCtx = False
+        moduleNameIcon = self.childAt('moduleIcon')
+        if isinstance(moduleNameIcon, RelativeImportIcon):
+            moduleNameIcon = moduleNameIcon.childAt('argIcon')
+        if isinstance(moduleNameIcon, IdentifierIcon):
+            attr = moduleNameIcon.childAt('attrIcon')
+            while attr is not None:
+                if not isinstance(attr, AttrIcon):
+                    needsCtx = True
+                    break
+                attr = attr.childAt('attrIcon')
+        elif moduleNameIcon is not None:
+            needsCtx = True
+        brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+        moduleNameText = icon.argSaveText(brkLvl, self.sites.moduleIcon, contNeeded,
+            export)
+        if needsCtx:
+            moduleNameText.wrapCtxMacro(parentBreakLevel + 1, needsCont=contNeeded)
+        text.concat(parentBreakLevel + 1, moduleNameText)
+        text.add(parentBreakLevel+1, " import ", contNeeded)
+        args = []
+        for ic in (site.att for site in self.sites.importsIcons):
+            needsCtx = False
+            parseCtx = None
+            if isinstance(ic, IdentifierIcon):
+                attr = ic.childAt('attrIcon')
+                if attr is not None:
+                    needsCtx = True
+            elif isinstance(ic, infixicon.AsIcon):
+                # 'as' icon enforces identifier as right arg, but does not enforce
+                # left arg also being constrained to an identifier
+                leftArg = ic.leftArg()
+                if leftArg is not None:
+                    if isinstance(leftArg, IdentifierIcon):
+                        if leftArg.childAt('attrIcon') is not None:
+                            needsCtx = True
+                            parseCtx = 's'
+                    else:
+                        needsCtx = True
+                        parseCtx = 's'
+            elif isinstance(ic, listicons.StarIcon):
+                if len(self.sites.importsIcons) > 1:
+                    needsCtx = True
+                    parseCtx = 'f'
+                if ic.arg() is not None:
+                    needsCtx = True
+                    parseCtx = 'f'
+            elif ic is not None:
+                needsCtx = True
+            if ic is None:
+                args.append(filefmt.SegmentedText('$Empty$'))
+            else:
+                brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+                arg = ic.createSaveText(brkLvl, contNeeded, export)
+                if needsCtx:
+                    arg.wrapCtxMacro(parentBreakLevel+1, needsCont=contNeeded,
+                        parseCtx=parseCtx)
+                args.append(arg)
+        text.concat(parentBreakLevel, args[0], contNeeded)
+        for arg in args[1:]:
+            text.add(None, ', ', contNeeded)
+            text.concat(parentBreakLevel+1, arg, contNeeded)
         return text
 
     def dumpName(self):
@@ -1276,19 +1405,36 @@ class RelativeImportIcon(opicons.UnaryOpIcon):
             return snapLists
         def snapFn(ic, siteId):
             return isinstance(ic, ImportFromIcon) and siteId == "moduleIcon"
-        snapData = snapLists['output'][0]
-        snapLists['output'] = []
-        snapLists['conditional'] = [(*snapData, 'output', snapFn)]
+        if 'output' in snapLists:
+            snapData = snapLists['output'][0]
+            snapLists['output'] = []
+            snapLists['conditional'] = [(*snapData, 'output', snapFn)]
         return snapLists
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            parent = self.parent()
+            if parent is None:
+                if self.sites.seqIn.att is not None or self.sites.seqOut.att is not None:
+                    errHighlight = icon.ErrorHighlight("Relative import (one or "
+                    "more leading '.') by itself is not legal as a statement")
+            elif not isinstance(parent, ImportFromIcon):
+                errHighlight = icon.ErrorHighlight("Can only use relative import (one or "
+                    "more leading '.') in the context of an import-from statement")
+        icon.Icon.highlightErrors(self, errHighlight)
+
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText("." * self.level)
+        parent = self.parent()
+        ctxNeeded = not isinstance(parent, ImportFromIcon) or \
+            parent.siteOf(self) != 'moduleIcon'
+        brkLvl = parentBreakLevel + (2 if ctxNeeded else 1)
         arg = self.sites.argIcon.att
-        if arg is None:
-            return text
-        argText = arg.createSaveText(brkLvl, contNeeded, export)
-        text.concat(None, argText, contNeeded)
+        if arg is not None:
+            argText = arg.createSaveText(brkLvl, contNeeded, export)
+            text.concat(None, argText, contNeeded)
+        if ctxNeeded:
+            text.wrapCtxMacro(parentBreakLevel+1, needsCont=contNeeded, parseCtx='i')
         return text
 
     def clipboardRepr(self, offset, iconsToCopy):
@@ -1341,7 +1487,7 @@ class YieldIcon(icon.Icon):
             # Commas
             self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip)
+        self._drawEmptySites(toDragImage, clip, allowTrailingComma=True)
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -1996,7 +2142,7 @@ def createNameFieldSaveText(brkLvl, site, needsCont, export):
     if site.att is None or isinstance(site.att, IdentifierIcon):
         return icon.argSaveText(brkLvl, site, needsCont, export)
     argText = icon.argSaveText(brkLvl+1, site, needsCont, export)
-    argText.wrapCtxMacro(brkLvl, parseCtx=None, needsContinue=needsCont)
+    argText.wrapCtxMacro(brkLvl, parseCtx=None, needsCont=needsCont)
     return argText
 
 # Getting resources (particularly icon class definitions) from other icon files requires
@@ -2082,7 +2228,7 @@ def createImportIconFromAst(astNode, window):
         else:
             nameIcon, asNameIcon = createIconsForNameFields(alias,
                 (alias.name, alias.asname), window)
-        if asNameIcon is None:
+        if alias.asname is None:
             aliases.append(nameIcon)
         else:
             asIcon = infixicon.AsIcon(window)
@@ -2112,7 +2258,7 @@ def createImportFromIconFromAst(astNode, window):
         else:
             nameIcon, asNameIcon = createIconsForNameFields(alias,
                 (alias.name, alias.asname), window)
-        if asNameIcon is None:
+        if alias.asname is None:
             aliases.append(nameIcon)
         else:
             asIcon = infixicon.AsIcon(window)
@@ -2122,6 +2268,10 @@ def createImportFromIconFromAst(astNode, window):
     topIcon.insertChildren(aliases, "importsIcons", 0)
     return topIcon
 icon.registerIconCreateFn(ast.ImportFrom, createImportFromIconFromAst)
+
+def createModuleNameIconFromFakeAst(astNode, window):
+    return moduleNameToIcons(astNode.moduleName, astNode.level, window)
+icon.registerIconCreateFn(filefmt.RelImportNameFakeAst, createModuleNameIconFromFakeAst)
 
 def createDeleteIconFromAst(astNode, window):
     topIcon = DelIcon(window)
