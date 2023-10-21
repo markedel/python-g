@@ -2,8 +2,7 @@
 # highlights during development.  The environment needs to be able to 1) load the entire file
 # successfully, 2) highlight  all of the syntax errors in the loaded code, and 3) save the file
 # such that a text diff will show no differences between the original and the saved copy.
-pass
-$@+0+75$
+$@+5+75$
 # The following statements
 # should not be highlighted
 from ...x import y
@@ -73,7 +72,7 @@ a += 2
 {a+b:c+d}
 del a, (b, c, [d])
 
-$@+200+75$
+$@+205+75$
 # The following statements
 # should have empty fields
 # highlighted
@@ -260,10 +259,24 @@ $XFinally$
 $XExcept($ a $)$
 $XExcept:s($ a as b$)$
 
-$@+600+540:a($
+$@+600+500$
+# Fragments should draw
+# w/o error
+$@+600+544:a($
     .a.b.c.d  $)$
-
 $@+600+560:f($  a=b  $)$
-$@+600+580:s($  a as b  $)$
-$@+600+600:c($  for a in b  $)$
-$@+600+620:c($  if a in b*c $)$
+$@+600+580:s($a as b$)$
+$@+600+600:c($for a in b$)$
+$@+600+620:c($if a in b*c$)$
+$@+600+644:a($.nert$)$
+$@+600+664:a($[a:b:c]$)$
+$@+600+684:a($(a, *b, c=2,**d)$)$
+$@+600+700$
+# Fragments should have
+# highlighted errors
+$@+600+740:f($  $Ctx($3$)$=b  $)$
+$@+600+760:s($a as $Ctx:d($b:c$)$$)$
+$@+600+780:c($for $Ctx(${1,2}$)$ in b$)$
+$@+600+800:c($if a in $Ctx:f($b=2$)$$)$
+$@+600+824:a($[a:b:$Ctx:i($...x$)$]$)$
+$@+600+844:a($(a, *b, c=2,$Ctx:K($d$)$)$)$

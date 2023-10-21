@@ -353,12 +353,14 @@ class Icon:
         return None
 
     def pos(self, preferSeqIn=False):
-        """The "official" position of an icon is defined by the location of its seqInsert
-        site if it has one, or output site if it doesn't.  Icons that don't have either
-        will not be centered vertically on that location: Icons with an attrOut site are
-        positioned by that, and anything else on the top-left corner of its rectangle.
-        For backward compatibility with earlier versions of the call, setting preferSeqIn
-        to True will return the position of the seqIn site over the seqInsert site."""
+        """The "official" position of an icon.  This is used to record and restore the
+        icon to its original location via the @ macro in the save file.  It is also used
+        to determine where place the window-cursor when the last remaining icon of a
+        structure is deleted.  The position is defined by the location of its seqInsert,
+        output, seqIin, attrOut, or cprhOut site (in that order).  Icons that don't have
+        any such sites return the top-left corner of their rectangle.  For backward
+        compatibility with earlier versions of the call, setting preferSeqIn to True will
+        return the position of the seqIn site over the seqInsert site."""
         if preferSeqIn and hasattr(self.sites, 'seqIn'):
             return self.posOfSite('seqIn')
         return self.posOfSite(self._anchorSite())
@@ -404,7 +406,7 @@ class Icon:
         for layout in layouts:
             if layout.width > self.window.margin:
                 layout.badness += 100 + 2 * layout.width - self.window.margin
-        if self.nextInSeq() or self.prevInSeq():
+        if self.nextInSeq() or self.prevInSeq(includeModuleAnchor=True):
             # Icon is part of a sequence.  Optimize for height
             minHeight = min((layout.height for layout in layouts))
             for layout in layouts:
@@ -695,8 +697,11 @@ class Icon:
             return None
         return self.sites.seqOut.att
 
-    def prevInSeq(self):
+    def prevInSeq(self, includeModuleAnchor=False):
         if not hasattr(self.sites, 'seqIn'):
+            return None
+        prevIcon = self.sites.seqIn.att
+        if prevIcon is self.window.modSeqIcon and not includeModuleAnchor:
             return None
         return self.sites.seqIn.att
 
@@ -1449,9 +1454,10 @@ def drawSeqSites(img, boxLeft, boxTop, boxHeight, indent=None, extendWidth=None)
 def drawSeqSiteConnection(toIcon, image=None, clip=None):
     """Draw connection line between ic's seqIn site and whatever it connects."""
     # Note that this is not currently used.  Since sequenced icons are usually close
-    # together, it seems to be enough that they share the same indent.  However there
-    # may be reasons to bring this code back, so for now it remains.
-    fromIcon = toIcon.prevInSeq()
+    # together, drawing lines along the innermost scope probably adds more "chart junk"
+    # than it contributes to clarity.  However there may be a critical distance where
+    # this actually helps, so, at least for now, the code remains.
+    fromIcon = toIcon.prevInSeq(includeModuleAnchor=True)
     if fromIcon is None:
         return
     fromX, fromY = fromIcon.posOfSite('seqOut')
@@ -1480,7 +1486,7 @@ def drawSeqSiteConnection(toIcon, image=None, clip=None):
 def seqConnectorTouches(toIcon, rect):
     """Return True if the icon is connected via its seqIn site and the sequence site
     connector line intersects rectangle, rect."""
-    fromIcon = toIcon.prevInSeq()
+    fromIcon = toIcon.prevInSeq(includeModuleAnchor=True)
     if fromIcon is None:
         return False
     fromX, fromY = fromIcon.posOfSite('seqOut')
@@ -1539,12 +1545,15 @@ def drawSeqRule(ic, clip=None, image=None):
 
 def findSeqStart(ic, toStartOfBlock=False):
     """Find the first icon of a sequence, either the very start (where it attaches to the
-    window (default) or to the top icon in its code block (toStartOfBlock=True)."""
+    window (default) or to the top icon in its code block (toStartOfBlock=True).  Note
+    that this will not return the window's module anchor icon (it will return the first
+    icon below it)."""
+    moduleAnchorIc = ic.window.modSeqIcon
     while True:
         if not hasattr(ic.sites, 'seqIn'):
             return ic
         prevIc = ic.sites.seqIn.att
-        if prevIc is None:
+        if prevIc is None or prevIc is moduleAnchorIc:
             return ic
         if toStartOfBlock and hasattr(prevIc, 'blockEnd'):
             return ic
@@ -1573,7 +1582,16 @@ def findSeqEnd(ic, toEndOfBlock=False):
 
 def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
         restrictToPage=None, skipInnerBlocks=False, inclStmtComments=False):
-    if includeStartingIcon:
+    """Traverse either top-level icons (hier=False) or all icons (hier-True) from
+    ic to the start (reverse=True) or end (reverse=False) of the sequence in which they
+    appear.  restrictToPage will stop the traversal when it leaves the boundary of the
+    specified page.  Specifying skipInnerBlocks=True will skip over nested code blocks.
+    inclStmtComments will yield statement comment icons along with the code icons that
+    it normally produces (line comments and verticalBlank icons are always included).
+    The window's module anchor icon is always excluded (both if passed as ic, and if
+    encountered in upward (reverse=True) traversal."""
+    moduleAnchor = ic.window.modSeqIcon
+    if includeStartingIcon and ic is not moduleAnchor:
         if hier:
             yield from ic.traverse(inclStmtComment=inclStmtComments)
         else:
@@ -1586,7 +1604,7 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
                 ic = ic.primary.sites.seqIn.att
             else:
                 ic = ic.sites.seqIn.att
-            if ic is None:
+            if ic is None or ic is moduleAnchor:
                 return
             if restrictToPage is not None and ic.window.topIcons[ic] != restrictToPage:
                 return

@@ -1502,7 +1502,7 @@ class CallIcon(icon.Icon):
                icon.attrTextRepr(self)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        brkLvl = parentBreakLevel + 1
+        brkLvl = parentBreakLevel + (2 if self.parent() is None else 1)
         text = filefmt.SegmentedText('(' if self.closed else '$:o$(')
         if len(self.sites.argIcons) > 1 or len(self.sites.argIcons) == 1 and \
                 self.sites.argIcons[0].att is not None:
@@ -1525,7 +1525,9 @@ class CallIcon(icon.Icon):
                 text.concat(brkLvl, argText, contNeeded)
         text.add(None, ')')
         if self.closed:
-            return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+            text = icon.addAttrSaveText(text, self, brkLvl-1, contNeeded, export)
+        if self.parent() is None:
+            text.wrapFragmentMacro(parentBreakLevel, 'a', needsCont=contNeeded)
         return text
 
     def dumpName(self):
@@ -1764,9 +1766,11 @@ class CprhIfIcon(icon.Icon):
         return "if " + icon.argTextRepr(self.sites.testIcon)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        brkLvl = parentBreakLevel + 1
+        brkLvl = parentBreakLevel + (1 if self.parent() is not None else 2)
         text = filefmt.SegmentedText("if ")
         icon.addArgSaveText(text, brkLvl, self.sites.testIcon, contNeeded, export)
+        if self.parent() is None:
+            text.wrapFragmentMacro(parentBreakLevel+1, 'c', needsCont=False)
         return text
 
     def createAst(self):
@@ -2049,12 +2053,23 @@ class CprhForIcon(icon.Icon):
             return self._becomeEntryIcon()
         return None
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None:
+            self.errHighlight = None
+            highlightSeriesErrorsForContext(self.sites.targets, 'store')
+        else:
+            icon.Icon.highlightErrors(self, errHighlight)
+
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        brkLvl = parentBreakLevel + 1
+        brkLvl = parentBreakLevel + (1 if self.parent() is not None else 2)
         text = filefmt.SegmentedText("async for " if self.isAsync else "for ")
-        icon.addSeriesSaveText(text, brkLvl, self.sites.targets, contNeeded, export)
+        tgtText = seriesSaveTextForContext(brkLvl, self.sites.targets, contNeeded,
+            export, 'store', allowTrailingComma=True)
+        text.concat(brkLvl, tgtText)
         text.add(None, " in ")
         icon.addArgSaveText(text, brkLvl, self.sites.iterIcon, contNeeded, export)
+        if self.parent() is None:
+            text.wrapFragmentMacro(parentBreakLevel+1, 'c', needsCont=False)
         return text
 
     def dumpName(self):
@@ -2163,7 +2178,7 @@ class ArgAssignIcon(infixicon.InfixIcon):
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
-        if not self._validateContext():
+        if not self._validateContext(forHighlight=True):
             icon.Icon.highlightErrors(self, icon.ErrorHighlight("Argument assignment "
                 "('=') can only appear in calls, lambdas, and def and class statements"))
             return
@@ -2195,12 +2210,14 @@ class ArgAssignIcon(infixicon.InfixIcon):
             text.wrapCtxMacro(parentBreakLevel+1, parseCtx='f')
         return text
 
-    def _validateContext(self):
+    def _validateContext(self, forHighlight=False):
         """Return True if icon is attached to a parent and parent site where it is
-        syntactically legal in Python to have an argument assignment."""
+        syntactically legal in Python to have an argument assignment.  If forHighlight
+        is True, consider free fragment valid."""
         parent = self.parent()
         if parent is None:
-            return False
+            return forHighlight and self.sites.seqIn.att is None and \
+                   self.sites.seqOut.att is None
         siteName, _ = iconsites.splitSeriesSiteId(parent.siteOf(self))
         return isinstance(parent, (CallIcon, blockicons.DefIcon, blockicons.LambdaIcon,
             blockicons.ClassDefIcon)) and siteName == 'argIcons'
@@ -2466,8 +2483,8 @@ def backspaceListIcon(ic, site, evt):
             # Empty list
             if parent is None and not attrIcon:
                 # Empty paren was the only thing left of the statement.  Remove
-                if ic.prevInSeq() is not None:
-                    cursorIc = ic.prevInSeq()
+                if ic.prevInSeq(includeModuleAnchor=True) is not None:
+                    cursorIc = ic.prevInSeq(includeModuleAnchor=True)
                     cursorSite = 'seqOut'
                 elif ic.nextInSeq() is not None:
                     cursorIc = ic.nextInSeq()
@@ -2484,7 +2501,7 @@ def backspaceListIcon(ic, site, evt):
                     win.cursor.setToIconSite(cursorIc, cursorSite)
             elif parent is None:
                 # Top-level empty paren w/attribute: Leave just an attribute
-                if ic.prevInSeq() or ic.nextInSeq():
+                if ic.prevInSeq(includeModuleAnchor=True) or ic.nextInSeq():
                     # ic was part of a sequence, hang the attribute off an entry icon
                     entryIcon = entryicon.EntryIcon(window=win)
                     win.replaceTop(ic, entryIcon)
@@ -2739,7 +2756,7 @@ def backspaceListIcon(ic, site, evt):
                     # backspace hack for assign icons can, in fact, set this up.
                     print("Naked tuple removed in backspace of single element")
                     nextIc = ic.nextInSeq()
-                    prevIc = ic.prevInSeq()
+                    prevIc = ic.prevInSeq(includeModuleAnchor=True)
                     win.removeIcons([ic])
                     if prevIc is not None:
                         win.cursor.setToIconSite(prevIc, 'seqOut')

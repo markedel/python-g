@@ -261,8 +261,8 @@ class CursorParenIcon(icon.Icon):
             if parent is None:
                 if content is None:
                     # Open paren was the only thing left of the statement.  Remove
-                    if self.prevInSeq() is not None:
-                        cursorIc = self.prevInSeq()
+                    if self.prevInSeq(includeModuleAnchor=True) is not None:
+                        cursorIc = self.prevInSeq(includeModuleAnchor=True)
                         cursorSite = 'seqOut'
                     elif self.nextInSeq() is not None:
                         cursorIc = self.nextInSeq()

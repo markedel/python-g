@@ -615,15 +615,16 @@ def getPlaceholderId(placeholderStr):
         return None
     return int(match.group(1))
 
-def parseTextToIcons(text, window, source="Pasted text", forImport=False):
+def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModule=False):
     """Parse the given text in either .pyg (forImport=False), or .py (forImport=True)
     format, and return the created icons in a single list.  Note that this does not
     lay-out icons, but does set the position (.rect[:2]) of the first icon, which will
     be used by the layout code to position the sequence.  On error, pops up a dialog
     describing the error.  "source" is the name to use in the error dialog as the file
-    (or other source) from which the text originated.  Returns list of top-level icons
-    on success and None on failure."""
-    pos = 0, 0
+    (or other source) from which the text originated.  If 'asModule' is True, code before
+    the first $@$ macro will be attached to the window's module anchor icon (window.
+    modSeqIcon).  Returns list of top-level icons on success and None on failure."""
+    pos = None if asModule else (0, 0)
     topLevelIcons = []
     startIdx = 0
     lineNum = 1
@@ -648,7 +649,15 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False):
             tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep))
             return None
         if len(icons) > 0:
-            icons[0].rect = icon.moveRect(icons[0].rect, pos)
+            if asModule and pos is None:
+                if icons[0].hasSite('seqIn'):
+                    window.modSeqIcon.replaceChild(icons[0], 'seqOut')
+                else:
+                    # (Probably only as a result of hand-edited .pyg file) the main
+                    # module sequence contains something with no sequence sites
+                    icons[0].rect = icon.moveRect(icons[0].rect, (10, 10))
+            else:
+                moveIconToPos(icons[0], pos)
             topLevelIcons += icons
         if parseEndIdx == len(text):
             return topLevelIcons
@@ -667,7 +676,7 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False):
             # elements and "as" clauses).  Build icons for the argument and make sure
             # that nothing follows the macro but another pos macro.
             topIcon = icon.createFromAst(argCode[0], window)
-            topIcon.rect = icon.moveRect(topIcon.rect, pos)
+            moveIconToPos(topIcon, pos)
             topLevelIcons.append(topIcon)
             while True:
                 if parseEndIdx >= len(text):
@@ -1519,6 +1528,20 @@ class SegmentedText:
         self.segments[:0] = [ctxMacro, breakValue]
         self.segments += [breakValue, '$)$']
 
+    def wrapFragmentMacro(self, breakLevel, parseCtx, needsCont=False):
+        """Surround the segmented text string with a fragment macro ($Fragment($  $)$)
+        with the given parse context.  The caller is expected to have set the breakLevel
+        for the text to be surrounded, with the expectation that another level will be
+        added.  The $Fragment$ macro represents a free fragment that cannot be attached
+        to either an input or sequence site, so can only ever appear by itself (whereas a
+        $Ctx$ macro adapts the enclosed site to be included in such a context. $Fragment$
+        macros never actually make it to the save file, but are instead intercepted by
+        the code generating it and merged into the @ macro"""
+        fragMacro = '$Fragment:%s($' % parseCtx
+        breakValue = _encodeBreakValue(breakLevel, 1 if needsCont else 0)
+        self.segments[:0] = [fragMacro, breakValue]
+        self.segments += [breakValue, '$)$']
+
     def concat(self, breakLevel, otherSegText, needsContinue=False):
         """Append another SegmentedText object to the end of the accumulated text.  If
         breakLevel is set to None, it will merge the first element of the appended
@@ -1753,6 +1776,25 @@ class SegmentedText:
             else:
                 newSegments.append(entry)
         self.segments = newSegments
+
+    def isCtxOrFragmentMacro(self):
+        """Returns True if the content of the string is either a single $Ctx$ macro or
+        a $Fragment$ macro."""
+        if self.segments is None or len(self.segments) == 0:
+            return False
+        return self._isSingleCtxMacro() or self.segments[0][:10] == '$Fragment:'
+
+    def cvtCtxOrFragmentToPosMacro(self, x, y):
+        """Convert the $Ctx$ or $Fragment$ macro contained in the string to an $@$ macro
+        with the given x,y location (assumes that the caller has verified the content
+        with isCtxOrFragmentMacro before calling)."""
+        posPrefix = "$@%+d%+d:" % (x, y)
+        if self.segments[0][:5] == '$Ctx:':
+            self.segments[0] = posPrefix + self.segments[0][5:]
+        elif self.segments[0][:10] == '$Fragment:':
+            self.segments[0] = posPrefix + self.segments[0][10:]
+        else:
+            print('cvtCtxOrFragmentToPosMacro passed string with unexpected prefix')
 
     def _isSingleCtxMacro(self):
         """Return True if the entire contents of the object is a single $Ctx$ macro.
@@ -2008,6 +2050,13 @@ def _breakSuffix(breakValue):
         return ''
     strType, quote, needsCont = _decodeStringBreakType(breakType)
     return strType + quote
+
+def moveIconToPos(ic, pos):
+    """Move the given icon, ic, such that the site that "officially" designates its
+    position (ic.pos()) lies on the specified x, y position, pos."""
+    x, y = ic.pos()
+    ic.rect = comn.offsetRect(ic.rect, pos[0] - x, pos[1] - y)
+
 
 class ReprocSyntaxErrExcept(Exception):
     lineNumRe = re.compile('.*(line \\d*\\))')

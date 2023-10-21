@@ -270,8 +270,12 @@ class AttrIcon(icon.Icon):
         return result
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        return icon.addAttrSaveText(filefmt.SegmentedText("." + self.name), self,
-            parentBreakLevel, contNeeded, export)
+        breakLvl = parentBreakLevel + (1 if self.parent() is None else 0)
+        text = icon.addAttrSaveText(filefmt.SegmentedText("." + self.name), self,
+            breakLvl, contNeeded, export)
+        if self.parent() is None:
+            text.wrapFragmentMacro(parentBreakLevel, 'a', needsCont=contNeeded)
+        return text
 
     def createAst(self, attrOfAst):
         return icon.composeAttrAst(self, ast.Attribute(value=attrOfAst, attr=self.name,

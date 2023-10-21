@@ -109,13 +109,13 @@ typeoverCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 typeoverCursorImage = Image.new('RGBA', (1, typeoverCursorHeight), color=(0, 0, 0, 255))
 
 class Cursor:
-    def __init__(self, window, cursorType):
+    def __init__(self, window, cursorType=None, ic=None, site=None):
         self.window = window
         self.type = cursorType
         self.pos = (0, 0)
-        self.icon = None
-        self.site = None
-        self.siteType = None
+        self.icon = ic
+        self.site = site
+        self.siteType = None if site is None else ic.typeOf(site)
         self.lastDrawRect = None
         self.blinkState = False
         self.anchorIc = None
@@ -692,7 +692,7 @@ def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
                 return fromIcon, "seqIn"
             return icon.rightmostSite(fromIcon)
         elif fromSite == 'seqIn':
-            prevStmt = fromIcon.prevInSeq()
+            prevStmt = fromIcon.prevInSeq(includeModuleAnchor=True)
             if prevStmt is None:
                 return fromIcon, fromSite
             if isinstance(prevStmt, icon.BlockEnd):
@@ -776,7 +776,7 @@ def geometricTraverse(fromIcon, fromSite, direction, enterTextFields=True,
         return 'icon', fromIcon, 'seqIn', None
     if isinstance(fromIcon.prevInSeq(), icon.BlockEnd) and fromSite == 'seqIn' and \
             direction == 'Up':
-        return 'icon', fromIcon.prevInSeq(), 'seqIn', None
+        return 'icon', fromIcon.prevInSeq(includeModuleAnchor=True), 'seqIn', None
     # Build a list of possible destination cursor positions, normalizing attribute
     # site positions to the center of the cursor (in/out site position).
     cursorX, cursorY = fromIcon.posOfSite(fromSite)
@@ -794,7 +794,7 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
         cursorX+limitDist[0], cursorY+limitDist[1])
     if limitAdjacentStmt is not None:
         cursorTopIcon = limitAdjacentStmt.topLevelParent()
-        cursorPrevIcon = cursorTopIcon.prevInSeq()
+        cursorPrevIcon = cursorTopIcon.prevInSeq(includeModuleAnchor=True)
         cursorNextIcon = cursorTopIcon.nextInSeq()
         limitToStmts = [cursorTopIcon]
         if hasattr(cursorTopIcon, 'stmtComment'):
@@ -810,7 +810,7 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
             if hasattr(nextTopIcon, 'stmtComment'):
                 limitToStmts.append(nextTopIcon.stmtComment)
     cursorSites = []
-    for winIcon in window.findIconsInRegion(searchRect):
+    for winIcon in window.findIconsInRegion(searchRect, inclModSeqIcon=True):
         if limitAdjacentStmt is not None:
             topIcon = winIcon.topLevelParent()
             if topIcon not in limitToStmts:
@@ -874,7 +874,7 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
         if site == 'seqIn' and direction == "Up":
             # Typing at a seqIn site is the same as typing at the connected seqOut
             # site, so save the user a keypress by going to the seqOut site above
-            prevIcon = ic.prevInSeq()
+            prevIcon = ic.prevInSeq(includeModuleAnchor=True)
             if prevIcon:
                 ic = prevIcon
                 site = 'seqOut'

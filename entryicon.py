@@ -1051,7 +1051,7 @@ class EntryIcon(icon.Icon):
                     # regardless of makePlaceholder, as it's the first arg that failed.
                     if not forceDelete:
                         return False
-                    prevIcon = self.prevInSeq()
+                    prevIcon = self.prevInSeq(includeModuleAnchor=True)
                     nextIcon = self.nextInSeq()
                     self.window.removeIcons([self])
                     if prevIcon:
@@ -1063,7 +1063,7 @@ class EntryIcon(icon.Icon):
                         self.window.cursor.setToWindowPos(self.posOfSite('output'))
             else:
                 # No pending arguments
-                prevIcon = self.prevInSeq()
+                prevIcon = self.prevInSeq(includeModuleAnchor=True)
                 nextIcon = self.nextInSeq()
                 if hasattr(self, 'blockEnd'):
                     self.window.removeIcons([self, self.blockEnd])
@@ -2080,11 +2080,14 @@ class EntryIcon(icon.Icon):
         """Handle insertion of a comprehension.  Comprehension sites are cursor-
         prohibited, and the entry icon will be sitting somewhere under a list, dict, or
         tuple icon, from which we will determine the actual insertion (cprh) site."""
+        child = self
         for parent in self.parentage(includeSelf=False):
             if isinstance(parent, (listicons.ListIcon, listicons.DictIcon,
-                    listicons.DictIcon, listicons.TupleIcon, parenicon.CursorParenIcon)):
+                    listicons.TupleIcon, parenicon.CursorParenIcon)) and \
+                    parent.siteOf(child) != 'attrIcon':
                 insertIn = parent
                 break
+            child = parent
         else:
             print('Failed to find host icon for comprehension')
             return None, None

@@ -8,6 +8,7 @@ import comn
 import cursors
 import iconsites
 import icon
+import iconlayout
 import blockicons
 import listicons
 import opicons
@@ -79,7 +80,53 @@ MOUSE_WHEEL_SCALE = 0.42
 # but not objectionable.
 PAGE_SPLIT_THRESHOLD = 100
 
+# Maximum line width in characters for save-file and copy/paste text
+DEFAULT_SAVE_FILE_MARGIN = 100
+
 WIN_TITLE_PREFIX = "Python-G - "
+
+# anchorImage = comn.asciiToImage((
+#  ".......6%%6.......",
+#  ".......%..%.......",
+#  "......8%..%8......",
+#  ".......2%%2.......",
+#  "........%%........",
+#  "........%%........",
+#  "....5%%%%%%%%5....",
+#  "........%%........",
+#  "........%%........",
+#  "........%%........",
+#  ".%7.....%%.....7%.",
+#  ".%%7....%%....7%%.",
+#  ".%%%5...%%...5%%%.",
+#  "5%%6....%%....6%%5",
+#  "8.%%....%%....%%.8",
+#  "..8%%...%%...%%8..",
+#  "...8%%%2%%2%%%8...",
+#  ".....72%%%%%......",
+#  "........oo........"))
+# moduleAnchorSeqOutOffset = anchorImage.width//2, anchorImage.height-1
+# MODULE_ANCHOR_X = 5
+# MODULE_ANCHOR_Y = 1
+anchorImage = comn.asciiToImage((
+ "oooooooooo",
+ "o%%%%%%%%o",
+ "o%%%%%%%%o",
+ "o%%%%%%%%o",
+ "o5%%%%%%5o",
+ ".o%%%%%%o.",
+ ".o5%%%%5o.",
+ "..o%%%%o..",
+ "..o5%%5o..",
+ "...o%%o...",
+ "...o44o...",
+ "...o%%o...",
+ "...o%%o...",
+ "....oo....",
+))
+moduleAnchorSeqOutOffset = anchorImage.width//2, anchorImage.height-2
+MODULE_ANCHOR_X = 9
+MODULE_ANCHOR_Y = 1
 
 startUpTime = time.monotonic()
 
@@ -285,7 +332,6 @@ class Window:
         self.image = Image.new('RGB', (width, height), color=WINDOW_BG_COLOR)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
-        self.cursor = cursors.Cursor(self, None)
         self.execResultPositions = {}
         self.undo = undo.UndoRedoList(self)
         self.macroParser = filefmt.MacroParser()
@@ -313,6 +359,14 @@ class Window:
         # Set on Alt+Mouse presses to suppress menu-bar highlighting, which Tkinter will
         # sometimes do when the Alt key is released
         self.suppressAltReleaseAction = False
+        # Create an icon to top the main module sequence.  Except for the seqOut site,
+        # this will normally be invisible (above the top of the window).  Only when the
+        # window content gets dragged above or left of (0,0) do we allow scrolling to
+        # that region.  When that area does get exposed, the module sequence snap point
+        # needs to be clearly visible.
+        self.modSeqIcon = ModuleAnchorIcon(self)
+        self.addTopSingle(self.modSeqIcon, newSeq=True)
+        self.cursor = cursors.Cursor(self, 'icon', ic=self.modSeqIcon, site='seqOut')
 
     def openFile(self, filename):
         """Open a .pyg or .py file in the window.  Uses file type to determine whether to
@@ -324,7 +378,7 @@ class Window:
         print("done")
         _base, ext = os.path.splitext(filename)
         icons = filefmt.parseTextToIcons(text, self, source=filename,
-            forImport=ext!=".pyg")
+            forImport=ext!=".pyg", asModule=True)
         if icons is None:
             return False
         if len(icons) == 0:
@@ -562,7 +616,7 @@ class Window:
         windowBottom = scrollOriginY + windowHeight + int(self.xScrollbar.cget('width'))
         for seqStartPage in self.sequences:
             for page in seqStartPage.traversePages():
-                yMin = min(page.topY, yMin)
+                yMin = 0 if page.startIcon is self.modSeqIcon else min(page.topY, yMin)
                 yMax = max(page.bottomY, yMax)
                 if page.bottomY >= scrollOriginY and page.topY <= windowBottom:
                     page.applyOffset()
@@ -1308,8 +1362,9 @@ class Window:
             elif self.cursor.type == "icon":
                 if self.cursor.siteType in ('seqIn', 'seqOut'):
                     cursorIc = self.cursor.icon
-                    if self.cursor.siteType == 'seqIn' and cursorIc.prevInSeq():
-                        cursorIc = cursorIc.prevInSeq()
+                    if self.cursor.siteType == 'seqIn' and cursorIc.prevInSeq(
+                            includeModuleAnchor=True):
+                        cursorIc = cursorIc.prevInSeq(includeModuleAnchor=True)
                     if isinstance(cursorIc, icon.BlockEnd):
                         ic, site = cursorIc, 'seqIn'
                     elif isinstance(cursorIc, commenticon.CommentIcon):
@@ -1457,7 +1512,7 @@ class Window:
         if evt.state & SHIFT_MASK:
             #... not correct/complete.  Need to create entry icon with pending block
             blockStartIcon = icon.findSeqStart(topIcon, toStartOfBlock=True)
-            blockOwnerIcon = blockStartIcon.childAt('seqIn')
+            blockOwnerIcon = blockStartIcon.prevInSeq()
             if blockOwnerIcon is not None:
                 topIcon = blockOwnerIcon.blockEnd
         self.cursor.setToIconSite(topIcon, 'seqOut')
@@ -1632,7 +1687,7 @@ class Window:
         stationaryInputs = []
         draggingComment = any((isinstance(i, commenticon.CommentIcon) for i in
             topDraggingIcons))
-        for winIcon in self.findIconsInRegion(order='pick'):
+        for winIcon in self.findIconsInRegion(order='pick', inclModSeqIcon=True):
             snapLists = winIcon.snapLists()
             for ic, pos, name in snapLists.get("input", []):
                 stationaryInputs.append((pos, 0, ic, "input", name, None))
@@ -2016,7 +2071,7 @@ class Window:
         # whether we need the result of the evaluation.
         self.globals['__windowExecContext__'] = {}
         if iconToExecute.hasSite('output') and iconToExecute.prevInSeq() is None and \
-         iconToExecute.nextInSeq() is None:
+                iconToExecute.nextInSeq() is None:
             # Create ast for eval
             execType = 'eval'
             seqIcons = [iconToExecute]
@@ -2270,7 +2325,7 @@ class Window:
         # order returned from findIconsInRegion.  Sequence lines must be drawn on top of
         # the icons they connect but below any icons that might be placed on top of them.
         drawStyle = icon.STYLE_OUTLINE if showOutlines else 0
-        for ic in self.findIconsInRegion(region, inclSeqRules=True):
+        for ic in self.findIconsInRegion(region, inclSeqRules=True, inclModSeqIcon=True):
             ic.draw(clip=region, style=drawStyle)
             # Looks better without connectors, but not willing to remove permanently, yet:
             # if region is None or icon.seqConnectorTouches(topIcon, region):
@@ -2280,6 +2335,10 @@ class Window:
 
     def _dumpCb(self, evt=None):
         for seqStartPage in self.sequences:
+            if seqStartPage.startIcon is self.modSeqIcon:
+                print('Module Sequence')
+            else:
+                print(f'@{seqStartPage.startIcon.pos()}')
             for ic in icon.traverseSeq(seqStartPage.startIcon):
                 icon.dumpHier(ic)
         print(f"Cursor type {self.cursor.type} ", end='')
@@ -2397,7 +2456,8 @@ class Window:
             self.dc = dib.image.getdc(self.imgFrame.winfo_id())
         dib.draw(self.dc, (x, y, x + image.width, y + image.height))
 
-    def findIconsInRegion(self, rect=None, inclSeqRules=False, order='draw'):
+    def findIconsInRegion(self, rect=None, inclSeqRules=False, order='draw',
+            inclModSeqIcon=False):
         """Find the icons that touch a (content coordinate) rectangle of the window.  If
         rect is not specified, assume the visible region of the window.  This function
         uses an efficient searching technique, so it is also used to cull candidate icons
@@ -2418,7 +2478,7 @@ class Window:
             for page in seqStartPage.traversePages():
                 if page.bottomY >= rect[1] and page.topY <= bottom:
                     page.applyOffset()
-                    for topIc in page.traverseSeq():
+                    for topIc in page.traverseSeq(inclModSeqIcon=inclModSeqIcon):
                         for ic in topIc.traverse(order=order, inclStmtComment=True):
                             if comn.rectsTouch(rect, ic.rect):
                                 iconsInRegion.append(ic)
@@ -2430,7 +2490,7 @@ class Window:
             # sequence rule left of seqRuleSeed
             blockStart = seqRuleSeed
             while True:
-                blockStart = icon.findSeqStart(blockStart, toStartOfBlock=True).prevInSeq()
+                blockStart = icon.findBlockOwner(blockStart)
                 if blockStart is None:
                     break
                 if icon.seqRuleTouches(blockStart, rect):
@@ -2536,7 +2596,7 @@ class Window:
                 tx, ty = ic.posOfSite('seqOut')
                 bx, by = nextIc.posOfSite('seqIn')
                 self.requestRedraw((tx-1, ty-1, tx+1, by+1))
-            prevIc = ic.prevInSeq()
+            prevIc = ic.prevInSeq(includeModuleAnchor=True)
             if prevIc is not None:
                 tx, ty = prevIc.posOfSite('seqOut')
                 bx, by = ic.posOfSite('seqIn')
@@ -2644,7 +2704,7 @@ class Window:
         affectedTopIcons = set()
         for topIcon in topDeletedIcons:
             affectedTopIcons.add(topIcon)
-            prevIcon = topIcon.prevInSeq()
+            prevIcon = topIcon.prevInSeq(includeModuleAnchor=True)
             if prevIcon is not None:
                 affectedTopIcons.add(prevIcon)
             nextIcon = topIcon.nextInSeq()
@@ -2712,9 +2772,34 @@ class Window:
         with open(filename, "w") as f:
             for seqStartPage in sorted(self.sequences, key=self.seqSortKeyFn):
                 startIcon = seqStartPage.startIcon
-                left, top = startIcon.hierRect()[:2]
-                if not exportPython:
-                    f.write("$@%+d%+d$\n" % (left, top))
+                if startIcon is not self.modSeqIcon:
+                    if exportPython:
+                        f.write('\n')
+                    else:
+                        x, y = startIcon.pos()
+                        if startIcon.nextInSeq() is None:
+                            # This is a single statement or fragment of some sort.  These
+                            # can hold icons that cannot be part of a sequence, which (to
+                            # make the  per-icon code simpler) is only determined by
+                            # creating save text and checking for a $Ctx$ or $Fragment$
+                            # macro.  The code duplication here keeps this complication
+                            # out of the main loop.
+                            saveText = startIcon.createSaveText(export=False)
+                            if saveText.isCtxOrFragmentMacro():
+                                saveText.cvtCtxOrFragmentToPosMacro(x, y)
+                            else:
+                                f.write("$@%+d%+d$\n" % (x, y))
+                            # At this point, we've either *wrapped* saveText with the @
+                            # macro, or *written* a line with the @ macro
+                            if hasattr(ic, 'stmtComment') and ic.stmtComment is not None:
+                                saveText.addComment(ic.stmtComment.createSaveText(
+                                    export=False), isStmtComment=True)
+                            stmtText = saveText.wrapText(0, continueIndent,
+                                margin=DEFAULT_SAVE_FILE_MARGIN, export=False)
+                            f.write(stmtText)
+                            f.write('\n')
+                            continue
+                        f.write("$@%+d%+d$\n" % (x, y))
                 branchDepth = 0
                 for ic in icon.traverseSeq(startIcon):
                     if isinstance(ic, icon.BlockEnd):
@@ -2734,7 +2819,7 @@ class Window:
                             saveText.addComment(ic.stmtComment.createSaveText(
                                 export=exportPython), isStmtComment=True)
                         stmtText = saveText.wrapText(indent, indent + continueIndent,
-                            margin=100, export=exportPython)
+                            margin=DEFAULT_SAVE_FILE_MARGIN, export=exportPython)
                         f.write(stmtText)
                         f.write('\n')
                         if (hasattr(ic, 'blockEnd') or saveText.requiresTempDedent) and \
@@ -2752,7 +2837,11 @@ class Window:
         diff/review tools, we need to order the sequence list consistently.  To do that,
         we sort it by y, then by x coordinate. of the start of the sequence."""
         startIcon = seqStartPage.startIcon
-        left, top = startIcon.hierRect()[:2]
+        if startIcon is startIcon.window.modSeqIcon:
+            # Module sequence always comes first
+            left, top = -999999999,  -999999999
+        else:
+            left, top = startIcon.pos()
         return top, left
 
     def clearBgRect(self, rect=None):
@@ -2827,6 +2916,9 @@ class Window:
         """Remove a (presumably empty) page.  Because pages are single-direction linked
          list, this can only be done by exhaustively searching for the page, starting
         from self.sequences."""
+        if pageToRemove.startIcon is self.modSeqIcon:
+            print("something tried to remove the module sequence page")
+            return
         for seqStartPage in self.sequences:
             if seqStartPage is pageToRemove:
                 idx = self.sequences.index(pageToRemove)
@@ -2894,7 +2986,7 @@ class Window:
                 else:
                     # Neither icon can own a code block
                     new.replaceChild(nextInSeq, 'seqOut')
-        prevInSeq = old.prevInSeq()
+        prevInSeq = old.prevInSeq(includeModuleAnchor=True)
         if prevInSeq:
             old.replaceChild(None, 'seqIn')
             new.replaceChild(prevInSeq, 'seqIn')
@@ -3009,7 +3101,7 @@ class Window:
         self.undo.registerAddToTopLevel(ic, newSeq)
         if pos is not None:
             ic.rect = icon.moveRect(ic.rect, pos)
-        prevIcon = ic.prevInSeq()
+        prevIcon = ic.prevInSeq(includeModuleAnchor=True)
         if prevIcon is None:
             nextIcon = ic.nextInSeq()
             if nextIcon is None or newSeq:
@@ -3109,7 +3201,8 @@ class Window:
                     redrawRegion.add((windowLeft, page.topY, windowRight, page.bottomY))
                 continue
             # The page is marked as needing layout.
-            if page.startIcon.nextInSeq() is None and page.startIcon.prevInSeq() is None:
+            if page.startIcon.nextInSeq() is None and \
+                    page.startIcon.prevInSeq(includeModuleAnchor=True) is None:
                 # The page contains a single icon that is not part of a sequence
                 redrawRegion.add(page.startIcon.hierRect())
                 if filterRedundantParens:
@@ -3164,9 +3257,17 @@ class Window:
         window, the new bottomY of the sequence/page, and the seqOut site offset of the
         last icon on the page."""
         redrawRegion = comn.AccumRects()
-        x, y = seqStartIcon.pos(preferSeqIn=True)
-        if fromTopY is not None:
-            y = fromTopY
+        if isinstance(seqStartIcon, ModuleAnchorIcon):
+            x = seqStartIcon.rect[0] + seqStartIcon.sites.seqOut.xOffset
+            y = seqStartIcon.rect[1] + seqStartIcon.sites.seqOut.yOffset
+            fromTopY = y
+            seqStartIcon = seqStartIcon.sites.seqOut.att
+            if seqStartIcon is None:
+                return
+        else:
+            x, y = seqStartIcon.pos(preferSeqIn=True)
+            if fromTopY is not None:
+                y = fromTopY
         if not seqStartIcon.hasSite('seqIn'):
             # Icon can not be laid out by sequence site.  Just lay it out by itself
             redrawRegion.add(seqStartIcon.hierRect())
@@ -3197,7 +3298,7 @@ class Window:
                 else:
                     anchorSite = seqIc.sites.seqIn  # Only BlockEndIcon
                 yOffsetToSeqIn = layout.parentSiteOffset + seqIc.sites.seqIn.yOffset - \
-                        anchorSite.yOffset
+                            anchorSite.yOffset
             # At this point, y is the seqIn site position if it is the first icon in the
             # sequence and fromTopY is False.  Otherwise y is the bottom of the layout of
             # the statement above.  Adjust it to be the desired y of the seqIn site.
@@ -3229,7 +3330,8 @@ class Window:
         bottom = btnY + SITE_SELECT_DIST
         minDist = SITE_SELECT_DIST + 1
         minSite = (None, None, None)
-        for ic in self.findIconsInRegion((left, top, right, bottom), order='pick'):
+        for ic in self.findIconsInRegion((left, top, right, bottom), order='pick',
+                inclModSeqIcon=True):
             iconSites = ic.snapLists(forCursor=True)
             for siteType, siteList in iconSites.items():
                 for siteIcon, (x, y), siteName, *_ in siteList:
@@ -3336,7 +3438,12 @@ class Page:
         pageStmtCnt = 0
         totalStmtCnt = 0
         page = self
-        for ic in icon.traverseSeq(self.startIcon):
+        startIcon = page.startIcon
+        if startIcon is startIcon.window.modSeqIcon:
+            startIcon = startIcon.sites.seqOut.att
+            pageStmtCnt += 1
+            totalStmtCnt += 1
+        for ic in icon.traverseSeq(startIcon):
             pageStmtCnt += 1
             totalStmtCnt += 1
             if pageStmtCnt > newPageMax:
@@ -3368,13 +3475,20 @@ class Page:
             yield page
             page = page.nextPage
 
-    def traverseSeq(self, hier=False, order="draw", inclStmtComments=False):
+    def traverseSeq(self, hier=False, order="draw", inclStmtComments=False,
+            inclModSeqIcon=False):
         """Traverse the icons in the page (note, generator).  If hier is False, just
         return the top icons in the sequence.  If hier is True, return all icons.  order
         can be either "pick" or "draw", and controls hierarchical (hier=True) traversal.
         Parent icons are allowed to hide structure under child icons, so picking must be
-        done child-first, and drawing must be done parent-first."""
-        count = 0
+        done child-first, and drawing must be done parent-first.  By default, the module
+        anchor icon is not included, but can ba if inclModSeqIcon is set to True."""
+        if self.startIcon is self.startIcon.window.modSeqIcon:
+            if inclModSeqIcon:
+                yield self.startIcon
+            count = 1
+        else:
+            count = 0
         for ic in icon.traverseSeq(self.startIcon):
             page = ic.window.topIcons[ic]
             if page is not self:
@@ -3399,6 +3513,32 @@ class Page:
             l, t, r, b = ic.rect
             ic.rect = l, t + self.unappliedOffset, r, b + self.unappliedOffset
         self.unappliedOffset = 0
+
+class ModuleAnchorIcon(icon.Icon):
+    def __init__(self,  window, location=None):
+        icon.Icon.__init__(self, window)
+        seqOutX, seqOutY = moduleAnchorSeqOutOffset
+        self.sites.add('seqOut', 'seqOut', seqOutX, seqOutY)
+        # The tip of the anchor is the seqOut site position
+        rectX = MODULE_ANCHOR_X - seqOutX
+        rectY = MODULE_ANCHOR_Y - seqOutY
+        self.rect = (rectX, rectY, rectX + anchorImage.width, rectY+anchorImage.height)
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
+        if self.drawList is None:
+            self.drawList = [((0, 0), anchorImage)]
+        self._drawFromDrawList(toDragImage, location, clip, style)
+
+    def doLayout(self, x, bottom, _layout):
+        # Never moves or changes
+        pass
+
+    def calcLayouts(self):
+        print('something is trying to call calcLayouts on module anchor')
+        return [iconlayout.Layout(self, anchorImage.width, anchorImage.height, 0)]
+
+    def dumpName(self):
+        return "module-anchor"
 
 def findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon=None):
     """Because we have icons with no pickable structure left of their arguments (binary
