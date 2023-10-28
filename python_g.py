@@ -25,6 +25,7 @@ import time
 import tkinter.messagebox
 import ctypes
 import reorderexpr
+import cProfile
 
 WINDOW_BG_COLOR = (255, 255, 255)
 #WINDOW_BG_COLOR = (128, 128, 128)
@@ -365,7 +366,9 @@ class Window:
         # that region.  When that area does get exposed, the module sequence snap point
         # needs to be clearly visible.
         self.modSeqIcon = ModuleAnchorIcon(self)
-        self.addTopSingle(self.modSeqIcon, newSeq=True)
+        page = Page(modSeqIcon=self.modSeqIcon)
+        self.sequences.append(page)
+        self.topIcons[self.modSeqIcon] = page
         self.cursor = cursors.Cursor(self, 'icon', ic=self.modSeqIcon, site='seqOut')
 
     def openFile(self, filename):
@@ -1617,6 +1620,20 @@ class Window:
         # the important job of re-building deleted icons into a set of dragable sequences
         # and hierarchies.
         draggingSequences = self.removeIcons(icons, assembleDeleted=True)
+        # For icons that depend on context to distinguish identical text syntax,
+        # (currently only for/if comprehension fields vs compatible for/if statements),
+        # choose the non-contextual representation for dragging.
+        for i in range(len(draggingSequences)):
+            seq = draggingSequences[i]
+            if len(seq) != 1:
+                # Apply to single icons only, not sequences
+                continue
+            ic = seq[0]
+            subsIc = subsCanonicalInterchangeIcons(ic)
+            if subsIc is not None:
+                draggingSequences[i] = [subsIc, subsIc.blockEnd]
+                if ic is self.buttonDownIcon:
+                    self.buttonDownIcon = subsIc
         # removeIcons will remove placeholder icons that no longer hold anything, so if
         # one of those just happens to be the icon that the user dragged, we 1) need make
         # sure that there's still something to drag, and 2) stop using the icon as a
@@ -1844,9 +1861,21 @@ class Window:
                 statIcon.insertAttr(movIcon)
             elif siteType == "cprhIn":
                 topDraggedIcons.remove(movIcon)
+                subsIcon, alsoRemove = restoreFromCanonicalInterchangeIcon(movIcon,
+                    siteType)
+                if subsIcon is not None:
+                    for ic in alsoRemove:
+                        topDraggedIcons.remove(ic)
+                    movIcon = subsIcon
                 statIcon.replaceChild(movIcon, siteName)
             elif siteType == "insertCprh":
                 topDraggedIcons.remove(movIcon)
+                subsIcon, alsoRemove = restoreFromCanonicalInterchangeIcon(movIcon,
+                    siteType)
+                if subsIcon is not None:
+                    for ic in alsoRemove:
+                        topDraggedIcons.remove(ic)
+                    movIcon = subsIcon
                 statIcon.insertChild(movIcon, siteName)
             elif siteType == 'seqOut':
                 icon.insertSeq(movIcon, statIcon)
@@ -3168,6 +3197,7 @@ class Window:
         else:
             for seqStartPage in self.sequences:
                 redrawRegion.add(self.layoutIconsInPage(seqStartPage, filterRedundantParens))
+        self._updateScrollRanges()
         return redrawRegion.get()
 
     def layoutIconsInPage(self, startPage, filterRedundantParens, checkAllForDirty=True):
@@ -3203,6 +3233,8 @@ class Window:
             # The page is marked as needing layout.
             if page.startIcon.nextInSeq() is None and \
                     page.startIcon.prevInSeq(includeModuleAnchor=True) is None:
+                if isinstance(page.startIcon, ModuleAnchorIcon):
+                    continue
                 # The page contains a single icon that is not part of a sequence
                 redrawRegion.add(page.startIcon.hierRect())
                 if filterRedundantParens:
@@ -3243,7 +3275,6 @@ class Window:
         for page in pagesNeedingSplit:
             page.split()
         # Window content likely changed, update the scroll bars
-        self._updateScrollRanges()
         return redrawRegion.get()
 
     def layoutIconsInSeq(self, seqStartIcon, filterRedundantParens, fromTopY=None,
@@ -3417,14 +3448,16 @@ class Page:
     offset" to a range of icons in a sequence.  When icons become visible and need to
     know their absolute positions, applyOffset can be called to update them.  The other
     issue that pages address is the need to quickly find icons by position, without
-    traversing the entire tree."""
-    def __init__(self):
+    traversing the entire tree.  The initialization for a window object can pass
+    its module sequence anchor icon in forModSeq to create the module sequence start page
+    (which persists for the life of the window)."""
+    def __init__(self, forModSeq=None):
         self.unappliedOffset = 0
         self.layoutDirty = False
         self.topY = 0
         self.bottomY = 0
-        self.iconCount = 0
-        self.startIcon = None
+        self.iconCount = 1 if forModSeq else 0
+        self.startIcon = forModSeq if forModSeq else None
         self.nextPage = None
 
     def split(self):
@@ -4123,6 +4156,73 @@ def reorderMarkedExprs(topIcon, exprsNeedingReorder):
             modifiedTopIcon = newTopIc
     return modifiedTopIcon
 
+def  subsCanonicalInterchangeIcons(ic):
+    """When an icon with an equivalent text representation but unique form within its
+    normal context, is dragged or cut/copied out of that context, return an equivalent
+    icon of its canonical (non-contextual) form.  For example, if an if clause is dragged
+    out of a comprehension this call will return an equivalent if statement.  Currently,
+    this only applies to comprehension components.  It was originally intended to apply
+    to argument assignment as well, but that led to complex ambiguities in the resulting
+    icon structure when an argument assignment became exposed outside of a call.  It will
+    probably eventually apply to slices versus dictionary elements (once slices are
+    separated from subscripts)."""
+    if isinstance(ic, listicons.CprhForIcon):
+        forIcon = blockicons.ForIcon(isAsync=ic.isAsync, window=ic.window)
+        tgtIcons = [tgtSite.att for tgtSite in ic.sites.targets]
+        for tgtSite in ic.sites.targets:
+            ic.replaceChild(None, tgtSite.name)
+        forIcon.insertChildren(tgtIcons, 'targets', 0)
+        iterIcon = ic.childAt('iterIcon')
+        ic.replaceChild(None, 'iterIcon')
+        forIcon.replaceChild(iterIcon, 'iterIcons_0')
+        return forIcon
+    elif isinstance(ic, listicons.CprhIfIcon):
+        ifIcon = blockicons.IfIcon(window=ic.window)
+        condIcon = ic.childAt('testIcon')
+        ic.replaceChild(None, 'testIcon')
+        ifIcon.replaceChild(condIcon, 'condIcon')
+        return ifIcon
+    return None
+
+def restoreFromCanonicalInterchangeIcon(ic, siteType):
+    """Decides whether to substitute the site-specific version of a text-equivalent icon
+    (see subsCanonicalInterchangeIcons for what this means).  If so, returns the icon to
+    substitute and a list of linked icons (blockEnd and possibly pass) that also need to
+    be removed.  If not, returns None, None."""
+    if siteType not in ('cprhIn', 'insertCprh'):
+        return None, None
+    if isinstance(ic, blockicons.ForIcon):
+        subsIcon = listicons.CprhForIcon(isAsync=ic.stmt == "async for",
+            window=ic.window)
+        tgtIcons = [tgtSite.att for tgtSite in ic.sites.targets]
+        for _ in range(len(tgtIcons)):
+            ic.replaceChild(None, 'targets_0')
+        subsIcon.insertChildren(tgtIcons, 'targets', 0)
+        if len(ic.sites.iterIcons) == 1:
+            iterIcon = ic.childAt('iterIcons_0')
+            ic.replaceChild(None, 'iterIcons_0')
+        else:
+            iterIcon = listicons.ListIcon(window=ic.window)
+            iterEntries = [site.att for site in ic.sites.iterIcons]
+            for _ in range(len(iterEntries)):
+                ic.replaceChild(None, 'iterIcons_0')
+            iterIcon.insertChildren(iterEntries, 'argIcons', 0)
+        subsIcon.replaceChild(iterIcon, 'iterIcon')
+    elif isinstance(ic, blockicons.IfIcon):
+        subsIcon = listicons.CprhIfIcon(window=ic.window)
+        condIcon = ic.childAt('condIcon')
+        ic.replaceChild(None, 'condIcon')
+        subsIcon.replaceChild(condIcon, 'testIcon')
+    else:
+        return None, None
+    topIconsToRemove = []
+    if hasattr(ic, 'blockEnd'):
+        nextIc = ic.nextInSeq()
+        if nextIc is not ic.blockEnd:
+            topIconsToRemove.append(nextIc)  # Block can have 'pass' icon
+        topIconsToRemove.append(ic.blockEnd)
+    return subsIcon, topIconsToRemove
+
 #... Move to OS-dependent module (once that's created)
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -4136,3 +4236,4 @@ def nudgeMouseCursor(x, y):
 if __name__ == '__main__':
     appData = App()
     appData.mainLoop()
+    #cProfile.run('appData.mainLoop()', 'prof_stats')

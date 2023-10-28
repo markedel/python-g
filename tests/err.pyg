@@ -67,6 +67,7 @@ a=[1,2,]
 (((*a))),b = [3,4,5]
 (*a,) = [1,2,3]
 (((*a))),b = [3,4,5]
+[a for a in b if c]
 a, = [2]
 a += 2
 {a+b:c+d}
@@ -120,7 +121,12 @@ with x as $Empty$:
     pass
 with x as ($Empty$, b):
     pass
+for $Empty$ in $Empty$:
+    pass
+for $Empty$, x, in y, $Empty$, z:
+    pass
 del a, $Empty$, b
+[a for $Empty$ in $Empty$ if $Empty$]
 
 $@+400+75$
 # The following statements
@@ -237,6 +243,8 @@ $:o$($Empty$)
 $:o$([a,b])
 $:o$(a+b)
 [a, $:o$(c)]
+[a $CprhUnassocIf$ b==c]
+[a $CprhUnassocIf$ b==c $CprhUnassocIf$ x in y for a in b]
 $@+600+75$
 # The following statements
 # should have both errors and

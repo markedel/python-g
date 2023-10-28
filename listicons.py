@@ -16,6 +16,9 @@ import entryicon
 import infixicon
 import reorderexpr
 
+UNASSOC_IF_IDENT = '___pyg_cprh_unassoc_if'
+UNASSOC_IF_MACRO_NAME = 'CprhUnassocIf'
+
 listLBktImage = comn.asciiToImage((
  "..oooooooo",
  "..o      o",
@@ -394,19 +397,24 @@ fnRParenTypeoverImage = comn.asciiToImage( (
  "oooooooo"))
 
 argAssignImage = comn.asciiToImage((
- "ooooooooo",
- "o       o",
- "o       o",
- "o       o",
- "o %%%%% o",
- "o      o.",
- "o     o..",
- "o %%%%%o.",
- "o       o",
- "o       o",
- "o       o",
- "o       o",
- "ooooooooo"))
+ "ooooooo",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o 555 o",
+ "o    o.",
+ "o   o..",
+ "o 555o.",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "ooooooo"))
 
 class ListTypeIcon(icon.Icon):
     hasTypeover = True
@@ -1767,7 +1775,10 @@ class CprhIfIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + (1 if self.parent() is not None else 2)
-        text = filefmt.SegmentedText("if ")
+        if self._detectBadOrder():
+            text = filefmt.SegmentedText("$%s$ " % UNASSOC_IF_MACRO_NAME)
+        else:
+            text = filefmt.SegmentedText("if ")
         icon.addArgSaveText(text, brkLvl, self.sites.testIcon, contNeeded, export)
         if self.parent() is None:
             text.wrapFragmentMacro(parentBreakLevel+1, 'c', needsCont=False)
@@ -1778,6 +1789,23 @@ class CprhIfIcon(icon.Icon):
             raise icon.IconExecException(self,
                     'Missing argument to "if" in comprehension')
         return self.sites.testIcon.att.createAst()
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None and self._detectBadOrder():
+            errHighlight = icon.ErrorHighlight("'if' comprehension clause must follow "
+                "'for' clause")
+        icon.Icon.highlightErrors(self, errHighlight)
+
+    def _detectBadOrder(self):
+        parent = self.parent()
+        if parent is None:
+            return False
+        for parentCprhSite in parent.sites.cprhIcons:
+            if parentCprhSite.att is self:
+                return True
+            if isinstance(parentCprhSite.att, CprhForIcon):
+                return False
+        return False  # Shouldn't happen
 
 class CprhForIcon(icon.Icon):
     def __init__(self, isAsync=False, typeover=False, window=None, location=None):
@@ -2057,6 +2085,9 @@ class CprhForIcon(icon.Icon):
         if errHighlight is None:
             self.errHighlight = None
             highlightSeriesErrorsForContext(self.sites.targets, 'store')
+            iterIcon = self.childAt('iterIcon')
+            if iterIcon is not None:
+                iterIcon.highlightErrors(None)
         else:
             icon.Icon.highlightErrors(self, errHighlight)
 
@@ -2064,7 +2095,7 @@ class CprhForIcon(icon.Icon):
         brkLvl = parentBreakLevel + (1 if self.parent() is not None else 2)
         text = filefmt.SegmentedText("async for " if self.isAsync else "for ")
         tgtText = seriesSaveTextForContext(brkLvl, self.sites.targets, contNeeded,
-            export, 'store', allowTrailingComma=True)
+            export, 'store', allowTrailingComma=True, allowEmpty=False)
         text.concat(brkLvl, tgtText)
         text.add(None, " in ")
         icon.addArgSaveText(text, brkLvl, self.sites.iterIcon, contNeeded, export)
@@ -3168,6 +3199,17 @@ def createComprehensionIconFromAst(astNode, window):
                 hasattr(gen.target, 'tupleHasParens'):
             tgtIcons = [icon.createFromAst(t, window) for t in gen.target.elts]
             forIcon.insertChildren(tgtIcons, "targets", 0)
+        elif isinstance(gen.target, ast.Name) and gen.target.id == UNASSOC_IF_IDENT:
+            # To fake out the parser for an 'if' comprehension clause not associated with
+            # a 'for', we define a macro to replace itself with: 'for unique_ident in'
+            # and when we se the unique identifier, we turn it back in to an 'if'
+            # comprehension with the test taken from the iterator of the 'for'.
+            ifIcon = CprhIfIcon(window)
+            testIcon = icon.createFromAst(gen.iter, window)
+            ifIcon.replaceChild(testIcon, 'testIcon')
+            topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
+            clauseIdx += 1
+            continue
         else:
             forIcon.insertChild(icon.createFromAst(gen.target, window), "targets", 0)
         forIcon.replaceChild(icon.createFromAst(gen.iter, window), 'iterIcon')
@@ -3184,6 +3226,7 @@ icon.registerIconCreateFn(ast.ListComp, createComprehensionIconFromAst)
 icon.registerIconCreateFn(ast.DictComp, createComprehensionIconFromAst)
 icon.registerIconCreateFn(ast.SetComp, createComprehensionIconFromAst)
 icon.registerIconCreateFn(ast.GeneratorExp, createComprehensionIconFromAst)
+filefmt.registerBuiltInMacro(UNASSOC_IF_MACRO_NAME, f'for {UNASSOC_IF_IDENT} in')
 
 def createCprhIfFromFakeAst(astNode, window):
     ifIcon = CprhIfIcon(window)

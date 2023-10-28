@@ -976,7 +976,7 @@ class Icon:
                 if len(siteOrSeries) > 1 or hilightEmptySeries:
                     for site in siteOrSeries:
                         if site.name in skip or allowTrailingComma and site is \
-                                siteOrSeries[-1]:
+                                siteOrSeries[-1] and len(siteOrSeries) > 1:
                             continue
                         if site.att is None and site.type == 'input':
                             sitesToDraw.append((site, True))

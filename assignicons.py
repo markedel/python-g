@@ -50,12 +50,30 @@ inpSeqImage = comn.asciiToImage((
  "ooo",
  "ooo"))
 
+equalImage = comn.asciiToImage( (
+ "oooooooooooooooooooo",
+ "o                  o",
+ "o                  o",
+ "o                  o",
+ "o                  o",
+ "o                  o",
+ "o                  o",
+ "o     %%%%%%%%     o",
+ "o     77777777    o.",
+ "o                o..",
+ "o     %%%%%%%%    o.",
+ "o     77777777     o",
+ "o                  o",
+ "o                  o",
+ "o                  o",
+ "o                  o",
+ "o                  o",
+ "oooooooooooooooooooo"))
+
 class AssignIcon(icon.Icon):
     def __init__(self, numTargets=1, window=None, location=None):
         icon.Icon.__init__(self, window)
-        opWidth, opHeight = icon.getTextSize('=')
-        opWidth += 2*icon.TEXT_MARGIN + 1
-        opHeight += 2*icon.TEXT_MARGIN + 1
+        opWidth, opHeight = equalImage.size
         siteY = inpSeqImage.height // 2
         self.opSize = (opWidth, opHeight)
         tgtSitesX = assignDragImage.width - 3
@@ -96,13 +114,7 @@ class AssignIcon(icon.Icon):
                 y = siteY - inpSeqImage.height // 2
                 self.drawList.append(((tgtSiteX, y), inpSeqImage))
             # Commas, spines and an = for each target group
-            txtImg = icon.iconBoxedText('=')
-            opWidth, opHeight = txtImg.size
-            img = Image.new('RGBA', (opWidth, opHeight), color=(0, 0, 0, 0))
-            img.paste(txtImg, (0, 0))
-            rInSiteX = opWidth - icon.inSiteImage.width
-            rInSiteY = opHeight // 2 - icon.inSiteImage.height // 2
-            img.paste(icon.inSiteImage, (rInSiteX, rInSiteY))
+            opWidth, opHeight = equalImage.size
             for i, tgtList in enumerate(self.tgtLists):
                 self.drawList += tgtList.drawListCommas(tgtSiteX, siteY)
                 spines = tgtList.drawSimpleSpine(tgtSiteX, siteY, drawOutputSite=False)
@@ -114,7 +126,7 @@ class AssignIcon(icon.Icon):
                 self.drawList += spines
                 tgtSiteX += tgtList.width - 1
                 self.drawList.append(((tgtSiteX + icon.OUTPUT_SITE_DEPTH,
-                        siteY - opHeight // 2), img))
+                        siteY - opHeight // 2), equalImage))
                 tgtSiteX += opWidth - 1
             self.drawList += self.valueList.drawListCommas(tgtSiteX, siteY)
             self.drawList += self.valueList.drawSimpleSpine(tgtSiteX, siteY)

@@ -575,6 +575,22 @@ class ForIcon(icon.Icon):
         siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
         siteSnapLists['insertInput'] = self.tgtList.makeInsertSnapList() + \
          self.iterList.makeInsertSnapList()
+        # Allow snapping to comprehension site if we're not part of a sequence and don't
+        # own a block (icon substitution happens in restoreFromCanonicalInterchangeIcon)
+        if forCursor or self.prevInSeq():
+            return siteSnapLists
+        nextIc = self.nextInSeq()
+        if isinstance(nextIc, nameicons.PassIcon):
+            if nextIc.nextInSeq() is not self.blockEnd:
+                return siteSnapLists
+        elif nextIc is not self.blockEnd:
+            return siteSnapLists
+        seqInsertSites = siteSnapLists.get('seqInsert')
+        if seqInsertSites is None:
+            return siteSnapLists
+        def snapFn(ic, siteId):
+            return ic.typeOf(siteId) == 'cprhIn'
+        siteSnapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', snapFn)]
         return siteSnapLists
 
     def select(self, select=True):
@@ -625,11 +641,11 @@ class ForIcon(icon.Icon):
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText(self.stmt + ' ')
         tgtText = listicons.seriesSaveTextForContext(brkLvl, self.sites.targets,
-            contNeeded, export, 'store', allowTrailingComma=True)
+            contNeeded, export, 'store', allowTrailingComma=True, allowEmpty=False)
         text.concat(brkLvl, tgtText)
         text.add(brkLvl, " in ", contNeeded)
         icon.addSeriesSaveText(text, brkLvl, self.sites.iterIcons, contNeeded,
-            export, allowTrailingComma=True)
+            export, allowTrailingComma=True, allowEmpty=False)
         text.add(None, ":")
         return text
 
@@ -706,6 +722,9 @@ class ForIcon(icon.Icon):
         if errHighlight is None:
             self.errHighlight = None
             listicons.highlightSeriesErrorsForContext(self.sites.targets, 'store')
+            for site in self.sites.iterIcons:
+                if site.att is not None:
+                    site.att.highlightErrors(None)
         else:
             icon.Icon.highlightErrors(self, errHighlight)
 
@@ -932,6 +951,26 @@ class IfIcon(icon.Icon):
     def dumpName(self):
         return "if"
 
+    def snapLists(self, forCursor=False):
+        # Allow snapping to comprehension site if we're not part of a sequence and don't
+        # own a block (icon substitution happens in restoreFromCanonicalInterchangeIcon)
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor or self.prevInSeq():
+            return snapLists
+        nextIc = self.nextInSeq()
+        if isinstance(nextIc, nameicons.PassIcon):
+            if nextIc.nextInSeq() is not self.blockEnd:
+                return snapLists
+        elif nextIc is not self.blockEnd:
+            return snapLists
+        seqInsertSites = snapLists.get('seqInsert')
+        if seqInsertSites is None:
+            return snapLists
+        def snapFn(ic, siteId):
+            return ic.typeOf(siteId) == 'cprhIn'
+        snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', snapFn)]
+        return snapLists
+
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
@@ -1041,7 +1080,7 @@ class ElifIcon(icon.Icon):
 
     @staticmethod
     def _snapFn(ic, siteId):
-        """Return True if sideId of ic is a sequence site within an if block (a suitable
+        """Return True if siteId of ic is a sequence site within an if block (a suitable
         site for snapping an elif icon)"""
         if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
             return False
