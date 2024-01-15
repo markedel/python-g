@@ -1,0 +1,86 @@
+# Tests for paren/bracket/brace removal.  Exercises some of the more complicated logic in window.removeIcons
+# and the backspace methods of list-type icons.  In each test, remove the indicated icon(s) by:
+#  1) Select (icon only, no content) and drag out
+#  2) Select (icon only, no content) and use delete key
+#  3) Place cursor right-of and backspace
+#  4) Place cursor before and use delete key
+#  5) Select everything but the indicated icon and drag out
+# In each of the above tests note both that the remaining icons are arranged sensibly, and that any associated
+# cursor ends up in an appropriate location.
+
+# Remove Brackets
+[]
+[a]
+[a,b]
+[a*b+c]
+a*[b]
+a*[b+c]
+a*[b+c,d]
+a*[b+c]*d
+a*[b+c,d]*e
+[].a
+[a].b
+[a.b].c
+([a,b])
+a*[b].c
+a*[b+c].d
+a*[b+c,d].e
+a*[].a
+[3].b
+a*[3].c
+a*[b+3].d
+a*[b+c,3].e
+1,[],2
+1,[2],3
+1,[2,3],4
+f(1,[2],3)
+([])
+[a for b in c]
+[$Empty$ for a in b]
+[a for b in c].d
+a,[b for a in c]
+a,[b for a in c].d
+[a for b in c if d]
+([a for b in c if d])
+[[a for b in c] for c in d]
+([[a for b in c] for c in d])
+{[[a for b in c] for c in d]}
+$@+150+194$
+[]
+$@+150+214$
+a
+[]
+$@+150+254$
+[]
+a
+$@+150+294$
+[].a
+$@+150+314$
+[$Empty$ for a in b]
+$@+150+334$
+([a for b in c])
+$@+150+354$
+([a, b, c])
+$@+280+174$
+# Remove Parens
+(a,)
+(a,b)
+()
+(a)
+[(a)]
+[(a,b)]
+f(1,[2],3)
+f()
+f().a
+f(a).b
+f(3).b
+fn(a=b,**c)
+fn(*c,d=e)
+$@+450+174$
+# Remove Braces
+({a,b})
+({a:b, c:d})
+{a:b, c:d}
+{a:b for c in d if e}
+[{a:b for c in d if e}]
+

@@ -87,6 +87,8 @@ class CursorParenIcon(icon.Icon):
             width = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH + 1
         else:
             width = bodyWidth + icon.outSiteImage.width - 1
+            if self.sites.argIcon.att is None:
+                width += icon.EMPTY_ARG_WIDTH
         top = outSiteY - self.sites.output.yOffset
         self.rect = (outSiteX, top, outSiteX + width, top + height)
         self.drawList = None

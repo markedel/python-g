@@ -766,7 +766,9 @@ class Icon:
         """Insert a child icon or empty icon site (child=None) at the specified site.
         siteIdOrName may specify either the complete siteId for a site, or (if
         seriesIdx is specified), the name for a series of sites with the index specified
-        in seriesIdx."""
+        in seriesIdx.  Normally the site of the child icon is inferred by finding a
+        mating site of the appropriate type, but if 'child' has multiple mating sites,
+        the site name can be specified in childSite."""
         if seriesIdx is None:
             seriesName, seriesIdx = iconsites.splitSeriesSiteId(siteIdOrSeriesName)
         else:
@@ -785,8 +787,17 @@ class Icon:
             self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
         self.markLayoutDirty()
 
-    def insertChildren(self, children, seriesName, seriesIdx, childSite=None):
-        """Insert a group of child icons at the specified site"""
+    def insertChildren(self, children, seriesOrSiteName, seriesIdx=None, childSite=None):
+        """Insert a group of child icons at the specified series-site.  seriesOrSiteName
+        can be either be a site name within the series, or just the name of the series,
+        in which case seriesIdx must specify the index.  Normally the site of each child
+        icon is inferred by finding a mating site for siteOrSeriesName, but in the (very
+        unlikely) event that the children have multiple mating sites, the site name can
+        be specified in childSite."""
+        if seriesIdx is None:
+            seriesName, seriesIdx = iconsites.splitSeriesSiteId(seriesOrSiteName)
+        else:
+            seriesName = seriesOrSiteName
         for i, child in enumerate(children):
             self.insertChild(child, seriesName, seriesIdx + i, childSite)
 
@@ -824,6 +835,9 @@ class Icon:
 
     def hasSite(self, siteId):
         return self.sites.lookup(siteId) is not None
+
+    def hasSiteType(self, siteType):
+        return bool(self.sites.sitesOfType(siteType))
 
     def posOfSite(self, siteId=None):
         """Return the window position of a given site of the icon.  If siteId is not
@@ -1004,7 +1018,7 @@ class Icon:
             x = iconX + site.xOffset + inSiteImage.width
             y = iconY + site.yOffset - height // 2
             l = max(x, clipLeft)
-            r = min(l + width, clipRight)
+            r = min(x + width, clipRight)
             t = max(y, clipTop)
             b = min(y + height, clipBottom)
             if r - l > 0 and b - t > 0:
@@ -1115,10 +1129,15 @@ class Icon:
         entry icon pending args list and (eventually) for multi-element pastes.  The
         format of the placementList is a list of elements which can be either:
         1. An icon to be placed.  Icons on the top level of the list originate from
-           individual (not sequence) sites of the icon whose arguments were transferred.
+           individual (not series) sites of the icon whose arguments were transferred.
+           The exception to this rule, is that comprehension sites, which are managed as
+           a series by icons, are managed as individuals in a place list.
         2. None, representing an empty site in the icon whose arguments were transferred
         3. A tuple or list of icons originating from a site series.  This may also
-           contain Nones, representing empty series sites.
+           contain Nones, representing empty series sites.  Note that this entry type
+           refers specifically to a series of input sites that will be displayed comma-
+           separated by the owning icon.  Comprehension site series are split up and
+           added to the top level of the list (per #1).
         Starts placing at startAtSite.  If startAtSite is None, starts at the first
         child-type cursor site.  Placement will proceed until any of the following
         conditions are met:
@@ -1159,9 +1178,9 @@ class Icon:
         return self._placeArgs(placementList, startSiteId, overwriteStart, False)
 
     def _placeArgs(self, placementList, startSiteId, overwriteStart, doPlacement):
-        """"Common method to perform both placeArgs and canPlaceArgs (the only
-        difference between the two is the two lines of code that actually insert/replace
-        the argument icons, which are called (or not) based on the value of doPlacement)."""
+        """"Common method to perform both placeArgs and canPlaceArgs (the only difference
+        between the two is the two lines of code that actually insert/replace the
+        argument icons, which are called (or not) based on the value of doPlacement)."""
         placedIdx = None
         placedSeriesIdx = None
         siteId = self.sites.firstCursorSite() if startSiteId is None else startSiteId
@@ -1958,6 +1977,8 @@ def firstPlaceListIcon(placeList):
 def placeListAtEnd(argList, thruIdx, thruSeriesIdx):
     """Return True if placement list indices, thruIdx and thruSeriesIdx, point to the
     last element of placement list, argList."""
+    if thruIdx is None:
+        return False
     if thruIdx == len(argList) - 1:
         if thruSeriesIdx is None:
             return True

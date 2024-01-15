@@ -1430,6 +1430,16 @@ def needsParens(ic, parent=None, forText=False, parentSite=None):
         parent = ic.parent()
     if parent is None:
         return False
+    if parentSite is None:
+        parentSite = parent.siteOf(ic, recursive=True)
+    # Weird case of inline-if on rightmost site of a comprehension clause: Python syntax
+    # requires parens around the inline-if operator to clarify the ambiguity between it
+    # and an 'if' comprehension clause ([a for a in b if c else d] produces a syntax
+    # error).
+    if isinstance(ic, IfExpIcon) and (parent.__class__.__name__ == 'CprhForIcon' and
+            parentSite == 'iterIcon' or parent.__class__.__name__ == 'CprhIfIcon' and
+            parentSite == 'testIcon'):
+        return True
     # Unclosed cursor-parens count as a left-paren, but not a right-paren
     if parent.__class__.__name__ == "CursorParenIcon" and not parent.closed:
         parenParent = parent.parent()
@@ -1447,8 +1457,6 @@ def needsParens(ic, parent=None, forText=False, parentSite=None):
     if ic.precedence < parent.precedence:
         return True
     # Precedence is equal to parent.  Look at associativity
-    if parentSite is None:
-        parentSite = parent.siteOf(ic, recursive=True)
     if parentSite == leftSiteOf(parent) and ic.rightAssoc():
         return True
     if parentSite == rightSiteOf(parent) and ic.leftAssoc():

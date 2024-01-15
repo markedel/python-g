@@ -397,19 +397,39 @@ fnRParenTypeoverImage = comn.asciiToImage( (
  "oooooooo"))
 
 argAssignImage = comn.asciiToImage((
+ "oooooooo",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o %%%% o",
+ "o     o.",
+ "o    o..",
+ "o %%%%o.",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "o      o",
+ "oooooooo"))
+
+colonImage = comn.asciiToImage((
  "ooooooo",
  "o     o",
  "o     o",
  "o     o",
  "o     o",
  "o     o",
- "o     o",
- "o 555 o",
+ "o %%  o",
+ "o %%  o",
  "o    o.",
  "o   o..",
- "o 555o.",
- "o     o",
- "o     o",
+ "o    o.",
+ "o %%  o",
+ "o %%  o",
  "o     o",
  "o     o",
  "o     o",
@@ -486,7 +506,8 @@ class ListTypeIcon(icon.Icon):
                 parenX = self.sites.cprhIcons[-1].xOffset
                 self.drawList.append(((parenX, 0), rightImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip, allowTrailingComma=True)
+        self._drawEmptySites(toDragImage, clip, allowTrailingComma=True,
+            hilightEmptySeries=self.isComprehension())
 
     def isComprehension(self):
         return len(self.sites.cprhIcons) > 1
@@ -509,14 +530,20 @@ class ListTypeIcon(icon.Icon):
             icon.Icon.insertChild(self, child, siteIdOrSeriesName, seriesIdx, childSite)
             return
         if len(self.sites.argIcons) > 1:
-            print("Can't add comprehension to multi-element list")
-            return
-        #  Without commas we need to never leave an empty site, except for the last one,
-        #  which must always exist and remain empty
+            # Single element tuples (x,) can still get a comprehension
+            if not (isinstance(self, TupleIcon) and len(self.sites.argIcons) == 2 and
+                    self.sites.argIcons[1].att is None):
+                print("Can't add comprehension to multi-element list")
+                return
+        #  Without commas, a comprehension list must never have an empty site, except for
+        #  the last one, which must always exist and remain empty
         if child is None:
             return
         self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, idx)
         self.sites.lookupSeries(seriesName)[idx].attach(self, child, childSite)
+        if len(self.sites.argIcons) == 2:
+            # Changing a single-element tuple to a comprehension: remove the extra comma
+            icon.Icon.replaceChild(self, None, 'argIcons_1')
         self.markLayoutDirty()
 
     def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
@@ -579,7 +606,7 @@ class ListTypeIcon(icon.Icon):
         self.layoutDirty = False
 
     def calcLayouts(self):
-        argListLayouts = self.argList.calcLayouts()
+        argListLayouts = self.argList.calcLayouts(argRequired=self.isComprehension())
         cprhLayoutLists = [(None,) if site.att is None else site.att.calcLayouts()
                 for site in self.sites.cprhIcons]
         if not self.closed or self.sites.attrIcon.att is None:
@@ -660,7 +687,8 @@ class ListTypeIcon(icon.Icon):
         # whole list, don't propagate the store/del context to them, but if we're not,
         # the elements need to be processed in that context.
         argText = seriesSaveTextForContext(brkLvl, self.sites.argIcons, False, export,
-            None if ctxMacroNeeded else ctx, allowTrailingComma=True)
+            None if ctxMacroNeeded else ctx, allowTrailingComma=True,
+            allowEmpty=not self.isComprehension())
         text.concat(brkLvl, argText)
         # If this is a comprehension, add the comprehension components
         cprhText = filefmt.SegmentedText(None)
@@ -671,7 +699,9 @@ class ListTypeIcon(icon.Icon):
         # Right paren/bracket and possible attribute
         text.add(None, self.rightText)
         if self.closed:
-            return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+            text = icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+        if ctxMacroNeeded:
+            text.wrapCtxMacro(parentBreakLevel+1, needsCont=contNeeded)
         return text
 
     def backspace(self, siteId, evt):
@@ -680,47 +710,62 @@ class ListTypeIcon(icon.Icon):
     def textEntryHandler(self, entryIc, text, onAttr):
         # Typeover for lists, tuples, and dicts is mostly handled by hard-coded parsing
         # because closing of matching open parens/brackets/braces needs to take
-        # precedence.  This only handles the * (pack/unpack) operator and comprehensions.
+        # precedence.  This only handles comprehensions.
         listSiteId = self.siteOf(entryIc, recursive=True)
         if listSiteId is None or not iconsites.isSeriesSiteId(listSiteId):
             return None
         seriesName, seriesIdx = iconsites.splitSeriesSiteId(listSiteId)
-        textStripped = text[:-1]
-        delim = text[-1]
-        # Comprehension
-        if len(self.sites.argIcons) == 1 and onAttr and seriesName in ('argIcons',
-                'cprhIcons') and text[0] in ('f', 'a', 'i'):
-            if text in ('i', 'if') and seriesName == 'argIcons':
-                # Not allowed to type 'if' as the first comprehension component.  This
-                # isn't simply to discourage the bad syntax (which we do allow), but
-                # because the user needs to be able to type "x if y else z" as the first
-                # element of a list, without it getting turned in to a comprehension.
+        if seriesName not in ('argIcons', 'cprhIcons'):
+            return None
+        if not (len(self.sites.argIcons) == 1 or isinstance(self, TupleIcon) and
+                len(self.sites.argIcons) == 2 and self.sites.argIcons[1].att is None):
+            return None
+        if not text[0] in ('f', 'a', 'i'):
+            return None
+        # Make sure entryIc is on the rightmost site before a comprehension site (entry
+        # icons and cursors are not allowed on comprehension sites) where it's safe
+        # to start a new comprehension.
+        entryRightmostIcon, entryRightmostSite = icon.rightmostSite(entryIc)
+        listRightmostIcon, listRightmostSite = icon.rightmostFromSite(self, listSiteId)
+        if entryRightmostIcon is not listRightmostIcon or entryRightmostSite != \
+                listRightmostSite:
+            return None
+        # Even when entryIc is the rightmost icon from a qualifying site, it could be so
+        # by virtue of an unclosed paren/bracket/brace, which would become the owner
+        # of the new comprehension clause.
+        for ic in entryIc.parentage():
+            if ic is self:
+                break
+            if isinstance(ic, (ListTypeIcon, parenicon.CursorParenIcon)) and \
+                    not ic.closed:
                 return None
-            if text in ('fo'[:len(text)], 'async fo'[:len(text)], 'i'):
-                return 'accept'
-            if text[:3] != 'for' and text[:2] != 'if' and text[:9] != 'async for':
-                return None
-            # Make sure entryIc is on the rightmost attribute site (either arg or an
-            # existing comprehension), where it's safe to start a new comprehension
-            entryRightmostIcon, entryRightmostSite = icon.rightmostSite(entryIc)
-            listRightmostIcon, listRightmostSite = icon.rightmostFromSite(self, listSiteId)
-            if entryRightmostIcon is not listRightmostIcon or entryRightmostSite != \
-                    listRightmostSite:
-                return None
+        if text in ('i', 'if', 'if ') and seriesName == 'argIcons':
+            # Not allowed to type 'if' as the first comprehension component.  This
+            # isn't simply to discourage the bad syntax (which we do allow), but
+            # because the user needs to be able to type "x if y else z" as the first
+            # element of a list, without it getting turned in to a comprehension.
+            return None
+        if text in ('fo'[:len(text)], 'async fo'[:len(text)], 'i'):
+            return 'accept'
+        if text[:3] != 'for' and text[:2] != 'if' and text[:9] != 'async for':
+            return None
+        if onAttr:
+            # On an attribute site, we can accept cprh kwds w/o waiting for delimiter
             if text == 'for':
                 return CprhForIcon(window=self.window, typeover=True), None
             if text == 'async for':
                 return CprhForIcon(window=self.window, typeover=True, isAsync=True), None
             if text == 'if':
                 return CprhIfIcon(window=self.window), None
-            forDelimiters = {*entryicon.emptyDelimiters, '(', '[', ','}
-            if textStripped == 'for' and delim in forDelimiters:
-                return CprhForIcon(window=self.window, typeover=True), delim
-            if textStripped == 'async for' and delim in forDelimiters:
-                return CprhForIcon(window=self.window, typeover=True, isAsync=True), delim
-            if textStripped == 'if' and delim in entryicon.delimitChars:
-                return CprhIfIcon(window=self.window), delim
-            return None
+        textStripped = text[:-1]
+        delim = text[-1]
+        forDelimiters = {*entryicon.emptyDelimiters, '(', '[', ','}
+        if textStripped == 'for' and delim in forDelimiters:
+            return CprhForIcon(window=self.window, typeover=True), delim
+        if textStripped == 'async for' and delim in forDelimiters:
+            return CprhForIcon(window=self.window, typeover=True, isAsync=True), delim
+        if textStripped == 'if' and delim in entryicon.delimitChars:
+            return CprhIfIcon(window=self.window), delim
         return None
 
     def highlightErrors(self, errHighlight):
@@ -785,6 +830,72 @@ class ListTypeIcon(icon.Icon):
         and dict icons an identical interface with that of the TupleIcon version which
         which has to deal with odd single-element syntax."""
         return [site.att for site in self.sites.argIcons]
+
+    def placeArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, True)
+
+    def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
+        return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
+
+    def _placeArgsCommon(self, placeList, startSiteId, overwriteStart, doPlacement):
+        # The base-class placeArgs method can only handle comprehensions if they are the
+        # only thing in place list (the only case for following a *series* of one type
+        # with a series of another type, is list-type icons, so there's no point in
+        # complicating it).  Here we also deal with the weird form of an expression or
+        # comprehension clause attached via a placeholder entry icon.  This results from
+        # editing off the paren/bracket/brace of a list or dragging the content out of
+        # one.  In fact, unless it gets translated into a for or if icon, a comprehension
+        # clause can only exist outside of a list, dict, or tuple icon if it is embedded
+        # in a placeholder entry icon, since we have no concept of a naked comprehension
+        # clause list.
+        if canPlaceCprhArgsFromEntry(self, placeList, startSiteId, overwriteStart):
+            newPlaceList = promoteCprhArgsFromEntry(placeList, removeEntryIc=doPlacement)
+            addedArgs = len(newPlaceList) - len(placeList)
+            placeList = newPlaceList
+        else:
+            addedArgs = 0
+        if doPlacement:
+            idx, seriesIdx = icon.Icon.placeArgs(self, placeList, startSiteId,
+                overwriteStart=overwriteStart)
+        else:
+            idx, seriesIdx = icon.Icon.canPlaceArgs(self, placeList, startSiteId,
+                overwriteStart=overwriteStart)
+        # The base class method can place comprehension clauses if they are the only
+        # thing in the place list.  If that happened, we can safely close the list.
+        if doPlacement and self.isComprehension() and not self.closed:
+            self.close(typeover=True)
+        # We're done if whatever is left is not a comprehension clause
+        adjustedIdx = idx if idx is None or idx == 0 else idx - addedArgs
+        if icon.placeListAtEnd(placeList, idx, seriesIdx):
+            return adjustedIdx, seriesIdx  # All icons placed
+        if seriesIdx is not None and seriesIdx != len(placeList[idx]) - 1:
+            return adjustedIdx, seriesIdx  # Place-list series aren't comprehensions
+        endIdx = -1 if idx is None else idx
+        if not isinstance(placeList[endIdx + 1], (CprhIfIcon, CprhForIcon)):
+            return adjustedIdx, None  # Next placeList item is not a comprehension
+        if len(self.sites.argIcons) > 1 or isinstance(self, TupleIcon) and self.noParens:
+            return adjustedIdx, None  # The list can't accept a comprehension
+        # If the first attempt at placement did nothing, we still need to perform
+        # overwriteStart, and will do so even if startSiteId is in argIcons
+        if doPlacement and idx is None and overwriteStart:
+            self.replaceChild(None, 'argIcons_0')
+        # The next thing on the (updated) placement list is a comprehension.
+        # Place (or determine placement for) comprehensions at the (new) start of
+        # placeList (since it's a list, it can absorb as many as there are).  We can't
+        # place any other icon types, as nothing follows a comprehension clause list and
+        # we can only prepend.
+        if doPlacement:
+            self.close(typeover=True)
+        cprhIdx = 0
+        while endIdx < len(placeList) - 1:
+            cprhIc = placeList[endIdx + 1]
+            if not isinstance(cprhIc, (CprhIfIcon, CprhForIcon)):
+                return endIdx - addedArgs, None
+            endIdx += 1
+            if doPlacement:
+                self.insertChild(cprhIc, 'cprhIcons', cprhIdx)
+            cprhIdx += 1
+        return endIdx - addedArgs, None
 
     def dumpName(self):
         return self.leftText + (self.rightText if self.closed else "")
@@ -956,7 +1067,10 @@ class TupleIcon(ListTypeIcon):
 
     def acceptsComprehension(self):
         # Redefine to add prohibition on no-paren tuple becoming generator comprehension
-        return len(self.sites.argIcons) <= 1 and not self.noParens
+        # and to allow comprehensions to be snapped to a one-arg tuple
+        nArgs = len(self.sites.argIcons)
+        return (nArgs <= 1 or nArgs == 2 and self.sites.argIcons[1].att is None) \
+            and not self.noParens
 
     def close(self, typeover=False):
         # This code is temporary, for catching old code that thinks it can treat naked
@@ -1275,6 +1389,8 @@ class DictIcon(ListTypeIcon):
                     "Mixed set/dict elements within braces"))
             else:
                 ic.highlightErrors(None)
+        for ic in (site.att for site in self.sites.cprhIcons if site.att is not None):
+            ic.highlightErrors(None)
         if self.closed and self.sites.attrIcon.att is not None:
             self.sites.attrIcon.att.highlightErrors(None)
 
@@ -1671,6 +1787,13 @@ class CallIcon(icon.Icon):
         if selRight < icRight - fnRParenImage.width:
             return False
         return True
+
+    def isComprehension(self):
+        # Python allows calls to contain a comprehension instead of an argument list.
+        # This is a weird case that we will eventually need to support, but which we
+        # currently punt by adding an embedded generator tuple upon translation from
+        # AST form on read: f(a for a in b) -> f((a for a in b)).
+        return False
 
 class CprhIfIcon(icon.Icon):
     def __init__(self, window, location=None):
@@ -2139,7 +2262,7 @@ class CprhForIcon(icon.Icon):
 class DictElemIcon(infixicon.InfixIcon):
     """Individual entry in a dictionary constant"""
     def __init__(self, window=None, location=None):
-        infixicon.InfixIcon.__init__(self, ":", icon.colonImage, False, window, location)
+        infixicon.InfixIcon.__init__(self, ":", colonImage, False, window, location)
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on parent being a dictionary constant
@@ -2159,7 +2282,8 @@ class DictElemIcon(infixicon.InfixIcon):
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
-        elif not isinstance(self.parent(), DictIcon):
+        elif not (isinstance(self.parent(), DictIcon) or self.parent() is None and
+                self.sites.seqIn.att is None and self.sites.seqOut.att is None):
             icon.Icon.highlightErrors(self, icon.ErrorHighlight("Dictionary element "
                 "(':') can only appear in { }"))
         else:
@@ -2472,6 +2596,10 @@ def restoreConditionalTargets(ic, snapLists, directAttachmentClasses):
             site.name, site.type, snapFn))
 
 def backspaceListIcon(ic, site, evt):
+    # Note that much of the code in here is now redundant with window.removeIcons.  It is
+    # left here, because it works, and is purpose-built for typing, versus the great
+    # Brobdingnagian splitDeletedIcons which has to handle every possible weird
+    # combination of icons being removed.
     siteName, index = iconsites.splitSeriesSiteId(site)
     allArgs = ic.argIcons()
     nonEmptyArgs = [i for i in allArgs if i is not None]
@@ -2495,24 +2623,32 @@ def backspaceListIcon(ic, site, evt):
         entryicon.reopenParen(ic)
         return
     elif index == 0:
-        # Backspace in to the open paren/bracket/brace: delete if possible
-        # Start by figuring out whether the list has an attribute that's going to require
-        # removing more than just the list icon.  If so, we won't do the deletion
+        # Backspace in to the open paren/bracket/brace: delete and spill the content
+        # in to the surrounding context
         parent = ic.parent()
         attrPlaceFail = False
         attrDestination = None
         if attrIcon:
-            if numArgs == 0:
+            if ic.isComprehension():
+                rightmostCprh = ic.sites.cprhIcons[-2]
+                attrDestination, attrDestSite = icon.rightmostSite(rightmostCprh.att)
+                if attrDestSite != 'attrIcon' or hasattr(attrDestination.sites.attrIcon,
+                        'cursorOnly'):
+                    attrPlaceFail = True
+            elif numArgs == 0:
                 attrPlaceFail = parent is not None and not isinstance(ic, CallIcon)
                 attrDestination = parent
             else:
-                attrDestination, attrDestSite  = icon.rightmostSite(nonEmptyArgs[-1])
+                attrDestination, attrDestSite = icon.rightmostSite(nonEmptyArgs[-1])
                 if attrDestSite != 'attrIcon' or hasattr(attrDestination.sites.attrIcon,
                         'cursorOnly'):
                     attrPlaceFail = True
         if numArgs == 0:
-            # Empty list
-            if parent is None and not attrIcon:
+            # Empty list, though may still contain comprehensions and/or attributes,
+            # which win.removeIcons will package into either an entry icon or (at the top
+            # level outside of a sequence), just left.
+            substitutions = None
+            if parent is None:
                 # Empty paren was the only thing left of the statement.  Remove
                 if ic.prevInSeq(includeModuleAnchor=True) is not None:
                     cursorIc = ic.prevInSeq(includeModuleAnchor=True)
@@ -2520,52 +2656,44 @@ def backspaceListIcon(ic, site, evt):
                 elif ic.nextInSeq() is not None:
                     cursorIc = ic.nextInSeq()
                     cursorSite = 'seqIn'
+                elif ic.isComprehension():
+                    cursorIc = ic.childAt('cprhIcons_0')
+                    substitutions = {cursorIc:None}
+                    cursorSite = None  # Can only accept cursor after substitution
+                elif attrIcon:
+                    cursorIc = attrIcon
+                    cursorSite = 'attrOut'
                 else:
                     cursorIc = None
                     pos = ic.pos()
-                win.removeIcons([ic])
+                win.removeIcons([ic], watchSubs=substitutions)
+                if substitutions is not None:
+                    subsIc = substitutions[cursorIc]
+                    if subsIc is not None:
+                        # removeIcons substituted the canonical form of a cprh icon which
+                        # can accept the cursor
+                        cursorIc = subsIc
+                        cursorSite = 'seqIn'
+                    else:
+                        cursorIc = None
+                        pos = ic.pos
                 if cursorIc is None:
                     win.cursor.setToWindowPos(pos)
                 else:
-                    if attrDestination is not None:
-                        attrDestination.replaceChild(ic.childAt('attrIcon'), 'attrIcon')
                     win.cursor.setToIconSite(cursorIc, cursorSite)
-            elif parent is None:
-                # Top-level empty paren w/attribute: Leave just an attribute
-                if ic.prevInSeq(includeModuleAnchor=True) or ic.nextInSeq():
-                    # ic was part of a sequence, hang the attribute off an entry icon
-                    entryIcon = entryicon.EntryIcon(window=win)
-                    win.replaceTop(ic, entryIcon)
-                    entryIcon.appendPendingArgs([attrIcon])
-                    win.cursor.setToText(entryIcon, drawNew=False)
-                    return
-                else:
-                    # ic was not part of a sequence (loose in window), attribute can
-                    # simply replace it
-                    win.replaceTop(ic, attrIcon)
-                    win.cursor.setToIconSite(attrIcon, 'attrOut')
             else:
-                # ic is an empty list with a parent
+                # ic is an empty list with a parent.  removeIcons will deal with
+                # attributes and comprehensions, just make sure cursor is placed well.
                 parentSite = parent.siteOf(ic)
-                if attrIcon:
-                    if parentSite == 'attrIcon':
-                        # ic was on an attribute site, place attribute on parent
-                        parent.replaceChild(attrIcon, 'attrIcon')
-                        win.cursor.setToIconSite(parent, parentSite)
-                    else:
-                        # Can't place attribute on parent, use an entry icon to place it
-                        entryIcon = entryicon.EntryIcon(window=win)
-                        parent.replaceChild(entryIcon, parentSite)
-                        entryIcon.appendPendingArgs([attrIcon])
-                        win.cursor.setToText(entryIcon, drawNew=False)
-                else:
-                    # There's no attribute icon, just remove the icon
+                win.cursor.setToIconSite(parent, parentSite)
+                win.removeIcons([ic])
+                if not parent.hasSite(parentSite):
+                    # Last element of a list can disappear when icon is removed
+                    parent.insertChild(None, parentSite)
                     win.cursor.setToIconSite(parent, parentSite)
-                    win.removeIcons([ic])
-                    if not parent.hasSite(parentSite):
-                        # Last element of a list can disappear when icon is removed
-                        parent.insertChild(None, parentSite)
-                        win.cursor.setToIconSite(parent, parentSite)
+                if isinstance(parent.childAt(parentSite), entryicon.EntryIcon):
+                    # If removal created an entry icon, put the cursor in that
+                    win.cursor.setToText(parent.childAt(parentSite))
             return
         elif numArgs == 1:
             # Just one item left in the list.  Unwrap the parens/brackets/braces
@@ -2573,15 +2701,41 @@ def backspaceListIcon(ic, site, evt):
             parent = ic.parent()
             content = nonEmptyArgs[0]
             ic.replaceChild(None, ic.siteOf(content))
+            if ic.isComprehension():
+                # The list contains comprehension clause(s).  Need to attach them to the
+                # end of the argument with an entry icon, unless we can promote them to
+                # the parent.
+                cprhIcons = [site.att for site in ic.sites.cprhIcons]
+                for _ in range(len(ic.sites.cprhIcons)):
+                    ic.replaceChild(None, 'cprhIcons_0')
+                if isinstance(parent, (TupleIcon, ListIcon, DictIcon)) and \
+                        len(parent.sites.argIcons) == 1:
+                    # Can promote comprehension to parent and safely close if open
+                    parent.insertChildren(cprhIcons, 'cprhIcons_0')
+                    parent.close()
+                elif isinstance(parent, parenicon.CursorParenIcon):
+                    # Can promote comprehension to parent, but must change it to a tuple
+                    newTuple = TupleIcon(window=ic.window, closed=True)
+                    parent.replaceChild(None, 'argIcon')
+                    newTuple.replaceChild(ic, 'argIcons_0')
+                    newTuple.insertChildren(cprhIcons, 'cprhIcons_0')
+                    parent.replaceWith(newTuple)
+                    parent = newTuple
+                else:
+                    # Can't promote to parent
+                    entryIcon = entryicon.EntryIcon(window=win)
+                    attIcon, attSite = icon.rightmostSite(content)
+                    attIcon.replaceChild(entryIcon, attSite)
+                    entryIcon.appendPendingArgs(cprhIcons)
             if attrIcon and not attrPlaceFail:
-                # Place attribute on the content icon
-                content.replaceChild(attrIcon, 'attrIcon')
+                # Place attribute on the content icon or last comprehension
+                attrDestination.replaceChild(attrIcon, attrDestSite)
             elif attrIcon and not isinstance(ic, CallIcon):
                 # Can't place attribute on content icon, add an entry icon, but don't
                 # give it the cursor.  Note that we don't do this if ic is a callIcon
                 # because we don't want to create two entry icons
                 entryIcon = entryicon.EntryIcon(window=win)
-                content.replaceChild(entryIcon, 'attrIcon')
+                attrDestination.replaceChild(entryIcon, attrDestSite)
                 entryIcon.appendPendingArgs([attrIcon])
             if parent is None:
                 # List was on top level
@@ -3024,6 +3178,291 @@ def attrValidForContext(ic, ctx):
         attr = nextAttr
     return True
 
+def canPlaceArgsInclCprh(placeList, onIcon, onSite, overwriteStart=False):
+    """Determine which arguments from placeList would be placed if the placeArgsInclCprh
+    were called on the same arguments (see placeArgsInclCprh for description)."""
+    return _placeArgsInclCprhOnParen(placeList, onIcon, onSite, overwriteStart, False)
+    if not _needToCvtParenToPlace(placeList, onIcon, onSite, overwriteStart):
+        return
+
+def placeArgsInclCprh(placeList, onIcon, onSite, overwriteStart=False):
+    """Comprehension sites can't hold a cursor or an entry icon (a design decision due to
+    their being coincident with other sites).  Therefore the coincident site becomes a
+    proxy site for insertion of comprehension clauses.  This call is the equivalent of
+    onIcon.placeArgs which takes this in to account and can place arguments both on
+    onIcon and, if it is also a proxy site for a comprehension, on the associated
+    comprehension.  placeArgsInclCprh also differs from a placeArgs method in that if
+    it is asked to place arguments on a cursor paren icon, and those arguments happen to
+    be or contain (via an embedded placeholder entry icon) one or more comprehension
+    clauses, it will replace onIcon with a tuple icon before placement.  Because it can
+    do this substitution, its return value also differs from a placeArgs method in that
+    it will return None if no substitution was done, or the substituted icon if it was.
+    Another difference to note is that overwriteStart does not apply to the comprehension
+    site, as the only current use case is for replacing an entry icon which can only be
+    on the proxy site.  Also note that it can (and will) place icons on BOTH sites if
+    placeList contains a compatible sequence of icons."""
+    return _placeArgsInclCprhOnParen(placeList, onIcon, onSite, overwriteStart, True)
+
+def _needToCvtParenToPlace(placeList, onIcon, onSite, overwriteStart):
+    cprhIc, cprhIdx = isProxyForCprhSite(onIcon, onSite, overwriteStart, True)
+    if not isinstance(cprhIc, parenicon.CursorParenIcon):
+        return None
+    # onIcon is on a proxy site for a comprehension on cprhIc and cprhIc is a cursor
+    # paren icon
+    if isinstance(placeList[0], (CprhForIcon, CprhIfIcon)):
+        return cprhIc
+    if canPlaceCprhArgsFromEntry(None, placeList, 'argIcons_0', overwriteStart):
+        return cprhIc
+    # placeList does not start with either a comprehension clause or something compatible
+    # with a tuple icon with an attached comprehension clause
+    return None
+
+def _placeArgsInclCprhOnParen(placeList, onIcon, onSite, overwriteStart, doPlacement):
+    """This is the common part of placeArgsInclCprh and canPlaceArgsInclCprh, or rather,
+    a wrapper around it that if comprehensions could be placed if the associated icon
+    were a tuple, but is a paren, will do the substitution and then place.  Note that
+    while the return value for canPlaceArgsInclCprh is the same as a canPlaceArgs icon
+    method, the return value for placeArgsInclCprh is different because it needs to
+    report if it has done an icon substitution and return the substituted icon."""
+    # Determine if onSite is a proxy site for a comprehension and if so, which one
+    cprhIc, cprhIdx = isProxyForCprhSite(onIcon, onSite, overwriteStart, True)
+    if not isinstance(cprhIc, parenicon.CursorParenIcon):
+        # Just place on the requested icon if onIcon and onSite could not be interpreted
+        # as a comprehension site if onIcon were converted to a tuple
+        idx, seriesIdx = _placeArgsInclCprhCommon(placeList, onIcon, onSite,
+            overwriteStart, doPlacement)
+        return None if doPlacement else (idx, seriesIdx)
+    # cprhIc is a cursor paren icon, so determine if we need to convert it to a tuple
+    # before placing
+    idx, seriesIdx = _placeArgsInclCprhCommon(placeList, onIcon, onSite,
+        overwriteStart, False)
+    canPlaceAll = icon.placeListAtEnd(placeList, idx, seriesIdx)
+    if canPlaceAll and not doPlacement:
+        # All icons can be placed without converting the cursor paren.  If we're not
+        # actually placing, the answer from _placeArgsInclCprhCommon will be correct
+        # even if we succeed in extracting comprehension clauses from the placed content.
+        return idx, seriesIdx
+    preferTuple = canPlaceCprhArgsFromEntry(None, placeList, 'argIcons_0', overwriteStart)
+    if not preferTuple and not isinstance(placeList[0], (CprhForIcon, CprhIfIcon)):
+        # If placeList does not start with either a comprehension clause or something
+        # compatible with a tuple icon with an attached comprehension clause, don't
+        # convert to tuple
+        if doPlacement:
+            _placeArgsInclCprhCommon(placeList, onIcon, onSite, overwriteStart, True)
+            return None
+        else:
+            return idx, seriesIdx
+    # We need to convert to a tuple, but should not convert unless doPlacement is True
+    if not doPlacement:
+        if preferTuple:
+            return 0, None
+        nCprh = len([ic for ic in placeList if isinstance(ic, (CprhIfIcon, CprhForIcon))])
+        return nCprh-1, None
+    tupleIcon = entryicon.cvtCursorParenToTuple(cprhIc, closed=True, typeover=False)
+    _placeArgsInclCprhCommon(placeList, tupleIcon, 'argIcons_0', overwriteStart, True)
+    return tupleIcon
+
+def _placeArgsInclCprhCommon(placeList, onIcon, onSite, overwriteStart, doPlacement):
+    """Lower-level common component to placeArgsInclCprh and canPlaceArgsInclCprh, that
+    computes and does placement and handles comprehension proxy sites, but does not do
+    substitution of paren icons with tuple icons.  Return values are the same as for
+    icon placeArgs and canPlaceArgs methods."""
+    # Place (if doPlacement is True) or determine placement for  whatever can be placed
+    # directly on onIcon (including actual comprehension sites).
+    if doPlacement:
+        idx, seriesIdx = onIcon.placeArgs(placeList, onSite,
+            overwriteStart=overwriteStart)
+    else:
+        idx, seriesIdx = onIcon.canPlaceArgs(placeList, onSite,
+            overwriteStart=overwriteStart)
+    if icon.placeListAtEnd(placeList, idx, seriesIdx):
+        return idx, seriesIdx  # All icons placed
+    if seriesIdx is not None and seriesIdx != len(placeList[idx])-1:
+        return idx, seriesIdx  # We won't find comprehensions in the middle of a series
+    endIdx = -1 if idx is None else idx
+    if not isinstance(placeList[endIdx + 1], (CprhIfIcon, CprhForIcon)):
+        return idx, seriesIdx  # Next placeList item is not a comprehension
+    # Determine if onSite is a proxy site for a comprehension and if so, which one
+    parentList, cprhIdx = isProxyForCprhSite(onIcon, onSite, overwriteStart, False)
+    if parentList is None:
+        return idx, seriesIdx
+    # Place (or determine placement for) comprehensions at the (new) start of placeList
+    # (since it's a list, we can absorb as many as there are).  We can't place any other
+    # icon types, as nothing follows a comprehension clause list and we can only prepend.
+    while endIdx < len(placeList) - 1:
+        cprhIc = placeList[endIdx+1]
+        if not isinstance(cprhIc, (CprhIfIcon, CprhForIcon)):
+            return endIdx, None
+        endIdx += 1
+        if doPlacement:
+            parentList.insertChild(cprhIc, 'cprhIcons', cprhIdx)
+        cprhIdx += 1
+    return endIdx, None
+
+def canPlaceCprhArgsFromEntry(ic, placeList, siteName, overwriteStart):
+    """Return True if the first element of placeList is compatible with site, siteName,
+    of a ListTypeIcon ic, and includes an entry icon touching its right edge whose
+    pending argument list contains only comprehension clauses.  ic can be passed as None
+    to represent an empty (not yet created) ListType icon."""
+    if len(placeList) == 0 or isinstance(placeList[0], (list, tuple)):
+        return False
+    firstEntry = placeList[0]
+    if siteName == 'argIcons_0':
+        if not firstEntry.hasSite('output'):
+            return False
+        if ic is not None:
+            if not overwriteStart and ic.childAt('argIcons_0'):
+                return False
+            argLen = len(ic.sites.argIcons)
+            if isinstance(ic, TupleIcon):
+                if argLen > 2 or argLen > 1 and ic.childAt('argIcons_1'):
+                    return False
+            else:
+                if argLen > 1:
+                    return False
+    elif siteName == 'cprhIcons':
+        if not (isinstance(firstEntry, entryicon.EntryIcon) or
+                not firstEntry.hasSite('cprhOut')):
+            return False
+    else:
+        return False
+    rightmostIc, rightmostSite = icon.rightmostSite(firstEntry)
+    for parent in rightmostIc.parentage(includeSelf=True):
+        if isinstance(parent, entryicon.EntryIcon) and parent.text == '':
+            pendingArgs = parent.listPendingArgs()
+            if len(pendingArgs) == 0:
+                return False
+            for arg in pendingArgs:
+                if not isinstance(arg, (CprhForIcon, CprhIfIcon)):
+                    return False
+            return True
+        if parent is firstEntry:
+            return False
+    return False
+
+def promoteCprhArgsFromEntry(placeList, removeEntryIc):
+    """Return a modified version of placeList with entry icon containing comprehension
+    clauses removed and the contained clauses promoted to the top level of the list.
+    Note that this assumes that the place list has been validated for compatibility by
+    canPlaceCprhArgsFromEntry, and should not be called if that returned False."""
+    firstEntry = placeList[0]
+    rightmostIc, rightmostSite = icon.rightmostSite(firstEntry)
+    for parent in rightmostIc.parentage(includeSelf=True):
+        if isinstance(parent, entryicon.EntryIcon) and parent.text == '':
+            pendingArgs = parent.listPendingArgs()
+            cprhArgs = [a for a in pendingArgs if isinstance(a, (CprhForIcon,
+            CprhIfIcon))]
+            if len(cprhArgs) == len(pendingArgs) and len(cprhArgs) > 0:
+                newPlaceList = [placeList[0]] + cprhArgs + placeList[1:]
+                if removeEntryIc:
+                    parent.popPendingArgs("all")
+                    parent.attachedIcon().replaceChild(None,  parent.attachedSite())
+                return newPlaceList
+        if parent is firstEntry:
+            break
+    return placeList
+
+def isProxyForCprhSite(ic, site, allowNonEmpty, includeParenIcon):
+    """Determine if site (site) on icon (ic) either is a comprehension site, or can be
+    a proxy site for a comprehension site, and if so, whether there's an icon in the way
+    (if allowNonEmpty is False).  If the site is acceptable, return the icon and site.
+    If not, return None, None.  If includeParenIcon is True, the function will also
+    recognize paren icons that can be converted to comprehension icons."""
+    # If site is an actual comprehension site, return ic and site as-is
+    if isinstance(ic, (ListIcon, DictIcon, TupleIcon)) and site[:9] == 'cprhIcons':
+        _, idx = iconsites.splitSeriesSiteId(site)
+        return ic, idx
+    # Search up the icon hierarchy for an icon type that can hold a comprehension
+    for cprhIc in ic.parentage(includeSelf=True):
+        if isinstance(cprhIc, (ListIcon, DictIcon)) or \
+                isinstance(cprhIc, TupleIcon) and not cprhIc.noParens or \
+                includeParenIcon and isinstance(cprhIc, parenicon.CursorParenIcon):
+            break
+    else:
+        return None, None
+    # Find the site on the comprehension-friendly icon that holds ic and site
+    if cprhIc is ic:
+        listSite = site
+    else:
+        listSite = cprhIc.siteOf(ic, recursive=True)
+    # Bail out if the site can't either hold a comprehension clause or be a proxy for
+    # such a site.  If the site is acceptable, figure out the index of the cprh site for
+    # which it is a proxy.
+    if isinstance(cprhIc, parenicon.CursorParenIcon):
+        if listSite == 'argIcon':
+            cprhIdx = 0
+        else:
+            return None, None
+    else:
+        if not iconsites.isSeriesSiteId(listSite):
+            return None, None
+        isTupleIcon = isinstance(cprhIc, TupleIcon)
+        nArgs = len(cprhIc.sites.argIcons)
+        if nArgs > 1 and not (isTupleIcon and nArgs == 2 and
+                cprhIc.sites.argIcons[1].att is None):
+            return None, None
+        listSeriesName, listSiteIdx = iconsites.splitSeriesSiteId(listSite)
+        if listSeriesName in ('argIcons', 'argIcon'):
+            cprhIdx = 0
+        elif listSeriesName == 'cprhIcons':
+            cprhIdx = listSiteIdx + 1
+        else:
+            return None, None
+    # Find the rightmost icon on the list site that holds the candidate proxy site,
+    # and if that does not directly match the candidate, check if there's something
+    # attached to the site that could be removed if allowNonEmpty is True.
+    proxyIc, proxySite = icon.rightmostFromSite(cprhIc, listSite)
+    if proxyIc != ic or proxySite != site:
+        if not allowNonEmpty or ic.childAt(site) is None:
+            return None, None
+        rightmostIc, rightmostSite = icon.rightmostFromSite(ic, site)
+        if rightmostIc != proxyIc or rightmostSite != proxySite:
+            return None, None
+    return cprhIc, cprhIdx
+
+def proxyForCprhSite(ic, site):
+    """Given a comprehension site (ic, site), find the icon and site that should be used
+    in its place to hold a cursor or entry icon."""
+    if not isinstance(ic, (ListIcon, DictIcon, TupleIcon)):
+        return ic, site
+    seriesName, seriesIdx = iconsites.splitSeriesSiteId(site)
+    if seriesName != 'cprhIcons':
+        return ic, site
+    if seriesIdx == 0:
+        return icon.rightmostFromSite(ic, 'argIcons_0')
+    return icon.rightmostFromSite(ic, iconsites.makeSeriesSiteId(seriesName, seriesIdx-1))
+
+def  subsCanonicalInterchangeIcon(ic):
+    """When an icon with an equivalent text representation but unique form within its
+    normal context, is dragged or cut/copied out of that context, return an equivalent
+    icon of its canonical (non-contextual) form.  For example, if an if clause is dragged
+    out of a comprehension this call will return an equivalent if statement.  Currently,
+    this only applies to comprehension components.  It was originally intended to apply
+    to argument assignment as well, but that led to complex ambiguities in the resulting
+    icon structure when an argument assignment became exposed outside of a call.  It will
+    probably eventually apply to slices versus dictionary elements (once slices are
+    separated from subscripts)."""
+    subsIc = None
+    if isinstance(ic, CprhForIcon):
+        subsIc = blockicons.ForIcon(isAsync=ic.isAsync, window=ic.window)
+        tgtIcons = [tgtSite.att for tgtSite in ic.sites.targets]
+        for tgtSite in ic.sites.targets:
+            ic.replaceChild(None, tgtSite.name)
+        subsIc.insertChildren(tgtIcons, 'targets', 0)
+        iterIcon = ic.childAt('iterIcon')
+        ic.replaceChild(None, 'iterIcon')
+        subsIc.replaceChild(iterIcon, 'iterIcons_0')
+    elif isinstance(ic, CprhIfIcon):
+        subsIc = blockicons.IfIcon(window=ic.window)
+        condIcon = ic.childAt('testIcon')
+        ic.replaceChild(None, 'testIcon')
+        subsIc.replaceChild(condIcon, 'condIcon')
+    if subsIc is not None:
+        filefmt.moveIconToPos(subsIc, ic.pos())
+        if ic.isSelected():
+            subsIc.select(True)
+    return subsIc
+
 def composeAttrAstIf(ic, icAst, skipAttr):
     """Wrapper for icon.composeAttrAst, giving it a disable flag (skipAttr), to simplify
     createAst methods for mutable icons which may need to suppress execution of
@@ -3054,7 +3493,7 @@ def createTupleIconFromAst(astNode, window):
         # While parenicon writes empty open parens as $:o$($Empty$)$)$,  $:o$() is also
         # acceptable, which Python parses as an empty tuple, in which case, convert
         return parenicon.CursorParenIcon(closed=False, window=window)
-    topIcon = TupleIcon(window, closed=closed)
+    topIcon = TupleIcon(window, closed=closed, noParens=hasattr(astNode, 'isNakedTuple'))
     childIcons = [icon.createFromAst(e, window) for e in astNode.elts]
     topIcon.insertChildren(childIcons, "argIcons", 0)
     return topIcon
@@ -3193,6 +3632,10 @@ def createComprehensionIconFromAst(astNode, window):
         dictElem.replaceChild(icon.createFromAst(tgt, window), "rightArg")
         topIcon.replaceChild(dictElem, 'argIcons_0')
     clauseIdx = 0
+    # Note the use of createOpArgFromAst to create the rightmost arg for of comprehension
+    # clauses.  This is for processing the unusual case of an inline-if in that spot,
+    # which gets auto-parens per Python syntax rules, to ensure that it doesn't conflict
+    # with a cprh 'if' clause.
     for gen in astNode.generators:
         forIcon = CprhForIcon(gen.is_async, window=window)
         if isinstance(gen.target, ast.Tuple) and not \
@@ -3202,22 +3645,23 @@ def createComprehensionIconFromAst(astNode, window):
         elif isinstance(gen.target, ast.Name) and gen.target.id == UNASSOC_IF_IDENT:
             # To fake out the parser for an 'if' comprehension clause not associated with
             # a 'for', we define a macro to replace itself with: 'for unique_ident in'
-            # and when we se the unique identifier, we turn it back in to an 'if'
+            # and when we see the unique identifier, we turn it back in to an 'if'
             # comprehension with the test taken from the iterator of the 'for'.
             ifIcon = CprhIfIcon(window)
-            testIcon = icon.createFromAst(gen.iter, window)
+            testIcon = opicons.createOpArgFromAst(ifIcon, 'testIcon', gen.iter, window)
             ifIcon.replaceChild(testIcon, 'testIcon')
             topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
             clauseIdx += 1
             continue
         else:
             forIcon.insertChild(icon.createFromAst(gen.target, window), "targets", 0)
-        forIcon.replaceChild(icon.createFromAst(gen.iter, window), 'iterIcon')
+        forIcon.replaceChild(opicons.createOpArgFromAst(forIcon, 'iterIcon',
+            gen.iter, window), 'iterIcon')
         topIcon.insertChild(forIcon, "cprhIcons", clauseIdx)
         clauseIdx += 1
         for i in gen.ifs:
             ifIcon = CprhIfIcon(window)
-            testIcon = icon.createFromAst(i, window)
+            testIcon = opicons.createOpArgFromAst(ifIcon, 'testIcon', i, window)
             ifIcon.replaceChild(testIcon, 'testIcon')
             topIcon.insertChild(ifIcon, "cprhIcons", clauseIdx)
             clauseIdx += 1
@@ -3230,7 +3674,7 @@ filefmt.registerBuiltInMacro(UNASSOC_IF_MACRO_NAME, f'for {UNASSOC_IF_IDENT} in'
 
 def createCprhIfFromFakeAst(astNode, window):
     ifIcon = CprhIfIcon(window)
-    testIcon = icon.createFromAst(astNode.cmp, window)
+    testIcon = opicons.createOpArgFromAst(ifIcon, 'testIcon', astNode.cmp, window)
     ifIcon.replaceChild(testIcon, 'testIcon')
     return ifIcon
 icon.registerIconCreateFn(filefmt.CprhIfFakeAst, createCprhIfFromFakeAst)
@@ -3243,7 +3687,8 @@ def createCprhForFromFakeAst(astNode, window):
         forIcon.insertChildren(tgtIcons, "targets", 0)
     else:
         forIcon.insertChild(icon.createFromAst(astNode.target, window), "targets", 0)
-    forIcon.replaceChild(icon.createFromAst(astNode.iter, window), 'iterIcon')
+    forIcon.replaceChild(opicons.createOpArgFromAst(forIcon, 'iterIcon',
+        astNode.iter, window), 'iterIcon')
     return forIcon
 icon.registerIconCreateFn(filefmt.CprhForFakeAst, createCprhForFromFakeAst)
 

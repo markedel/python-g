@@ -1,3 +1,7 @@
+# Load this file using the "Open" menu item in the software under test, and compare
+# the text of the file with what appears on the screen.  The test passes if the number
+# of parens displayed matches the number of parens in the (this) text file, and that
+# all $:o$ macros translate to open (unclosed) parens/brackets/braces.
 a*$:o$(fn(b))
 fn($:o$(a),b)
 yield $:o$(a,b,c)
@@ -99,3 +103,5 @@ class C (D,E=(f)):
 fn(a.b(c=d))
 fn(b(c=d))
 fn(b(c))
+a, b, c
+(a, b, c)

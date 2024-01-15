@@ -1347,6 +1347,14 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, allocated=None):
             unmatchedLParens = [p for p in unmatchedLParens if p != match]
             unmatchedRParens = [p for p in unmatchedRParens if p != match]
             astNode.tupleHasParens = True
+    elif isinstance(astNode, ast.Expr):
+        # Technically, the tuple creation code could use the 'tupleHasParens' property to
+        # decide to create a naked tuple.  We take the extra step of labeling it with
+        # 'isNakedTuple' to ensure that a mislabeled paren won't cause us to accidentally
+        # create one somewhere other than the top level.
+        if isinstance(astNode.value, ast.Tuple):
+            if not hasattr(astNode.value, 'tupleHasParens'):
+                astNode.value.isNakedTuple = True
     elif icon.astCreationFunctions.get(astNode.__class__) is not None:
         # For remaining icons, look up associated parens via line/col offset of the start
         # and end.  This will result in lots of duplication (for any icons with coincident

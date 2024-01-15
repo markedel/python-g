@@ -72,6 +72,7 @@ a, = [2]
 a += 2
 {a+b:c+d}
 del a, (b, c, [d])
+f(a for a in range(10))
 
 $@+205+75$
 # The following statements
@@ -214,6 +215,7 @@ except 3 as $Ctx($3$)$:
 (*a, *b) = [1,2,3]
 $Ctx($ 4 $)$ = 3
 $Ctx($ a+b $)$, = [3]
+$Ctx($[a for b in c]$)$ = 3
 ($Ctx($ 1 $)$) = 2
 (($Ctx($ 2 $)$)) = 3
 *a, $Ctx($ 3 $)$,c=[(1,2),3]

@@ -139,7 +139,8 @@ def highestAffectedExpr(changedIcon):
         #... why is CursorParenIcon in the expression, below?  It may have something to
         #    do with closing cursor parens, but wouldn't that affect braces and brackets?
         if siteType == "input" and parent.__class__ not in (opicons.BinOpIcon,
-                opicons.IfExpIcon, opicons.UnaryOpIcon, parenicon.CursorParenIcon):
+                opicons.IfExpIcon, opicons.UnaryOpIcon, parenicon.CursorParenIcon,
+                listicons.DictElemIcon, listicons.ArgAssignIcon):
             return ic  # Everything other than arithmetic expressions encloses args
         if parent.__class__ is opicons.IfExpIcon and site == 'testExpr':
             return ic  # Inline-if encloses test expression
@@ -155,15 +156,18 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
     representedIcons = (topNode, )
     if topNode is None:
         yield MissingArgToken()
-    elif topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon):
-        if topNode.hasParens:
+    elif topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon,
+            listicons.DictElemIcon, listicons.ArgAssignIcon):
+        hasParens = topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+            topNode.hasParens  # infix ops dict elem and arg assign can't have parens
+        if hasParens:
             yield OpenParenToken(topNode)
         yield from traverseExprLeftToRight(topNode.leftArg(), allowedNonParen,
          closeParenAfter)
         yield BinaryOpToken(topNode)
         yield from traverseExprLeftToRight(topNode.rightArg(), allowedNonParen,
          closeParenAfter)
-        if topNode.hasParens:
+        if hasParens:
             yield CloseParenToken(topNode)
             attrIcon = topNode.childAt('attrIcon')
             if attrIcon:
@@ -249,6 +253,9 @@ class CloseParenToken:
         self.parenIcon = parenIcon
 
 class BinaryOpToken:
+    """Represent a binary operator.  Note that this also includes the infix operator
+    icons DictElemIcon and ArgAssignIcon, which are only sometimes considered part of
+    an expression (as they have precedence -1)."""
     def __init__(self, ic):
         self.ic = ic
         self.leftArg = None

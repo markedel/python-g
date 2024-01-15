@@ -666,7 +666,7 @@ def lexicalTraverse(fromIcon, fromSite, direction, traverseStmtComment=False):
     comment following the rightmost cursor position at the end of a statement, with
     a site of None (since statement comments are not attached to a site)."""
     ic, site = _lexicalTraverse(fromIcon, fromSite, direction, traverseStmtComment)
-    if site is not None and ic.isCursorSkipSite(site):
+    while site is not None and ic.isCursorSkipSite(site):
         # lexical traversal includes comprehension sites, and we want the icon
         # that is on the comprehension site, so go around again.
         ic, site = _lexicalTraverse(ic, site, direction, traverseStmtComment)
