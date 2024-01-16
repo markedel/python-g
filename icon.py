@@ -132,33 +132,33 @@ leftInSiteImage = comn.asciiToImage((
  "...o "))
 
 commaImage = comn.asciiToImage((
- "ooooo",
- "o   o",
- "o  o.",
- "o o..",
- "o  o.",
- "o   o",
- "o   o",
- "o %7o",
- "o8%7o",
- "o%8 o",
- "o   o",
- "ooooo"))
+ "ooooooooo",
+ "o       o",
+ "o      o.",
+ "o     o..",
+ "o      o.",
+ "o       o",
+ "o       o",
+ "o %7    o",
+ "o8%7    o",
+ "o%8     o",
+ "o       o",
+ "ooooooooo"))
 commaImageSiteYOffset = 3
 
 commaTypeoverImage = comn.asciiToImage((
- "ooooo",
- "o   o",
- "o  o.",
- "o o..",
- "o  o.",
- "o   o",
- "o   o",
- "o 89o",
- "o 89o",
- "o8  o",
- "o   o",
- "ooooo"))
+ "ooooooooo",
+ "o       o",
+ "o      o.",
+ "o     o..",
+ "o      o.",
+ "o       o",
+ "o       o",
+ "o 89    o",
+ "o 89    o",
+ "o8      o",
+ "o       o",
+ "ooooooooo"))
 commaImageSiteYOffset = 3
 
 colonImage = comn.asciiToImage((
