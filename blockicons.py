@@ -275,7 +275,7 @@ class WithIcon(icon.Icon):
         return None
 
     def highlightErrors(self, errHighlight):
-        checkPseudoBlockHighlights(self)
+        checkOwnedBlockHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -454,7 +454,7 @@ class WhileIcon(icon.Icon):
         return text
 
     def highlightErrors(self, errHighlight):
-        checkPseudoBlockHighlights(self)
+        checkOwnedBlockHighlights(self)
         icon.Icon.highlightErrors(self, errHighlight)
 
     def dumpName(self):
@@ -665,6 +665,9 @@ class ForIcon(icon.Icon):
         for site in self.sites.targets:
             if site.att is None:
                 raise icon.IconExecException(self, "Missing assignment target(s)")
+            if not site.att.canProcessCtx:
+                raise icon.IconExecException(site.att,
+                    "Not a valid target for assignment")
             tgts.append(site.att)
         if len(tgts) == 1:
             tgtAst = tgts[0].createAst()
@@ -685,8 +688,9 @@ class ForIcon(icon.Icon):
             valueAst = ast.Tuple([v.createAst() for v in iterValues], ctx=ast.Load(),
              lineno=self.id, col_offset=0)
         bodyAsts = createBlockAsts(self)
-        return ast.For(tgtAst, valueAst, **bodyAsts, lineno=self.id,
-         col_offset=0)
+        if 'orelse' not in bodyAsts:
+            bodyAsts['orelse'] = []
+        return ast.For(tgtAst, valueAst, **bodyAsts, lineno=self.id, col_offset=0)
 
     def inRectSelect(self, rect):
         # Require selection rectangle to touch icon body
@@ -718,7 +722,7 @@ class ForIcon(icon.Icon):
         return None
 
     def highlightErrors(self, errHighlight):
-        checkPseudoBlockHighlights(self)
+        checkOwnedBlockHighlights(self)
         if errHighlight is None:
             self.errHighlight = None
             listicons.highlightSeriesErrorsForContext(self.sites.targets, 'store')
@@ -978,7 +982,7 @@ class IfIcon(icon.Icon):
         return None  #... no idea what to do here, yet.
 
     def highlightErrors(self, errHighlight):
-        checkPseudoBlockHighlights(self)
+        checkOwnedBlockHighlights(self)
         icon.Icon.highlightErrors(self, errHighlight)
 
     def createAst(self):
@@ -986,6 +990,8 @@ class IfIcon(icon.Icon):
             raise icon.IconExecException(self, "Missing condition in if statement")
         testAst = self.sites.condIcon.att.createAst()
         bodyAsts = createBlockAsts(self)
+        if 'orelse' not in bodyAsts:
+            bodyAsts['orelse'] = []
         return ast.If(testAst, **bodyAsts, lineno=self.id, col_offset=0)
 
     def backspace(self, siteId, evt):
@@ -1258,7 +1264,7 @@ class TryIcon(icon.Icon):
         return filefmt.SegmentedText("try:")
 
     def highlightErrors(self, errHighlight):
-        checkPseudoBlockHighlights(self)
+        checkOwnedBlockHighlights(self)
         icon.Icon.highlightErrors(self, errHighlight)
 
     def dumpName(self):
@@ -1272,6 +1278,10 @@ class TryIcon(icon.Icon):
 
     def createAst(self):
         bodyAsts = createBlockAsts(self)
+        if 'orelse' not in bodyAsts:
+            bodyAsts['orelse'] = []
+        if 'finalbody' not in bodyAsts:
+            bodyAsts['finalbody'] = []
         return ast.Try(**bodyAsts, lineno=self.id, col_offset=0)
 
 class ExceptIcon(icon.Icon):
@@ -1588,7 +1598,9 @@ class FinallyIcon(icon.Icon):
         for ic in icon.traverseSeq(self, includeStartingIcon=False, reverse=True,
                 skipInnerBlocks=True):
             if hasattr(ic, 'blockEnd'):
-                if not isinstance(ic, TryIcon):
+                if isinstance(ic, TryIcon):
+                    self.errHighlight = None
+                else:
                     self.errHighlight = icon.ErrorHighlight(
                         "finally can only appear in try block")
                 break
@@ -2248,7 +2260,7 @@ class ClassDefIcon(DefOrClassIcon):
         return text
 
     def highlightErrors(self, errHighlight):
-        checkPseudoBlockHighlights(self)
+        checkOwnedBlockHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -2335,7 +2347,7 @@ class DefIcon(DefOrClassIcon):
          createBlockEnd=False)
 
     def highlightErrors(self, errHighlight):
-        checkPseudoBlockHighlights(self)
+        checkOwnedBlockHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -2835,35 +2847,56 @@ def createBlockAsts(ic):
     stmtAsts = []
     handlerIcs = []
     stmt = ic.nextInSeq()
+    processedElse = False
+    processedFinally = False
     while not isinstance(stmt, icon.BlockEnd):
         if stmt is None:
             raise icon.IconExecException(ic, "Error processing code block")
         if isinstance(stmt, ElifIcon):
             if ic.__class__ not in (IfIcon, ElifIcon):
-                raise icon.IconExecException(stmt, "Elif statement should not be here")
+                raise icon.IconExecException(stmt, "elif statement should not be here")
+            if stmt.childAt('condIcon') is None:
+                raise icon.IconExecException(stmt, "elif statement missing condition")
+            if processedElse:
+                raise icon.IconExecException(stmt, "elif statement cannot follow else")
             # Python does not have an elif ast, instead, it creates an if embedded in
             # an orelse block.  Make recursive callback to collect body and orelse for
             # the embedded if (which may, themselves embed deeper elifs and elses), and
             # then return immediately as the recursive call will finish the block
             subsequentBlockAsts = createBlockAsts(stmt)
+            if 'orelse' not in subsequentBlockAsts:
+                subsequentBlockAsts['orelse'] = []
             ifAst = ast.If(stmt.sites.condIcon.att.createAst(), **subsequentBlockAsts,
                 lineno=stmt.id, col_offset=0)
             return {'body':stmtAsts, 'orelse':[ifAst]}
         elif isinstance(stmt, ElseIcon):
             if ic.__class__ not in (IfIcon, ElifIcon, ForIcon, WhileIcon, TryIcon):
-                raise icon.IconExecException(stmt, "Else statement should not be here")
+                raise icon.IconExecException(stmt, "else statement should not be here")
+            if processedElse:
+                raise icon.IconExecException(stmt, "multiple else statements")
+            if processedFinally:
+                raise icon.IconExecException(stmt, "else statement cannot follow finally")
             paramDict[blockType] = stmtAsts
             blockType = 'orelse'
             stmtAsts = []
+            processedElse = True
         elif isinstance(stmt, FinallyIcon):
             if not isinstance(ic, TryIcon):
                 raise icon.IconExecException(stmt, "finally statement should not be here")
+            if processedFinally:
+                raise icon.IconExecException(stmt,
+                    "try block cannot have more than one finally")
             paramDict[blockType] = stmtAsts
             blockType = 'finalbody'
             stmtAsts = []
+            processedFinally = True
         elif isinstance(stmt, ExceptIcon):
             if not isinstance(ic, TryIcon):
                 raise icon.IconExecException(stmt, "except statement should not be here")
+            if processedFinally:
+                raise icon.IconExecException(stmt, "except cannot follow finally")
+            if processedElse:
+                raise icon.IconExecException(stmt, "except should precede else statement")
             paramDict[blockType] = stmtAsts
             blockType = 'handler%d' % len(handlerIcs)
             handlerIcs.append(stmt)
@@ -2907,7 +2940,8 @@ def _consolidateHandlerBlocks(paramDict, handlerIcs):
         paramDictKey = 'handler%d' % i
         body = paramDict[paramDictKey]
         del paramDict[paramDictKey]
-        handlerAst = ast.ExceptHandler(type=typeAst, name=name, body=body)
+        handlerAst = ast.ExceptHandler(type=typeAst, name=name, body=body, lineno=ic.id,
+            col_offset=0)
         handlers.append(handlerAst)
     paramDict['handlers'] = handlers
 
@@ -3366,14 +3400,55 @@ def _addStmtComment(ic, comment):
     commenticon.CommentIcon(commentText, attachedToStmt=ic, window=ic.window,
         ann=comment[0])
 
+def checkOwnedBlockHighlights(blockOwner):
+    """Scan the top-level content of the block below blockOwner for icons dependent upon
+    a particular owning block for their validity (else, elif, except, finally, continue,
+    break, and return), that have not been marked dirty (and whose highlightErrors method
+    would therefore not be called).  This needs to be done for all dirty block-owning
+    icons as well as for pseudo-block-owing icons (see checkPseudoBlockHighlights),
+    because we have to both highlight and un-highlight misplaced dependent statements."""
+    # Search the block owned by blockOwner for else, elif, except, finally, continue,
+    # break, and return icons.  Search descends into sub-blocks for continue, break, and
+    # return statements.  If the found ic is already marked as dirty, skip it, as it will
+    # be highlighted by the layout code.  While there's subtle dependency upon layout
+    # proceeding top-to-bottom for this to help, the code would still work regardless of
+    # the layout order.  There will also, necessarily, be duplication for continue, break
+    # and return statement.  While this duplication wastes cycles, it won't affect
+    # results, as the highlightErrors method for top-level statements is only ever called
+    # with an argument of None.
+    #
+    # This code (I suspect) wastes a lot of cycles. Hopefully, an overhaul of the
+    # sequence mechanism can someday address this.
+    inInnerBlock = None
+    inInnerLoop = None
+    inInnerDef = None
+    for ic in icon.traverseOwnedBlock(blockOwner, skipInnerBlocks=False):
+        if inInnerBlock is None and hasattr(ic, 'blockEnd'):
+            inInnerBlock = ic.blockEnd.sites.seqOut.att
+        if inInnerLoop is None and isinstance(ic, (ForIcon, WhileIcon)):
+            inInnerLoop = ic.blockEnd.sites.seqOut.att
+        if inInnerDef is None and isinstance(ic, DefIcon):
+            inInnerDef = ic.blockEnd.sites.seqOut.att
+        if not ic.layoutDirty and (
+                inInnerDef is None and isinstance(ic, nameicons.ReturnIcon) or
+                inInnerLoop is None and isinstance(ic, (nameicons.ContinueIcon,
+                    nameicons.BreakIcon)) or
+                inInnerBlock is None and isinstance(ic, (ElseIcon, ElifIcon, ExceptIcon,
+                    FinallyIcon))):
+            ic.highlightErrors(None)
+        if ic is inInnerBlock:
+            inInnerBlock = None
+        if ic is inInnerLoop:
+            inInnerLoop = None
+        if ic is inInnerDef:
+            inInnerDef = None
+
 def checkPseudoBlockHighlights(blockOwner):
-    """Scan the top-level content of the block below blockOwner for pseudo-block-owning
-    icons (else, elif, except, finally) that have not been marked dirty (and whose
-    highlightErrors method would therefore not be called).  This needs to be done for
-    all dirty block-owning icons as well as for pseudo-block-owing icons (unfortunately),
-    because we have to both highlight and un-highlight misplaced else, elif, except, and
-    finally statements.  I suspect this wastes a lot of cycles. (... hopefully, an
-    overhaul of the sequence mechanism can someday address this)."""
+    """Scan the top-level content of the block below pseudo-block-owning icons (else,
+    elif, except, finally) for other such icons that would be affected by changes to
+    them and which have not been marked dirty (whose  highlightErrors method would
+    therefore not be called).  This needs to be done for dirty block-owning icons as
+    well (see checkOwnedBlockHighlights)."""
     nextIc = blockOwner.nextInSeq()
     if nextIc is not None and nextIc is not isinstance(nextIc, icon.BlockEnd):
         for ic in icon.traverseSeq(nextIc, includeStartingIcon=True,
@@ -3382,11 +3457,6 @@ def checkPseudoBlockHighlights(blockOwner):
                 break
             if isinstance(ic, (ElseIcon, ElifIcon, ExceptIcon, FinallyIcon)):
                 if not ic.layoutDirty:
-                    # Note that we're subtly depending upon layout proceeding in top to
-                    # bottom to avoid doing the highlighting twice.  However, even if
-                    # this were not the case, the highlightErrors method for top-level
-                    # statements is only ever called with an argument of None, so the
-                    # only consequence to calling it twice is (yet more) wasted cycles.
                     ic.highlightErrors(None)
 
 def checkEmptyBlockNeedsPass(ic):

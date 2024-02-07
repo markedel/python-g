@@ -1302,6 +1302,12 @@ class EntryIcon(icon.Icon):
             self.insertLambda(ic)
             cursorIcon = ic
             cursorSite = 'argIcons_0'
+        elif ic.__class__ in (assignicons.AssignIcon, assignicons.AugmentedAssignIcon):
+            cursorIcon, cursorSite = self.insertAssign(ic)
+            if not cursorIcon:
+                self.removeIfEmpty()
+                cursors.beep()
+                return
         elif self.attachedIcon() is None:
             # Entry icon is on the top level
             self.window.replaceTop(self, ic)
@@ -1314,12 +1320,6 @@ class EntryIcon(icon.Icon):
                 cursorIcon, cursorSite = ic, 'seqOut'
             else:
                 cursorIcon, cursorSite = icon.rightmostSite(ic)
-        elif ic.__class__ in (assignicons.AssignIcon, assignicons.AugmentedAssignIcon):
-            cursorIcon, cursorSite = self.insertAssign(ic)
-            if not cursorIcon:
-                self.removeIfEmpty()
-                cursors.beep()
-                return
         elif ic.__class__ is nameicons.YieldIcon:
             cursorIcon, cursorSite = self.insertYieldIcon(ic)
         elif self.canJoinIcons(ic):
@@ -1853,121 +1853,86 @@ class EntryIcon(icon.Icon):
         return False
 
     def insertAssign(self, assignIcon):
-        # (note that this never called with the entry icon attached to nothing)
-        attIcon = icon.findAttrOutputSite(self.attachedIcon())
+        # Older versions of this code were much more restrictive with respect to where
+        # users could insert an assignment.  This was surprisingly annoying in the way
+        # it interfered with typing flow.  For example, not allowing users to type '='
+        # after an invalid target, meant we were both throwing out their keystroke and
+        # forcing them to go back and correct code we had *already accepted* before they
+        # could continue typing.  The new code accepts anything that will produce a
+        # correct structure, but since we're also able to highlight errors, these are
+        # clearly marked so the user can go back and correct them.
+        #
+        # Check for all illegal cases before taking any irreversible actions.  We only
+        # require that the entry icon is on either a top-level expression or one that is
+        # a child of either a naked tuple or an existing assignment. For an augmented
+        # assign, also ensure that the insertion will produce only a single target.
+        topIcon, splitSite = findEnclosingSite(self)
+        if not (topIcon is None or isinstance(topIcon, assignicons.AssignIcon) or
+                isinstance(topIcon, listicons.TupleIcon) and topIcon.noParens):
+            return None, None
         isAugmentedAssign = assignIcon.__class__ is assignicons.AugmentedAssignIcon
-        # Older versions had code here to prevent typing '=' after unacceptable targets.
-        # This turned out to interfere with typing flow, since the user probably wanted
-        # the = and we were throwing out their keystroke and forcing them to go back and
-        # correct code we had *already accepted* before they could continue.  Now that
-        # we're highlighting bad targets, instead of inexplicably rejecting a keystroke,
-        # we can both let them proceed unhindered and *show* them exactly what they need
-        # to correct at their later convenience.
-        if self.attachedToAttribute():
-            highestCoincidentIcon = iconsites.highestCoincidentIcon(attIcon)
-            if highestCoincidentIcon in self.window.topIcons:
-                # The cursor is attached to an attribute of a top-level icon. Insert the
-                # assignment icon and make it the target.
-                self.attachedIcon().replaceChild(None, self.attachedSite())
-                self.window.replaceTop(highestCoincidentIcon, assignIcon)
-                if highestCoincidentIcon is not attIcon:
-                    parent = attIcon.parent()
-                    parentSite = parent.siteOf(attIcon)
-                    parent.replaceChild(None, parentSite)
-                    if isinstance(highestCoincidentIcon, listicons.TupleIcon) and \
-                            highestCoincidentIcon.noParens:
-                        # The highest coincident icon is a naked tuple: while these are
-                        # also handled further down in the function, this is a simpler
-                        # case (just insert the remaining icons in to values series) and
-                        # easier to handle, here, than to bail from the deeply nested if.
-                        args = highestCoincidentIcon.argIcons()
-                        for arg in args:
-                            highestCoincidentIcon.replaceChild(None,
-                                highestCoincidentIcon.siteOf(arg))
-                        assignIcon.replaceChild(self, 'values_0')
-                        assignIcon.insertChildren(args, 'values', 1)
-                        cursorIcon, cursorSite = assignIcon, 'values_0'
-                    else:
-                        assignIcon.replaceChild(highestCoincidentIcon, 'values_0')
-                        cursorIcon, cursorSite = parent, parentSite
-                else:
-                    cursorIcon, cursorSite = assignIcon, "values_0"
-                if isAugmentedAssign:
-                    assignIcon.replaceChild(attIcon, 'targetIcon')
-                else:
-                    assignIcon.replaceChild(attIcon, "targets0_0")
-                return cursorIcon, cursorSite
-        topParent = self.attachedIcon().topLevelParent()
-        if topParent.__class__ is listicons.TupleIcon and topParent.noParens:
-            # There is a no-paren tuple at the top level waiting to be converted in to an
-            # assignment statement.  Do the conversion.
-            targetIcons = topParent.argIcons()
+        if isAugmentedAssign and (isinstance(topIcon, assignicons.AssignIcon) or
+                isinstance(topIcon, listicons.TupleIcon) and splitSite != 'argIcons_0'):
+            return None, None
+        # Replace the current top-level icon with the new assignment icon (unless it's
+        # already an assignment icon)
+        if not isinstance(topIcon, assignicons.AssignIcon):
+            self.window.replaceTop(self.topLevelParent(), assignIcon)
+        # Split the expression around the entry icon
+        left, right = splitExprAtIcon(self, topIcon, None, self)
+        if left is None and right is None:
+            # Deadly failure probably dropped content (diagnostics already printed)
+            return None, None
+        # Move the icons into the new assignment statement
+        if topIcon is None:
+            # The entry icon is on a top-level expression
+            expr = self.topLevelParent()
+            tgtSite = 'targetIcon' if isAugmentedAssign else 'targets0_0'
+            assignIcon.replaceChild(left, tgtSite)
+            assignIcon.replaceChild(right, 'values_0')
+        elif isinstance(topIcon, listicons.TupleIcon):
+            # The entry icon is on a naked tuple
+            _, splitIdx = iconsites.splitSeriesSiteId(splitSite)
+            argIcons = topIcon.argIcons()
+            tgtIcons = argIcons[:splitIdx] + [left]
+            valueIcons = [right] + argIcons[splitIdx+1:]
+            for _ in range(len(topIcon.sites.argIcons)):
+                topIcon.replaceChild(None, 'argIcons_0')
             if isAugmentedAssign:
-                # Augmented (i.e. +=) assigns have just one target, but can have multiple
-                # values, so it possible to insert one after the first entry.
-                if len(targetIcons) != 1:
-                    return None, None
-                self.attachedIcon().replaceChild(None, self.attachedSite())
-                assignIcon.replaceChild(targetIcons[0], 'targetIcon')
+                assignIcon.replaceChild(tgtIcons[0], 'targetIcon')
             else:
-                attachedIcon = self.attachedIcon()
-                attachedSite = self.attachedSite()
-                attachedIcon.replaceChild(None, attachedSite)
-                if attachedIcon is topParent:
-                    # entry icon is directly attached to the tuple (on comma or body)
-                    insertSiteId = attachedSite
-                    targetIcons.remove(self)
-                else:
-                    insertSiteId = topParent.siteOf(attIcon, recursive=True)
-                for tgtIcon in targetIcons:
-                    if tgtIcon is not None:
-                        topParent.replaceChild(None, topParent.siteOf(tgtIcon))
-                seriesName, seriesIdx = iconsites.splitSeriesSiteId(insertSiteId)
-                splitIdx = seriesIdx + (0 if topParent is attachedIcon else 1)
-                assignIcon.insertChildren(targetIcons[:splitIdx], 'targets0', 0)
-                assignIcon.insertChildren(targetIcons[splitIdx:], 'values', 0)
-                # The removed code, below inserts a useless comma and I haven't found any
-                # cases where it was needed (preserved temporarily for documentation).
-                #if splitIdx < len(targetIcons):
-                #    assignIcon.insertChild(None, 'values_0')
-            self.window.replaceTop(topParent, assignIcon)
-            return assignIcon, "values_0"
-        if topParent.__class__ is assignicons.AssignIcon and not isAugmentedAssign:
-            # There is already an assignment icon.  Add a new clause, splitting the
-            # target list at the entry location.  (assignIcon is thrown away)
-            attachedIcon = self.attachedIcon()
-            attachedSite = self.attachedSite()
-            attachedIcon.replaceChild(None, attachedSite)
-            if attachedIcon is topParent:
-                # entry icon is directly attached to the assignment (on comma or body)
-                insertSiteId = attachedSite
-            else:
-                insertSiteId = topParent.siteOf(attIcon, recursive=True)
-            seriesName, seriesIdx = iconsites.splitSeriesSiteId(insertSiteId)
-            splitIdx = seriesIdx + (0 if topParent is attachedIcon else 1)
-            if seriesName == 'values':  # = was typed in the value series
-                newTgtGrpIdx = len(topParent.tgtLists)
-                cursorSite = 'values_0'
-                iconsToMove = [site.att for site in topParent.sites.values][:splitIdx]
-                removeFromSite = iconsites.makeSeriesSiteId('values', 0)
+                assignIcon.insertChildren(tgtIcons, 'targets0', 0)
+            assignIcon.insertChildren(valueIcons, 'values', 0)
+        elif isinstance(topIcon, assignicons.AssignIcon):
+            # The entry icon is on an existing assignment icon.  Add a new target clause
+            # either before the split (if it is in the values series) or after the split
+            # (if it is in a target series)  assignIcon is thrown away.
+            splitSeriesName, splitIdx = iconsites.splitSeriesSiteId(splitSite)
+            if splitSeriesName == 'values':
+                # = was typed in the value series, add a new target group at the end
+                # and move the icons from before the insertion in to it.
+                newTgtGrpIdx = len(topIcon.tgtLists)
+                iconsToMove = [site.att for site in topIcon.sites.values][:splitIdx]
+                iconsToMove.append(left)
+                topIcon.replaceChild(right, splitSite)
                 for _ in range(splitIdx):
-                    topParent.replaceChild(None, removeFromSite)
-            else:  # = was typed in a target series
-                newTgtGrpIdx = int(seriesName[7:]) + 1
-                cursorSite = 'targets%d_0' % newTgtGrpIdx
-                series = getattr(topParent.sites, seriesName)
-                iconsToMove = [site.att for site in series][splitIdx:]
-                removeFromSite = iconsites.makeSeriesSiteId(seriesName, splitIdx)
-                for _ in range(splitIdx, len(series)):
-                    topParent.replaceChild(None, removeFromSite)
-            topParent.addTargetGroup(newTgtGrpIdx)
-            topParent.insertChildren(iconsToMove, 'targets%d' % newTgtGrpIdx, 0)
-            # The removed code, below inserts a useless comma and I haven't found any
-            # cases where it was needed (preserved temporarily for documentation).
-            # if topParent.childAt(cursorSite):
-            #     topParent.insertChild(None, cursorSite)
-            return topParent, cursorSite
-        return None, None
+                    topIcon.replaceChild(None, 'values_0')
+            else:
+                # = was typed in a target series, insert a new target group after the
+                # split group and move the icons from after the insertion in to it.
+                topIcon.replaceChild(left, splitSite, leavePlace=True)
+                newTgtGrpIdx = int(splitSeriesName[7:]) + 1
+                series = getattr(topIcon.sites, splitSeriesName)
+                iconsToMove = [right] + [site.att for site in series][splitIdx+1:]
+                removeFromSite = iconsites.makeSeriesSiteId(splitSeriesName, splitIdx+1)
+                for _ in range(splitIdx+1, len(series)):
+                    topIcon.replaceChild(None, removeFromSite)
+            topIcon.addTargetGroup(newTgtGrpIdx)
+            topIcon.insertChildren(iconsToMove, 'targets%d' % newTgtGrpIdx, 0)
+        # Remove the entry icon if possible
+        if not self.remove():
+            return self.attachedIcon(), self.attachedSite()
+        return self.window.cursor.icon, self.window.cursor.site
 
     def insertColon(self):
         if self.attachedIcon() is None:
@@ -3092,7 +3057,8 @@ def findEnclosingSite(startIc):
                     subscripticon.SubscriptIcon, listicons.CprhForIcon,
                     listicons.CprhIfIcon) or \
                 parentClass is opicons.IfExpIcon and site == 'testExpr' or \
-                parentClass in cursors.stmtIcons:
+                parentClass is assignicons.AugmentedAssignIcon and site == 'targetIcon' \
+                or parentClass in cursors.stmtIcons:
             return parent, site
 
 def _findParenTypeover(entryIc, token):

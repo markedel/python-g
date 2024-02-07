@@ -454,7 +454,8 @@ class ListTypeIcon(icon.Icon):
         self.object = obj
         leftWidth, height = leftImgFn(0).size
         self.sites.add('output', 'output', 0, height // 2)
-        self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', leftWidth-1, height//2)
+        self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', leftWidth-1, height//2,
+            allowsTrailingComma=True)
         self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)],
             cursorSkip=True)
         width = self.sites.cprhIcons[-1].xOffset + rightImgFn(0).width
@@ -515,7 +516,8 @@ class ListTypeIcon(icon.Icon):
     def acceptsComprehension(self):
         return len(self.sites.argIcons) <= 1
 
-    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
+    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None,
+            preserveNoneAtZero=False):
         # Checks and special rules for comprehension series with no commas.
         if seriesIdx is None:
             seriesName, idx = iconsites.splitSeriesSiteId(siteIdOrSeriesName)
@@ -527,7 +529,8 @@ class ListTypeIcon(icon.Icon):
                 print('Attempt to add elements to comprehension')
                 return
         if seriesName != 'cprhIcons':
-            icon.Icon.insertChild(self, child, siteIdOrSeriesName, seriesIdx, childSite)
+            icon.Icon.insertChild(self, child, siteIdOrSeriesName, seriesIdx, childSite,
+                preserveNoneAtZero=preserveNoneAtZero)
             return
         if len(self.sites.argIcons) > 1:
             # Single element tuples (x,) can still get a comprehension
@@ -932,6 +935,7 @@ class ListIcon(ListTypeIcon):
         ListTypeIcon.__init__(self, '[', ']', window, obj=obj, location=location,
                 closed=closed, leftImgFn=self._stretchedLBracketImage,
                 rightImgFn=self._stretchedRBracketImage, typeover=typeover)
+        self.canProcessCtx = True
 
     def execute(self):
         if not self.closed:
@@ -962,18 +966,25 @@ class ListIcon(ListTypeIcon):
             return ast.Subscript(value=icon.createAstDataRef(self),
                     slice=ast.Slice(lower=None, upper=None, step=None),
                     ctx=ast.Store(), lineno=self.id, col_offset=0)
+        ctx = nameicons.determineCtx(self)
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
+            if isinstance(ctx, ast.Store):
+                raise icon.IconExecException(self, "Can't assign to empty list")
+            if isinstance(ctx, ast.Del):
+                raise icon.IconExecException(self, "Can't delete empty list")
             elts = []
         else:
             for site in self.sites.argIcons:
                 if site.att is None:
                     raise icon.IconExecException(self, "Missing argument(s)")
-            for site in self.sites.argIcons:
-                if site.att is None:
-                    raise icon.IconExecException(self, "Missing argument(s)")
+            if self.sites.attrIcon.att is None and isinstance(ctx, (ast.Store, ast.Del)):
+                for site in self.sites.argIcons:
+                    if not site.att.canProcessCtx:
+                        ctxName = 'assignment' if isinstance(ctx, ast.Store) else 'del'
+                        raise icon.IconExecException(site.att,
+                            "Not a valid target for %s" % ctxName)
             elts = [site.att.createAst() for site in self.sites.argIcons]
-        listContentAst = ast.List(elts=elts,
-                ctx=nameicons.determineCtx(self), lineno=self.id, col_offset=0)
+        listContentAst = ast.List(elts=elts,  ctx=ctx, lineno=self.id, col_offset=0)
         # If this is not a mutable icon, we're done
         if self.object is None:
             return composeAttrAstIf(self, listContentAst, skipAttr)
@@ -1028,6 +1039,7 @@ class TupleIcon(ListTypeIcon):
         ListTypeIcon.__init__(self, '(', ')', window, closed=closed, obj=obj,
                 location=location, leftImgFn=self._stretchedLTupleImage,
                 rightImgFn=self._stretchedRTupleImage, typeover=typeover)
+        self.canProcessCtx = True
 
     def argIcons(self):
         """Return list of tuple argument icons, handling special case of a single element
@@ -1135,6 +1147,14 @@ class TupleIcon(ListTypeIcon):
             return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
         return text
 
+    def highlightErrors(self, errHighlight):
+        # Can't use ListTypeIcon method on naked tuples, because we set .closed to False
+        # which would trigger a highlight
+        if errHighlight is None or self.noParens:
+            icon.Icon.highlightErrors(self, errHighlight)
+        else:
+            ListTypeIcon.highlightErrors(self, errHighlight)
+
     def createAst(self):
         if not self.closed:
             raise icon.IconExecException(self, "Unclosed temporary icon")
@@ -1143,16 +1163,20 @@ class TupleIcon(ListTypeIcon):
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
             elts = []
         elif len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is not None \
-         and self.sites.argIcons[1].att is None:
+                and self.sites.argIcons[1].att is None:
             elts = [self.sites.argIcons[0].att.createAst()]  # Traditional form: (1, )
         else:
             for site in self.sites.argIcons:
                 if site.att is None:
                     raise icon.IconExecException(self, "Missing argument(s)")
-            for site in self.sites.argIcons:
-                if site.att is None:
-                    raise icon.IconExecException(self, "Missing argument(s)")
             elts = [site.att.createAst() for site in self.sites.argIcons]
+        ctx = nameicons.determineCtx(self)
+        if self.sites.attrIcon.att is None and isinstance(ctx, (ast.Store, ast.Del)):
+            for site in self.sites.argIcons:
+                if site.att is not None and not site.att.canProcessCtx:
+                    ctxName = 'assignment' if isinstance(ctx, ast.Store) else 'del'
+                    raise icon.IconExecException(site.att,
+                        "Not a valid target for %s" % ctxName)
         contentAst = ast.Tuple(elts=elts, ctx=nameicons.determineCtx(self),
                 lineno=self.id, col_offset=0)
         # If this tuple icon does not represent an existing data object or represents one
@@ -2242,6 +2266,9 @@ class CprhForIcon(icon.Icon):
         for target in self.sites.targets:
             if target.att is None:
                 raise icon.IconExecException(self, 'Missing target in comprehension')
+            if not target.att.canProcessCtx:
+                raise icon.IconExecException(target.att,
+                    "Not a valid target for assignment")
         tgtAsts = [tgt.att.createAst() for tgt in self.sites.targets]
         if len(tgtAsts) == 1:
             targetAst = tgtAsts[0]
@@ -3069,6 +3096,9 @@ def highlightErrorsForContext(site, ctx, restrictToSingle=False):
     ic = site.att
     if ic is None:
         return
+    if ctx is None:
+        ic.highlightErrors(None)
+        return
     attr = None
     if isinstance(ic, nameicons.IdentifierIcon):
         attr = ic.sites.attrIcon.att
@@ -3102,9 +3132,10 @@ def highlightErrorsForContext(site, ctx, restrictToSingle=False):
                 attr = ic.sites.attrIcon.att
     elif isinstance(ic, parenicon.CursorParenIcon):
         ic.errHighlight = None
-        highlightErrorsForContext(ic.sites.argIcon, ctx, restrictToSingle)
         if ic.closed:
             attr = ic.sites.attrIcon.att
+        argCtx = ctx if attr is None else None
+        highlightErrorsForContext(ic.sites.argIcon, argCtx, restrictToSingle)
     else:
         ic.highlightErrors(icon.ErrorHighlight("Not a valid target for %s" % ctx))
     while attr is not None:
@@ -3115,7 +3146,7 @@ def highlightErrorsForContext(site, ctx, restrictToSingle=False):
                     "Function call cannot be used in a %s context" % ctx))
                 break
             attr.highlightErrors(None)
-        elif isinstance(attr, subscripticon.SubscriptIcon):
+        elif isinstance(attr, (subscripticon.SubscriptIcon, entryicon.EntryIcon)):
             attr.highlightErrors(None)
         attr.errHighlight = None
         attr = nextAttr

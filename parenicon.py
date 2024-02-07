@@ -1,5 +1,6 @@
 # Copyright Mark Edel  All rights reserved
 from PIL import Image, ImageDraw
+import ast
 import comn
 import iconlayout
 import entryicon
@@ -7,6 +8,7 @@ import filefmt
 import listicons
 import icon
 import reorderexpr
+import nameicons
 
 class CursorParenIcon(icon.Icon):
     def __init__(self, closed=False, window=None, typeover=False, location=None):
@@ -29,6 +31,7 @@ class CursorParenIcon(icon.Icon):
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.canProcessCtx = True
         if closed:
             self.close()
 
@@ -134,6 +137,22 @@ class CursorParenIcon(icon.Icon):
         if self.closed:
             return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
         return text
+
+    def createAst(self):
+        # Paren icon is always an *extraneous* paren, so except in the case of supporting
+        # an attribute, we simply return the ast of our argument icon.
+        argIcon = self.sites.argIcon.att
+        if argIcon is None:
+            raise icon.IconExecException(self, "Empty paren (re-type to convert to "
+                "empty tuple if that was intent)")
+        if not argIcon.canProcessCtx and self.closed and self.sites.attrIcon.att is None:
+            ctx = nameicons.determineCtx(self)
+            if isinstance(ctx, ast.Store):
+                raise icon.IconExecException(argIcon, "Not a valid target for assignment")
+            if isinstance(ctx, ast.Del):
+                raise icon.IconExecException(argIcon, "Not a valid target for del")
+        argAst = argIcon.createAst()
+        return icon.composeAttrAst(self, argAst)
 
     def textRepr(self):
         if self.sites.argIcon.att is None:

@@ -94,10 +94,11 @@ class ListLayoutMgr:
     incorporate the additional space where the spine will draw, but the caller must
     invoke drawSimpleSpine to actually draw it"""
     def __init__(self, ic, siteSeriesName, leftSiteX, leftSiteY, simpleSpine=False,
-            cursorTraverseOrder=None):
+            cursorTraverseOrder=None, allowsTrailingComma=False):
         self.icon = ic
         self.siteSeriesName = siteSeriesName
         self.simpleSpine = simpleSpine
+        self.allowsTrailingComma = allowsTrailingComma
         ic.sites.addSeries(siteSeriesName, 'input', 1, [(leftSiteX, leftSiteY)],
             cursorTraverseOrder=cursorTraverseOrder)
         self.width = 0
@@ -249,7 +250,8 @@ class ListLayoutMgr:
                 minWidth = min((lo.width for lo in childLayoutList))
             childLayoutLists.append(childLayoutList)
             margin = max(margin, minWidth)
-        rowLayoutMgr = self.RowLayoutManager(childLayoutLists)
+        rowLayoutMgr = self.RowLayoutManager(childLayoutLists,
+            self.allowsTrailingComma)
         finishedLayouts = []
         # Loop, increasing margin
         while margin < sys.maxsize:
@@ -308,7 +310,7 @@ class ListLayoutMgr:
                         startIdx, rowYOffset, rowWidth = rowData[rowNum]
                         siteName = siteSeries[siteNum].name
                         lo.addSubLayout(sublayout, siteName, x, rowYOffset - centerY)
-                        x += (icon.LIST_EMPTY_ARG_WIDTH if sublayout is None else
+                        x += (self.emptyArgWidth(siteNum) if sublayout is None else
                               sublayout.width) + icon.commaImage.width - 2
                     lo.width = margin
                     if self.simpleSpine and len(rowData) >= 2:
@@ -330,11 +332,12 @@ class ListLayoutMgr:
         have already been computed.  Expects to be re-instantiated for every new layout,
         and to be used such that that the margin always increases."""
 
-        def __init__(self, layoutLists):
+        def __init__(self, layoutLists, allowsTrailingComma):
             self.layoutLists = layoutLists
             maxRows = len(layoutLists)
             self.finishedLayouts = [[] for _ in range(maxRows)]
             self.branchesToProcess = [None] * maxRows
+            self.allowsTrailingComma = allowsTrailingComma
 
         def rowLayoutChoices(self, rowStartIdx, margin):
             """Returns a list of row layouts (tuple form) and the next larger margin
@@ -346,8 +349,9 @@ class ListLayoutMgr:
             rowBranches = self.branchesToProcess[rowStartIdx]
             if rowBranches is None:
                 rowBranches = self.branchesToProcess[rowStartIdx] = []
-                for lo in self.layoutLists[rowStartIdx]:
-                    loWidth = icon.LIST_EMPTY_ARG_WIDTH if lo is None else lo.width
+                for loIdx, lo in enumerate(self.layoutLists[rowStartIdx]):
+                    loWidth = self.emptyArgWidth(rowStartIdx, loIdx) if lo is None \
+                        else lo.width
                     heapq.heappush(rowBranches, (loWidth, (0, 0, 0, 0, ()), lo))
             # Loop, incrementally incorporating new layout choices until the margin is
             # reached
@@ -379,8 +383,9 @@ class ListLayoutMgr:
                 if survivedCull:
                     if nextIdx < len(self.layoutLists):
                         maxRowWidth = 0
-                        for lo in self.layoutLists[nextIdx]:
-                            loWidth = icon.LIST_EMPTY_ARG_WIDTH if lo is None else lo.width
+                        for loIdx, lo in enumerate(self.layoutLists[nextIdx]):
+                            loWidth = self.emptyArgWidth(nextIdx, loIdx) if lo is None \
+                                else lo.width
                             rowWidth = width + loWidth + icon.commaImage.width-2
                             heapq.heappush(rowBranches, (rowWidth, newRowLayout, lo))
                             maxRowWidth = max(maxRowWidth, rowWidth)
@@ -422,6 +427,13 @@ class ListLayoutMgr:
                     return False
             return True
 
+        def emptyArgWidth(self, rowStartIdx, layoutIdx):
+            nElems = len(self.layoutLists)
+            if self.allowsTrailingComma and \
+                    rowStartIdx + layoutIdx == nElems - 1:
+                return icon.TRAILING_EMPTY_ARG_WIDTH
+            return icon.LIST_EMPTY_ARG_WIDTH
+
     def calcLayoutsAllCombos(self):
         """Deprecated version of calcLayouts for list manager that provides every
         possible layout for the list.  Deprecated because (obviously) every combination
@@ -454,10 +466,10 @@ class ListLayoutMgr:
                 rowXOffsets = []
                 rowWidths = []
                 siteOffsets = []
-                for childLayout in childLayouts:
+                for childLayoutIdx, childLayout in enumerate(childLayouts):
                     rowXOffsets.append(rowWidth)
                     if childLayout is None:
-                        childWidth = icon.LIST_EMPTY_ARG_WIDTH
+                        childWidth = self.emptyArgWidth(childLayoutIdx)
                         childHeightAbove = icon.minTxtIconHgt // 2
                         childHeightBelow = icon.minTxtIconHgt - childHeightAbove
                     else:
@@ -503,6 +515,12 @@ class ListLayoutMgr:
     def rename(self, newName):
         self.icon.sites.renameSeries(self.siteSeriesName, newName)
         self.siteSeriesName = newName
+
+    def emptyArgWidth(self, subLayoutIdx):
+        if self.allowsTrailingComma and subLayoutIdx == \
+                len(self.icon.sites.getSeries(self.siteSeriesName)) - 1:
+            return icon.TRAILING_EMPTY_ARG_WIDTH
+        return icon.LIST_EMPTY_ARG_WIDTH
 
 class ListMgrLayout(Layout):
     """Represents the part of an icon layout associated with a single variable-length

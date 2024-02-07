@@ -2159,7 +2159,11 @@ class Window:
             astToExecute = ast.Module(body, type_ignores=[])
         #print(ast.dump(astToExecute, include_attributes=True))
         # Compile the AST
-        code = compile(astToExecute, self.winName, execType)
+        try:
+            code = compile(astToExecute, self.winName, execType)
+        except Exception as excep:
+            self._handleExecErr(excep, iconToExecute)
+            return False
         # Execute the compiled AST, providing variable __windowExecContext__ for
         # mutable icons to use to pass their live data into the compiled code.
         try:
@@ -2274,7 +2278,7 @@ class Window:
                     ic.replaceChild(None, site.name)
             elems = [self.objectToIcons(value) for value in obj]
             ic.insertChildren(elems, 'argIcons', 0)
-        elif isinstance(obj, (int, float)):
+        elif isinstance(obj, (int, float)) or obj is None:
             ic = nameicons.NumericIcon(obj, window=self)
         elif isinstance(obj, complex):
             # Complex should probably be a numeric icon subtype or a specialty icon of
@@ -2290,7 +2294,12 @@ class Window:
         # entire stack (icon and text modules).
         if isinstance(excep, icon.IconExecException):
             excepIcon = excep.icon
+            message = str(excep)
+        elif isinstance(excep, SyntaxError):
+            excepIcon = self.iconIds[excep.lineno]
+            message = 'Syntax Error: ' + excep.msg
         else:
+            message = excep.__class__.__name__ + ': ' + str(excep)
             tb = excep.__traceback__.tb_next  # One level down in traceback stack
             if tb is None:
                 excepIcon = executedIcon
@@ -2301,7 +2310,6 @@ class Window:
             style = icon.STYLE_EXEC_ERR if ic==excepIcon else 0
             ic.draw(clip=iconRect, style=style)
         self.refresh(iconRect, redraw=False)
-        message = excep.__class__.__name__ + ': ' + str(excep)
         tkinter.messagebox.showerror("Error Executing", message=message)
         for ic in excepIcon.traverse():
             ic.draw(clip=iconRect)
@@ -2322,9 +2330,9 @@ class Window:
         selection to the entire code block containing ic"""
         if op in ('select', 'hier', 'left', 'block'):
             self.unselectAll()
-        #... I'm leaving the commented-out code below as a reminder that I removed it
-        #    because it's clearly wrong for comments and strings, but worried that I've
-        #    forgotten about cases where the entry icon needs to preserve a selection.
+        # ... I'm leaving the commented-out code below as a reminder that I removed it
+        #     because it's clearly wrong for comments and strings, but worried that I've
+        #     forgotten about cases where the entry icon needs to preserve a selection.
         # if ic is None or self.cursor.type == "text" and ic is self.cursor.icon:
         #    return
         if op == 'hier':
@@ -2695,15 +2703,51 @@ class Window:
             topIcons = orderedTopIcons
         else:
             deletedSeqList = None
-        # Before doing the deletion, waste some cycles to scan for else icons among the
-        # deleted icons, if one is found, mark the owner of the containing block, dirty
-        # so its highlightErrors method will re-scan and potentially clear else-related
-        # errors
+        # Before doing the deletion, waste some cycles to scan blocks under removed
+        # block-owning and pseudo-block-owning icons for icons whose error highlighting
+        # might change as a result of their removal.  Mark them dirty so error
+        # highlighting will be called on them.
         for ic in topIcons:
-            if isinstance(ic, blockicons.ElseIcon):
-                blockOwner = icon.findBlockOwner(ic)
-                if blockOwner is not None:
-                    blockOwner.markLayoutDirty()
+            if isinstance(ic, (blockicons.ElseIcon, blockicons.ExceptIcon,
+                    blockicons.FinallyIcon)):
+                # For pseudo-block-owners: scan to end of block
+                for blockIc in icon.traverseSeq(ic, includeStartingIcon=False,
+                        hier=False, skipInnerBlocks=True):
+                    if isinstance(blockIc, icon.BlockEnd):
+                        break
+                    if not blockIc.layoutDirty and isinstance(blockIc,
+                            (blockicons.ElseIcon, blockicons.ElifIcon,
+                             blockicons.ExceptIcon, blockicons.FinallyIcon)):
+                        blockIc.markLayoutDirty()
+            elif isinstance(ic, blockicons.IfIcon):
+                for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=True):
+                    if isinstance(blockIc, (blockicons.ElseIcon, blockicons.ElifIcon)):
+                        blockIc.markLayoutDirty()
+            elif isinstance(ic, blockicons.TryIcon):
+                for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=True):
+                    if isinstance(blockIc, (blockicons.ExceptIcon, blockicons.ElseIcon,
+                            blockicons.FinallyIcon)):
+                        blockIc.markLayoutDirty()
+            elif isinstance(ic, (blockicons.ForIcon, blockicons.WhileIcon)):
+                inInnerBlock = None
+                for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=False):
+                    if inInnerBlock is None and hasattr(blockIc, 'blockEnd'):
+                        inInnerBlock = blockIc.blockEnd.sites.seqOut.att
+                    if inInnerBlock is None and isinstance(blockIc, blockicons.ElseIcon):
+                        blockIc.markLayoutDirty()
+                    if blockIc is inInnerBlock:
+                        inInnerBlock = None
+                    if isinstance(blockIc, (nameicons.ContinueIcon, nameicons.BreakIcon)):
+                        blockIc.markLayoutDirty()
+            elif isinstance(ic, blockicons.DefIcon):
+                # Note that yield and yield-from can appear inside expressions, so here
+                # we're traversing the entire icon hierarchy.  Could save some time by
+                # skipping nested defs (but would only help in that unusual case).
+                for blockIc in icon.traverseOwnedBlock(ic, hier=True,
+                        skipInnerBlocks=False):
+                    if isinstance(blockIc, (nameicons.ReturnIcon, nameicons.YieldIcon,
+                            nameicons.YieldFromIcon)):
+                        blockIc.markLayoutDirty()
         # Recursively call splitDeletedIcons to build up a replacement tree for
         # each of those top-level icons.  The deletion code will return either 1) None
         # indicating no change (leave current icon), 2) Empty list (fully delete),

@@ -506,7 +506,8 @@ class AnnotationList:
             if hasattr(leftNode, 'end_lineno') and hasattr(leftNode, 'end_col_offset'):
                 return self.getByLeftArgEnd(leftNode.end_lineno, leftNode.end_col_offset)
         else:
-            if hasattr(node, 'lineno') and hasattr(node, 'col_offset'):
+            if hasattr(node, 'lineno') and hasattr(node, 'col_offset') and \
+                    not hasattr(node, 'isNakedTuple'):
                 return self.getByLineAndCol(node.lineno, node.col_offset)
         return None
 

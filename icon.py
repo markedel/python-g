@@ -38,7 +38,7 @@ boldFont = ImageFont.truetype('c:/Windows/fonts/arialbd.ttf', 12)
 textFont = ImageFont.truetype('c:/Windows/fonts/consola.ttf', 13)
 
 stmtAstClasses = {ast.Assign, ast.AugAssign, ast.While, ast.For, ast.AsyncFor, ast.If,
- ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Return, ast.With,
+ ast.Try, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Return, ast.With,
  ast.AsyncWith, ast.Delete, ast.Pass, ast.Continue, ast.Break, ast.Global, ast.Nonlocal,
  ast.Import, ast.ImportFrom, ast.Raise}
 
@@ -68,6 +68,7 @@ EMPTY_ARG_COLOR = (255, 0, 0, 30)
 
 EMPTY_ARG_WIDTH = 11
 LIST_EMPTY_ARG_WIDTH = 8
+TRAILING_EMPTY_ARG_WIDTH = 0
 
 # Options for (post layout) icon drawing
 STYLE_OUTLINE = 1
@@ -329,7 +330,11 @@ class IconExecException(Exception):
         super().__init__(self.message)
 
 class Icon:
-    def __init__(self, window=None):
+
+    # Icons that can be used in store and del contexts will override this to be True
+    canProcessCtx = False
+
+    def __init__(self, window=None, canProcessCtx=False):
         self.window = window
         self.rect = None
         self.layoutDirty = False
@@ -337,6 +342,8 @@ class Icon:
         self.sites = iconsites.IconSiteList()
         self.id = None if window is None else self.window.makeId(self)
         self.errHighlight = None
+        if canProcessCtx:
+            self.canProcessCtx = True
         window.undo.registerIconCreated(self)
 
     def draw(self, image=None, location=None, clip=None):
@@ -762,13 +769,18 @@ class Icon:
         self.sites.removeSeriesSiteById(self, siteId)
         self.markLayoutDirty()
 
-    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None):
+    def insertChild(self, child, siteIdOrSeriesName, seriesIdx=None, childSite=None,
+            preserveNoneAtZero=False):
         """Insert a child icon or empty icon site (child=None) at the specified site.
         siteIdOrName may specify either the complete siteId for a site, or (if
         seriesIdx is specified), the name for a series of sites with the index specified
         in seriesIdx.  Normally the site of the child icon is inferred by finding a
         mating site of the appropriate type, but if 'child' has multiple mating sites,
-        the site name can be specified in childSite."""
+        the site name can be specified in childSite.  The zeroth site is of a series is
+        somewhat special, in that it always exists, and when empty does not imply an
+        empty element unless a second site exists.  Normally the call will overwrite this
+        empty site, but if the desired behavior is to insert before it and leave a
+        trailing comma, set preserveNoneAtZero to True."""
         if seriesIdx is None:
             seriesName, seriesIdx = iconsites.splitSeriesSiteId(siteIdOrSeriesName)
         else:
@@ -780,26 +792,33 @@ class Icon:
         if series is None:
             print("Failed to insert icon,", child, "in series", seriesName)
             return
-        if len(series) == 1 and series[0].att is None and seriesIdx == 0:
+        if not preserveNoneAtZero and len(series) == 1 and series[0].att is None and \
+                seriesIdx == 0:
             series[0].attach(self, child, childSite)
         else:
             self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, seriesIdx)
             self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
         self.markLayoutDirty()
 
-    def insertChildren(self, children, seriesOrSiteName, seriesIdx=None, childSite=None):
+    def insertChildren(self, children, seriesOrSiteName, seriesIdx=None, childSite=None,
+            preserveNoneAtZero=False):
         """Insert a group of child icons at the specified series-site.  seriesOrSiteName
         can be either be a site name within the series, or just the name of the series,
         in which case seriesIdx must specify the index.  Normally the site of each child
         icon is inferred by finding a mating site for siteOrSeriesName, but in the (very
         unlikely) event that the children have multiple mating sites, the site name can
-        be specified in childSite."""
+        be specified in childSite.  The zeroth site is of a series is somewhat special,
+        in that it always exists, and when empty does not imply an empty element unless a
+        second site exists.  Normally the call will overwrite this empty site, but if the
+        desired behavior is to insert before it and leave a trailing comma, set
+        preserveNoneAtZero to True."""
         if seriesIdx is None:
             seriesName, seriesIdx = iconsites.splitSeriesSiteId(seriesOrSiteName)
         else:
             seriesName = seriesOrSiteName
         for i, child in enumerate(children):
-            self.insertChild(child, seriesName, seriesIdx + i, childSite)
+            self.insertChild(child, seriesName, seriesIdx + i, childSite,
+                preserveNoneAtZero=preserveNoneAtZero)
 
     def insertAttr(self, topAttrIcon):
         """Insert an attribute or chain of attributes between the icon and its current
@@ -1074,8 +1093,7 @@ class Icon:
     def createAst(self):
         """Create a Python Abstract Syntax Tree (AST) for the icon and everything below
         it in the icon hierarchy.  The AST can be passed to the Python compiler to create
-        code for execution.  In the future it may also be used to create a version-
-        control-friendly Python-text-compatible save file format."""
+        code for execution."""
         return None
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
@@ -1647,6 +1665,21 @@ def traverseSeq(ic, includeStartingIcon=True, reverse=False, hier=False,
                 yield from ic.traverse(inclStmtComment=inclStmtComments)
             else:
                 yield ic
+
+def traverseOwnedBlock(blockOwnerIc, hier=False, skipInnerBlocks=False,
+        inclStmtComments=False):
+    ic = blockOwnerIc.nextInSeq()
+    while ic is not None and ic is not blockOwnerIc.blockEnd:
+        if hier:
+            yield from ic.traverse(inclStmtComment=inclStmtComments)
+        else:
+            yield ic
+        if not hasattr(ic.sites, 'seqOut'):
+            return
+        if skipInnerBlocks and hasattr(ic, 'blockEnd'):
+            ic = ic.blockEnd.sites.seqOut.att
+        else:
+            ic = ic.sites.seqOut.att
 
 def insertSeq(seqStartIc, atIc, before=False):
     seqEndIc = findSeqEnd(seqStartIc)

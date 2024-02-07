@@ -82,10 +82,10 @@ class AssignIcon(icon.Icon):
         self.sites.add('seqOut', 'seqOut', seqSiteX, siteY + inpSeqImage.height//2 - 2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteY)
         self.tgtLists = [iconlayout.ListLayoutMgr(self, 'targets0', tgtSitesX, siteY,
-                simpleSpine=True)]
+                simpleSpine=True, allowsTrailingComma=True)]
         valueSitesX = tgtSitesX + icon.EMPTY_ARG_WIDTH + opWidth
         self.valueList = iconlayout.ListLayoutMgr(self, 'values', valueSitesX, siteY,
-                simpleSpine=True)
+                simpleSpine=True, allowsTrailingComma=True)
         self.dragSiteDrawn = False
         if location is None:
             x = y = 0
@@ -96,6 +96,7 @@ class AssignIcon(icon.Icon):
         self.rect = (x, y, x + width, y + inpSeqImage.height)
         for i in range(1, numTargets):
             self.addTargetGroup(i)
+        self.coincidentSite = 'targets0_0'
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
         needDragSite = toDragImage is not None and self.prevInSeq() is None
@@ -140,7 +141,7 @@ class AssignIcon(icon.Icon):
             raise Exception('Bad index for adding target group to assignment icon')
         # Name will be filled in by renumberTargetGroups, offset by layout
         self.tgtLists.insert(idx, iconlayout.ListLayoutMgr(self, 'targetsX', 0, 0,
-                simpleSpine=True))
+                simpleSpine=True, allowsTrailingComma=True))
         self.renumberTargetGroups(descending=True)
         self.window.undo.registerCallback(self.removeTargetGroup, idx)
         self.markLayoutDirty()
@@ -219,37 +220,45 @@ class AssignIcon(icon.Icon):
         # Get the target and value icons
         tgtLists = []
         for tgtList in self.tgtLists:
-            tgts = []
-            for site in getattr(self.sites, tgtList.siteSeriesName):
-                if site.att is None:
+            tgts = [site.att for site in getattr(self.sites, tgtList.siteSeriesName)]
+            if len(tgts) > 1 and tgts[-1] is None:
+                tgts = tgts[:-1]
+                trailingComma = True
+            else:
+                trailingComma = False
+            for tgt in tgts:
+                if tgt is None:
                     raise icon.IconExecException(self, "Missing assignment target(s)")
-                tgts.append(site.att)
-            tgtLists.append(tgts)
-        values = []
-        for site in self.sites.values:
-            if site.att is None:
+                if not tgt.canProcessCtx:
+                    raise icon.IconExecException(tgt, "Not a valid target for assignment")
+            if len(tgts) == 1 and not trailingComma:
+                tgtLists.append(tgts[0])
+            else:
+                tgtLists.append(tgts)
+        values = [site.att for site in self.sites.values]
+        if len(values) > 1 and values[-1] is None:
+            values = values[:-1]
+            valuesTrailingComma = True
+        else:
+            valuesTrailingComma = False
+        for value in values:
+            if value is None:
                 raise icon.IconExecException(self, "Missing assignment value")
-            values.append(site.att)
         # Make asts for targets and values, adding tuples if packing/unpacking is
         # specified
-        if len(values) == 1:
+        if len(values) == 1 and not valuesTrailingComma:
             valueAst = values[0].createAst()
         else:
             valueAst = ast.Tuple([v.createAst() for v in values], ctx=ast.Load(),
              lineno=self.id, col_offset=0)
         tgtAsts = []
         for tgts in tgtLists:
-            perTgtAsts = []
-            for tgt in tgts:
-                if isinstance(tgt, parenicon.CursorParenIcon):
-                    perTgtAsts.append(tgt.childAt('argIcon').createAst())
-                else:
-                    perTgtAsts.append(tgt.createAst())
-            if len(tgts) == 1:
-                tgtAst = perTgtAsts[0]
-            else:
+            if isinstance(tgts, list):
+                perTgtAsts = [tgt.createAst() for tgt in tgts]
                 tgtAst = ast.Tuple(perTgtAsts, ctx=ast.Store(), lineno=self.id,
-                 col_offset=0)
+                    col_offset=0)
+            else:
+                tgtAst = tgts.createAst()
             tgtAsts.append(tgtAst)
         return ast.Assign(tgtAsts, valueAst, lineno=self.id, col_offset=0)
 
@@ -404,7 +413,7 @@ class AssignIcon(icon.Icon):
                 removeFromSite = iconsites.makeSeriesSiteId(srcSite, 0)
                 for _ in argIcons:
                     self.replaceChild(None, removeFromSite)
-                self.insertChildren(argIcons, destSite, destIdx)
+                self.insertChildren(argIcons, destSite, destIdx, preserveNoneAtZero=True)
                 self.removeTargetGroup(removetgtGrpIdx)
                 cursorSite = iconsites.makeSeriesSiteId(destSite, cursorIdx)
                 win.cursor.setToIconSite(self, cursorSite)
@@ -465,10 +474,11 @@ class AugmentedAssignIcon(icon.Icon):
         self.targetWidth = icon.EMPTY_ARG_WIDTH
         argX = icon.dragSeqImage.width + self.targetWidth + bodyWidth
         self.valuesList = iconlayout.ListLayoutMgr(self, 'values', argX, siteYOffset,
-                simpleSpine=True)
+                simpleSpine=True, allowsTrailingComma=True)
         totalWidth = argX + self.valuesList.width - 2
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
+        self.coincidentSite = 'targetIcon'
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if toDragImage is None:
@@ -507,7 +517,8 @@ class AugmentedAssignIcon(icon.Icon):
             # Commas
             self.drawList += self.valuesList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
+        self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True,
+            allowTrailingComma=True)
         if temporaryDragSite:
             self.drawList = None
 
@@ -587,16 +598,27 @@ class AugmentedAssignIcon(icon.Icon):
 
     def createAst(self):
         # Get the target and value icons
-        if self.sites.targetIcon.att is None:
+        tgtIc = self.sites.targetIcon.att
+        if tgtIc is None:
             raise icon.IconExecException(self, "Missing assignment target")
+        if not tgtIc.canProcessCtx:
+            raise icon.IconExecException(tgtIc, "Not a valid target for assignment")
+        if isinstance(tgtIc, listicons.ListIcon):
+            # List icons are ok in storage context, but not augmented assign
+            raise icon.IconExecException(tgtIc,
+                "List is not a valid target for augmented assignment")
         tgtAst = self.sites.targetIcon.att.createAst()
-        values = []
-        for site in self.sites.values:
-            if site.att is None:
+        values = [site.att for site in self.sites.values]
+        if len(values) > 1 and values[-1] is None:
+            values = values[:-1]
+            trailingComma = True
+        else:
+            trailingComma = False
+        for value in values:
+            if value is None:
                 raise icon.IconExecException(self, "Missing assignment value")
-            values.append(site.att)
         # If there are multiple values, make a tuple out of them
-        if len(values) == 1:
+        if len(values) == 1 and not trailingComma:
             valueAst = values[0].createAst()
         else:
             valueAst = ast.Tuple([v.createAst() for v in values], ctx=ast.Load(),

@@ -121,6 +121,7 @@ class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
         TextIcon.__init__(self, name, window, location)
         self.name = name
+        self.canProcessCtx = True
 
     def execute(self):
         if self.name in namedConsts:
@@ -150,7 +151,9 @@ class IdentifierIcon(TextIcon):
         # if it is not.
         if ctx is None or listicons.attrValidForContext(self, ctx):
             return TextIcon.createSaveText(self, parentBreakLevel, contNeeded, export)
-        #... I think this whole method can go away
+        # Currently, this code is never reached, because parent icons handle this for us
+        # in every case.  It's left here, to be ready if something changes, as it would
+        # be confusing for an icon not to be able to handle its own save-text generation.
         text = TextIcon.createSaveText(self, parentBreakLevel+1, contNeeded, export)
         text.wrapCtxMacro(parentBreakLevel, needsCont=contNeeded)
         return text
@@ -278,8 +281,9 @@ class AttrIcon(icon.Icon):
         return text
 
     def createAst(self, attrOfAst):
+        # No need to check ctx, since all are acceptable
         return icon.composeAttrAst(self, ast.Attribute(value=attrOfAst, attr=self.name,
-         lineno=self.id, col_offset=0, ctx=determineCtx(self)))
+            lineno=self.id, col_offset=0, ctx=determineCtx(self)))
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
@@ -401,12 +405,22 @@ class ContinueIcon(NoArgStmtIcon):
     def createAst(self):
         return ast.Continue(lineno=self.id, col_offset=0)
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None and isOutsideOfLoop(self):
+            errHighlight = "continue statement outside of loop"
+        icon.Icon.highlightErrors(self, errHighlight)
+
 class BreakIcon(NoArgStmtIcon):
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "break", window, location)
 
     def createAst(self):
         return ast.Break(lineno=self.id, col_offset=0)
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None and isOutsideOfLoop(self):
+            errHighlight = "break statement outside of loop"
+        icon.Icon.highlightErrors(self, errHighlight)
 
 class SeriesStmtIcon(icon.Icon):
     def __init__(self, stmt, window, seqIndent=False, requireArg=False,
@@ -575,6 +589,11 @@ class ReturnIcon(SeriesStmtIcon):
             allowTrailingComma=True)
         return text
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None and isOutsideOfDef(self):
+            errHighlight = icon.ErrorHighlight("return statement outside of def")
+        icon.Icon.highlightErrors(self, errHighlight)
+
 class DelIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "del", window, requireArg=True, location=location)
@@ -591,6 +610,8 @@ class DelIcon(SeriesStmtIcon):
         for site in self.sites.values:
             if site.att is None:
                 raise icon.IconExecException(self, "Missing argument(s)")
+            if not site.att.canProcessCtx:
+                raise icon.IconExecException(site.att, "Not a valid target for del")
         targetAsts = [site.att.createAst() for site in self.sites.values]
         return ast.Delete(targetAsts, lineno=self.id, col_offset=0)
 
@@ -1574,6 +1595,11 @@ class YieldIcon(icon.Icon):
                 return YieldFromIcon(window=self.window), text[-1]
         return None
 
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None and isOutsideOfDef(self.topLevelParent()):
+            errHighlight = icon.ErrorHighlight("yield statement outside of def")
+        icon.Icon.highlightErrors(self, errHighlight)
+
     def backspace(self, siteId, evt):
         return backspaceSeriesStmt(self, siteId, evt, "yield")
 
@@ -1599,6 +1625,11 @@ class YieldFromIcon(opicons.UnaryOpIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         # Superclass UnaryOp specifies op keyword, which this does not have
         return self._serialize(offset, iconsToCopy)
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is None and isOutsideOfDef(self.topLevelParent()):
+            errHighlight = icon.ErrorHighlight("'yield from' outside of def")
+        icon.Icon.highlightErrors(self, errHighlight)
 
     def createAst(self):
         if self.arg() is None:
@@ -2153,6 +2184,25 @@ def createNameFieldSaveText(brkLvl, site, needsCont, export):
 # circular imports, unfortunately.  Here, the import is deferred far enough down the file
 # that the dependencies can resolve.
 import blockicons
+
+def isOutsideOfDef(iconToTest):
+    for ic in icon.traverseSeq(iconToTest, includeStartingIcon=False, reverse=True,
+            skipInnerBlocks=True):
+        if isinstance(ic, blockicons.ClassDefIcon):
+            return True
+        if isinstance(ic, blockicons.DefIcon):
+            return False
+    return True
+
+def isOutsideOfLoop(iconToTest):
+    for ic in icon.traverseSeq(iconToTest, includeStartingIcon=False, reverse=True,
+            skipInnerBlocks=True):
+        if isinstance(ic, (blockicons.ClassDefIcon, blockicons.DefIcon)):
+            return True
+        if isinstance(ic, (blockicons.ForIcon, blockicons.WhileIcon)):
+            return False
+    return True
+
 
 def determineCtx(ic):
     """Figure out the load/store/delete context of a given icon.  Returns an object

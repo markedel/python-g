@@ -373,11 +373,11 @@ class SubscriptIcon(icon.Icon):
                 stepAst = self.sites.stepIcon.att.createAst()
             else:
                 stepAst = None
-            slice = ast.Slice(indexAst, upperAst, stepAst)
+            sliceAst = ast.Slice(indexAst, upperAst, stepAst)
         else:
-            slice = ast.Index(value=indexAst)
-        return icon.composeAttrAst(self, ast.Subscript(value=attrOfAst, slice=slice,
-         lineno=self.id, col_offset=0, ctx=nameicons.determineCtx(self)))
+            sliceAst = ast.Index(value=indexAst)
+        return icon.composeAttrAst(self, ast.Subscript(value=attrOfAst, slice=sliceAst,
+            lineno=self.id, col_offset=0, ctx=nameicons.determineCtx(self)))
 
     def textEntryHandler(self, entryIc, text, onAttr):
         # Typeover for end-brackets is handled by hard-coded parsing because
