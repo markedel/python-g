@@ -2708,46 +2708,7 @@ class Window:
         # might change as a result of their removal.  Mark them dirty so error
         # highlighting will be called on them.
         for ic in topIcons:
-            if isinstance(ic, (blockicons.ElseIcon, blockicons.ExceptIcon,
-                    blockicons.FinallyIcon)):
-                # For pseudo-block-owners: scan to end of block
-                for blockIc in icon.traverseSeq(ic, includeStartingIcon=False,
-                        hier=False, skipInnerBlocks=True):
-                    if isinstance(blockIc, icon.BlockEnd):
-                        break
-                    if not blockIc.layoutDirty and isinstance(blockIc,
-                            (blockicons.ElseIcon, blockicons.ElifIcon,
-                             blockicons.ExceptIcon, blockicons.FinallyIcon)):
-                        blockIc.markLayoutDirty()
-            elif isinstance(ic, blockicons.IfIcon):
-                for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=True):
-                    if isinstance(blockIc, (blockicons.ElseIcon, blockicons.ElifIcon)):
-                        blockIc.markLayoutDirty()
-            elif isinstance(ic, blockicons.TryIcon):
-                for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=True):
-                    if isinstance(blockIc, (blockicons.ExceptIcon, blockicons.ElseIcon,
-                            blockicons.FinallyIcon)):
-                        blockIc.markLayoutDirty()
-            elif isinstance(ic, (blockicons.ForIcon, blockicons.WhileIcon)):
-                inInnerBlock = None
-                for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=False):
-                    if inInnerBlock is None and hasattr(blockIc, 'blockEnd'):
-                        inInnerBlock = blockIc.blockEnd.sites.seqOut.att
-                    if inInnerBlock is None and isinstance(blockIc, blockicons.ElseIcon):
-                        blockIc.markLayoutDirty()
-                    if blockIc is inInnerBlock:
-                        inInnerBlock = None
-                    if isinstance(blockIc, (nameicons.ContinueIcon, nameicons.BreakIcon)):
-                        blockIc.markLayoutDirty()
-            elif isinstance(ic, blockicons.DefIcon):
-                # Note that yield and yield-from can appear inside expressions, so here
-                # we're traversing the entire icon hierarchy.  Could save some time by
-                # skipping nested defs (but would only help in that unusual case).
-                for blockIc in icon.traverseOwnedBlock(ic, hier=True,
-                        skipInnerBlocks=False):
-                    if isinstance(blockIc, (nameicons.ReturnIcon, nameicons.YieldIcon,
-                            nameicons.YieldFromIcon)):
-                        blockIc.markLayoutDirty()
+            blockicons.markDependentStmts(ic)
         # Recursively call splitDeletedIcons to build up a replacement tree for
         # each of those top-level icons.  The deletion code will return either 1) None
         # indicating no change (leave current icon), 2) Empty list (fully delete),

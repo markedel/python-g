@@ -478,9 +478,11 @@ class WhileIcon(icon.Icon):
             return None
         # Cursor is directly on condition site.  Remove icon and replace with entry
         # icon, converting condition to pending argument
+        markDependentStmts(self)
         self.window.backspaceIconToEntry(evt, self, "while", "condIcon")
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        markDependentStmts(self)
         if clickPos is not None:
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
             textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
@@ -822,6 +824,7 @@ class ForIcon(icon.Icon):
                 listicons.backspaceComma(self, siteId, evt)
 
     def _becomeEntryIcon(self):
+        markDependentStmts(self)
         win = self.window
         targetIcons = [s.att for s in self.sites.targets]
         iterIcons = [s.att for s in self.sites.iterIcons]
@@ -995,6 +998,7 @@ class IfIcon(icon.Icon):
         return ast.If(testAst, **bodyAsts, lineno=self.id, col_offset=0)
 
     def backspace(self, siteId, evt):
+        markDependentStmts(self)
         if siteId != "condIcon":
             return None
         # Cursor is directly on condition site.  Remove icon and replace with entry
@@ -1002,6 +1006,7 @@ class IfIcon(icon.Icon):
         self.window.backspaceIconToEntry(evt, self, "if", "condIcon")
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        markDependentStmts(self)
         if clickPos is not None:
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
             textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
@@ -1238,11 +1243,13 @@ class TryIcon(icon.Icon):
         icon.Icon.select(self.blockEnd, select)
 
     def backspace(self, siteId, evt):
+        markDependentStmts(self)
         if siteId != "attrIcon":
             return None
         self.window.backspaceIconToEntry(evt, self, "try")
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        markDependentStmts(self)
         if clickPos is not None:
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
             textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
@@ -1375,6 +1382,7 @@ class ExceptIcon(icon.Icon):
         return snapLists
 
     def backspace(self, siteId, evt):
+        markDependentStmts(self)
         if siteId != "typeIcon":
             return None
         # Cursor is directly on type site.  Remove icon and replace with entry
@@ -1382,6 +1390,7 @@ class ExceptIcon(icon.Icon):
         self.window.backspaceIconToEntry(evt, self, "except", "typeIcon")
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        markDependentStmts(self)
         if clickPos is not None:
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
             textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
@@ -1561,11 +1570,13 @@ class FinallyIcon(icon.Icon):
         return [layout]
 
     def backspace(self, siteId, evt):
+        markDependentStmts(self)
         if siteId != "attrIcon":
             return None
         self.window.backspaceIconToEntry(evt, self, "finally")
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        markDependentStmts(self)
         if clickPos is not None:
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
             textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
@@ -1697,11 +1708,13 @@ class ElseIcon(icon.Icon):
         return snapLists
 
     def backspace(self, siteId, evt):
+        markDependentStmts(self)
         if siteId != "attrIcon":
             return None
         self.window.backspaceIconToEntry(evt, self, "else")
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        markDependentStmts(self)
         if clickPos is not None:
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
             textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
@@ -2116,6 +2129,7 @@ class DefOrClassIcon(icon.Icon):
         return None
 
     def _becomeEntryIcon(self):
+        markDependentStmts(self)
         self.window.requestRedraw(self.topLevelParent().hierRect())
         nameIcon = self.childAt('nameIcon')
         if self.hasArgs:
@@ -2911,6 +2925,50 @@ def createBlockAsts(ic):
     if isinstance(ic, TryIcon):
         _consolidateHandlerBlocks(paramDict, handlerIcs)
     return paramDict
+
+def markDependentStmts(ic):
+    """Given a top (stmt-level) icon about to be deleted, scan blocks under removed
+    block-owning and pseudo-block-owning icons for icons whose error highlighting might
+    change as a result of their removal.  Mark them dirty so error highlighting will be
+    called on them.  While the backspace and becomeEntryIcon methods of these icons
+    call this directly, it is also safe to call on any top-level icon and will only act
+    on the icon types that will invalidate the highlighting of icons that follow them."""
+    if isinstance(ic, (ElseIcon, ExceptIcon, FinallyIcon)):
+        # For pseudo-block-owners: scan to end of block
+        for blockIc in icon.traverseSeq(ic, includeStartingIcon=False, hier=False,
+                skipInnerBlocks=True):
+            if isinstance(blockIc, icon.BlockEnd):
+                break
+            if not blockIc.layoutDirty and isinstance(blockIc, (ElseIcon, ElifIcon,
+                    ExceptIcon, FinallyIcon)):
+                blockIc.markLayoutDirty()
+    elif isinstance(ic, IfIcon):
+        for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=True):
+            if isinstance(blockIc, (ElseIcon, ElifIcon)):
+                blockIc.markLayoutDirty()
+    elif isinstance(ic, TryIcon):
+        for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=True):
+            if isinstance(blockIc, (ExceptIcon, ElseIcon, FinallyIcon)):
+                blockIc.markLayoutDirty()
+    elif isinstance(ic, (ForIcon, WhileIcon)):
+        inInnerBlock = None
+        for blockIc in icon.traverseOwnedBlock(ic, skipInnerBlocks=False):
+            if inInnerBlock is None and hasattr(blockIc, 'blockEnd'):
+                inInnerBlock = blockIc.blockEnd.sites.seqOut.att
+            if inInnerBlock is None and isinstance(blockIc, ElseIcon):
+                blockIc.markLayoutDirty()
+            if blockIc is inInnerBlock:
+                inInnerBlock = None
+            if isinstance(blockIc, (nameicons.ContinueIcon, nameicons.BreakIcon)):
+                blockIc.markLayoutDirty()
+    elif isinstance(ic, DefIcon):
+        # Note that yield and yield-from can appear inside expressions, so here
+        # we're traversing the entire icon hierarchy.  Could save some time by
+        # skipping nested defs (but would only help in that unusual case).
+        for blockIc in icon.traverseOwnedBlock(ic, hier=True, skipInnerBlocks=False):
+            if isinstance(blockIc, (nameicons.ReturnIcon, nameicons.YieldIcon,
+                    nameicons.YieldFromIcon)):
+                blockIc.markLayoutDirty()
 
 def _consolidateHandlerBlocks(paramDict, handlerIcs):
     """createBlockAsts puts each except clause block of a try statement in a separate
