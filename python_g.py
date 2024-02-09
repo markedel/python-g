@@ -25,7 +25,9 @@ import time
 import tkinter.messagebox
 import ctypes
 import reorderexpr
-import cProfile
+import contextlib
+import sys
+# import cProfile
 
 WINDOW_BG_COLOR = (255, 255, 255)
 #WINDOW_BG_COLOR = (128, 128, 128)
@@ -209,8 +211,8 @@ class Window:
                 self.winName = filename
                 self.filename = filename
         self.top.title(WIN_TITLE_PREFIX + self.winName)
-        self.frame = tk.Frame(self.top)
-        self.menubar = tk.Menu(self.frame)
+        outerFrame = tk.Frame(self.top)
+        self.menubar = tk.Menu(outerFrame)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="File", menu=menu, underline=0)
         menu.add_command(label="New File", accelerator="Ctrl+N", command=self._newCb)
@@ -244,7 +246,11 @@ class Window:
         if size is None:
             size = DEFAULT_WINDOW_SIZE
         width, height = size
-        self.imgFrame = tk.Frame(self.frame, bg="", width=width, height=height)
+        panes = tk.PanedWindow(outerFrame, orient=tk.VERTICAL, sashwidth=4,
+            width=width, height=height)
+
+        iconFrame = tk.Frame(panes, background='white')
+        self.imgFrame = tk.Frame(iconFrame, bg="")
         self.imgFrame.bind("<Expose>", self._exposeCb)
         self.imgFrame.bind("<Configure>", self._configureCb)
         self.imgFrame.bind("<Button-1>", self._buttonPressCb)
@@ -281,17 +287,34 @@ class Window:
         self.top.bind("<Alt-l>", self._undebugLayoutCb)
         self.top.bind("<KeyRelease-Alt_L>", self._altReleaseCb)
         self.imgFrame.grid(row=0, column=0, sticky=tk.NSEW)
-        self.xScrollbar = tk.Scrollbar(self.frame, orient=tk.HORIZONTAL,
-         width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
+        self.xScrollbar = tk.Scrollbar(iconFrame, orient=tk.HORIZONTAL,
+            width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
         self.xScrollbar.grid(row=1, column=0, sticky=tk.EW)
-        self.yScrollbar = tk.Scrollbar(self.frame,
-         width=SCROLL_BAR_WIDTH, command=self._yScrollCb)
+        self.yScrollbar = tk.Scrollbar(iconFrame,
+            width=SCROLL_BAR_WIDTH, command=self._yScrollCb)
         self.yScrollbar.grid(row=0, column=2, sticky=tk.NS)
         self.scrollOrigin = 0, 0
         self.scrollExtent = 0, 0, width, height
-        self.frame.grid_rowconfigure(0, weight=1)
-        self.frame.grid_columnconfigure(0, weight=1)
-        self.frame.pack(fill=tk.BOTH, expand=True)
+        iconFrame.grid_rowconfigure(0, weight=1)
+        iconFrame.grid_columnconfigure(0, weight=1)
+        #iconFrame.pack(fill=tk.BOTH, expand=True) #... try removing
+        panes.add(iconFrame, minsize=20, stretch='always')
+
+        outputFrame = tk.Frame(panes)
+        self.outputPane = tk.Text(outputFrame, wrap=tk.WORD, height=1, takefocus=0)
+        self.outputPane.insert('0.0', 'This is a test')
+        self.outputPane.bind("<ButtonRelease-1>", self._outputSelectCb)
+        self.outputPane.config(state=tk.DISABLED)
+        self.outputPane.grid(row=0, column=0, sticky=tk.NSEW)
+        outputScrollbar = tk.Scrollbar(outputFrame,  width=SCROLL_BAR_WIDTH,
+            command=self.outputPane.yview)
+        outputScrollbar.grid(row=0, column=1, sticky=tk.NS)
+        self.outputPane.config(yscrollcommand=outputScrollbar.set)
+        outputFrame.grid_columnconfigure(0, weight=1)
+        outputFrame.grid_rowconfigure(0, weight=1)
+        panes.add(outputFrame, minsize=20, stretch='never', sticky=tk.NSEW)
+        panes.pack(fill=tk.BOTH, expand=1)
+        outerFrame.pack(fill=tk.BOTH, expand=1)
 
         self.listPopup = tk.Menu(self.imgFrame, tearoff=0)
         self.listPopupVal = tk.StringVar()
@@ -1096,10 +1119,21 @@ class Window:
             # In order to handle double-click, button release actions are run not done
             # until we know that a double-click can't still happen (_delayedBtnUpActions).
             delay = DOUBLE_CLICK_TIME - (msTime() - self.buttonDownTime)
-            self.frame.after(delay, self._delayedBtnUpActions, evt)
+            self.top.after(delay, self._delayedBtnUpActions, evt)
         else:
             # Do the button-release actions immediately, double-click wait has passed.
             self._delayedBtnUpActions(evt)
+
+    def _outputSelectCb(self, evt):
+        selection = self.outputPane.tag_ranges(tk.SEL)
+        if len(selection) == 0:
+            return
+        # Copy the selected text to clipboard and clear the selection
+        left, right = selection[:2]
+        text = self.outputPane.get(left, right)
+        self.top.clipboard_clear()
+        self.top.clipboard_append(text, type='STRING')
+        self.outputPane.tag_remove(tk.SEL, "0.0", tk.END)
 
     def _delayedBtnUpActions(self, evt):
         """Button-up actions (which may be delayed to wait for possible double-click)."""
@@ -1262,7 +1296,7 @@ class Window:
                 pastedIcons = filefmt.parseTextToIcons(text, self)
                 # Not usable python code, put in to single icon as string
                 if pastedIcons is None:
-                    pastedIcons = [nameicons.TextIcon(repr(text), self, (0, 0))]
+                    pastedIcons = [stringicon.StringIcon(repr(text), self)]
             else:
                 # No text available in a form we can use.  Try for image
                 clipImage = ImageGrab.grabclipboard()
@@ -2167,10 +2201,11 @@ class Window:
         # Execute the compiled AST, providing variable __windowExecContext__ for
         # mutable icons to use to pass their live data into the compiled code.
         try:
-            if execType == 'eval':
-                result = eval(code, self.globals, self.locals)
-            else:
-                result = exec(code, self.globals, self.locals)
+            with self.streamToOutputPane():
+                if execType == 'eval':
+                    result = eval(code, self.globals, self.locals)
+                else:
+                    result = exec(code, self.globals, self.locals)
         except Exception as excep:
             self._handleExecErr(excep, iconToExecute)
             return False
@@ -2231,7 +2266,8 @@ class Window:
             return False
         code = compile(astToExecute, self.winName, 'eval')
         try:
-            eval(code, self.globals, self.locals)
+            with self.streamToOutputPane():
+                eval(code, self.globals, self.locals)
         except Exception as excep:
             self._handleExecErr(excep, ic)
             return False
@@ -3503,6 +3539,26 @@ class Window:
         the future."""
         appData.resetBlinkTimer(holdTime=holdTime)
 
+    @contextlib.contextmanager
+    def streamToOutputPane(self, includeStderr=True):
+        """Redirect stdout and stderr streams to deposit text in the window's output
+        pane.  This is done only during execution of the already-compiled code and inside
+        of execution error handling, so hopefully will only ever apply to the user's
+        actual output, and not to any of our crashes or diagnostic output.  Written as a
+        context manager due to the devastating consequences of not restoring the output
+        streams at the end of execution and likelihood of exceptions being involved."""
+        origStdout = sys.stdout
+        sys.stdout = StreamToTextWidget(self.outputPane)
+        if includeStderr:
+            origStderr = sys.stderr
+            sys.stderr = StreamToTextWidget(self.outputPane)
+        try:
+            yield None
+        finally:
+            sys.stdout = origStdout
+            if includeStderr:
+                sys.stderr = origStderr
+
 class Page:
     """The fact that icons know their own window positions becomes problematic for very
     large files, because tiny edits can relocate every single icon below them in the
@@ -4544,6 +4600,21 @@ def restoreFromCanonicalInterchangeIcon(ic, siteType):
             topIconsToRemove.append(nextIc)  # Block can have 'pass' icon
         topIconsToRemove.append(ic.blockEnd)
     return subsIcons, topIconsToRemove
+
+class StreamToTextWidget:
+    """Imitate an output text stream and append any text written to it to a specified
+    Tkinter text widget."""
+    def __init__(self, textWidget):
+        self.widget = textWidget
+
+    def write(self, str):
+        self.widget.config(state=tk.NORMAL)
+        self.widget.insert('end', str)
+        self.widget.see('end')
+        self.widget.config(state=tk.DISABLED)
+
+    def flush(self):
+        pass
 
 #... Move to OS-dependent module (once that's created)
 class POINT(ctypes.Structure):
