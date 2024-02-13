@@ -644,13 +644,15 @@ class GlobalIcon(SeriesStmtIcon):
         if text == ',':
             return "comma"
         elif onAttr:
-            return "reject"
+            return "reject:global statement expects only unqualified identifiers"
         elif text.isidentifier():
             return "accept"
-        elif text[-1] in ' ,' and text[:-1].isidentifier() and \
-                text[:-1] not in entryicon.keywords:
+        elif text[-1] in ' ,' and text[:-1].isidentifier():
+            if text[:-1] in entryicon.keywords:
+                return "reject:%s is a reserved keyword and cannot be used " \
+                    "as a variable name" % text[:-1]
             return IdentifierIcon(text[:-1], self.window), text[-1]
-        return 'reject'
+        return "reject:Only valid identifiers can be declared global"
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
@@ -708,13 +710,15 @@ class NonlocalIcon(SeriesStmtIcon):
         if text == ',':
             return "comma"
         elif onAttr:
-            return "reject"
+            return "reject:nonlocal statement expects only unqualified identifiers"
         elif text.isidentifier():
             return "accept"
-        elif text[-1] in ' ,' and text[:-1].isidentifier() and \
-                text[:-1] not in entryicon.keywords:
+        elif text[-1] in ' ,' and text[:-1].isidentifier():
+            if text[:-1] in entryicon.keywords:
+                return "reject:%s is a reserved keyword and cannot be used " \
+                    "as a variable name" % text[:-1]
             return IdentifierIcon(text[:-1], self.window), text[-1]
-        return 'reject'
+        return 'reject:Only valid identifiers can be declared nonlocal'
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
@@ -802,10 +806,11 @@ class ImportIcon(SeriesStmtIcon):
                 return "comma"
             name = name.rstrip(',')
             if not name.isidentifier():
-                return "reject"
+                return "reject:as requires a simple identifier as module name"
             if text[-1] in (' ', ','):
                 if text[:-1] in entryicon.keywords:
-                    return "reject"
+                    return "reject:%s is a reserved keyword and cannot be used " \
+                           "as a module identifier" % text[:-1]
                 return IdentifierIcon(name, self.window), text[-1]
             return "accept"
         elif text == ',':
@@ -817,17 +822,20 @@ class ImportIcon(SeriesStmtIcon):
             elif text in ('as', 'as '):
                 return infixicon.AsIcon(self.window), ' ' if text == 'as ' else None
             elif text[0] != '.':
-                return "reject"
+                return "reject:Not a valid module identifier, must be name or " \
+                    "dot-separated names"
             elif text[1:].isidentifier():
                 return "accept"
             elif text[-1] in ' .,' and text[1:-1].isidentifier():
                 return AttrIcon(text[:-1], self.window), text[-1]
         elif text.isidentifier():
             return "accept"
-        elif text[-1] in ' .,' and text[:-1].isidentifier() and \
-                text[:-1] not in entryicon.keywords:
+        elif text[-1] in ' .,' and text[:-1].isidentifier():
+            if text[:-1] in entryicon.keywords:
+                return "reject:%s is a reserved keyword and cannot be used " \
+                       "as a module name" % text[:-1]
             return IdentifierIcon(text[:-1], self.window), text[-1]
-        return 'reject'
+        return 'reject:Not a valid module name'
 
     def highlightErrors(self, errHighlight):
         # textEntryHandler prohibits typing of anything but correct syntax, but we
@@ -1168,17 +1176,18 @@ class ImportFromIcon(icon.Icon):
                     if delim == '':
                         return 'accept'
                     if not self.relDelimPattern.fullmatch(delim):
-                        return "reject"
+                        return "reject:Module names must be dot-separated identifiers"
                     return RelativeImportIcon(len(text) - len(delim), self.window), delim
             if self.sites.moduleIcon.att is entryIc or isinstance(entryIc.parent(),
                     RelativeImportIcon):
                 name = text.rstrip(' .')
                 if not name.isidentifier():
                     # The only valid text for the module site itself, is an identifier
-                    return "reject"
+                    return "reject:Module name must be a valid identifier"
                 if text[-1] in ' .':
                     if name in entryicon.keywords:
-                        return "reject"
+                        return "reject:%s is a reserved keyword and cannot be used " \
+                            "in a module name" % name
                     else:
                         return IdentifierIcon(name, self.window), text[-1]
                 return "accept"
@@ -1188,16 +1197,17 @@ class ImportFromIcon(icon.Icon):
                     return "typeover"
                 # Allow only simple attributes to be typed
                 if text[0] != '.':
-                    return "reject"
+                    return "reject:module name can only be identifier or dot-saparated " \
+                        "identifiers"
                 elif text == '.' or text[1:].isidentifier():
                     return "accept"
                 elif text[-1] in ' .' and text[1:-1].isidentifier():
                     return AttrIcon(text[1:-1], self.window), text[-1]
-            return "reject"
+            return "reject:Not a valid module name"
         elif siteId[:12] == 'importsIcons':
             parent = entryIc.parent()
             if isinstance(parent, listicons.StarIcon):
-                return "reject"
+                return "reject:Nothing can follow *"
             if parent is self and len(self.sites.importsIcons) == 1 and text == '*':
                 return listicons.StarIcon(self.window), None
             if parent is self and text in ('as ', 'as,'):
@@ -1208,10 +1218,11 @@ class ImportFromIcon(icon.Icon):
                     return "comma"
                 name = name.rstrip(',')
                 if not name.isidentifier():
-                    return "reject"
+                    return "reject:Modules can only be named with simple identifier"
                 if text[-1] in (' ', ','):
                     if name in entryicon.keywords:
-                        return "reject"
+                        return "reject:%s is a reserved keyword and cannot be used " \
+                           "as a module identifier" % name
                     else:
                         return IdentifierIcon(name, self.window), text[-1]
                 return "accept"
@@ -1223,7 +1234,7 @@ class ImportFromIcon(icon.Icon):
                         return infixicon.AsIcon(self.window), None
                     if text == 'a':
                         return "accept"
-            return "reject"
+            return "reject:Not a valid target for import"
         return None
 
     def highlightErrors(self, errHighlight):
@@ -2037,7 +2048,8 @@ class DecoratorIcon(icon.Icon):
         if self.siteOf(entryIc) != 'attrIcon':
             return None
         if text != '(':
-            return "reject"
+            return "reject:A decorator name can be followed by '(' if it takes " \
+                "arguments, but nothing else"
 
     def snapLists(self, forCursor=False):
         # Make snapping on attribute site conditional on icon being a call icon

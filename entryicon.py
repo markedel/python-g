@@ -617,7 +617,8 @@ class EntryIcon(icon.Icon):
         only adds one if it modified the icon structure, and may make changes to the
         icon structure *after* adding the boundary, leaving the undo stack
         "unterminated".  This also handles spaces, as both a command to complete the
-        current entry, and as in internal space following "async" and 'not"."""
+        current entry, and as in internal space following "async" and 'not".  Returns
+        error string on failure, None on success."""
         if char == ' ' and not (self.text[:3] == 'not' and self.cursorPos == 3 and
                 self.attachedToAttribute() or
                 self.text[:5] in ('async', 'yield') and self.cursorPos == 5):
@@ -630,7 +631,8 @@ class EntryIcon(icon.Icon):
         else:
             newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
             newCursorPos = self.cursorPos + len(char)
-        if not self._setText(newText, newCursorPos):
+        rejectMessage = self._setText(newText, newCursorPos)
+        if rejectMessage is not None:
             # the resulting text was rejected.  If cursorPos was as the end of the
             # entry (or space was typed to add a delimiter), beep and do not update.
             # If not, just enter the updated text
@@ -638,19 +640,21 @@ class EntryIcon(icon.Icon):
                 if char == ' ':
                     # User added space delimiter.  If we had something that would
                     # otherwise have been self delimiting, try again w/o the delimiter.
-                    if not self._setText(newText[:-1], newCursorPos-1):
-                        cursors.beep()
-                        return
+                    parseResult, _, _ = self.parseEntryText(self.text)
+                    if parseResult == 'accept':
+                        return rejectMessage
+                    if self._setText(self.text, newCursorPos-1) is not None:
+                        return rejectMessage
                 else:
-                    # Beep and prohibit the character
-                    cursors.beep()
-                    return
+                    # Prohibit the character (caller will beep and present message)
+                    return rejectMessage
             else:
                 # Allow insertion, even though it's bad, because user is "editing", and
                 # may go through bad states to get to good ones.
                 self.text = newText
                 self.cursorPos = newCursorPos
         self.markLayoutDirty()
+        return None
 
     def backspaceInText(self, evt=None):
         if self.text != "" and self.cursorPos != 0:
@@ -865,7 +869,7 @@ class EntryIcon(icon.Icon):
             # parens to call parens, but for now, just try to focus out and beep and
             # do nothing if we can't
             if self.canPlaceEntryText(requireArgPlacement=True):
-                if not self._setText(self.text + ' ', len(self.text)):
+                if self._setText(self.text + ' ', len(self.text)) is not None:
                     cursors.beep()
             else:
                 cursors.beep()
@@ -1158,12 +1162,13 @@ class EntryIcon(icon.Icon):
 
     def parseEntryText(self, newText):
         """Parse proposed text for the entry icon.  Returns three values: 1) the parse
-        result, one of "accept", "reject", "typeover", "comma", "colon", "openBracket",
-        "end"bracket" "openBrace", "endBrace", "openParen", "endParen", "makeFunction",
-        "makeSubscript", or a pair of a created icon and delimiter.  2) If the text was
-        processed by a per-icon textHandler method, the responsible icon, 3) A boolean
-        value indicating that the text represents a statement that needs to be prepended
-        to the attached icon, as opposed to being inserted at the site."""
+        result, one of "accept", "reject:reason", "typeover", "comma", "colon",
+        "openBracket", "endBracket" "openBrace", "endBrace", "openParen", "endParen",
+        "makeFunction", "makeSubscript", or a pair of a created icon and delimiter.
+        2) If the text was processed by a per-icon textHandler method, the responsible
+        icon, 3) A boolean  value indicating that the text represents a statement that
+        needs to be prepended to the attached icon, as opposed to being inserted at the
+        site."""
         if self.attachedToAttribute():
             parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=True)
             if parseResult is None:
@@ -1177,21 +1182,25 @@ class EntryIcon(icon.Icon):
                 forSeries = self.attachedIcon() is not None and \
                     iconsites.isSeriesSiteId(self.attachedSite())
                 parseResult = parseExprText(newText, self.window, forSeriesSite=forSeries)
-        if parseResult == "reject" and self.attachedSiteType() == 'input':
+        if parseResult[:7] == "reject:" and self.attachedSiteType() == 'input':
             coincidentSite = self.attachedIcon().hasCoincidentSite()
-            if coincidentSite is not None and coincidentSite == self.attachedSite() and \
-                    iconsites.highestCoincidentIcon(self.attachedIcon()).parent() is None:
-                # Site is coincident with the start of the statement. We might be able to
-                # prepend a top-level statement
-                altParseResult = parseTopLevelText(newText, self.window)
-                if len(altParseResult) == 2 and \
-                        altParseResult[0].__class__ in cursors.stmtIcons:
-                    return altParseResult, handlerIc, True
+            if coincidentSite is not None and coincidentSite == self.attachedSite():
+                highestCoincIcon = iconsites.highestCoincidentIcon(self.attachedIcon())
+                if highestCoincIcon.parent() is None and \
+                        not isinstance(highestCoincIcon, assignicons.AssignIcon):
+                    # Site is coincident with the start of the statement. We might be
+                    # able to prepend a top-level statement
+                    altParseResult = parseTopLevelText(newText, self.window)
+                    if len(altParseResult) == 2 and \
+                            altParseResult[0].__class__ in cursors.stmtIcons and \
+                            not isinstance(altParseResult[0], nameicons.NoArgStmtIcon):
+                        return altParseResult, handlerIc, True
         return parseResult, handlerIc, False
 
     def _setText(self, newText, newCursorPos):
         """Process the text in the icon, possibly creating or rearranging the icon
-        structure around it."""
+        structure around it.  Returns None on success and a string containing a message
+        explaining the reason for the failure on failure."""
         if newText == '#' and self.text == '' and (self.parent() is not None or
                 self.hasPendingArgs()):
             # The user has typed a pound character outside of  the legal context for a
@@ -1204,12 +1213,12 @@ class EntryIcon(icon.Icon):
             stmtComment = commenticon.CommentIcon(attachedToStmt=topParent,
                 window=self.window)
             self.window.cursor.setToText(stmtComment)
-            return True
+            return None
         parseResult, handlerIc, prepend = self.parseEntryText(newText)
         # print('parse result', parseResult)
-        if parseResult == "reject":
+        if parseResult[:7] == "reject:":
             self.removeIfEmpty()
-            return False
+            return parseResult[7:]
         self.window.requestRedraw(self.topLevelParent().hierRect(),
             filterRedundantParens=True)
         if parseResult == "accept":
@@ -1218,7 +1227,7 @@ class EntryIcon(icon.Icon):
             self.cursorPos = newCursorPos
             self.window.cursor.draw()
             self.markLayoutDirty()
-            return True
+            return None
         elif parseResult == "typeover":
             if not self.hasPendingArgs():
                 self.remove(forceDelete=True)
@@ -1230,66 +1239,72 @@ class EntryIcon(icon.Icon):
                     self.window.cursor.setToTypeover(handlerIc)
             else:
                 print('parseEntryText detected typeover, but entry icon has pending args')
-            return True
+            return None
         elif parseResult == "comma":
-            if not self.insertComma():
+            rejectReason = self.insertComma()
+            if rejectReason is not None:
                 self.removeIfEmpty()
-                return False
+                return rejectReason
             else:
                 self.window.undo.addBoundary()
-                return True
+                return None
         elif parseResult == "colon":
-            if not self.insertColon():
+            rejectReason = self.insertColon()
+            if rejectReason is not None:
                 self.removeIfEmpty()
-                return False
+                return rejectReason
             else:
                 self.window.undo.addBoundary()
-                return True
+                return None
         elif parseResult == "openBracket":
             self.insertOpenParen(listicons.ListIcon)
             self.window.undo.addBoundary()
-            return True
+            return None
         elif parseResult == "endBracket":
-            if not self.insertEndParen(parseResult):
+            rejectReason = self.insertEndParen(parseResult)
+            if rejectReason is not None:
                 self.removeIfEmpty()
-                return False
+                return rejectReason
             else:
                 self.window.undo.addBoundary()
-                return True
+                return None
         elif parseResult == "openBrace":
             self.insertOpenParen(listicons.DictIcon)
             self.window.undo.addBoundary()
-            return True
+            return None
         elif parseResult == "endBrace":
-            if not self.insertEndParen(parseResult):
+            rejectReason = self.insertEndParen(parseResult)
+            if rejectReason is not None:
                 self.removeIfEmpty()
-                return False
+                return rejectReason
             else:
                 self.window.undo.addBoundary()
-                return True
+                return None
         elif parseResult == "openParen":
             self.insertOpenParen(parenicon.CursorParenIcon)
             self.window.undo.addBoundary()
-            return True
+            return None
         elif parseResult == "endParen":
-            if not self.insertEndParen(parseResult):
+            rejectReason = self.insertEndParen(parseResult)
+            if rejectReason is not None:
                 self.removeIfEmpty()
-                return False
+                return rejectReason
             else:
                 self.window.undo.addBoundary()
-                return True
+                return None
         elif parseResult == "makeFunction":
             if self.attachedIcon().isCursorOnlySite(self.attachedSite()):
                 self.removeIfEmpty()
-                return False
+                #... Why would parser let this through?
+                return "Can't type anything here"
             else:
                 self.insertOpenParen(listicons.CallIcon)
                 self.window.undo.addBoundary()
-                return True
+                return None
         elif parseResult == "makeSubscript":
             self.insertOpenParen(subscripticon.SubscriptIcon)
             self.window.undo.addBoundary()
-            return True
+            return None
         # Parser emitted an icon.  Splice it in to the hierarchy in place of the entry
         # icon (ignoring, for now, that the entry icon may have to be reinstated if there
         # are pending args/attrs or remaining to be placed).  Figure out where the cursor
@@ -1303,11 +1318,12 @@ class EntryIcon(icon.Icon):
             cursorIcon = ic
             cursorSite = 'argIcons_0'
         elif ic.__class__ in (assignicons.AssignIcon, assignicons.AugmentedAssignIcon):
-            cursorIcon, cursorSite = self.insertAssign(ic)
-            if not cursorIcon:
+            rejectReason = self.canInsertAssign(ic)
+            if rejectReason is None:
+                cursorIcon, cursorSite = self.insertAssign(ic)
+            else:
                 self.removeIfEmpty()
-                cursors.beep()
-                return
+                return rejectReason
         elif self.attachedIcon() is None:
             # Entry icon is on the top level
             self.window.replaceTop(self, ic)
@@ -1346,7 +1362,7 @@ class EntryIcon(icon.Icon):
                 if argIcon is None:
                     # We can't append an operator if there's no operand to attach it to
                     self.removeIfEmpty()
-                    return False
+                    return "Enter left operand before typing operator"
                 cursorIcon, cursorSite = _appendOperator(ic, self.attachedIcon(),
                     self.attachedSite())
         elif self.attachedSiteType() == "input":
@@ -1453,7 +1469,7 @@ class EntryIcon(icon.Icon):
                 else:
                     self.window.cursor.setToIconSite(cursorIcon, cursorSite)
                 self.window.undo.addBoundary()
-                return True
+                return None
         # There is remaining text or pending arguments.  Restore the entry icon.  Note
         # that the code above is guaranteed to put the cursor in the right place, and
         # either leave or remove the entry icon (I don't think any of the code will leave
@@ -1511,7 +1527,7 @@ class EntryIcon(icon.Icon):
         self.markLayoutDirty()
         if remainingText == "":
             self.window.cursor.draw()
-            return True
+            return None
         # There is still text that might be processable.  Recursively go around again
         # (we only get here if something was processed, so this won't loop forever).
         # self.text still contains the content that was processed, above, and (while
@@ -1519,7 +1535,7 @@ class EntryIcon(icon.Icon):
         self.text = ''  # In unlikely event _setText rejects, self.text needs to be right
         self.cursorPos = 0
         self._setText(remainingText, len(remainingText))
-        return True
+        return None
 
     def canPlaceEntryText(self, requireArgPlacement=False):
         # Parse the existing text and in the entry icon as if it had a delimiter (space)
@@ -1530,9 +1546,9 @@ class EntryIcon(icon.Icon):
         # print('parse result', parseResult)
         # We assume that the entry text is something legal, waiting for a delimiter.
         # It should not be something self-delimiting.
-        if parseResult in ("reject", "accept", "typeover", "comma", "colon",
-                "openBracket", "endBracket", "openBreace", "endBrace", "openParen",
-                "endParen", "makeFunction", "makeSubscript"):
+        if parseResult[:7] == "reject:" or parseResult in ("accept", "typeover", "comma",
+                "colon", "openBracket", "endBracket", "openBreace", "endBrace",
+                "openParen", "endParen", "makeFunction", "makeSubscript"):
             return False
         # Parser emitted an icon.  Splice it in to the hierarchy in place of the entry
         # icon (ignoring, for now, that the entry icon may have to be reinstated if there
@@ -1543,7 +1559,7 @@ class EntryIcon(icon.Icon):
             print("Remaining text in canPlaceEntry text was not injected delimiter")
             return False
         if ic.__class__ in (assignicons.AssignIcon, assignicons.AugmentedAssignIcon):
-            if not self.canInsertAssign(ic):
+            if self.canInsertAssign(ic) is not None:
                 return False
         elif self.attachedToAttribute():
             # Entry icon is attached to an attribute site (ic is operator or attribute)
@@ -1582,14 +1598,14 @@ class EntryIcon(icon.Icon):
         if self.attachedIcon() is None:
             # The entry icon is on the top level.  Reject, so as not to create a naked
             # tuple containing just a comma, which is more confusing than useful
-            return False
+            return "Comma must follow something"
         # Look for comma typeover opportunity
         typeoverIc = _findParenTypeover(self, "comma")
         if typeoverIc is not None:
             self.remove()  # Safe, since args would have invalidated typeover
             _siteBefore, siteAfter, _text, _idx = typeoverIc.typeoverSites()
             self.window.cursor.setToIconSite(typeoverIc, siteAfter)
-            return True
+            return None
         # Find the top of the expression to which the entry icon is attached
         ic, splitSite = findEnclosingSite(self)
         if ic is None:
@@ -1622,23 +1638,20 @@ class EntryIcon(icon.Icon):
                 splitSite = 'argIcons_0'
             else:
                 # Bounding icon will not accept comma: reject
-                return False
+                return "Can't enter comma in a non-series field"
         if isinstance(ic, listicons.ListTypeIcon) and ic.isComprehension():
             # The bounding icon is a comprehension and won't accept additional clauses
-            return False
+            return "Comprehension can have only one element"
         # ic can accept a new comma clause after splitSite.  Split expression in two at
         # entry icon
         left, right = splitExprAtIcon(self, ic, None, self)
-        if left is None and right is None:
-            # Deadly failure probably dropped content (diagnostics already printed)
-            return False
         # Place the newly-split expression in to the series, creating a new clause
         ic.replaceChild(None, splitSite)
         splitSiteSeriesName, splitSiteIdx = iconsites.splitSeriesSiteId(splitSite)
         ic.insertChildren((left, right), splitSiteSeriesName, splitSiteIdx)
         # Remove entry icon and place pending arguments (if possible)
         self.remove()
-        return True
+        return None
 
     def insertOpenParen(self, iconClass):
         """Called when the user types an open paren, bracket, or brace to insert an icon
@@ -1777,16 +1790,17 @@ class EntryIcon(icon.Icon):
             tupleIcon.replaceChild(self, 'attrIcon')
             self.remove()
             self.window.updateTypeoverStates()
-            return True
+            return None
         matchingParen, transferArgsFrom = searchForOpenParen(token, self)
         if matchingParen is None:
             # No matching paren was found.  Remove cursor and look for typeover
             typeoverIc = _findParenTypeover(self, token)
             if typeoverIc is None:
-                return False
+                matchChar = {'endParen':'(', 'endBracket':'[', 'endBrace':'{'}[token]
+                return "No matching %s" % matchChar
             self.remove()  # Safe, since args would have invalidated typeover
             self.window.cursor.setToIconSite(typeoverIc, 'attrIcon')
-            return True
+            return None
         if transferArgsFrom is not None:
             # If the icon that matches or an intervening open paren/bracket/brace might
             # have arguments beyond the inserted end paren/bracket/brace, check whether
@@ -1800,7 +1814,8 @@ class EntryIcon(icon.Icon):
             name, idx = iconsites.splitSeriesSiteId(siteOfMatch)
             if name == "argIcons" and idx < len(transferArgsFrom.sites.argIcons) - 1:
                 if not transferToParentList(transferArgsFrom, idx+1, matchingParen):
-                    return False
+                    #... This needs to insert an entry icon, and not just reject.
+                    return "Parent can not accept series elements"
                 if isinstance(transferArgsFrom, listicons.TupleIcon) and idx == 0:
                     # Tuple is down to 1 argument.  Convert to arithmetic parens
                     newParen = cvtTupleToCursorParen(transferArgsFrom, closed=False,
@@ -1820,7 +1835,7 @@ class EntryIcon(icon.Icon):
                 listicons.DictIcon)) and matchingParen.isComprehension():
             matchingParen.close(typeover=False)
             self.window.cursor.setToIconSite(matchingParen, 'attrIcon')
-            return True
+            return None
         else:
             reorderexpr.reorderArithExpr(matchingParen, closeParenAt=self)
         # If there are pending args, they need to go *after* the newly-closed paren.
@@ -1830,29 +1845,30 @@ class EntryIcon(icon.Icon):
         # be working correctly, but this is a good place to check if something's wrong.
         self.remove()
         self.window.updateTypeoverStates()
-        return True
+        return None
 
     def canInsertAssign(self, assignIcon):
-        attIcon = icon.findAttrOutputSite(self.attachedIcon())
+        """Does pre-checking and rejectReason generation for insertAssign.  Note that
+        this returns None if assignIcon CAN be inserted, and the reason (as a string)
+        that it can't.  If this does not return None, insertAssign should not be
+        called."""
+        topIcon, splitSite = findEnclosingSite(self)
+        if not (topIcon is None or isinstance(topIcon, assignicons.AssignIcon) or
+                isinstance(topIcon, listicons.TupleIcon) and topIcon.noParens):
+            return "= can only be added at the top level or within calls and definitions"
         isAugmentedAssign = assignIcon.__class__ is assignicons.AugmentedAssignIcon
-        if self.attachedToAttribute():
-            highestCoincidentIcon = iconsites.highestCoincidentIcon(attIcon)
-            if highestCoincidentIcon in self.window.topIcons:
-                # The cursor is attached to an attribute of a top-level icon of a type
-                # appropriate as a target.
-                return True
-        topParent = (attIcon if attIcon is not None else self.attachedIcon()).topLevelParent()
-        if topParent.__class__ is listicons.TupleIcon and topParent.noParens:
-            # There is a naked tuple at the top level waiting to be converted in to an
-            # assignment statement.  This is fine, unless it's an augmented assign
-            # (i.e +=), which can take only a single target
-            return not isAugmentedAssign or len(topParent.argIcons()) == 1
-        if topParent.__class__ is assignicons.AssignIcon and not isAugmentedAssign:
-            # There is already an assignment icon to which we can add a new clause.
-            return True
-        return False
+        if isAugmentedAssign:
+            if isinstance(topIcon, assignicons.AssignIcon):
+                return "Augmented assignment (i.e. +=) can not be " \
+                    "combined with normal assignment (=)"
+            if isinstance(topIcon, listicons.TupleIcon) and splitSite != 'argIcons_0':
+                return "Augmented assignment (i.e. +=) can have only one target"
+        return None
 
     def insertAssign(self, assignIcon):
+        """Insert an assignment or augmented assignment operator.  Before calling this,
+        call canInsertAssign to decide if this can be called.  THIS IS NOT SAFE to call
+        if canInsertAssign has not returned None."""
         # Older versions of this code were much more restrictive with respect to where
         # users could insert an assignment.  This was surprisingly annoying in the way
         # it interfered with typing flow.  For example, not allowing users to type '='
@@ -1867,22 +1883,13 @@ class EntryIcon(icon.Icon):
         # a child of either a naked tuple or an existing assignment. For an augmented
         # assign, also ensure that the insertion will produce only a single target.
         topIcon, splitSite = findEnclosingSite(self)
-        if not (topIcon is None or isinstance(topIcon, assignicons.AssignIcon) or
-                isinstance(topIcon, listicons.TupleIcon) and topIcon.noParens):
-            return None, None
         isAugmentedAssign = assignIcon.__class__ is assignicons.AugmentedAssignIcon
-        if isAugmentedAssign and (isinstance(topIcon, assignicons.AssignIcon) or
-                isinstance(topIcon, listicons.TupleIcon) and splitSite != 'argIcons_0'):
-            return None, None
         # Replace the current top-level icon with the new assignment icon (unless it's
         # already an assignment icon)
         if not isinstance(topIcon, assignicons.AssignIcon):
             self.window.replaceTop(self.topLevelParent(), assignIcon)
         # Split the expression around the entry icon
         left, right = splitExprAtIcon(self, topIcon, None, self)
-        if left is None and right is None:
-            # Deadly failure probably dropped content (diagnostics already printed)
-            return None, None
         # Move the icons into the new assignment statement
         if topIcon is None:
             # The entry icon is on a top-level expression
@@ -1937,14 +1944,14 @@ class EntryIcon(icon.Icon):
     def insertColon(self):
         if self.attachedIcon() is None:
             # Not allowed to type colon at the top level: Reject
-            return False
+            return "Colon must be in context of a dictionary or subscript"
         # Find the top of the expression to which the entry icon is attached
         ic, splitSite = findEnclosingSite(self)
         if isinstance(ic, listicons.DictIcon):
             return self.insertDictColon(ic)
         if isinstance(ic, subscripticon.SubscriptIcon):
             return self.insertSubscriptColon(ic)
-        return False
+        return "Colon must be in context of a dictionary or subscript"
 
     def insertYieldIcon(self, ic):
         """This handles a weird corner case in Python syntax, where yield can be used as
@@ -2056,11 +2063,9 @@ class EntryIcon(icon.Icon):
             # a dictElem is not expected without a comma, and not allowed.
             dictElemSite = child.siteOf(self, recursive=True)
             if dictElemSite != 'leftArg':
-                return False
+                return "Entry already contains a colon"
             # Split across entry icon, insert both a colon and a comma w/typeover
             left, right = splitExprAtIcon(self, child, None, self)
-            if left is None and right is None:
-                return False
             newDictElem = listicons.DictElemIcon(window=self.window)
             newDictElem.replaceChild(left, 'leftArg')
             onIcon.replaceChild(newDictElem, onSite, leavePlace=True)
@@ -2100,24 +2105,19 @@ class EntryIcon(icon.Icon):
         else:
             # There's something at the site.  Put a colon in it
             left, right = splitExprAtIcon(self, onIcon, None, self)
-            if left is None and right is None:
-                return False
             newDictElem = listicons.DictElemIcon(window=self.window)
             onIcon.replaceChild(newDictElem, onSite)
             newDictElem.replaceChild(left, 'leftArg')
             newDictElem.replaceChild(right, 'rightArg')
             self.remove()
-        return True
+        return None
 
     def insertSubscriptColon(self, onIcon):
         if onIcon.hasSite('stepIcon'):
-            return False   # Subscript already has all 3 colons
+            return "Subscript already has all 3 clauses (start:stop:step)"
         onSite = onIcon.siteOf(self, recursive=True)
         # Split the expression holding the entry icon in two at the entry icon
         left, right = splitExprAtIcon(self, onIcon, None, self)
-        if left is None and right is None:
-            # Deadly failure probably dropped content (diagnostics already printed)
-            return False
         # Create a new clause and put the two halves in to them
         if onIcon.hasSite('upperIcon'):
             onIcon.changeNumSubscripts(3)
@@ -2138,7 +2138,7 @@ class EntryIcon(icon.Icon):
         onIcon.replaceChild(right, nextSite)
         # Remove entry icon and place pending arguments (if possible)
         self.remove()
-        return True
+        return None
 
     def insertCprhIcon(self, ic):
         """Handle insertion of a comprehension.  Comprehension sites are cursor-
@@ -2632,7 +2632,7 @@ def parseAttrText(text, window):
             return assignicons.AugmentedAssignIcon(op[:-1], window), delim
     if op == '=':
         return assignicons.AssignIcon(1, window), delim
-    return "reject"
+    return "reject:Expecting an operator, attribute, or delimiter"
 
 def parseExprText(text, window, forSeriesSite=False):
     if len(text) == 0:
@@ -2676,7 +2676,7 @@ def parseExprText(text, window, forSeriesSite=False):
             return listicons.StarIcon(window), delim
     if text == 'lambda':
         if delim not in ' *:':
-            return 'reject'
+            return "reject:lambda should be followed by parameter list or colon"
         return blockicons.LambdaIcon(window, typeover=True), delim
     if text == 'yield':
         return nameicons.YieldIcon(window), delim
@@ -2685,17 +2685,19 @@ def parseExprText(text, window, forSeriesSite=False):
     if text == 'await':
         return nameicons.AwaitIcon(window), delim
     if not (identPattern.fullmatch(text) or numPattern.fullmatch(text)):
-        return "reject"  # Precursor characters do not form valid identifier or number
-    if len(text) == 0 or delim not in delimitChars:
-        return "reject"  # No legal text or not followed by a legal delimiter
+        return "reject:Not a valid identifier or value"
+    if len(text) == 0:
+        return "reject:No legal expression starts with this character"
+    if delim not in delimitChars:
+        return "reject:Not a valid delimiter"
     # All but the last character is ok and the last character is a valid delimiter
     if text in ('False', 'None', 'True'):
         return nameicons.IdentifierIcon(text, window), delim
     if text in keywords:
-        return "reject"
+        return "reject:%s is a keyword that should not be used in this context" % text
     exprAst = parseExprToAst(text)
     if exprAst is None:
-        return "reject"
+        return "reject:%s is not a valid expression" % text
     if exprAst.__class__ == ast.Name:
         return nameicons.IdentifierIcon(exprAst.id, window), delim
     if exprAst.__class__ == ast.Num:
@@ -2709,7 +2711,7 @@ def parseExprText(text, window, forSeriesSite=False):
             exprAst.operand.__class__ == ast.Constant and \
             isinstance(exprAst.operand.value, numbers.Number):
         return nameicons.NumericIcon(text, window), delim
-    return "reject"
+    return "reject:Not a valid expression"
 
 def parseTopLevelText(text, window):
     if len(text) == 0:
@@ -2720,7 +2722,8 @@ def parseTopLevelText(text, window):
         delim = text[-1]
         if text[:-1] == stmt and delim in delimitChars:
             if stmt in noArgStmts and delim not in emptyDelimiters:
-                return "reject"  # Accepting unusable delimiters would cause trouble later
+                # Accepting unusable delimiters would cause trouble later
+                return "reject:%s does not take an argument" % text[:-1]
             kwds = {}
             if stmt[:5] == "async":
                 kwds['isAsync'] = True
@@ -3134,8 +3137,8 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
                 parent.replaceChild(leftArg, binOpRightArgSite(parent))
                 leftArg = parent
             else:
-                print('Unexpected site attachment in "splitExprAtIcon" function')
-                return None, None
+                raise Exception(
+                    'Unexpected site attachment in "splitExprAtIcon" function')
         elif childSiteType == 'input' and isinstance(parent, blockicons.LambdaIcon) and \
                 childSite == 'exprIcon':
             parent.replaceChild(leftArg, 'exprIcon')
@@ -3144,15 +3147,14 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
             leftArg = parent
         else:
             # Parent was not an arithmetic operator or had parens
-            print('Bounding expression found in "splitExprAtIcon" function')
-            return None, None
+            raise Exception('Bounding expression found in "splitExprAtIcon" function')
         if child is splitAt and childSiteType == 'attrIn':
             parent.replaceChild(None, childSite)
         child = parent
     else:
         if splitTo is not None:
-            print('"splitExprAtIcon" function reached top without finding splitTo')
-            return None, None
+            raise Exception(
+                '"splitExprAtIcon" function reached top without finding splitTo')
     return leftArg, rightArg
 
 def _canCloseParen(entryIc):

@@ -92,6 +92,9 @@ DEFAULT_SAVE_FILE_MARGIN = 100
 
 WIN_TITLE_PREFIX = "Python-G - "
 
+TYPING_ERR_COLOR = '#FFAAAA'
+TYPING_ERR_HOLD_TIME = 5000
+
 # anchorImage = comn.asciiToImage((
 #  ".......6%%6.......",
 #  ".......%..%.......",
@@ -300,19 +303,19 @@ class Window:
         #iconFrame.pack(fill=tk.BOTH, expand=True) #... try removing
         panes.add(iconFrame, minsize=20, stretch='always')
 
-        outputFrame = tk.Frame(panes)
-        self.outputPane = tk.Text(outputFrame, wrap=tk.WORD, height=1, takefocus=0)
-        self.outputPane.insert('0.0', 'This is a test')
+        self.outputFrame = tk.Frame(panes)
+        self.typingErrPane = tk.Label(self.outputFrame, text='', bg=TYPING_ERR_COLOR)
+        self.outputPane = tk.Text(self.outputFrame, wrap=tk.WORD, height=1, takefocus=0)
         self.outputPane.bind("<ButtonRelease-1>", self._outputSelectCb)
         self.outputPane.config(state=tk.DISABLED)
-        self.outputPane.grid(row=0, column=0, sticky=tk.NSEW)
-        outputScrollbar = tk.Scrollbar(outputFrame,  width=SCROLL_BAR_WIDTH,
+        self.outputPane.grid(row=1, column=0, sticky=tk.NSEW)
+        outputScrollbar = tk.Scrollbar(self.outputFrame,  width=SCROLL_BAR_WIDTH,
             command=self.outputPane.yview)
-        outputScrollbar.grid(row=0, column=1, sticky=tk.NS)
+        outputScrollbar.grid(row=0, rowspan=2, column=1, sticky=tk.NS)
         self.outputPane.config(yscrollcommand=outputScrollbar.set)
-        outputFrame.grid_columnconfigure(0, weight=1)
-        outputFrame.grid_rowconfigure(0, weight=1)
-        panes.add(outputFrame, minsize=20, stretch='never', sticky=tk.NSEW)
+        self.outputFrame.grid_columnconfigure(0, weight=1)
+        self.outputFrame.grid_rowconfigure(1, weight=1)
+        panes.add(self.outputFrame, minsize=0, stretch='never', sticky=tk.NSEW)
         panes.pack(fill=tk.BOTH, expand=1)
         outerFrame.pack(fill=tk.BOTH, expand=1)
 
@@ -345,6 +348,7 @@ class Window:
         self.lastStmtHighlightRects = None
         self.rectSelectInitialStates = {}
         self.popupIcon = None
+        self.typingErrCancelId = None
 
         self.margin = 800
 
@@ -725,15 +729,22 @@ class Window:
         char = cursors.tkCharFromEvt(evt)
         if char is None:
             return
-        # If there's a cursor displayed somewhere, use it, otherwise, use selection
+        # If there's a cursor displayed somewhere, use it, otherwise, use selection.
+        # Except in the case of typeovers, text is either fed directly to an accepting
+        # widget using its addText method, or an entry icon is created at the requested
+        # site and text is added to that.  The addText method for icons that support a
+        # text cursor return a reject-reason string on failure and None on success.
         if self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
-            self.cursor.icon.addText(char)
+            rejectReason = self.cursor.icon.addText(char)
         elif self.cursor.type == "icon":
+            if char == ' ':
+                # Quietly ignore extra space to eat unnecessary padding
+                return
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
             self._insertEntryIconAtCursor(allowOnCursorOnly=char=='#')
-            self.cursor.icon.addText(char)
+            rejectReason = self.cursor.icon.addText(char)
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
             entryIcon = entryicon.EntryIcon(window=self)
@@ -741,7 +752,7 @@ class Window:
             entryIcon.rect = comn.offsetRect(entryIcon.rect, x, y)
             self.addTopSingle(entryIcon, newSeq=True)
             self.cursor.setToText(entryIcon, drawNew=False)
-            entryIcon.addText(char)
+            rejectReason = entryIcon.addText(char)
         elif self.cursor.type == "typeover":
             self.cursor.erase()
             ic = self.cursor.icon
@@ -782,13 +793,21 @@ class Window:
                         iconParent.replaceChild(entryIcon, replaceSite)
                 entryIcon.appendPendingArgs([pendingAttr])
                 self.cursor.setToText(entryIcon, drawNew=False)
-                entryIcon.addText(char)
+                rejectReason = entryIcon.addText(char)
+            elif len(selectedIcons) == 0:
+                rejectReason = "No cursor"
             else:
                 # Either no icons were selected, or multiple icons were selected (so
                 # we don't know what to replace).
-                cursors.beep()
-                return
-        self.refreshDirty()  # Undo boundary added within entryIcon.addText
+                rejectReason = "Multiple selections (ambiguous replace)"
+        if rejectReason is not None:
+            # Text was rejected, beep and flash the error reason
+            cursors.beep()
+            self.displayTypingError(rejectReason)
+        else:
+            # Text was accepted.  Note that no undo boundary is added here, as .addText
+            # methods handle it to control grouping of operations.
+            self.refreshDirty()
 
     def _insertEntryIconAtCursor(self, allowOnCursorOnly=False):
         # Note that location is set in the entry icon for the single case where it
@@ -1275,8 +1294,13 @@ class Window:
             except:
                 return
             self.requestRedraw(self.cursor.icon.hierRect())
-            self.cursor.icon.addText(text)
-            self.refreshDirty()  # Undo boundary added by addText
+            rejectReason = self.cursor.icon.addText(text)
+            if rejectReason is not None:
+                # Text was rejected, beep and flash the error reason
+                cursors.beep()
+                self.displayTypingError(rejectReason)
+            else:
+                self.refreshDirty()  # Undo boundary added by addText
             return
         # Look at what is on the clipboard and make the best possible conversion to icons
         try:
@@ -1540,7 +1564,7 @@ class Window:
         """Move Entry icon after the top-level icon where the cursor is found."""
         if self.cursor.type == 'text' and isinstance(self.cursor.icon,
                 (stringicon.StringIcon, commenticon.CommentIcon)):
-            self.cursor.icon.processEnterKey(evt)
+            self.cursor.icon.processEnterKey()
             self.refreshDirty(addUndoBoundary=True)
             return
         if not self._completeEntry(evt):
@@ -1565,7 +1589,6 @@ class Window:
             if blockOwnerIcon is not None:
                 topIcon = blockOwnerIcon.blockEnd
         self.cursor.setToIconSite(topIcon, 'seqOut')
-        self._insertEntryIconAtCursor()
         self.refreshDirty()  # No undo boundary, as this is just an entry icon
 
     def _execCb(self, evt=None):
@@ -2410,6 +2433,19 @@ class Window:
         self.clearSelection()
         if refreshRegion.get() is not None:
             self.refresh(refreshRegion.get(), redraw=True)
+
+    def displayTypingError(self, errText):
+        self.typingErrPane.config(text=errText)
+        self.typingErrPane.grid(row=0, column=0, sticky=tk.EW)
+        if self.typingErrCancelId is not None:
+            self.top.after_cancel(self.typingErrCancelId)
+        self.typingErrCancelId = self.top.after(TYPING_ERR_HOLD_TIME,
+            self._closeTypingErrPane)
+
+    def _closeTypingErrPane(self):
+        self.typingErrPane.config(text='')
+        self.typingErrPane.grid_forget()
+        self.typingErrCancelId = None
 
     def redraw(self, region=None, clear=True, showOutlines=False):
         """Cause all icons to redraw to the pseudo-framebuffer (call refresh to transfer

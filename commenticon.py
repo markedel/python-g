@@ -170,7 +170,7 @@ class CommentIcon(icon.Icon):
         if insertPos == 'end':
             insertPos = len(self.string)
         if text == "" or insertPos < 0 or insertPos > len(self.string):
-            return False
+            return ''  # Not sure this happens, but should not for addText
         self.window.requestRedraw(self.topLevelParent().hierRect())
         self.string = self.string[:insertPos] + text + self.string[insertPos:]
         self.markLayoutDirty()
@@ -193,13 +193,14 @@ class CommentIcon(icon.Icon):
             self.cursorPos = insertPos
         else:
             self.cursorPos = insertPos + len(text)
-        return True
+        return None
 
     def addText(self, text):
-        """Add a character or text at the cursor."""
-        self.insertText(text, self.cursorPos)
+        """Add a character or text at the cursor.  Returns error string on failure, None
+        on success."""
+        return self.insertText(text, self.cursorPos)
 
-    def processEnterKey(self, evt):
+    def processEnterKey(self):
         self.insertText('\n', self.cursorPos)
 
     def click(self, x, y):

@@ -924,9 +924,9 @@ class Icon:
         delimiter character was left in text.  Or, it can return one of a set of keywords
         accepted by the entry-processing code:
 
-            reject:             Prevent the user from entering the character and beep
-            accept:             Allow the user to enter the character
-            typeover:           Initiate typeover of dimmed characters
+            reject:reason-text  Prevent the user from entering the character and beep
+            accept              Allow the user to enter the character
+            typeover            Initiate typeover of dimmed characters
 
         Additional keywords are supported as part of general parsing, but would probably
         not be used by text entry handlers:

@@ -1415,11 +1415,14 @@ class ExceptIcon(icon.Icon):
             asSiteId = siteIcon.siteOf(entryIc, recursive=True)
             if asSiteId == 'rightArg':
                 if entryIc.parent() is not siteIcon:
-                    return "reject"
+                    return "reject:as must be followed by identifier"
                 name = text.rstrip(' ')
                 if not name.isidentifier():
-                    return "reject"
+                    return "reject:as must be followed by a valid identifier"
                 if text[-1] == ' ':
+                    if name in entryicon.keywords:
+                        return "reject:%s is a reserved keyword and cannot be used " \
+                               "as a variable name" % name
                     return nameicons.IdentifierIcon(name, self.window), text[-1]
                 return "accept"
             else:  # Right arg of as can be an arbitrary expression, allow anything
@@ -2001,17 +2004,20 @@ class DefOrClassIcon(icon.Icon):
             name = text.rstrip(' (')
             if not name.isidentifier():
                 # The only valid text for a function or class name is an identifier
-                return "reject"
+                context = 'Function' if isinstance(self, DefIcon) else 'Class'
+                return "reject:%s name must be a simple identifier" % context
             iconOnNameSite = self.sites.nameIcon.att
             if iconOnNameSite is entryIc:
-                # Nothing but the entry icon is at the site, allow for typing leading
-                # dots by explicitly accepting
+                # Nothing but the entry icon is at the site
                 if text[-1] in (' ', '('):
+                    if text[:-1] in entryicon.keywords:
+                        return "reject:%s is a reserved keyword and cannot be used " \
+                               "as a function or class name" % text[:-1]
                     return nameicons.IdentifierIcon(name, self.window), text[-1]
                 return "accept"
             if onAttr:
                 # No attributes or operators of any kind are allowed on argument names
-                return "reject"
+                return "reject:Name must be a simple identifier"
             return None
         elif siteId[:8] == 'argIcons':
             if text == '*' and not onAttr:
@@ -2033,7 +2039,7 @@ class DefOrClassIcon(icon.Icon):
                 argAtSite = self.childAt(siteId)
                 if argAtSite is None or not isinstance(argAtSite,
                         listicons.ArgAssignIcon):
-                    return "reject"
+                    return "reject:Invalid format for parameter definition"
             # Typeover for end-paren is handled by the general code
             return None
         else:
@@ -2583,7 +2589,7 @@ class LambdaIcon(icon.Icon):
                 argAtSite = self.childAt(siteId)
                 if argAtSite is None or not isinstance(argAtSite,
                         listicons.ArgAssignIcon):
-                    return "reject"
+                    return "reject:Invalid format for parameter definition"
         return None
 
     def createAst(self):

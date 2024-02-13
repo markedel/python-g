@@ -242,7 +242,8 @@ class StringIcon(icon.Icon):
         return True
 
     def addText(self, text):
-        """Add a character or text at the cursor."""
+        """Add a character or text at the cursor.  Returns error string on failure, None
+        on success."""
         if text == self.quote[0] and self.cursorPos == len(self.string) and (
                 self.typeoverIdx is not None or (len(self.quote) == 3 and
                 self.string[-2:] == self.quote[:2])):
@@ -258,7 +259,7 @@ class StringIcon(icon.Icon):
             else:
                 self.window.cursor.setToIconSite(self, 'attrIcon')
             self.markLayoutDirty()
-            return
+            return None
         if self.cursorPos < 0:
             # Cursor is in the quote / string-type field
             text = text.lower()
@@ -306,12 +307,16 @@ class StringIcon(icon.Icon):
             elif text == ' ':
                 self._changeStrType('')
             else:
-                cursors.beep()
-            return
+                return "Enter alternate quote (', \") or string type (b, r, f or u)"
+            return None
         self.insertText(text, self.cursorPos)
+        return None
 
-    def processEnterKey(self, evt):
+    def processEnterKey(self):
         if self.cursorPos < 0:
+            topIcon = self.window.cursor.icon.topLevelParent()
+            if topIcon is not None and topIcon.hasSite('seqOut'):
+                self.window.cursor.setToIconSite(topIcon, 'seqOut')
             return
         if len(self.quote) == 3:
             self.insertText('\n', self.cursorPos)
