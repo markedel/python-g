@@ -266,16 +266,16 @@ class AssignIcon(icon.Icon):
         brkLvl = parentBreakLevel + 1
         text = listicons.seriesSaveTextForContext(brkLvl, getattr(self.sites,
             self.tgtLists[0].siteSeriesName), contNeeded, export, 'store',
-            allowTrailingComma=True)
+            allowTrailingComma=True, allowEmpty=False)
         text.add(None, " = ")
         for tgtList in self.tgtLists[1:]:
             tgtText = listicons.seriesSaveTextForContext(brkLvl,
                 getattr(self.sites, tgtList.siteSeriesName), contNeeded, export, 'store',
-                allowTrailingComma=True)
+                allowTrailingComma=True, allowEmpty=False)
             text.concat(brkLvl, tgtText, contNeeded)
             text.add(None, " = ")
         icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
-            allowTrailingComma=True)
+            allowTrailingComma=True, allowEmpty=False)
         return text
 
     def assignValues(self, tgtIcon, value):
@@ -348,6 +348,11 @@ class AssignIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, numTargets=len(self.tgtLists))
+
+    def duplicate(self, linkToOriginal=False):
+        ic = AssignIcon(numTargets=len(self.tgtLists), window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
@@ -582,6 +587,11 @@ class AugmentedAssignIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.op)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = AugmentedAssignIcon(op=self.op, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def highlightErrors(self, errHighlight):
         if errHighlight is None:
             self.errHighlight = None
@@ -632,7 +642,7 @@ class AugmentedAssignIcon(icon.Icon):
             export, 'store')
         text.add(None, " " + self.op + "= ")
         icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
-            allowTrailingComma=True)
+            allowTrailingComma=True, allowEmpty=False)
         return text
 
     def backspace(self, siteId, evt):

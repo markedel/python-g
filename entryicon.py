@@ -2430,6 +2430,13 @@ class EntryIcon(icon.Icon):
     def clipboardRepr(self, offset):
         return None
 
+    def duplicate(self, linkToOriginal=False):
+        # ... This is untested, as the only use of duplicate so far is copy-to-clipboard,
+        #     and entry icons still don't have a createSaveText method.
+        ic = EntryIcon(initialString=self.text, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def createAst(self):
         raise icon.IconExecException(self, "Remove text-entry field")
 

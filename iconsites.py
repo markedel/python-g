@@ -164,13 +164,13 @@ class IconSiteList:
                 return site
         return None
 
-    def childSites(self):
+    def childSites(self, expandSeries=True):
         childList = []
         for siteType, siteNames in self._typeDict.items():
             if siteType in childSiteTypes:
                 for name in siteNames:
                     site = getattr(self, name)
-                    if isinstance(site, IconSiteSeries):
+                    if expandSeries and isinstance(site, IconSiteSeries):
                         childList += site.sites
                     else:
                         childList.append(site)

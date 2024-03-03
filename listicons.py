@@ -532,16 +532,16 @@ class ListTypeIcon(icon.Icon):
             icon.Icon.insertChild(self, child, siteIdOrSeriesName, seriesIdx, childSite,
                 preserveNoneAtZero=preserveNoneAtZero)
             return
+        #  Without commas, a comprehension list must never have an empty site, except for
+        #  the last one, which must always exist and remain empty
+        if child is None:
+            return
         if len(self.sites.argIcons) > 1:
             # Single element tuples (x,) can still get a comprehension
             if not (isinstance(self, TupleIcon) and len(self.sites.argIcons) == 2 and
                     self.sites.argIcons[1].att is None):
                 print("Can't add comprehension to multi-element list")
                 return
-        #  Without commas, a comprehension list must never have an empty site, except for
-        #  the last one, which must always exist and remain empty
-        if child is None:
-            return
         self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, idx)
         self.sites.lookupSeries(seriesName)[idx].attach(self, child, childSite)
         if len(self.sites.argIcons) == 2:
@@ -680,9 +680,9 @@ class ListTypeIcon(icon.Icon):
         # or tuple has attributes, it becomes a source of data for those attributes, and
         # we get called with ctx=None.  The attribute case is handled in
         # argSaveTextForContext, so no additional code is needed, here.
-        ctxMacroNeeded = self.isComprehension()
+        ctxMacroNeeded = ctx is not None and self.isComprehension() and not export
         brkLvl = parentBreakLevel + 1 + (1 if ctxMacroNeeded else 0)
-        if self.closed:
+        if self.closed or export:
             text = filefmt.SegmentedText(self.leftText)
         else:
             text = filefmt.SegmentedText('$:o$' + self.leftText)
@@ -1001,6 +1001,11 @@ class ListIcon(ListTypeIcon):
         return composeAttrAstIf(self, ast.Call(func=icon.createAstDataRef(self, updateFn),
             args=[listContentAst], keywords=[], lineno=self.id, col_offset=0), skipAttr)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = ListIcon(closed=self.closed, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def _stretchedLBracketImage(self, desiredHeight):
         if self.object is None:
             bracketImg = listLBktImage
@@ -1134,9 +1139,13 @@ class TupleIcon(ListTypeIcon):
         return result
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False, ctx=None):
+        # Process naked tuple and single-element tuple syntax, (x,), not handled by
+        # ListTypeIcon.
+        if self.noParens:
+            return icon.seriesSaveText(parentBreakLevel, self.sites.argIcons, contNeeded,
+                export, allowEmpty=True)
         if not (len(self.sites.argIcons) == 2 and self.sites.argIcons[1].att is None):
             return super().createSaveText(parentBreakLevel, contNeeded, export, ctx)
-        # Process single-element tuple syntax, (x,), not handled by ListTypeIcon.
         brkLvl = parentBreakLevel + 1
         text = filefmt.SegmentedText('(' if self.closed else '$:o$(')
         argText = argSaveTextForContext(brkLvl, self.sites.argIcons[0], contNeeded,
@@ -1199,6 +1208,11 @@ class TupleIcon(ListTypeIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, noParens=self.noParens,
          closed=self.closed)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = TupleIcon(noParens=self.noParens, closed=self.closed, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def _stretchedLTupleImage(self, desiredHeight):
         if self.noParens:
@@ -1351,15 +1365,15 @@ class DictIcon(ListTypeIcon):
         # parser.
         mismatchedElems = self._findCtxViolations()
         if mismatchedElems is None:
-            return ListTypeIcon.createSaveText(self)
+            return ListTypeIcon.createSaveText(self, parentBreakLevel, contNeeded, export)
         brkLvl = parentBreakLevel + 1
-        if self.closed:
+        if self.closed or export:
             text = filefmt.SegmentedText('{')
         else:
             text = filefmt.SegmentedText('$:o${')
         argTextList = []
         for site in self.sites.argIcons:
-            needsCtx = site.att in mismatchedElems
+            needsCtx = site.att in mismatchedElems and not export
             argBrkLvl = brkLvl + (1 if needsCtx else 0)
             argText = icon.argSaveText(argBrkLvl, site, contNeeded, export)
             if needsCtx:
@@ -1373,6 +1387,11 @@ class DictIcon(ListTypeIcon):
         if self.closed:
             return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
         return text
+
+    def duplicate(self, linkToOriginal=False):
+        ic = DictIcon(closed=self.closed, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def textEntryHandler(self, entryIc, text, onAttr):
         # Handle typing of ** (and prevent * from immediately generating an icon)
@@ -1645,13 +1664,18 @@ class CallIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, closed=self.closed)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = CallIcon(closed=self.closed, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def textRepr(self):
         return '(' + icon.seriesTextRepr(self.sites.argIcons) + ')' + \
                icon.attrTextRepr(self)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + (2 if self.parent() is None else 1)
-        text = filefmt.SegmentedText('(' if self.closed else '$:o$(')
+        text = filefmt.SegmentedText('(' if self.closed or export else '$:o$(')
         if len(self.sites.argIcons) > 1 or len(self.sites.argIcons) == 1 and \
                 self.sites.argIcons[0].att is not None:
             kwArgEncountered = False
@@ -1660,7 +1684,7 @@ class CallIcon(icon.Icon):
                 needsCtx = False
                 if isinstance(site.att, (StarStarIcon, ArgAssignIcon)):
                     kwArgEncountered = True
-                elif kwArgEncountered:
+                elif kwArgEncountered and not export:
                     needsCtx = True
                 argBrkLvl = brkLvl + (1 if needsCtx else 0)
                 argText = icon.argSaveText(argBrkLvl, site, contNeeded, export)
@@ -1674,7 +1698,7 @@ class CallIcon(icon.Icon):
         text.add(None, ')')
         if self.closed:
             text = icon.addAttrSaveText(text, self, brkLvl-1, contNeeded, export)
-        if self.parent() is None:
+        if self.parent() is None and not export:
             text.wrapFragmentMacro(parentBreakLevel, 'a', needsCont=contNeeded)
         return text
 
@@ -1922,12 +1946,12 @@ class CprhIfIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + (1 if self.parent() is not None else 2)
-        if self._detectBadOrder():
+        if self._detectBadOrder() and not export:
             text = filefmt.SegmentedText("$%s$ " % UNASSOC_IF_MACRO_NAME)
         else:
             text = filefmt.SegmentedText("if ")
         icon.addArgSaveText(text, brkLvl, self.sites.testIcon, contNeeded, export)
-        if self.parent() is None:
+        if self.parent() is None and not export:
             text.wrapFragmentMacro(parentBreakLevel+1, 'c', needsCont=False)
         return text
 
@@ -2246,7 +2270,7 @@ class CprhForIcon(icon.Icon):
         text.concat(brkLvl, tgtText)
         text.add(None, " in ")
         icon.addArgSaveText(text, brkLvl, self.sites.iterIcon, contNeeded, export)
-        if self.parent() is None:
+        if self.parent() is None and not export:
             text.wrapFragmentMacro(parentBreakLevel+1, 'c', needsCont=False)
         return text
 
@@ -2255,6 +2279,11 @@ class CprhForIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = CprhForIcon(isAsync=self.isAsync, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -2317,7 +2346,7 @@ class DictElemIcon(infixicon.InfixIcon):
             icon.Icon.highlightErrors(self, None)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        needsCtx = not isinstance(self.parent(), DictIcon)
+        needsCtx = not isinstance(self.parent(), DictIcon) and not export
         brkLvl = parentBreakLevel + (2 if needsCtx else 1)
         text = icon.argSaveText(brkLvl, self.sites.leftArg, contNeeded, export)
         text.add(None, ":")
@@ -2382,7 +2411,7 @@ class ArgAssignIcon(infixicon.InfixIcon):
             rightArg.highlightErrors(None)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        needsCtx = not self._validateContext()
+        needsCtx = not self._validateContext() and not export
         brkLvl = parentBreakLevel + (2 if needsCtx else 1)
         text = nameicons.createNameFieldSaveText(brkLvl, self.sites.leftArg, contNeeded,
             export)
@@ -2474,12 +2503,12 @@ class StarIcon(opicons.UnaryOpIcon):
         # a store or del context.
         text = filefmt.SegmentedText('*')
         parent = self.parent()
-        if self.sites.argIcon.att is None :
+        if self.sites.argIcon.att is None and not export:
             # Python only allows * with no arg in function def and lambda
             if not isinstance(parent, (blockicons.DefIcon, blockicons.LambdaIcon)):
                 text.wrapCtxMacro(parentBreakLevel + 1, 'f', needsCont=contNeeded)
             return text
-        needCtx = parent is not None and \
+        needCtx = not export and parent is not None and \
             not iconsites.isSeriesSiteId(parent.siteOf(self)) and \
             not isinstance(parent, parenicon.CursorParenIcon)
         brkLvl = parentBreakLevel + (1 if needCtx else 0)
@@ -2542,7 +2571,7 @@ class StarStarIcon(opicons.UnaryOpIcon):
         text = filefmt.SegmentedText('**')
         parent = self.parent()
         needCtx = not isinstance(parent, (CallIcon, blockicons.DefIcon,
-            blockicons.ClassDefIcon))
+            blockicons.ClassDefIcon)) and not export
         brkLvl = parentBreakLevel + (1 if needCtx else 0)
         icon.addArgSaveText(text, brkLvl, self.sites.argIcon, contNeeded, export)
         if needCtx:
@@ -3156,7 +3185,7 @@ def seriesSaveTextForContext(breakLevel, seriesSite, cont, export, ctx,
     """Store/del context-aware version of icon.seriesSaveText which wraps $Ctx$ macros
     around any element that is not valid for the context."""
     if len(seriesSite) == 0 or len(seriesSite) == 1 and seriesSite[0].att is None:
-        return filefmt.SegmentedText(None if allowEmpty else '$Empty$')
+        return filefmt.SegmentedText(None if allowEmpty or export else '$Empty$')
     # Multiple star targets are illegal Python syntax, and code, here, originally
     # surrounded them with $Ctx$ macros, but since the Python AST parser accepts them
     # them, we now skip the macro and save them as-is.
@@ -3176,15 +3205,15 @@ def argSaveTextForContext(breakLevel, site, cont, export, ctx):
     delete (ctx == 'del') context."""
     ic = site.att
     if ic is None:
-        return filefmt.SegmentedText("$Empty$")
+        return filefmt.SegmentedText(None if export else "$Empty$")
     if ctx is None:
         return ic.createSaveText(breakLevel, cont, export)
     attr = ic.sites.attrIcon.att if hasattr(ic.sites, 'attrIcon') else None
     # If the icon has an attribute, we need to judge it by what's at the end of the
     # attribute chain: if it's a function, it needs a context macro, but ordinary
     # attributes and subscripts are allowable in both store and del contexts
-    if attr is not None:
-        if attrValidForContext(ic, ctx):
+    if attr is not None or export:
+        if export or attrValidForContext(ic, ctx):
             text = ic.createSaveText(breakLevel, cont, export)
         else:
             text = ic.createSaveText(breakLevel + 1, cont, export)

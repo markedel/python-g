@@ -126,7 +126,7 @@ class CursorParenIcon(icon.Icon):
         # attributes, and we get called with ctx=None.  The attribute case is handled in
         # argSaveTextForContext, so no additional code is needed, here.
         brkLvl = parentBreakLevel + 1
-        if self.closed:
+        if self.closed or export:
             text = filefmt.SegmentedText("(")
         else:
             text = filefmt.SegmentedText('$:o$(')
@@ -164,6 +164,11 @@ class CursorParenIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, closed=self.closed)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = CursorParenIcon(closed=self.closed, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def execute(self):
         if not self.closed:

@@ -55,7 +55,7 @@ builtInMacros = {}
 # AST nodes whose text syntax includes parens (mapped to the name of the field(s) that
 # contain the arguments that appear within the parens).
 astNodesWithParens = {ast.Call:('args', 'keywords'), ast.Tuple:('elts',),
-    ast.FunctionDef:('args',), ast.ClassDef:('bases',)}
+    ast.FunctionDef:('args',), ast.AsyncFunctionDef:('args',), ast.ClassDef:('bases',)}
 
 class MacroParser:
     macroPattern = re.compile("\\$([^$]+)\\$")
@@ -540,7 +540,7 @@ class AnnotationList:
                 node.keys]
         elif nodeClass in (ast.Global, ast.Nonlocal):
             fieldNames = node.names
-        elif nodeClass in (ast.FunctionDef, ast.ClassDef):
+        elif nodeClass in (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef):
             fieldNames = (node.name,)
         elif nodeClass is ast.ImportFrom:
             fieldNames = (node.module,)  # Stand-in is never dotted
@@ -1435,7 +1435,7 @@ class SegmentedText:
     potential line breaks and their associated "level" in the hierarchy of the statement.
     Once collected, the wrapText method will produce an attractively (and compactly)
     wrapped version of the text."""
-    __slots__ = ('segments', 'stmtComment', 'requiresTempDedent')
+    __slots__ = ('segments', 'stmtComment')
     # Format for "segments" list is strings separated by numbers (break values).  break
     # values encapsulate the break "level", as well as how the break needs to be made
     # (with/without line continuation and string splitting).  Strings represent text to
@@ -1463,7 +1463,7 @@ class SegmentedText:
     #       52 = Newline break (mandatory) without dedent to left margin (help strings)
     #       53 = Non-newline break without dedent to left margin (help strings)
 
-    def __init__(self, initialString=None, requiresTempDedent=False):
+    def __init__(self, initialString=None):
         """Create a SegmentedText object.  initialString may be set to None or an empty
         string, to create an empty string, or to a normal text string.  It may also be
         set to a list of strings, and multiStringBreakLevel specified to initialize it
@@ -1473,7 +1473,6 @@ class SegmentedText:
         else:
             self.segments = [initialString]
         self.stmtComment = None
-        self.requiresTempDedent = requiresTempDedent
 
     def add(self, breakLevel, text, needsContinue=False):
         """Append a single string to the end of the accumulated text.  If breakLevel
@@ -1654,6 +1653,8 @@ class SegmentedText:
         # from ever being explored.
         if self.segments is None and self.stmtComment:
             return self.stmtComment.wrap(startIndent, margin, export=export)
+        if self.segments is None:
+            return ''  # Vertical blank icons are empty and should not generate indent
         maxDepth = 0
         brkLvl = 0
         for s in self.segments:
@@ -1687,7 +1688,8 @@ class SegmentedText:
             for i in range(startIdx, bp, 2):
                 strings.append(self.segments[i])
             # If continuation and/or string splitting is needed, add it
-            endChar = None if len(strings) == 0 else strings[-1][-1]
+            endChar = None if len(strings) == 0 or len(strings[-1]) == 0 \
+                else strings[-1][-1]
             strings.append(_breakPrefix(breakType, endChar))
             # Append the newline and continuation indent (triple quoted strings get
             # no indent, unless they are docstrings, which get startIndent)
@@ -1755,7 +1757,8 @@ class SegmentedText:
                     return lastAcceptableBreakPoint
             breakLevel, breakType = _decodeBreakValue(self.segments[i + 1])
             if breakLevel < levelCutoff:
-                stringRequiredWidth += len(_breakPrefix(breakType, self.segments[i][-1]))
+                endChar = None if len(self.segments[i]) == 0 else self.segments[i][-1]
+                stringRequiredWidth += len(_breakPrefix(breakType, endChar))
                 if textWidth + stringRequiredWidth > margin:
                     return lastAcceptableBreakPoint
                 lastAcceptableBreakPoint = i + 1
@@ -1786,17 +1789,24 @@ class SegmentedText:
                 newSegments.append(entry)
         self.segments = newSegments
 
-    def isCtxOrFragmentMacro(self):
-        """Returns True if the content of the string is either a single $Ctx$ macro or
-        a $Fragment$ macro."""
-        if self.segments is None or len(self.segments) == 0:
+    def isFragmentMacro(self):
+        """Returns True if the content of the string is a $Fragment$ macro."""
+        if self.segments is None or len(self.segments) == 0 or \
+                not isinstance(self.segments[0], str):
             return False
-        return self._isSingleCtxMacro() or self.segments[0][:10] == '$Fragment:'
+        return self.segments[0][:10] == '$Fragment:'
+
+    def isCtxMacro(self):
+        """Returns True if the content of the string is a single $Ctx$ macro."""
+        if self.segments is None or len(self.segments) == 0 or \
+                not isinstance(self.segments[0], str):
+            return False
+        return self._isSingleCtxMacro()
 
     def cvtCtxOrFragmentToPosMacro(self, x, y):
         """Convert the $Ctx$ or $Fragment$ macro contained in the string to an $@$ macro
         with the given x,y location (assumes that the caller has verified the content
-        with isCtxOrFragmentMacro before calling)."""
+        with isCtxMacro and/or isFragmentMacro before calling)."""
         posPrefix = "$@%+d%+d:" % (x, y)
         if self.segments[0][:5] == '$Ctx:':
             self.segments[0] = posPrefix + self.segments[0][5:]

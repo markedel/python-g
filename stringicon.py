@@ -577,6 +577,12 @@ class StringIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, string=self.string)
 
+    def duplicate(self, linkToOriginal=False):
+        strText = self.strType + self.quote + self.string + self.quote
+        ic = StringIcon(initReprStr=strText, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def compareData(self, data):
         # I hope this is sufficiently fast for large structures.  If not we need to
         # cache a copy of the created object.

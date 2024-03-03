@@ -13,6 +13,8 @@ import infixicon
 import entryicon
 import commenticon
 
+INCOMPLETE_TRY_IDENT = '___pyg_incomplete_try_stmt'
+
 # Number of pixels to the left of sequence site to start else and elif icons
 ELSE_DEDENT = 21
 
@@ -244,6 +246,12 @@ class WithIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = WithIcon(isAsync=self.stmt[0] == 'a', createBlockEnd=False,
+            window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def textRepr(self):
         return self.stmt + " " + icon.seriesTextRepr(self.sites.values)
 
@@ -344,8 +352,9 @@ class WithIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        text = filefmt.SegmentedText("with ")
-        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export)
+        text = filefmt.SegmentedText(self.stmt + ' ')
+        icon.addSeriesSaveText(text, brkLvl, self.sites.values, contNeeded, export,
+            allowEmpty=False)
         text.add(None, ":")
         return text
 
@@ -463,6 +472,11 @@ class WhileIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = WhileIcon(createBlockEnd=False, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def execute(self):
         return None  #... no idea what to do here, yet.
 
@@ -528,6 +542,7 @@ class ForIcon(icon.Icon):
         totalWidth = iterX + self.iterList.width - 1
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
+        self.blockEnd = None
         if createBlockEnd:
             self.blockEnd = icon.BlockEnd(self, window, (x, y + bodyHeight + 2))
             self.sites.seqOut.attach(self, self.blockEnd)
@@ -657,6 +672,12 @@ class ForIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.stmt == "async for",
          createBlockEnd=False)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = ForIcon(isAsync=self.stmt[0] == 'a', createBlockEnd=False,
+            window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -981,6 +1002,11 @@ class IfIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = IfIcon(createBlockEnd=False, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def execute(self):
         return None  #... no idea what to do here, yet.
 
@@ -1118,14 +1144,18 @@ class ElifIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
-        # See note about dependency on errHighlight in ElseIcon createSaveText
-        if self.errHighlight is None:
-            text = filefmt.SegmentedText("elif ", requiresTempDedent=True)
-        elif not export:
-            text = filefmt.SegmentedText("$XElif$ ")
+        text = filefmt.SegmentedText("elif ")
         icon.addArgSaveText(text, brkLvl, self.sites.condIcon, contNeeded, export)
-        if self.errHighlight is None:
-            text.add(None, ":")
+        text.add(None, ":")
+        return text
+
+    def createInvalidCtxSaveText(self, parentBreakLevel=0, contNeeded=True,
+            export=False):
+        if export:
+            return self.createSaveText(parentBreakLevel, contNeeded, export)
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("$XElif$ ")
+        icon.addArgSaveText(text, brkLvl, self.sites.condIcon, contNeeded, export)
         return text
 
     def highlightErrors(self, errHighlight):
@@ -1279,6 +1309,11 @@ class TryIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, createBlockEnd=False)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = TryIcon(createBlockEnd=False, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def execute(self):
         return None  #... no idea what to do here, yet.
@@ -1444,16 +1479,19 @@ class ExceptIcon(icon.Icon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
         typeIcon = self.sites.typeIcon.att
-        if not self.errHighlight:
-            if typeIcon is None:
-                return filefmt.SegmentedText("except:", requiresTempDedent=True)
-            text = filefmt.SegmentedText("except ", requiresTempDedent=True)
-            icon.addArgSaveText(text, brkLvl, self.sites.typeIcon, contNeeded, export)
-            text.add(None, ":")
-            return text
-        # except stmt is out of context, create macro (unless for export to Python)
+        if typeIcon is None:
+            return filefmt.SegmentedText("except:")
+        text = filefmt.SegmentedText("except ")
+        icon.addArgSaveText(text, brkLvl, self.sites.typeIcon, contNeeded, export)
+        text.add(None, ":")
+        return text
+
+    def createInvalidCtxSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        typeIcon = self.sites.typeIcon.att
         if export:
-            return filefmt.SegmentedText('pass')
+            # Reproduce the user's error, just like a text-editor would.
+            return self.createSaveText(parentBreakLevel, contNeeded, export)
         if typeIcon is None:
             return filefmt.SegmentedText('$XExcept$')
         # Statement has an argument, which could be 'as'
@@ -1598,12 +1636,13 @@ class FinallyIcon(icon.Icon):
         return "finally:"
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        if self.errHighlight is None:
-            text = filefmt.SegmentedText("finally:", requiresTempDedent=True)
-        else:
-            # finally is in a bad context
-            text = filefmt.SegmentedText("$XFinally$")
-        return text
+        return filefmt.SegmentedText("finally:")
+
+    def createInvalidCtxSaveText(self, parentBreakLevel=0, contNeeded=True,
+            export=False):
+        if export:
+            return self.createSaveText(parentBreakLevel, contNeeded, export)
+        return filefmt.SegmentedText("$XFinally$")
 
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
@@ -1621,6 +1660,7 @@ class FinallyIcon(icon.Icon):
             if isinstance(ic, FinallyIcon):
                 self.errHighlight = icon.ErrorHighlight(
                     "try block can have only one finally clause")
+                break
         else:
             self.errHighlight = icon.ErrorHighlight(
                 "finally is not allowed outside of try block")
@@ -1736,17 +1776,13 @@ class ElseIcon(icon.Icon):
         return "else:"
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        # Note the dependency, here, of saving on error highlighting being up-to-date.
-        # I hope this doesn't cause issues, later, but reusing this info saves a lot of
-        # open-ended scanning up the code block to find the block owner and other elses.
-        # Also note that this cheat is not generally applicable to other situations, as
-        # anything that's not a top-level icon may be highlighted due to parent issues.
-        if self.errHighlight is None:
-            text = filefmt.SegmentedText("else:", requiresTempDedent=True)
-        else:
-            # else is in a bad context
-            text = filefmt.SegmentedText("$XElse$")
-        return text
+        return filefmt.SegmentedText("else:")
+
+    def createInvalidCtxSaveText(self, parentBreakLevel=0, contNeeded=True,
+            export=False):
+        if export:
+            return self.createSaveText(parentBreakLevel, contNeeded, export)
+        return filefmt.SegmentedText("$XElse$")
 
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
@@ -2184,6 +2220,12 @@ class ClassDefIcon(DefOrClassIcon):
         return self._serialize(offset, iconsToCopy, hasArgs=self.argList is not None,
          createBlockEnd=False)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = ClassDefIcon(hasArgs=self.argList is not None, createBlockEnd=False,
+            window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def createAst(self):
         nameIcon = self.sites.nameIcon.att
         if nameIcon is None:
@@ -2265,7 +2307,7 @@ class ClassDefIcon(DefOrClassIcon):
                 needsCtx = False
                 if isinstance(site.att, (listicons.StarStarIcon, listicons.ArgAssignIcon)):
                     kwArgEncountered = True
-                elif kwArgEncountered:
+                elif kwArgEncountered and not export:
                     needsCtx = True
                 argBrkLvl = brkLvl + (1 if needsCtx else 0)
                 argText = icon.argSaveText(argBrkLvl, site, contNeeded, export)
@@ -2365,6 +2407,11 @@ class DefIcon(DefOrClassIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync,
          createBlockEnd=False)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = DefIcon(isAsync=self.isAsync, createBlockEnd=False, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def highlightErrors(self, errHighlight):
         checkOwnedBlockHighlights(self)
@@ -3192,7 +3239,7 @@ def _fnDefArgSaveText(defIcon, brkLvl, needsCont, export):
         else:
             needsCtx = True
             parentCtx = 'K' if endOfPositionalArgs else None
-        if needsCtx:
+        if needsCtx and not export:
             argText = icon.argSaveText(brkLvl+1, site, needsCont, export)
             argText.wrapCtxMacro(brkLvl, parseCtx=parseCtx, parentCtx=parentCtx,
                 needsCont=needsCont)
@@ -3386,8 +3433,9 @@ def createIconsFromBodyAsts(bodyAsts, window):
                 prevIcon = stmtIcon if len(bodyIcons) == 0 else bodyIcons[-1]
                 prevIcon.sites.seqOut.attach(prevIcon, elifIcon, 'seqIn')
                 bodyIcons.append(elifIcon)
-                elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
-                bodyIcons += elifBlockIcons
+                if len(elifBlockIcons) > 0:
+                    elifIcon.sites.seqOut.attach(elifIcon, elifBlockIcons[0], 'seqIn')
+                    bodyIcons += elifBlockIcons
                 if hasattr(stmt, 'stmtcomment'):
                     _addStmtComment(stmtIcon, stmt.stmtcomment)
                 stmt = stmt.orelse[0]
@@ -3404,19 +3452,26 @@ def createIconsFromBodyAsts(bodyAsts, window):
                 prevIcon = stmtIcon if len(bodyIcons) == 0 else bodyIcons[-1]
                 prevIcon.sites.seqOut.attach(prevIcon, elseIcon, 'seqIn')
                 bodyIcons.append(elseIcon)
-                elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
-                bodyIcons += elseBlockIcons
-            if isinstance(stmt, ast.Try) and len(stmt.finalbody) != 0:
+                if len(elseBlockIcons) > 0:
+                    elseIcon.sites.seqOut.attach(elseIcon, elseBlockIcons[0], 'seqIn')
+                    bodyIcons += elseBlockIcons
+            if isinstance(stmt, ast.Try) and len(stmt.finalbody) != 0 and \
+                    not isIncompleteTry(stmt):
                 if hasattr(stmt, 'finallylinecomments'):
                     _addLineCommentIcons(stmt.finallylinecomments, window, bodyIcons)
                 finallyIcon = FinallyIcon(window)
                 if hasattr(stmt, 'finallystmtcomment'):
                     _addStmtComment(finallyIcon, stmt.finallystmtcomment)
                 finallyBlockIcons = createIconsFromBodyAsts(stmt.finalbody, window)
-                bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], finallyIcon, 'seqIn')
+                if len(bodyIcons) > 0:
+                    bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], finallyIcon, 'seqIn')
+                else:
+                    stmtIcon.sites.seqOut.attach(stmtIcon, finallyIcon, 'seqIn')
                 bodyIcons.append(finallyIcon)
-                finallyIcon.sites.seqOut.attach(finallyIcon, finallyBlockIcons[0], 'seqIn')
-                bodyIcons += finallyBlockIcons
+                if len(finallyBlockIcons) > 0:
+                    finallyIcon.sites.seqOut.attach(finallyIcon, finallyBlockIcons[0],
+                        'seqIn')
+                    bodyIcons += finallyBlockIcons
             blockEnd = stmtIcon.blockEnd
             if len(bodyIcons) > 0:
                 bodyIcons[-1].sites.seqOut.attach(bodyIcons[-1], blockEnd, 'seqIn')
@@ -3523,12 +3578,95 @@ def checkPseudoBlockHighlights(blockOwner):
                 if not ic.layoutDirty:
                     ic.highlightErrors(None)
 
-def checkEmptyBlockNeedsPass(ic):
-    """Determine if block-owning or pseudo-block-owning (else, elif, except, finally)
-    icon, ic needs to be followed by a $:x$pass (or simply pass for Python export)."""
-    nextIc = ic.nextInSeq()
-    return nextIc is None or isinstance(nextIc, icon.BlockEnd) or isinstance(nextIc,
-            (ElifIcon, ElseIcon,  ExceptIcon, FinallyIcon)) and not nextIc.errHighlight
+class BlockContextStack:
+    """Used by save file and clipboard format writing code to determine whether icons
+    that depend on the context of their enclosing blocks (else, elif, except, finally),
+    need to be macro-substituted to be acceptable to the Python parser.  Note that this
+    also works for icons that the Python compiler would reject if we weren't just parsing
+    to AST form (continue, break, return, yield, and yield-from), but this feature is not
+    currently used.  It might someday be used to clean up the export format, but the
+    current working concept for that is to leave bad syntax as-is (per a text editor)."""
+    class BlockContext:
+        def __init__(self, forIc):
+            self.icClass = forIc.__class__
+            self.exceptSeen = False
+            self.finallySeen = False
+            self.elifSeen = False
+            self.elseSeen = False
+
+    def __init__(self):
+        self.stack = []
+
+    def push(self, blockIc):
+        if isBlockOwnerIc(blockIc):
+            self.stack.append(self.BlockContext(blockIc))
+        elif isPseudoBlockIc(blockIc):
+            currentContext = self.stack[-1]
+            if isinstance(blockIc, ElseIcon):
+                currentContext.elseSeen = True
+            elif isinstance(blockIc, ElifIcon):
+                currentContext.elifSeen = True
+            elif isinstance(blockIc, FinallyIcon):
+                currentContext.finallySeen = True
+            elif isinstance(blockIc, ExceptIcon):
+                currentContext.exceptSeen = True
+
+    def pop(self):
+        if len(self.stack) != 0:
+            self.stack.pop()
+
+    def isIncompleteTryBlock(self):
+        """Call this upon processing block-end icons to figure out if a $EmptyTry$ macro
+        needs to be inserted to get the Python parser to accept a try block that has no
+        except or finally sections."""
+        if len(self.stack) == 0:
+            return False
+        ctx = self.stack[-1]
+        return ctx.icClass is TryIcon and not (ctx.exceptSeen or ctx.finallySeen)
+
+    def validForContext(self, ic):
+        """Determine if the block-context-dependent icon (return, yield, yield-from,
+        continue, break, else, elif, except, finally), ic, is allowable in the current
+        block hierarchy as defined by the block stack."""
+        if len(self.stack) == 0:
+            return not isinstance(ic, (nameicons.ReturnIcon, nameicons.YieldIcon,
+                nameicons.YieldFromIcon,nameicons.ContinueIcon, nameicons.BreakIcon,
+                ElseIcon, ElifIcon, FinallyIcon, ExceptIcon))
+        ctx = self.stack[-1]
+        if isinstance(ic, (nameicons.ReturnIcon, nameicons.YieldIcon,
+                nameicons.YieldFromIcon)):
+            for ctx in reversed(self.stack):
+                if ctx.icClass is DefIcon:
+                    return True
+                if ctx.icClass is ClassDefIcon:
+                    return False
+            return False
+        elif isinstance(ic, (nameicons.ContinueIcon, nameicons.BreakIcon)):
+            for ctx in reversed(self.stack):
+                if ctx.icClass in (DefIcon, ClassDefIcon):
+                    return False
+                if ctx.icClass in (ForIcon, WhileIcon):
+                    return True
+            return False
+        elif isinstance(ic, ElseIcon):
+            if ctx.icClass in (IfIcon, ForIcon, WhileIcon):
+                return not ctx.elseSeen
+            if ctx.icClass is TryIcon:
+                return ctx.exceptSeen and not ctx.elseSeen and not ctx.finallySeen
+            return False
+        elif isinstance(ic, FinallyIcon):
+            return ctx.icClass is TryIcon and not ctx.finallySeen
+        elif isinstance(ic, ExceptIcon):
+            return ctx.icClass is TryIcon and not ctx.finallySeen and not ctx.elseSeen
+        elif isinstance(ic, ElifIcon):
+            return ctx.icClass is IfIcon and not ctx.elseSeen
+        return True
+
+def isBlockOwnerIc(ic):
+    return hasattr(ic, 'blockEnd')
+
+def isPseudoBlockIc(ic):
+    return isinstance(ic, (ElifIcon, ElseIcon,  ExceptIcon, FinallyIcon))
 
 def looseElseMacroIconCreationFn(astNode, macroArgs, argAsts, window):
     return ElseIcon(window)
@@ -3556,3 +3694,11 @@ def looseExceptMacroIconCreationFn(astNode, macroArgs, argAsts, window):
     exceptIcon.replaceChild(typeIcon, 'typeIcon')
     return exceptIcon
 filefmt.registerBuiltInMacro('XExcept', 'pass', looseExceptMacroIconCreationFn)
+
+# The Python parser does not accept a try block without an except or finally.  We emit
+# this macro to fake it out so we can store/clip such a thing.
+def isIncompleteTry(stmt):
+    return len(stmt.finalbody) == 1 and isinstance(stmt.finalbody[0], ast.Expr) and \
+        isinstance(stmt.finalbody[0].value, ast.Name) and \
+        stmt.finalbody[0].value.id == INCOMPLETE_TRY_IDENT
+filefmt.registerBuiltInMacro('EmptyTry', 'finally:' + INCOMPLETE_TRY_IDENT, None)

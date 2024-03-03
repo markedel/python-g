@@ -232,6 +232,11 @@ class UnaryOpIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.operator)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = UnaryOpIcon(op=self.operator, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def execute(self):
         if self.arg() is None:
             raise icon.IconExecException(self, "Missing argument")
@@ -566,6 +571,11 @@ class BinOpIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, op=self.operator)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = BinOpIcon(op=self.operator, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def locIsOnLeftParen(self, btnPressLoc):
         iconLeft = self.rect[0]
         return iconLeft < btnPressLoc[0] < iconLeft + lParenImage.width
@@ -839,6 +849,11 @@ class DivideIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, floorDiv=self.floorDiv)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = DivideIcon(floorDiv=self.floorDiv, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def leftAssoc(self):
         """Note that this is only used for text generation for copy/paste"""

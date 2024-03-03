@@ -232,11 +232,12 @@ class AsIcon(InfixIcon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         parent = self.parent()
-        if parent is None:
+        parentClass = None if parent is None else parent.__class__.__name__
+        if export:
+            needCtx = False
+        elif parent is None:
             needCtx = True
-            parentClass = None
         else:
-            parentClass = parent.__class__.__name__
             if parentClass in self.allowableParents:
                 parentSite = parent.siteOf(self)
                 if iconsites.isSeriesSiteId(parentSite):

@@ -390,6 +390,11 @@ class CommentIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, string=self.string)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = CommentIcon(text=self.string, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def textCursorImage(self):
         return textCursorImage
 
@@ -567,7 +572,7 @@ class VerticalBlankIcon(icon.Icon):
         return '--'
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        return filefmt.SegmentedText(' ')
+        return filefmt.SegmentedText(None)
 
     def backspace(self, siteId, evt):
         if siteId == 'seqOut':

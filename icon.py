@@ -340,7 +340,7 @@ class Icon:
         self.layoutDirty = False
         self.drawList = None
         self.sites = iconsites.IconSiteList()
-        self.id = None if window is None else self.window.makeId(self)
+        self.id = None if self._isTemporaryIcon() else self.window.makeId(self)
         self.errHighlight = None
         if canProcessCtx:
             self.canProcessCtx = True
@@ -629,6 +629,8 @@ class Icon:
         parent links to find the page.  If the icon is not linked to a page, it is the
         responsibility of the caller to ensure that the page gets marked.  Returns False
         if the parent links are broken or cyclic and the page can not be found."""
+        if self._isTemporaryIcon():
+            return True
         self.layoutDirty = True
         # Dirty layouts are found through the window Page structure, then iterating over
         # just the top icons of the page sequence, so mark the page and the top icon.
@@ -1073,6 +1075,21 @@ class Icon:
             children.append(currentSeries)
         return self.__class__.__name__, addPoints(self.rect[:2], offset), args, children
 
+    def _duplicateChildren(self, toIcon, linkToOriginal=False):
+        """Part of the normal mechanism for icon duplication.  The 'duplicate' methods in
+        icon subclasses will typically recreate the icon itself and configure its state,
+        but will call this to find, copy, and link all of the icons children.
+        Additionally, if linkToOriginal is specified, it will tag toIcon with a back-
+        pointer to the icon of which it is a copy."""
+        if linkToOriginal:
+            toIcon.copiedFrom = self
+        for site in self.sites.childSites(expandSeries=True):
+            if site.att is None:
+                newChild = None
+            else:
+                newChild = site.att.duplicate(linkToOriginal=linkToOriginal)
+            toIcon.replaceChild(newChild, site.name, leavePlace=True)
+
     def _restoreChildrenFromClipData(self, childrenClipData, window, offset):
         for childData in childrenClipData:
             siteName, *iconData = childData
@@ -1112,11 +1129,53 @@ class Icon:
         return filefmt.SegmentedText("***No createSaveText method for icon %s" %
                                      self.dumpName())
 
+    def createInvalidCtxSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        """Same as createSaveText, but called when writer code detects that the icon
+        appears outside of its allowed (statement-level) context.  This is implemented
+        only by icons that can be invalidated by context above the statement-level, such
+        as an 'else' outside of an if block.  Note that this is currently only used on
+        pseudo-block icons (elif, else, except, finally) which need to write a macro for
+        out-of-context use.  return, yield, continue, and break, are acceptable to the
+        Python parser, without additional macro support.  This method exists both for
+        efficiency (so icons don't have to individually scan their entire block to
+        determine their context), and to simplify writing of code fragments (by not
+        having to reconstruct sequences)."""
+        raise Exception(f"Icon type, {self.__class__} createInvalidCtxSaveText method " \
+            "called for icon that does not implement it.")
+
     def clipboardRepr(self, offset, iconsToCopy):
         """Serialized binary representation of an icon tree currently used for copy/paste
         within and between windows.  Given that the save file format will also be capable
         of being used for copy/paste, this mechanism will eventually be removed."""
         return self._serialize(offset, iconsToCopy)
+
+    def temporaryDuplicate(self, inclStmtComment=False, linkToOriginal=False):
+        """Make a copy of the hierarchy under this icon with undo turned off and no icon
+        ids expended (currently, not wasting ids matters, because we don't have icon
+        deletion, so there's no reuse mechanism).  Also leaves icon off of the window
+        topIcon list and page-related infrastructure.  Temporary icons cannot be
+        intermixed with permanent ones, and are only used in the process of producing
+        save text for disjoint selections (see window._copyCb)."""
+        with self.window.pauseUndoRecording():
+            copyTopIcon = self.duplicate(linkToOriginal=linkToOriginal)
+        if inclStmtComment and hasattr(self, 'stmtComment'):
+            stmtComment = self.stmtComment.duplicate(linkToOriginal=linkToOriginal)
+            stmtComment.attachStmtComment(copyTopIcon)
+        return copyTopIcon
+
+    def duplicate(self, linkToOriginal=False):
+        """Return a copy of the icon and hierarchy beneath it.  Note that block-owning
+        and comment-owning icons will neither duplicate their associated .endBlock
+        and stmtComment icons, nor fill in the associated fields."""
+        # This (icon superclass method) can be used for icons that do not have internal
+        # state (other than connections to their child icons) to reproduce.  Those that
+        # do will need to subclass this function.
+        ic = self.__class__(window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
+    def _isTemporaryIcon(self):
+        return self.window.undoRecordingIsPaused()
 
     def backspace(self, siteId, evt):
         """Icon-specific action to perform when user presses backspace with the cursor
@@ -1817,7 +1876,7 @@ def argSaveText(breakLevel, site, cont, export):
     """Create a filefmt.SegmentedText string representing an argument icon (tree) at
     a given site.  If the site is empty, place the $Empty$ macro, instead."""
     if site.att is None:
-        return filefmt.SegmentedText("$Empty$")
+        return filefmt.SegmentedText(None if export else "$Empty$")
     return site.att.createSaveText(breakLevel, cont, export)
 
 def addArgSaveText(saveText, breakLevel, site, cont, export):
@@ -1834,7 +1893,7 @@ def seriesSaveText(breakLevel, seriesSite, cont, export, allowTrailingComma=Fals
     series can represent a non-parenthesized tuple, such as =, for, return, and yield).
     if allowEmpty is set to False, a completely empty series will get a $Empty$ macro."""
     if len(seriesSite) == 0 or len(seriesSite) == 1 and seriesSite[0].att is None:
-        return filefmt.SegmentedText(None if allowEmpty else '$Empty$')
+        return filefmt.SegmentedText(None if allowEmpty or export else '$Empty$')
     args = [argSaveText(breakLevel, site, cont, export) for site in seriesSite]
     combinedText = args[0]
     if allowTrailingComma and len(args) == 2 and seriesSite[1].att is None:

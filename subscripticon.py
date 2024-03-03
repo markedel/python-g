@@ -297,7 +297,7 @@ class SubscriptIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + (2 if self.parent() is None else 1)
-        text = filefmt.SegmentedText('[' if self.closed else '$:o$[')
+        text = filefmt.SegmentedText('[' if self.closed or export else '$:o$[')
         if self.sites.indexIcon.att is not None:
             text.concat(brkLvl, self.sites.indexIcon.att.createSaveText(brkLvl,
                 False, export), False)
@@ -313,7 +313,7 @@ class SubscriptIcon(icon.Icon):
         text.add(None, ']')
         if self.closed:
             text = icon.addAttrSaveText(text, self, brkLvl-1, contNeeded, export)
-        if self.parent() is None:
+        if self.parent() is None and not export:
             text.wrapFragmentMacro(parentBreakLevel, 'a', needsCont=contNeeded)
         return text
 
@@ -326,6 +326,17 @@ class SubscriptIcon(icon.Icon):
             numSubscripts = 3
         return self._serialize(offset, iconsToCopy, numSubscripts=numSubscripts,
          closed=self.closed)
+
+    def duplicate(self, linkToOriginal=False):
+        if hasattr(self.sites, 'stepIcon'):
+            n = 3
+        elif hasattr(self.sites, 'upperIcon'):
+            n = 2
+        else:
+            n = 1
+        ic = SubscriptIcon(numSubscripts=n, closed=self.closed, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def execute(self, attrOfValue):
         if not self.closed:

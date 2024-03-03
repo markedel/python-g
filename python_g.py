@@ -1,5 +1,6 @@
 # Copyright Mark Edel  All rights reserved
 # Python-g main module
+import io
 import tkinter as tk
 import tkinter.filedialog
 import ast
@@ -89,6 +90,8 @@ PAGE_SPLIT_THRESHOLD = 100
 
 # Maximum line width in characters for save-file and copy/paste text
 DEFAULT_SAVE_FILE_MARGIN = 100
+# Number of columns to indent in save-file and copy/paste text
+DEFAULT_SAVE_FILE_TAB_SIZE = 4
 
 WIN_TITLE_PREFIX = "Python-G - "
 
@@ -1275,12 +1278,16 @@ class Window:
         selectedRect = icon.containingRect(selectedIcons)
         if selectedRect is None:
             return
-        xOff, yOff = selectedRect[:2]
-        clipIcons = clipboardRepr(selectedIcons, (-xOff, -yOff))
-        clipTxt = textRepr(selectedIcons)
+        with io.StringIO() as outStream:
+            self.writeSaveFileText(outStream, selectedOnly=True, exportPython=False)
+            pygText = outStream.getvalue()
+        with io.StringIO() as outStream:
+            self.writeSaveFileText(outStream, selectedOnly=True, exportPython=True)
+            pyText = outStream.getvalue()
         self.top.clipboard_clear()
-        self.top.clipboard_append(clipIcons, type='ICONS')
-        self.top.clipboard_append(clipTxt, type='STRING')
+        self.top.clipboard_append(pygText, type='PYG')
+        print(pygText)  # *******
+        self.top.clipboard_append(pyText, type='STRING')
 
     def _pasteCb(self, evt=None):
         print('start icon creation', time.monotonic())
@@ -1304,11 +1311,11 @@ class Window:
             return
         # Look at what is on the clipboard and make the best possible conversion to icons
         try:
-            iconString = self.top.clipboard_get(type="ICONS")
+            iconString = self.top.clipboard_get(type="PYG")
         except:
             iconString = None
         if iconString is not None:
-            pastedIcons = icon.iconsFromClipboardString(iconString, self, (0, 0))
+            pastedIcons = filefmt.parseTextToIcons(iconString, self)
         else:
             # Couldn't get our icon data format.  Try string as python code
             try:
@@ -2801,17 +2808,6 @@ class Window:
             else:
                 forSeq = topIcon.childAt('seqIn') or topIcon.childAt('seqOut')
                 newTopIcon = placeListToTopLevelIcon(remainingIcons, forSeq, watchSubs)
-            if isinstance(newTopIcon, listicons.TupleIcon) and newTopIcon.noParens and \
-                    len(newTopIcon.sites.argIcons) == 1:
-                # Deletion left an empty or single-element naked tuple: remove it (note
-                # that this step is skipped when assembling deleted icons later on,
-                # because users can't select or drag a naked tuple)
-                argIcon = newTopIcon.childAt('argIcons_0')
-                if argIcon is None:
-                    newTopIcon = None
-                else:
-                    newTopIcon.replaceChild(None, 'argIcons_0')
-                    newTopIcon = argIcon
             newTopIcon = reorderMarkedExprs(newTopIcon, needReorder)
             if assembleDeleted:
                 if assembledDeletions is None:
@@ -2924,84 +2920,225 @@ class Window:
 
     def saveFile(self, filename):
         _base, ext = os.path.splitext(filename)
-        exportPython = ext != ".pyg"
-        tabSize = 4
         print('Started save')
         with open(filename, "w") as f:
-            for seqStartPage in sorted(self.sequences, key=self.seqSortKeyFn):
-                startIcon = seqStartPage.startIcon
-                if startIcon is not self.modSeqIcon:
-                    if exportPython:
-                        f.write('\n')
-                    else:
-                        x, y = startIcon.pos()
-                        if startIcon.nextInSeq() is None:
-                            # This is a single statement or fragment of some sort.  These
-                            # can hold icons that cannot be part of a sequence, which (to
-                            # make the  per-icon code simpler) is only determined by
-                            # creating save text and checking for a $Ctx$ or $Fragment$
-                            # macro.  The code duplication here keeps this complication
-                            # out of the main loop.
-                            saveText = startIcon.createSaveText(export=False)
-                            if saveText.isCtxOrFragmentMacro():
-                                saveText.cvtCtxOrFragmentToPosMacro(x, y)
-                            else:
-                                f.write("$@%+d%+d$\n" % (x, y))
-                            # At this point, we've either *wrapped* saveText with the @
-                            # macro, or *written* a line with the @ macro
-                            if hasattr(startIcon, 'stmtComment') and \
-                                    startIcon.stmtComment is not None:
-                                saveText.addComment(startIcon.stmtComment.createSaveText(
-                                    export=False), isStmtComment=True)
-                            stmtText = saveText.wrapText(0, continuationIndent=tabSize,
-                                margin=DEFAULT_SAVE_FILE_MARGIN, export=False)
-                            f.write(stmtText)
-                            f.write('\n')
-                            continue
-                        f.write("$@%+d%+d$\n" % (x, y))
-                branchDepth = 0
-                for ic in icon.traverseSeq(startIcon):
-                    if isinstance(ic, icon.BlockEnd):
-                        branchDepth -= 1
-                    else:
-                        saveText = ic.createSaveText(export=exportPython)
-                        if saveText.requiresTempDedent:
-                            indent = tabSize * max(0, branchDepth - 1)
-                        else:
-                            indent = tabSize * max(0, branchDepth)
-                        if hasattr(ic, 'blockEnd'):
-                            continueIndent = 8
-                            branchDepth += 1
-                        else:
-                            continueIndent = tabSize
-                        if hasattr(ic, 'stmtComment') and ic.stmtComment is not None:
-                            saveText.addComment(ic.stmtComment.createSaveText(
-                                export=exportPython), isStmtComment=True)
-                        stmtText = saveText.wrapText(indent, indent + continueIndent,
-                            margin=DEFAULT_SAVE_FILE_MARGIN, export=exportPython)
-                        f.write(stmtText)
-                        f.write('\n')
-                        if (hasattr(ic, 'blockEnd') or saveText.requiresTempDedent) and \
-                                blockicons.checkEmptyBlockNeedsPass(ic):
-                            # Python requires a 'pass' statement for empty blocks
-                            f.write((tabSize * max(0, branchDepth)) * ' ')
-                            if not exportPython:
-                                f.write('$:x$')
-                            f.write('pass\n')
+            self.writeSaveFileText(f, exportPython=ext != ".pyg")
         print('Finished save')
 
-    @staticmethod
-    def seqSortKeyFn(seqStartPage):
-        """To make the save file format stable for use by version control systems and
+    def writeSaveFileText(self, outStream, selectedOnly=False, exportPython=False):
+        """Write save-file-format text to outStream.  By default, will save all icons in
+        the window.  If selectedOnly is specified, only the selected icons in the window
+        will be written."""
+        # Iterate over sequences determined by _findtSequencesForOutput.  While it would
+        # seem obvious to write the position macro in the outer (per sequence) loop, it's
+        # actually written in the inner (per stmt) loop because there are some cases
+        # where the generated text helps determine the form of the macro. There are also
+        # some ugly inefficiencies in the clipboard case (see _findtSequencesForOutput),
+        # particularly when selections get large.
+        pruneBlockEnds = set()
+        tabSize = DEFAULT_SAVE_FILE_TAB_SIZE
+        isFirstSeq = True
+        for pos, isModSeqIcon, seqIter in self._findtSequencesForOutput(selectedOnly):
+            haveWrittenSeqPos = False
+            branchDepth = 0
+            isStartOfOwnedBlock = False
+            blockCtx = blockicons.BlockContextStack()
+            for isSingleStmt, ic in flagIndividual(seqIter):
+                if isinstance(ic, icon.BlockEnd) and ic not in pruneBlockEnds:
+                    # Python requires a 'pass' statement for empty blocks
+                    if isStartOfOwnedBlock:
+                        self._writePassStmt(outStream, tabSize * branchDepth,
+                            not exportPython)
+                        isStartOfOwnedBlock = False
+                    # If user makes a selection that would go negative indent, we just
+                    # flatten at 0, since the only alternative would be to invent non-
+                    # existent block owning statements to preserve their indentation.
+                    branchDepth = max(0, branchDepth - 1)
+                    # The Python parser will not accept a try block without either an
+                    # except or a finally block, so emit $EmptyTry$ workaround macro
+                    if not exportPython and blockCtx.isIncompleteTryBlock():
+                        outStream.write(tabSize * branchDepth * ' ' + '$EmptyTry$')
+                    blockCtx.pop()
+                    continue
+                stmtComment = ic.stmtComment if hasattr(ic, 'stmtComment') else None
+                if selectedOnly and (
+                        any((c not in self.selectedSet for c in ic.traverse())) or
+                        stmtComment is not None and stmtComment not in self.selectedSet):
+                    # We're outputting selected icons, and some of the icons in the
+                    # current statement are not selected.  Make a temporary copy and use
+                    # splitDeletedIcons to reassemble the remaining ones.  Note that
+                    # we're going statement-by-statement and don't care about re-linking
+                    # block-end pointers, just that we don't indent for pruned block-
+                    # owners or dedent for their corresponding block-ends.
+                    prunedIc = _makePrunedCopy(ic, self.selectedSet, not isSingleStmt)
+                    if hasattr(ic, 'blockEnd') and ic not in self.selectedSet:
+                        pruneBlockEnds.add(ic.blockEnd)
+                else:
+                    prunedIc = ic
+                if isStartOfOwnedBlock and blockicons.isPseudoBlockIc(prunedIc):
+                    self._writePassStmt(outStream, tabSize*branchDepth, not exportPython)
+                if not isinstance(ic, (commenticon.CommentIcon,
+                        commenticon.VerticalBlankIcon)):
+                    isStartOfOwnedBlock = False
+                indent = tabSize * branchDepth
+                pseudoBlockInvalid = False
+                if blockicons.isPseudoBlockIc(prunedIc):
+                    if exportPython:
+                        indent = max(0, branchDepth - 1) * tabSize
+                    elif branchDepth == 0 or not blockCtx.validForContext(prunedIc):
+                        indent = tabSize * branchDepth
+                        pseudoBlockInvalid = True
+                    else:
+                        blockCtx.push(prunedIc)
+                        indent = tabSize * (branchDepth - 1)
+                if pseudoBlockInvalid and not exportPython:
+                    saveText = prunedIc.createInvalidCtxSaveText(export=exportPython)
+                else:
+                    saveText = prunedIc.createSaveText(export=exportPython)
+                if blockicons.isBlockOwnerIc(prunedIc):
+                    continueIndent = 8
+                    branchDepth += 1
+                    blockCtx.push(prunedIc)
+                else:
+                    continueIndent = tabSize
+                # Compose an @ (pos) macro if one is needed.  Note that the rules for
+                # whether one is needed are different between the clipboard and file
+                # formats.  In the .pyg file, an @ macro is written for any sequence
+                # that's not the module sequence.  In the clipboard format, the first
+                # sequence written (regardless of whether it is the module sequence) is
+                # written without the @ macro, except for the case where it is sequence-
+                # unfriendly $Fragment$, where it gets a position of (0, 0).  Likewise,
+                # positions in the file format are based on the absolute position of the
+                # first element in the sequence, but in the clipboard format, are
+                # relative to the first selected
+                needsSeparator = False
+                if exportPython:
+                    needPosMacro = False
+                    needsSeparator = not haveWrittenSeqPos and not isFirstSeq
+                elif haveWrittenSeqPos:
+                    needPosMacro = False
+                elif selectedOnly:
+                    needPosMacro = not isFirstSeq or saveText.isFragmentMacro()
+                else:
+                    needPosMacro = not isModSeqIcon
+                if needPosMacro:
+                    if saveText.isFragmentMacro() or ic.nextInSeq() is None and \
+                            saveText.isCtxMacro():
+                        # This is a single statement or fragment of some sort.  These
+                        # can hold icons that cannot be part of a sequence, which is only
+                        # determined by creating save text and checking for a $Ctx$ or
+                        # $Fragment$ macro.  Note that here the pos macro is wrapped
+                        # around the statement and will be output with the statement,
+                        # whereas in the normal case (else, below) we write it on a
+                        # separate line
+                        saveText.cvtCtxOrFragmentToPosMacro(*pos)
+                    else:
+                        # Don't wrap the pos macro around the statement, just write it
+                        # above the statement
+                        outStream.write("$@%+d%+d$\n" % pos)
+                if needsSeparator:
+                    outStream.write('\n\n')
+                haveWrittenSeqPos = True
+                isFirstSeq = False
+                if hasattr(prunedIc, 'stmtComment') and prunedIc.stmtComment is not None:
+                    saveText.addComment(prunedIc.stmtComment.createSaveText(
+                        export=exportPython), isStmtComment=True)
+                stmtText = saveText.wrapText(indent, indent + continueIndent,
+                    margin=DEFAULT_SAVE_FILE_MARGIN, export=exportPython)
+                outStream.write(stmtText)
+                outStream.write('\n')
+                if blockicons.isBlockOwnerIc(prunedIc) or blockicons.isPseudoBlockIc(ic) \
+                        and not pseudoBlockInvalid:
+                    isStartOfOwnedBlock = True
+            # If we ended the sequence with a block-owning statement (user had block
+            # owner as last statement in selection), add a 'pass' icon
+            if isStartOfOwnedBlock:
+                self._writePassStmt(outStream, tabSize * branchDepth, not exportPython)
+
+    def _findtSequencesForOutput(self, forClipboard):
+        """Figure out what icons to iterate over for generating save-file and clipboard
+        content.  This is an iterator over sequences, that also returns an iterator over
+        icons within each sequence.  It is structured this way to handle both sorting of
+        sequences and (in the clipboard case), culling the sequences themselves of icons
+        that are not either themselves or parents of selelected icons.  Sorting is done
+        To make the save file format stable for use by version control systems and
         diff/review tools, we need to order the sequence list consistently.  To do that,
-        we sort it by y, then by x coordinate. of the start of the sequence."""
-        startIcon = seqStartPage.startIcon
-        if startIcon is startIcon.window.modSeqIcon:
-            # Module sequence always comes first
-            left, top = -999999999,  -999999999
+        we sort it by y, then by x coordinate. of the start of the sequence. The method
+        yields:
+            1) The position to use for the the sequence in the '@' macro (if needed).
+               For files, this is simply the position first icon of the sequence, but for
+               the clipboard, it is the relative offset from the first selected icon of
+               the first sequence to the first selected icon of the current sequence
+               (therefore, (0, 0) for the first icon).  Also note that in the clipboard
+               case, the position may not be that of the first icon of the sequence,
+               since the selection may not include the top icon of the hierarchy.
+            2) True if the sequence is the window module-sequence, False if not.
+            3) An iterator yielding the relevant top-level icons in the seqeuence.  For
+               files, this is all of them.  For clipboard data, this will skip over those
+               which do not contain selected icons."""
+        # As is currently the case for everything involving large selections, this may
+        # be inefficient, as it traces up the icon hierarchy for every selected icon.  It
+        # may also be inefficient for small selections in large files, as it traces
+        # through all of the top-level icons in the process of assembling the icons into
+        # sequences.  There might be some clever way to improve this, but it's more of
+        # a structural issue, requiring change to the basic mechanisms for organizing
+        # icons, sequences, and selections (probably starting with sequences).
+        seqStartIcons = []
+        if forClipboard:
+            # Traverse just the sequences containing selected icons and just the top
+            # icons that contain selections
+            selectedTopIcons = set()
+            for ic in self.selectedSet:
+                if isStmtComment(ic):
+                    selectedTopIcons.add(ic.attachedToStmt)
+                else:
+                    selectedTopIcons.add(ic.topLevelParent())
+            for startPage in self.sequences:
+                for ic in icon.traverseSeq(startPage.startIcon):
+                    if ic in selectedTopIcons:
+                        for i in ic.traverse(includeSelf=True, inclStmtComment=True):
+                            if i in self.selectedSet:
+                                firstSelectedIcon = i
+                                break
+                        break
+                else:
+                    continue
+                x, y = firstSelectedIcon.pos()
+                if isinstance(firstSelectedIcon, commenticon.CommentIcon) and \
+                        firstSelectedIcon.attachedToStmt is not None:
+                    seqStartIcons.append((y, x, firstSelectedIcon.attachedToStmt))
+                else:
+                    seqStartIcons.append((y, x, firstSelectedIcon.topLevelParent()))
+            seqStartIcons.sort()
+            firstSeqPos = None
+            for y, x, startIcon in seqStartIcons:
+                seqIter = (ic for ic in icon.traverseSeq(startIcon) if ic in
+                    selectedTopIcons)
+                if firstSeqPos is None:
+                    firstSeqPos = x, y
+                    pos = 0, 0
+                else:
+                    pos = icon.subtractPoints((x, y), firstSeqPos)
+                yield pos, startIcon is self.modSeqIcon, seqIter
         else:
-            left, top = startIcon.pos()
-        return top, left
+            # Traverse all sequences in the window
+            for startPage in self.sequences:
+                startIcon = startPage.startIcon
+                if startIcon is startIcon.window.modSeqIcon:
+                    x, y = -999999999,  -999999999
+                else:
+                    x, y = startIcon.pos()
+                seqStartIcons.append((y, x, startIcon))
+            seqStartIcons.sort()
+            for y, x, startIcon in seqStartIcons:
+                yield (x, y), startIcon is self.modSeqIcon, icon.traverseSeq(startIcon)
+
+    @staticmethod
+    def _writePassStmt(outStream, indent, withIgnoreMacro):
+        outStream.write(indent * ' ')
+        if withIgnoreMacro:
+            outStream.write('$:x$')
+        outStream.write('pass\n')
 
     def clearBgRect(self, rect=None):
         """Clear but don't refresh a rectangle of the window.  rect is in content
@@ -3595,6 +3732,19 @@ class Window:
             if includeStderr:
                 sys.stderr = origStderr
 
+    @contextlib.contextmanager
+    def pauseUndoRecording(self, includeStderr=True):
+        """Stop undo recording.  Obviously, this needs to be used carefully."""
+        savedUndoRedoList = self.undo
+        self.undo = undo.undoNoOp
+        try:
+            yield None
+        finally:
+            self.undo = savedUndoRedoList
+
+    def undoRecordingIsPaused(self):
+        return self.undo == undo.undoNoOp
+
 class Page:
     """The fact that icons know their own window positions becomes problematic for very
     large files, because tiny edits can relocate every single icon below them in the
@@ -4122,6 +4272,16 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs):
                 # trimming code)
                 ic.popPendingArgs('all')
                 subsList = [nonEmptyArgs[0]]
+    # If ic is a naked tuple, deletion of its content could leave it empty or owning a
+    # single element.  If so, remove it.
+    if subsList is None and isinstance(ic, listicons.TupleIcon) and ic.noParens and \
+            len(ic.sites.argIcons) == 1:
+        argIcon = ic.childAt('argIcons_0')
+        if argIcon is None:
+            subsList = []
+        else:
+            ic.replaceChild(None, 'argIcons_0')
+            subsList = [argIcon]
     if icDeleted:
         return splitList, subsList, removedTopIcon
     else:
@@ -4319,7 +4479,7 @@ def placeOnSingleSite(toIcon, toSite, placeList, subsPlaceList, needReorder, wat
             parent = toIcon.parent()
             if parent is not None:
                 parent.replaceChild(None, parent.siteOf(toIcon))
-            else:
+            elif toIcon in toIcon.window.topIcons:
                 toIcon.window.removeTop(toIcon)
             if insertArgs is not None:
                 newTuple.insertChildren(insertArgs, 'argIcons_0')
@@ -4355,7 +4515,7 @@ def placeOnSingleSite(toIcon, toSite, placeList, subsPlaceList, needReorder, wat
             if subsPlaceList is None:
                 if parent is not None:
                     parent.replaceChild(None, parent.siteOf(toIcon))
-                else:
+                elif toIcon in toIcon.window.topIcons:
                     toIcon.window.removeTop(toIcon)
                 toIcon.replaceChild(placeList[0][0], toSite.name)
                 checkReorder(toIcon, needReorder)
@@ -4375,7 +4535,7 @@ def placeOnSingleSite(toIcon, toSite, placeList, subsPlaceList, needReorder, wat
         if toIcon.hasCoincidentSite() == toSite.name:
             if parent is not None:
                 parent.replaceChild(None, parent.siteOf(toIcon))
-            else:
+            elif toIcon in toIcon.window.topIcons:
                 toIcon.window.removeTop(toIcon)
             toIcon.replaceChild(placeList[0][-1], toSite.name)
             checkReorder(toIcon, needReorder)
@@ -4636,6 +4796,63 @@ def restoreFromCanonicalInterchangeIcon(ic, siteType):
             topIconsToRemove.append(nextIc)  # Block can have 'pass' icon
         topIconsToRemove.append(ic.blockEnd)
     return subsIcons, topIconsToRemove
+
+def _makePrunedCopy(topIcon, keepSet, forSeq):
+    """Return a temporary-icon copy of topIcon with icons not in keepSet removed.  Stitch
+    the tree back together in the same manner as removeIcons.Note the SEVERE
+    restrictions on the use of temporary icons (see icon.temporaryDuplicate)."""
+    # Create a full copy of the tree out of temporary icons.  The linkToOriginal option
+    # adds a property (.copiedFrom) pointing back to the original.
+    copiedTopIcon = topIcon.temporaryDuplicate(inclStmtComment=True, linkToOriginal=True)
+    # Translate keepSet from a set of original icons to preserve, into a set of copied
+    # icons to remove.
+    deletedSet = {c for c in copiedTopIcon.traverse(inclStmtComment=True)
+        if c.copiedFrom not in keepSet}
+    # Use splitDeletedIcons to remove the unwanted icons and assemble the remaining ones
+    # into a single coherent tree.
+    stmtComment = copiedTopIcon.stmtComment if hasattr(copiedTopIcon, 'stmtComment') \
+        else None
+    needReorder = []
+    remainingIcons, _, _ = splitDeletedIcons(copiedTopIcon, deletedSet, False,
+        needReorder, None)
+    if remainingIcons is None:
+        prunedCopy = copiedTopIcon
+    else:
+        prunedCopy = placeListToTopLevelIcon(remainingIcons, forSeq, None)
+    prunedCopy = reorderMarkedExprs(prunedCopy, needReorder)
+    # If the top icon was removed, move the statement comment to the new top icon (or
+    # convert it to a line comment if the entire statement was removed).
+    if stmtComment is not None:
+        if stmtComment in deletedSet:
+            stmtComment.detachStmtComment()
+        else:
+            if prunedCopy is None:
+                stmtComment = copiedTopIcon.stmtComment
+                stmtComment.detachStmtComment()
+                prunedCopy = stmtComment
+            elif prunedCopy is not copiedTopIcon:
+                stmtComment = copiedTopIcon.stmtComment
+                stmtComment.detachStmtComment()
+                stmtComment.attachStmtComment(prunedCopy)
+    return prunedCopy
+
+def flagIndividual(iter):
+    """Wrapper for iterator in the same form as 'enumerate', that returns a flag
+    indicating that iterator will only return a single value.  Why, you might ask?
+    It is being used to avoid creating what would be a very long list in a performance
+    critical operation (at least I think this will be more efficient)."""
+    isFirstValue = True
+    isSingleValue = True
+    lastValue = None
+    for value in iter:
+        if isFirstValue:
+            isFirstValue = False
+        else:
+            yield False, lastValue
+            isSingleValue = False
+        lastValue = value
+    if lastValue is not None:
+        yield isSingleValue, lastValue
 
 class StreamToTextWidget:
     """Imitate an output text stream and append any text written to it to a specified

@@ -99,6 +99,12 @@ class TextIcon(icon.Icon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, text=self.text)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = TextIcon(text=self.text, window=self.window,
+            cursorOnlyAttrSite=self.sites.attrIcon.isCursorOnlySite())
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.text, pendingArgSite=siteId)
 
@@ -144,6 +150,11 @@ class IdentifierIcon(TextIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
 
+    def duplicate(self, linkToOriginal=False):
+        ic = IdentifierIcon(name=self.name, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False, ctx=None):
         # Identifiers are valid in delete and save contexts, hence the optional ctx
         # parameter.  If ctx is not None, check that the attributes are legal in the
@@ -155,7 +166,8 @@ class IdentifierIcon(TextIcon):
         # in every case.  It's left here, to be ready if something changes, as it would
         # be confusing for an icon not to be able to handle its own save-text generation.
         text = TextIcon.createSaveText(self, parentBreakLevel+1, contNeeded, export)
-        text.wrapCtxMacro(parentBreakLevel, needsCont=contNeeded)
+        if not export:
+            text.wrapCtxMacro(parentBreakLevel, needsCont=contNeeded)
         return text
 
     def compareData(self, data):
@@ -196,6 +208,11 @@ class NumericIcon(TextIcon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, value=self.value)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = NumericIcon(value=self.value, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def compareData(self, data):
         return data == self.value
@@ -276,7 +293,7 @@ class AttrIcon(icon.Icon):
         breakLvl = parentBreakLevel + (1 if self.parent() is None else 0)
         text = icon.addAttrSaveText(filefmt.SegmentedText("." + self.name), self,
             breakLvl, contNeeded, export)
-        if self.parent() is None:
+        if self.parent() is None and not export:
             text.wrapFragmentMacro(parentBreakLevel, 'a', needsCont=contNeeded)
         return text
 
@@ -287,6 +304,11 @@ class AttrIcon(icon.Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, name=self.name)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = AttrIcon(name=self.name, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, '.' + self.name,
@@ -659,7 +681,8 @@ class GlobalIcon(SeriesStmtIcon):
         text = filefmt.SegmentedText("global ")
         valuesSites = self.sites.values
         if len(valuesSites) == 0 or len(valuesSites) == 1 and valuesSites[0].att is None:
-            text.add(brkLvl, '$Empty$', contNeeded)
+            if not export:
+                text.add(brkLvl, '$Empty$', contNeeded)
             return text
         args = [createNameFieldSaveText(brkLvl, site, contNeeded, export) for site in
             valuesSites]
@@ -725,7 +748,8 @@ class NonlocalIcon(SeriesStmtIcon):
         text = filefmt.SegmentedText("nonlocal ")
         valuesSites = self.sites.values
         if len(valuesSites) == 0 or len(valuesSites) == 1 and valuesSites[0].att is None:
-            text.add(brkLvl, '$Empty$', contNeeded)
+            if not export:
+                text.add(brkLvl, '$Empty$', contNeeded)
             return text
         args = [createNameFieldSaveText(brkLvl, site, contNeeded, export) for site in
             valuesSites]
@@ -921,11 +945,12 @@ class ImportIcon(SeriesStmtIcon):
             elif ic is not None:
                 needsCtx = True
             if ic is None:
-                args.append(filefmt.SegmentedText('$Empty$'))
+                if not export:
+                    args.append(filefmt.SegmentedText('$Empty$'))
             else:
-                brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+                brkLvl = parentBreakLevel + (2 if needsCtx and not export else 1)
                 arg = ic.createSaveText(brkLvl, contNeeded, export)
-                if needsCtx:
+                if needsCtx and not export:
                     arg.wrapCtxMacro(parentBreakLevel+1, needsCont=contNeeded,
                         parseCtx=parseCtx)
                 args.append(arg)
@@ -1068,10 +1093,10 @@ class ImportFromIcon(icon.Icon):
                 attr = attr.childAt('attrIcon')
         elif moduleNameIcon is not None:
             needsCtx = True
-        brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+        brkLvl = parentBreakLevel + (2 if needsCtx  and not export else 1)
         moduleNameText = icon.argSaveText(brkLvl, self.sites.moduleIcon, contNeeded,
             export)
-        if needsCtx:
+        if needsCtx and not export:
             moduleNameText.wrapCtxMacro(parentBreakLevel + 1, needsCont=contNeeded)
         text.concat(parentBreakLevel + 1, moduleNameText)
         text.add(parentBreakLevel+1, " import ", contNeeded)
@@ -1105,11 +1130,11 @@ class ImportFromIcon(icon.Icon):
             elif ic is not None:
                 needsCtx = True
             if ic is None:
-                args.append(filefmt.SegmentedText('$Empty$'))
+                args.append(filefmt.SegmentedText(None if export else '$Empty$'))
             else:
-                brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+                brkLvl = parentBreakLevel + (2 if needsCtx and not export else 1)
                 arg = ic.createSaveText(brkLvl, contNeeded, export)
-                if needsCtx:
+                if needsCtx and not export:
                     arg.wrapCtxMacro(parentBreakLevel+1, needsCont=contNeeded,
                         parseCtx=parseCtx)
                 args.append(arg)
@@ -1462,8 +1487,8 @@ class RelativeImportIcon(opicons.UnaryOpIcon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         text = filefmt.SegmentedText("." * self.level)
         parent = self.parent()
-        ctxNeeded = not isinstance(parent, ImportFromIcon) or \
-            parent.siteOf(self) != 'moduleIcon'
+        ctxNeeded = not export and (not isinstance(parent, ImportFromIcon) or
+            parent.siteOf(self) != 'moduleIcon')
         brkLvl = parentBreakLevel + (2 if ctxNeeded else 1)
         arg = self.sites.argIcon.att
         if arg is not None:
@@ -1476,6 +1501,11 @@ class RelativeImportIcon(opicons.UnaryOpIcon):
     def clipboardRepr(self, offset, iconsToCopy):
         # Superclass UnaryOp specifies op keyword, which this does not have
         return self._serialize(offset, iconsToCopy)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = RelativeImportIcon(level=self.level, window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
 class YieldIcon(icon.Icon):
     def __init__(self, window=None, location=None):
@@ -2186,7 +2216,7 @@ def createNameFieldSaveText(brkLvl, site, needsCont, export):
     accept a simple identifier, but is an input site in the icon representation and so
     may contain any sort of expression.  Generates a $Ctx$ macro to hold anything that
     is not an identifier."""
-    if site.att is None or isinstance(site.att, IdentifierIcon):
+    if site.att is None or isinstance(site.att, IdentifierIcon) or export:
         return icon.argSaveText(brkLvl, site, needsCont, export)
     argText = icon.argSaveText(brkLvl+1, site, needsCont, export)
     argText.wrapCtxMacro(brkLvl, parseCtx=None, needsCont=needsCont)
