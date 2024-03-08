@@ -954,7 +954,7 @@ class ListIcon(ListTypeIcon):
 
     def createAst(self, skipAttr=False):
         if not self.closed:
-            raise icon.IconExecException(self, "Unclosed temporary icon")
+            raise icon.IconExecException(self, "No matching ']' for '['")
         if self.isComprehension():
             return composeAttrAstIf(self, createComprehensionAst(self), skipAttr)
         if self.object is not None and self.sites.attrIcon.att is None and \
@@ -1165,8 +1165,8 @@ class TupleIcon(ListTypeIcon):
             ListTypeIcon.highlightErrors(self, errHighlight)
 
     def createAst(self):
-        if not self.closed:
-            raise icon.IconExecException(self, "Unclosed temporary icon")
+        if not self.closed and not self.noParens:
+            raise icon.IconExecException(self, "No matching ')' for '('")
         if self.isComprehension():
             return icon.composeAttrAst(self, createComprehensionAst(self))
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
@@ -1180,7 +1180,8 @@ class TupleIcon(ListTypeIcon):
                     raise icon.IconExecException(self, "Missing argument(s)")
             elts = [site.att.createAst() for site in self.sites.argIcons]
         ctx = nameicons.determineCtx(self)
-        if self.sites.attrIcon.att is None and isinstance(ctx, (ast.Store, ast.Del)):
+        hasAttribute = not self.noParens and self.sites.attrIcon.att is not None
+        if not hasAttribute and isinstance(ctx, (ast.Store, ast.Del)):
             for site in self.sites.argIcons:
                 if site.att is not None and not site.att.canProcessCtx:
                     ctxName = 'assignment' if isinstance(ctx, ast.Store) else 'del'
@@ -1190,6 +1191,8 @@ class TupleIcon(ListTypeIcon):
                 lineno=self.id, col_offset=0)
         # If this tuple icon does not represent an existing data object or represents one
         # that needs to change, emit an ast the generates a new tuple when executed.
+        if self.noParens:
+            return contentAst
         if self.object is None or not self.compareData(self.object):
             return icon.composeAttrAst(self, contentAst)
         # If the icon still faithfully represents its data object, produce an AST
@@ -1275,7 +1278,7 @@ class DictIcon(ListTypeIcon):
 
     def createAst(self, skipAttr=False):
         if not self.closed:
-            raise icon.IconExecException(self, "Unclosed temporary icon")
+            raise icon.IconExecException(self, "No matching '}' for '{'")
         if self.isComprehension():
             return composeAttrAstIf(self, createComprehensionAst(self), skipAttr)
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:

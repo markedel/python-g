@@ -1995,15 +1995,20 @@ class RaiseIcon(icon.Icon):
         return None
 
 class DecoratorIcon(icon.Icon):
-    # This implementation is a bit of a hack, because it's really just the name part of
-    # the decorator, with an attribute site for a call icon for decorators with
-    # parameters.  The attribute site, however, has both typing and snapping conditions
-    # placed on it, so you can't type or snap anything other than a call icon.  Users
-    # may still find it weird that you can drag the parens off of it.
-    def __init__(self, name, window, location=None):
+    # The decorator iccon is just "@" sign part of the decorator, with an input site for
+    # attaching the name, optional module components, and call icon to provide arguments.
+    # The input site, has both typing and snapping conditions placed on it, to restrict
+    # users from typing incompatible stuff, but as usual, users can use tricky methods
+    # that will result in things that need to be highlighted and saved.  Originally,
+    # the decorator icon held the more of the decorator content, but to make it easier
+    # to edit (for example, to add a module name), it is now just '@'.  Currently
+    # parameterized decorators use a call icon, which is different from, function or
+    # class def icons, which own their parens. However in the decorator case, this
+    # parallels the AST form, which uses and actual ast.Call node to hold the decorator
+    # information.
+    def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
-        self.stmt = '@' + name
-        bodyWidth = icon.getTextSize(self.stmt, icon.boldFont)[0] + 2*icon.TEXT_MARGIN + 1
+        bodyWidth = icon.getTextSize('@', icon.boldFont)[0] + 2*icon.TEXT_MARGIN + 1
         bodyHeight = icon.minTxtIconHgt
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
@@ -2011,8 +2016,7 @@ class DecoratorIcon(icon.Icon):
         self.sites.add('seqIn', 'seqIn', seqX, 1)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
-        self.sites.add('attrIcon', 'attrIn', bodyWidth,
-            bodyHeight // 2 + icon.ATTR_SITE_OFFSET)
+        self.sites.add('argIcon', 'input', bodyWidth - 1, siteYOffset)
         totalWidth = icon.dragSeqImage.width + bodyWidth
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
@@ -2030,8 +2034,10 @@ class DecoratorIcon(icon.Icon):
                     comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = icon.dragSeqImage.width - 1
-            txtImg = icon.iconBoxedText(self.stmt)
+            txtImg = icon.iconBoxedText('@')
             img.paste(txtImg, (bodyOffset, 0))
+            inImageY = self.sites.argIcon.yOffset - icon.inSiteImage.height // 2
+            img.paste(icon.inSiteImage, (self.sites.argIcon.xOffset, inImageY))
             icon.drawSeqSites(img, bodyOffset, 0, txtImg.height)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, bodyHeight//2 -
@@ -2050,36 +2056,145 @@ class DecoratorIcon(icon.Icon):
         self.layoutDirty = False
 
     def calcLayouts(self):
-        if self.sites.attrIcon.att is None:
-            attrLayouts = [None]
+        if self.sites.argIcon.att is None:
+            argLayouts = [None]
         else:
-            attrLayouts = self.sites.attrIcon.att.calcLayouts()
+            argLayouts = self.sites.argIcon.att.calcLayouts()
         width, height = self.bodySize
         layouts = []
-        for attrLayout in attrLayouts:
+        for attrLayout in argLayouts:
             layout = iconlayout.Layout(self, width, height, height // 2)
-            layout.addSubLayout(attrLayout, 'attrIcon', width-1, icon.ATTR_SITE_OFFSET)
+            layout.addSubLayout(attrLayout, 'argIcon', width-1, 0)
             layouts.append(layout)
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
-        return self.stmt
+        return '@'
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
-        return icon.addAttrSaveText(filefmt.SegmentedText(self.stmt), self,
-            parentBreakLevel, contNeeded, export)
+        text = filefmt.SegmentedText('@')
+        argSaveText = icon.argSaveText(parentBreakLevel, self.sites.argIcon,
+            contNeeded, export)
+        text.concat(None, argSaveText, contNeeded)
+        return text
 
     def dumpName(self):
-        return self.stmt
+        return '@'
+
+    def createAst(self):
+        # The decorator icon does not produce any code.  The decorated function or class
+        # def calls our createAstForAppliedIc method (below) to generate the associated
+        # code.  However we do generate errors associated with the icon.  Technically,
+        # the python compiler will catch all of these, but the Python messages are
+        # unhelpful 'syntax error' or generic expression error.
+        argIcon = self.childAt('argIcon')
+        if argIcon is None:
+            raise icon.IconExecException(self, "Expected decorator function")
+        if not isinstance(argIcon, IdentifierIcon):
+            raise icon.IconExecException(self, "Invalid decorator name")
+        attr = argIcon.childAt('attrIcon')
+        while isinstance(attr, AttrIcon):
+            attr.errHighlight = None
+            attr = attr.childAt('attrIcon')
+        if isinstance(attr, listicons.CallIcon) and attr.childAt('attrIcon'):
+            raise icon.IconExecException(self,
+                "Nothing can follow decorator function argument list")
+        if attr is not None:
+            raise icon.IconExecException(self, "Decorator can only accept decorator "
+                "function name, module components, and arguments")
+        if not isFollowedByDefOrClass(self):
+            raise icon.IconExecException(self,
+                "Decorator must be followed by a def or class statement")
+
+    def createAstForAppliedIc(self, forIc):
+        """The createAst call for a decorator does nothing because decorator ASTs are
+        attached to the decorated statement, as opposed to the decorator statement."""
+        argIcon = self.childAt('argIcon')
+        if argIcon is None:
+            raise icon.IconExecException(self, "No decorator specified")
+        else:
+            return argIcon.createAst()
 
     def textEntryHandler(self, entryIc, text, onAttr):
-        # Prohibit from typing anything but a call icon directly on our (decorator icon)
-        # attribute site (below that, users can still type whatever the call icon allows).
-        if self.siteOf(entryIc) != 'attrIcon':
+        # Prohibit from typing anything but a name, attributes, or call icon directly on
+        # our (decorator icon) input site or its direct attributes. Within the call
+        # argument list, users can still type whatever the call icon allows.  Once the
+        # user has mangled it (through deletion, paste, or snapping), relax the rules
+        # and allow anything (bad stuff will be highlighted).
+        if self.siteOf(entryIc, recursive=True) != 'argIcon':
             return None
-        if text != '(':
-            return "reject:A decorator name can be followed by '(' if it takes " \
-                "arguments, but nothing else"
+        onIcon = entryIc.attachedIcon()
+        if onIcon is self:
+            # Entry icon is directly on the input site of the '@'
+            if text.isidentifier():
+                return "accept"
+            elif text[-1] in ' .(' and text[:-1].isidentifier():
+                if text[:-1] in entryicon.keywords:
+                    return "reject:%s is a reserved keyword and cannot be used " \
+                        "as a decorator or module name" % text[:-1]
+                return IdentifierIcon(text[:-1], self.window), text[-1]
+            return "reject:Decorator name must be a valid identifier"
+        else:
+            argIcon = self.childAt('argIcon')
+            if not isinstance(argIcon, IdentifierIcon):
+                # The user has managed to mess up the decorator syntax.  Let them type
+                # anything, but highlight to show it's wrong
+                return None
+            attr = argIcon.childAt('attrIcon')
+            while isinstance(attr, AttrIcon):
+                attr = attr.childAt('attrIcon')
+            if attr is entryIc:
+                # The entry icon is on an appropriate attribute site
+                if text == '(' or text == '.' or text[0] == '.' and (
+                        text[1:].isidentifier() or text[1:-1].isidentifier() and
+                        text[-1] in ' .('):
+                    return None
+                return "reject:Decorator can only accept decorator name and module " \
+                        "components, optionally followed by '(' (if it takes " \
+                        "arguments)"
+            if isinstance(attr, listicons.CallIcon):
+                # Anything can appear within call arguments, but not after
+                if attr.childAt('attrIcon') is entryIc:
+                    return "reject:Nothing can follow decorator argument list"
+                return None
+            # The user has managed to get something other than attributes or a call after
+            # the decorator.  Let them type anything, but highlight to show it's wrong
+            return None
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        if isFollowedByDefOrClass(self):
+            self.errHighlight = None
+        else:
+            self.errHighlight = icon.ErrorHighlight(
+                "Decorator is not followed by a def or class statement")
+        argIcon = self.childAt('argIcon')
+        if argIcon is None:
+            return
+        if not isinstance(argIcon, IdentifierIcon):
+            argIcon.highlightErrors(icon.ErrorHighlight("Invalid decorator name"))
+            return
+        attr = argIcon.childAt('attrIcon')
+        while isinstance(attr, AttrIcon):
+            attr.errHighlight = None
+            attr = attr.childAt('attrIcon')
+        if attr is None:
+            argIcon.highlightErrors(None)
+            return
+        if isinstance(attr, listicons.CallIcon):
+            # Anything can appear within call arguments, but not after.  For simplicity,
+            # we start by calling highlightErrors all of the call icon's children,
+            # including the unwanted attribute, and re-highlight the attribute.
+            attr.highlightErrors(None)
+            callAttr = attr.childAt('attrIcon')
+            if callAttr is not None:
+                callAttr.highlightErrors(icon.ErrorHighlight(
+                    "Nothing can follow decorator argument list"))
+            return
+        attr.highlightErrors(icon.ErrorHighlight("Decorator can only accept decorator "
+            "name, module components, and arguments"))
 
     def snapLists(self, forCursor=False):
         # Make snapping on attribute site conditional on icon being a call icon
@@ -2087,29 +2202,28 @@ class DecoratorIcon(icon.Icon):
         if forCursor:
             return snapLists
         def snapFn(ic, siteId):
-            return isinstance(ic, listicons.CallIcon)
-        attrSites = snapLists['attrIn']
-        snapLists['attrIn'] = []
-        snapLists['insertAttr'] = []
-        snapLists['conditional'] = [(*attrSites[0], 'attrIn', snapFn)]
+            return isinstance(ic, IdentifierIcon)
+        inputSites = snapLists['input']
+        snapLists['input'] = []
+        snapLists['conditional'] = [(*inputSites[0], 'input', snapFn)]
         return snapLists
 
     def backspace(self, siteId, evt):
-        self.window.backspaceIconToEntry(evt, self, self.stmt, pendingArgSite=siteId)
+        self.window.backspaceIconToEntry(evt, self, '@', pendingArgSite=siteId)
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
         if clickPos is not None:
             textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width
             textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
             cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, self.stmt)
+                (textOriginX, textOriginY), clickPos, icon.boldFont, '@')
             if cursorTextIdx is None:
                 return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
+            entryIcon = self.window.replaceIconWithEntry(self, '@', 'argIcon')
             entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
-        if siteAfter is None or siteAfter == 'attrIcon':
-            return self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
+        if siteAfter is None or siteAfter == 'argIcon':
+            return self.window.replaceIconWithEntry(self, '@', 'argIcon')
         return None
 
 def backspaceSeriesStmt(ic, site, evt, text):
@@ -2225,7 +2339,7 @@ def createNameFieldSaveText(brkLvl, site, needsCont, export):
 # Getting resources (particularly icon class definitions) from other icon files requires
 # circular imports, unfortunately.  Here, the import is deferred far enough down the file
 # that the dependencies can resolve.
-import blockicons
+import blockicons, commenticon
 
 def isOutsideOfDef(iconToTest):
     for ic in icon.traverseSeq(iconToTest, includeStartingIcon=False, reverse=True,
@@ -2245,6 +2359,13 @@ def isOutsideOfLoop(iconToTest):
             return False
     return True
 
+def isFollowedByDefOrClass(iconToTest):
+    for seqIc in icon.traverseSeq(iconToTest, includeStartingIcon=False):
+        if isinstance(seqIc, (commenticon.CommentIcon, commenticon.VerticalBlankIcon,
+                DecoratorIcon)):
+            continue
+        return isinstance(seqIc, (blockicons.DefIcon, blockicons.ClassDefIcon))
+    return False
 
 def determineCtx(ic):
     """Figure out the load/store/delete context of a given icon.  Returns an object

@@ -14,6 +14,7 @@ import entryicon
 import commenticon
 
 INCOMPLETE_TRY_IDENT = '___pyg_incomplete_try_stmt'
+UNUSED_DECORATOR_IDENT = '___pyg_unused_decorator'
 
 # Number of pixels to the left of sequence site to start else and elif icons
 ELSE_DEDENT = 21
@@ -2253,9 +2254,14 @@ class ClassDefIcon(DefOrClassIcon):
                      lineno=base.id, col_offset=0))
                 else:
                     bases.append(base.createAst())
+        decoratorIcs = isPrecededByDecorators(self)
+        if decoratorIcs is None:
+            decoratorAsts = []
+        else:
+            deoratorAsts = [ic.createAstForAppliedIc(self) for ic in decoratorIcs]
         bodyAsts = createBlockAsts(self)
         return ast.ClassDef(nameIcon.name, bases, keywords=kwds, **bodyAsts,
-         decorator_list=[], lineno=self.id, col_offset=0)
+         decorator_list=deoratorAsts, lineno=self.id, col_offset=0)
 
     def textEntryHandler(self, entryIc, text, onAttr):
         siteId = self.siteOf(entryIc, recursive=True)
@@ -2323,6 +2329,7 @@ class ClassDefIcon(DefOrClassIcon):
 
     def highlightErrors(self, errHighlight):
         checkOwnedBlockHighlights(self)
+        checkDecoratorHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -2415,6 +2422,7 @@ class DefIcon(DefOrClassIcon):
 
     def highlightErrors(self, errHighlight):
         checkOwnedBlockHighlights(self)
+        checkDecoratorHighlights(self)
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)
             return
@@ -2445,8 +2453,13 @@ class DefIcon(DefOrClassIcon):
         if self.isAsync:
             return ast.AsyncFunctionDef(nameIcon.name, argumentAsts, **bodyAsts,
              decorator_list=[], returns=None, lineno=self.id, col_offset=0)
+        decoratorIcs = isPrecededByDecorators(self)
+        if decoratorIcs is None:
+            decoratorAsts = []
+        else:
+            decoratorAsts = [ic.createAstForAppliedIc(self) for ic in decoratorIcs]
         return ast.FunctionDef(nameIcon.name, argumentAsts, **bodyAsts,
-         decorator_list=[], returns=None, lineno=self.id, col_offset=0)
+         decorator_list=decoratorAsts, returns=None, lineno=self.id, col_offset=0)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
@@ -3022,6 +3035,11 @@ def markDependentStmts(ic):
             if isinstance(blockIc, (nameicons.ReturnIcon, nameicons.YieldIcon,
                     nameicons.YieldFromIcon)):
                 blockIc.markLayoutDirty()
+    if isinstance(ic, (DefIcon, ClassDefIcon)):
+        decoratorIcs = isPrecededByDecorators(ic)
+        if decoratorIcs is not None:
+            for decoratorIc in decoratorIcs:
+                decoratorIc.markLayoutDirty()
 
 def _consolidateHandlerBlocks(paramDict, handlerIcs):
     """createBlockAsts puts each except clause block of a try statement in a separate
@@ -3375,6 +3393,8 @@ def createIconsFromBodyAsts(bodyAsts, window):
                     if icons[-1].hasSite('seqOut'):
                         icons[-1].sites.seqOut.attach(icons[-1], decoratorIc, 'seqIn')
                 icons.append(decoratorIc)
+            if isUnusedDecoratorMacro(stmt):
+                continue  # Don't create icon or block for $UnusedDecorator$
         if hasattr(stmt, 'linecomments'):
             _addLineCommentIcons(stmt.linecomments, window, icons)
         if isinstance(stmt, ast.Expr):
@@ -3494,12 +3514,9 @@ def createIconsFromBodyAsts(bodyAsts, window):
 icon.registerIconCreateFn("bodyAsts", createIconsFromBodyAsts)
 
 def _createDecoratorIconFromAst(decoratorAst, window):
-    if isinstance(decoratorAst, ast.Name):
-        decoratorIc = nameicons.DecoratorIcon(decoratorAst.id, window)
-    else:  # decoratorAst is ast.Call
-        decoratorIc = nameicons.DecoratorIcon(decoratorAst.func.id, window)
-        callIcon = listicons.createCallIconFromAst(decoratorAst, window)
-        decoratorIc.replaceChild(callIcon, "attrIcon")
+    decoratorIc = nameicons.DecoratorIcon(window)
+    argIcon = icon.createFromAst(decoratorAst, window)
+    decoratorIc.replaceChild(argIcon, 'argIcon')
     return decoratorIc
 
 def _addLineCommentIcons(commentList, window, sequence):
@@ -3577,6 +3594,31 @@ def checkPseudoBlockHighlights(blockOwner):
             if isinstance(ic, (ElseIcon, ElifIcon, ExceptIcon, FinallyIcon)):
                 if not ic.layoutDirty:
                     ic.highlightErrors(None)
+
+def checkDecoratorHighlights(defOrClassIcon):
+    """Look back upward in the sequence, behind a dirty def or class icon to make sure
+    the highlights of any associated decorator are cleared"""
+    decoratorIcs = isPrecededByDecorators(defOrClassIcon)
+    if decoratorIcs is not None:
+        for ic in decoratorIcs:
+            ic.errHighlight = None
+
+def isPrecededByDecorators(iconToTest):
+    """Return a list of associated decorators if the (presumably def or class) icon is
+    preceded by one or more decorators.  Otherwise returns None."""
+    decorators = None
+    for seqIc in icon.traverseSeq(iconToTest, includeStartingIcon=False, reverse=True):
+        if isinstance(seqIc, (commenticon.CommentIcon, commenticon.VerticalBlankIcon)):
+            continue
+        if isinstance(seqIc, nameicons.DecoratorIcon):
+            if decorators is None:
+                decorators = [seqIc]
+            else:
+                decorators.append(seqIc)
+            continue
+        return decorators
+    return decorators
+
 
 class BlockContextStack:
     """Used by save file and clipboard format writing code to determine whether icons
@@ -3696,9 +3738,16 @@ def looseExceptMacroIconCreationFn(astNode, macroArgs, argAsts, window):
 filefmt.registerBuiltInMacro('XExcept', 'pass', looseExceptMacroIconCreationFn)
 
 # The Python parser does not accept a try block without an except or finally.  We emit
-# this macro to fake it out so we can store/clip such a thing.
+# an $EmptyTry$ macro to fake it out so we can store/clip such a thing.
 def isIncompleteTry(stmt):
     return len(stmt.finalbody) == 1 and isinstance(stmt.finalbody[0], ast.Expr) and \
         isinstance(stmt.finalbody[0].value, ast.Name) and \
         stmt.finalbody[0].value.id == INCOMPLETE_TRY_IDENT
 filefmt.registerBuiltInMacro('EmptyTry', 'finally:' + INCOMPLETE_TRY_IDENT, None)
+
+# The Python parser cannot handle a decorator without a function or class to decorate,
+# so we emit the $UnusedDecorator$ macro after unassociated decorator icons.
+def isUnusedDecoratorMacro(stmtAst):
+    return isinstance(stmtAst, ast.FunctionDef) and stmtAst.name == UNUSED_DECORATOR_IDENT
+filefmt.registerBuiltInMacro('UnusedDecorator',
+    'def ' + UNUSED_DECORATOR_IDENT + '():pass', None)

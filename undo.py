@@ -254,3 +254,13 @@ class Callback(UndoListEntry):
 
     def undo(self, undoData):
         self.callback(*self.args)
+
+class UndoNoOp:
+    """Do-nothing version of UndoRedoList that window can swap-in so code can perform
+    operations without recording."""
+    # For now, all interaction with the UndoRedoList objects is in the form of calls
+    # that return no values, so this weird object just accepts any arbitrary method call
+    # and does nothing  May need to be more involved if the class interface changes.
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+undoNoOp = UndoNoOp()

@@ -1968,6 +1968,8 @@ def createStmtAst(ic):
     simply means calling the .createAst() method, but for expressions this additionally
     entails wrapping it in an ast.Expr() node."""
     stmtAst = ic.createAst()
+    if stmtAst is None:
+        return None
     if stmtAst.__class__ in stmtAstClasses:
         return stmtAst
     return ast.Expr(stmtAst, lineno=ic.id, col_offset=0)

@@ -49,7 +49,6 @@ attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
 opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~"\']')
 stringPattern = re.compile("^(f|fr|rf|b|br|rb|u|r)?['\"]$", re.IGNORECASE)
-decoratorPattern = re.compile('^@[a-zA-Z_][a-zA-Z_\\d]*$')
 textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
@@ -2738,16 +2737,23 @@ def parseTopLevelText(text, window):
                 kwds['typeover'] = True
             return icClass(window=window, **kwds), delim
     if text == '*':
-        # Sadly, while very unusual, it is possible to write *a, b = c, and since we
-        # don't yet even know if it's a list on the first keystroke, it's necessary to
-        # generate a star icon, even though this is more likely a typing error.
+        # A star icon by itself must be allowed, as it is the beginning of *a, b = ...
         return listicons.StarIcon(window), None
-    if text == '@' or decoratorPattern.fullmatch(text):
-        return "accept"
-    if decoratorPattern.fullmatch(text[:-1]) and text[-1] in (' ('):
-        return nameicons.DecoratorIcon(text[1:-1], window), text[-1]
-    if text == '#':
-        return commenticon.CommentIcon('', window=window), None
+    if text == '@':
+        return nameicons.DecoratorIcon(window), None
+    if text[0] == '#':
+        return commenticon.CommentIcon(text[1:], window=window), None
+    if len(text) == 2:
+        op = text[0]
+        delim = text[1]
+        if op == '*':
+            if delim.isalpha() or delim.isspace() or delim in '([{':
+                return listicons.StarIcon(window), delim
+            return "reject:* must be followed by identifier or iterable"
+        if op == '@':
+            if delim.isalpha():
+                return nameicons.DecoratorIcon(window), delim
+            return "reject:@ must be followed by decorator function name"
     return parseExprText(text, window)
 
 def runIconTextEntryHandlers(entryIc, text, onAttr):

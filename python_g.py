@@ -745,9 +745,14 @@ class Window:
             if char == ' ':
                 # Quietly ignore extra space to eat unnecessary padding
                 return
+            origCursorIcon = self.cursor.icon
+            origCursorSite = self.cursor.site
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
             self._insertEntryIconAtCursor(allowOnCursorOnly=char=='#')
             rejectReason = self.cursor.icon.addText(char)
+            if rejectReason is not None:
+                # Nothing was inserted and inserted entry icon was presumably deleted
+                self.cursor.setToIconSite(origCursorIcon, origCursorSite)
         elif self.cursor.type == "window":
             x, y = self.cursor.pos
             entryIcon = entryicon.EntryIcon(window=self)
@@ -2206,7 +2211,14 @@ class Window:
             execType = 'eval'
             seqIcons = [iconToExecute]
             try:
-                astToExecute = ast.Expression(iconToExecute.createAst())
+                exprAst = iconToExecute.createAst()
+            except icon.IconExecException as excep:
+                self._handleExecErr(excep)
+                return False
+            if exprAst is None:
+                return True
+            try:
+                astToExecute = ast.Expression(exprAst)
             except icon.IconExecException as excep:
                 self._handleExecErr(excep)
                 return False
@@ -2215,11 +2227,15 @@ class Window:
             execType = 'exec'
             iconToExecute = icon.findSeqStart(iconToExecute)
             seqIcons = icon.traverseSeq(iconToExecute, skipInnerBlocks=True)
-            try:
-                body = [icon.createStmtAst(ic) for ic in seqIcons]
-            except icon.IconExecException as excep:
-                self._handleExecErr(excep)
-                return False
+            body = []
+            for ic in seqIcons:
+                try:
+                    stmtAst = icon.createStmtAst(ic)
+                except icon.IconExecException as excep:
+                    self._handleExecErr(excep)
+                    return False
+                if stmtAst is not None:  # Comments and decorators create no ASTs
+                    body.append(stmtAst)
             astToExecute = ast.Module(body, type_ignores=[])
         #print(ast.dump(astToExecute, include_attributes=True))
         # Compile the AST
@@ -2942,11 +2958,16 @@ class Window:
             haveWrittenSeqPos = False
             branchDepth = 0
             isStartOfOwnedBlock = False
+            pendingDecorators = False
             blockCtx = blockicons.BlockContextStack()
             for isSingleStmt, ic in flagIndividual(seqIter):
                 if isinstance(ic, icon.BlockEnd) and ic not in pruneBlockEnds:
-                    # Python requires a 'pass' statement for empty blocks
-                    if isStartOfOwnedBlock:
+                    # Python requires a 'pass' statement for empty blocks and something
+                    # to decorate for decorators
+                    if pendingDecorators:
+                        outStream.write(tabSize*branchDepth*' ' + '$UnusedDecorator$\n')
+                        pendingDecorators = False
+                    elif isStartOfOwnedBlock:
                         self._writePassStmt(outStream, tabSize * branchDepth,
                             not exportPython)
                         isStartOfOwnedBlock = False
@@ -2960,26 +2981,38 @@ class Window:
                         outStream.write(tabSize * branchDepth * ' ' + '$EmptyTry$')
                     blockCtx.pop()
                     continue
+                # If we're outputting selected icons and some of the icons in the
+                # current statement are not selected, make a temporary copy and use
+                # splitDeletedIcons to reassemble the remaining ones.  Note that
+                # we're going statement-by-statement and don't care about re-linking
+                # block-end pointers, just that we don't indent for pruned block-owners
+                # or dedent for their corresponding block-ends.
                 stmtComment = ic.stmtComment if hasattr(ic, 'stmtComment') else None
                 if selectedOnly and (
                         any((c not in self.selectedSet for c in ic.traverse())) or
                         stmtComment is not None and stmtComment not in self.selectedSet):
-                    # We're outputting selected icons, and some of the icons in the
-                    # current statement are not selected.  Make a temporary copy and use
-                    # splitDeletedIcons to reassemble the remaining ones.  Note that
-                    # we're going statement-by-statement and don't care about re-linking
-                    # block-end pointers, just that we don't indent for pruned block-
-                    # owners or dedent for their corresponding block-ends.
                     prunedIc = _makePrunedCopy(ic, self.selectedSet, not isSingleStmt)
                     if hasattr(ic, 'blockEnd') and ic not in self.selectedSet:
                         pruneBlockEnds.add(ic.blockEnd)
                 else:
                     prunedIc = ic
-                if isStartOfOwnedBlock and blockicons.isPseudoBlockIc(prunedIc):
+                # Work-around statement-level differences between Python parser and icon
+                # form: pass statements are required decorators must decorate something
+                if isinstance(prunedIc, (blockicons.DefIcon, blockicons.ClassDefIcon)):
+                    pendingDecorators = False
+                elif pendingDecorators and not isinstance(prunedIc,
+                        (commenticon.CommentIcon, commenticon.VerticalBlankIcon)):
+                    outStream.write(tabSize * branchDepth * ' ' + '$UnusedDecorator$\n')
+                    pendingDecorators = False
+                elif isStartOfOwnedBlock and blockicons.isPseudoBlockIc(prunedIc):
                     self._writePassStmt(outStream, tabSize*branchDepth, not exportPython)
+                if isinstance(ic, nameicons.DecoratorIcon):
+                    pendingDecorators = True
                 if not isinstance(ic, (commenticon.CommentIcon,
                         commenticon.VerticalBlankIcon)):
                     isStartOfOwnedBlock = False
+                # Compute the indent needed for this statement: pseudo-blocks get dedent
+                # (but only valid ones).
                 indent = tabSize * branchDepth
                 pseudoBlockInvalid = False
                 if blockicons.isPseudoBlockIc(prunedIc):
@@ -2991,6 +3024,7 @@ class Window:
                     else:
                         blockCtx.push(prunedIc)
                         indent = tabSize * (branchDepth - 1)
+                # Create the save text
                 if pseudoBlockInvalid and not exportPython:
                     saveText = prunedIc.createInvalidCtxSaveText(export=exportPython)
                 else:
@@ -3043,6 +3077,7 @@ class Window:
                 if hasattr(prunedIc, 'stmtComment') and prunedIc.stmtComment is not None:
                     saveText.addComment(prunedIc.stmtComment.createSaveText(
                         export=exportPython), isStmtComment=True)
+                # Wrap the save text and write it to outStream
                 stmtText = saveText.wrapText(indent, indent + continueIndent,
                     margin=DEFAULT_SAVE_FILE_MARGIN, export=exportPython)
                 outStream.write(stmtText)
@@ -3051,7 +3086,10 @@ class Window:
                         and not pseudoBlockInvalid:
                     isStartOfOwnedBlock = True
             # If we ended the sequence with a block-owning statement (user had block
-            # owner as last statement in selection), add a 'pass' icon
+            # owner as last statement in selection) or unassociated decorator, add a
+            # 'pass' statement or an $UnusedDecorator$ macro.
+            if pendingDecorators:
+                outStream.write(tabSize * branchDepth * ' ' + '$UnusedDecorator$\n')
             if isStartOfOwnedBlock:
                 self._writePassStmt(outStream, tabSize * branchDepth, not exportPython)
 
