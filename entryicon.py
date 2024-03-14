@@ -19,6 +19,7 @@ import stringicon
 import commenticon
 import cursors
 import reorderexpr
+import filefmt
 
 PLAIN_BG_COLOR = (255, 255, 255, 255)
 FOCUS_BG_COLOR = (255, 242, 242, 255)
@@ -2430,11 +2431,69 @@ class EntryIcon(icon.Icon):
         return None
 
     def duplicate(self, linkToOriginal=False):
-        # ... This is untested, as the only use of duplicate so far is copy-to-clipboard,
-        #     and entry icons still don't have a createSaveText method.
+        # ...  This is untested, as the only use of duplicate so far is copy-to-clipboard,
+        #      and entry icons still don't have a createSaveText method.
         ic = EntryIcon(initialString=self.text, window=self.window)
         self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
         return ic
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText('$Entry')
+        macroArgs = '' if self.text == '' else repr(self.text)
+        if self.attachedToAttribute():
+            macroArgs += 'A'
+        argsWritten = False
+        for argIdx, arg in enumerate(self.listPendingArgs()):
+            if isinstance(arg, (list, tuple)):
+                argText = filefmt.SegmentedText(None)
+                argType = 'l'
+                for i, argIcon in enumerate(arg):
+                    if argIcon is None:
+                        argText.add(brkLvl, '$Empty$', needsContinue=False)
+                    else:
+                        argText.concat(brkLvl, argIcon.createSaveText(brkLvl + 1,
+                            contNeeded=False, export=export))
+                    if i != len(arg) - 1:
+                        argText.add(None, ', ', needsContinue=False)
+            elif arg is None:
+                argText = filefmt.SegmentedText('$Empty$')
+                argType = ''
+            else:
+                argText = arg.createSaveText(brkLvl, False, export)
+                if argText.isCtxMacro():
+                    argType = argText.unwrapCtxMacro()
+                elif isinstance(arg, (nameicons.AttrIcon, subscripticon.SubscriptIcon,
+                        listicons.CallIcon)):
+                    argType = 'a'
+                elif isinstance(arg, infixicon.AsIcon):
+                    argType = 's'
+                elif isinstance(arg, listicons.DictElemIcon):
+                    argType = 'd'
+                elif isinstance(arg, (listicons.CprhForIcon, listicons.CprhIfIcon)):
+                    argType = 'c'
+                elif isinstance(arg, (listicons.ArgAssignIcon, listicons.StarStarIcon)):
+                    argType = 'f'
+                elif isinstance(arg, nameicons.RelativeImportIcon):
+                    argType = 'i'
+                else:
+                    argType = ''
+            if argIdx == 0:
+                text.add(None, ':' + macroArgs + argType + '($')
+            else:
+                text.add(brkLvl, '$)' + argType + '($', needsContinue=False)
+            text.concat(brkLvl, argText, needsContinue=False)
+            argsWritten = True
+        if argsWritten:
+            # Close last macro code argument (macroArgs already written)
+            text.add(brkLvl, '$)$', needsContinue=False)
+        else:
+            # If no code arguments were written (pending arg list was empty) , we also
+            # haven't written the macroArgs.  Write them and the closing '$' of the
+            # macro.  There's no point in optimizing out the : for the no arg case, since
+            # that's only a backstop for failing to remove an empty entry icon.
+            text.add(None, ':' + macroArgs + '$')
+        return text
 
     def createAst(self):
         raise icon.IconExecException(self, "Remove text-entry field")
@@ -3279,3 +3338,47 @@ def cvtTupleToCursorParen(tupleIcon, closed, typeover):
         tupleIcon.replaceChild(None, 'attrIcon')
         newParen.replaceChild(attr, 'attrIcon')
     return newParen
+
+def entryMacroFn(astNode, macroArgs, argAsts, window):
+    if macroArgs is not None:
+        singleQuoteStartIdx = macroArgs.find("'")
+        singleQuoteEndIdx = macroArgs.rfind("'")
+        doubleQuoteStartIdx = macroArgs.find('"')
+        doubleQuoteEndIdx = macroArgs.rfind('"')
+        if singleQuoteStartIdx == -1 and doubleQuoteStartIdx == -1:
+            text = ''
+        elif singleQuoteStartIdx != -1 and singleQuoteStartIdx != singleQuoteEndIdx:
+            text = ast.literal_eval(macroArgs[singleQuoteStartIdx:singleQuoteEndIdx + 1])
+        elif doubleQuoteStartIdx != -1 and doubleQuoteStartIdx != doubleQuoteEndIdx:
+            text = ast.literal_eval(macroArgs[doubleQuoteStartIdx:doubleQuoteEndIdx + 1])
+        else:
+            # There's verification code in filefmt.py (verifyEntryMacroArgs), so this
+            # shouldn't happen unless they get out of sync.  If we ever get the
+            # capability to raise syntax errors from macro functions, that checking
+            # should be moved, here.
+            text = ''
+    else:
+        text = ''
+    entryIc = EntryIcon(initialString=text, window=window)
+    if argAsts is not None:
+        for argAst in argAsts:
+            if isinstance(argAst, ast.Tuple) and hasattr(argAst, 'isNakedTuple'):
+                seriesIcons = [icon.createFromAst(astNode, window)
+                    for astNode in argAst.elts]
+                entryIc.appendPendingArgs([seriesIcons])
+            else:
+                argIcons = icon.createFromAst(argAst, window)
+                entryIc.appendPendingArgs([argIcons])
+    if not isinstance(astNode, ast.Attribute):
+        return entryIc
+    # If we're on an attribute site, the entry icon needs to be put underneath whatever
+    # is in the .value slot of the Attribute AST.
+    topIcon = icon.createFromAst(astNode.value, window)
+    parentIcon = icon.findLastAttrIcon(topIcon)
+    parentIcon.replaceChild(entryIc, "attrIcon")
+    return topIcon
+
+# Note that although registering the $Entry$ macro here would normally imply that the
+# processing is confined to this module, $Entry$ also has hard-coded support in
+# filefmt.py.
+filefmt.registerBuiltInMacro('Entry', None, entryMacroFn)

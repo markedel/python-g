@@ -323,8 +323,15 @@ def createCursorParenFromFakeAst(astNode, window, skipArgCreate=False):
     if hasattr(astNode, 'macroAnnotations'):
         macroName, macroArgs, iconCreateFn, argAsts = astNode.macroAnnotations
         closed = 'o' not in macroArgs
+        remove = 'x' in macroArgs
     else:
         closed = True
+        remove = False
+    if remove:
+        # The $:x$ macro argument allows us to add parens for the python parser, which
+        # we remove upon read (currently used to attach an entry icon to numeric icons
+        # in the save/clipboard format).
+        return icon.createFromAst(astNode.arg, window)
     parenIcon = CursorParenIcon(closed=closed, window=window)
     if not skipArgCreate:
         argIcon = icon.createFromAst(astNode.arg, window)

@@ -214,6 +214,21 @@ class NumericIcon(TextIcon):
         self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
         return ic
 
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        # While other icons with cursor-only sites can temporarily host entry icons
+        # during parsing, numeric icons can hold them indefinitely, and therefore need
+        # to take responsibility for saving.  In order to do that, we wrap a paren with
+        # $:x$ (remove option) around ourselves
+        numberText = filefmt.SegmentedText(self.text)
+        attr = self.childAt('attrIcon')
+        if attr is None:
+            return numberText
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText('$:x$(')
+        text.concat(brkLvl, numberText)
+        text.add(None, ")")
+        return icon.addAttrSaveText(text, self, parentBreakLevel, contNeeded, export)
+
     def compareData(self, data):
         return data == self.value
 

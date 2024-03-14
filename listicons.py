@@ -1972,7 +1972,7 @@ class CprhIfIcon(icon.Icon):
 
     def _detectBadOrder(self):
         parent = self.parent()
-        if parent is None:
+        if parent is None or not isinstance(parent, ListTypeIcon):
             return False
         for parentCprhSite in parent.sites.cprhIcons:
             if parentCprhSite.att is self:
@@ -3592,6 +3592,10 @@ def createDictIconFromAst(astNode, window):
         elif macroName == 'Empty' and macroArgs is not None and 'D' in macroArgs:
             # This is an Empty macro with D (masquerade as dict elem) arg
             argIcons.append(None)
+        elif macroName == 'Entry' and macroArgs is not None and 'D' in macroArgs:
+            # This is an Entry macro with D (masquerade as dict elem) arg loaded in to
+            # the key field, so transform just that part, rather than the entire element.
+            argIcons.append(icon.createFromAst(key, window))
         elif key is None:
             starStar = StarStarIcon(window)
             starStar.replaceChild(value, "argIcon")
@@ -3645,6 +3649,15 @@ def createCallIconFromAst(astNode, window):
         if fieldName == 'Ctx' and 'K' in macroArgs:
             # This is a Ctx macro with K (masquerade as keyword) argument, use macro arg
             argIcons.append(icon.createFromAst(argAsts[0], window))
+        elif fieldName == 'Empty' and 'K' in macroArgs:
+            # This is an Empty macro with K (masquerade as keyword) argument, stuffed in
+            # to the key field.  Make an empty argument
+            argIcons.append(None)
+        elif fieldName in ('Entry', 'Empty') and 'K' in macroArgs:
+            # This is an Entry macro with K (masquerade as keyword) argument, stuffed
+            # in to the key field.  We don't have an AST, but are allowed to call the
+            # $Entry$ macro's icon creation function with an AST of None.
+            argIcons.append(entryicon.entryMacroFn(None, macroArgs, argAsts, window))
         elif key.arg is None:
             starStarIcon = StarStarIcon(window)
             starStarIcon.replaceChild(valueIcon, 'argIcon')

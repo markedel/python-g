@@ -23,6 +23,7 @@ PLACEHOLDER_NAME_TEMPLATE = "___pyg_placeholder_ident_"
 placeholderNamePattern = re.compile("%s(\\d+)" % PLACEHOLDER_NAME_TEMPLATE)
 
 ctxMacroPattern = re.compile('\\$Ctx[(:]')
+endMacroArgPattern = re.compile('\\$\\)((.)?\\()?\\$')
 
 # Variable names used for faking out the Python parser to parse free attributes,
 # function call, and comprehensions
@@ -41,8 +42,9 @@ CPRH_PARSE_STUB = '___pyg_cprh_parse_stub'
 #   e   expression
 #   f   function argument assignment or **
 #   i   "import from" relative module syntax: ...x
+#   l   a series of values (l for list)
 # In Ctx and Entry macros, omitting the parse context type implies 'e'.
-macroArgContextTypes = {'a', 's', 'd', 'c', 'e', 'f', 'i'}
+macroArgContextTypes = {'a', 's', 'd', 'c', 'e', 'f', 'i', 'l'}
 
 # Dark Unicode arrow for inserting in code lines to show the location of errors in error
 # dialogs (Python's normal method using a caret is problematic with proportional fonts).
@@ -96,7 +98,8 @@ class MacroParser:
 
     def expandMacros(self, text, startIdx=0, startLineNum=1):
         """Takes text in python_g clipboard/save-file text format, expands macros until
-        either the end of text or $($ or $@$ macro.  Returns four items:
+        either the end of text, end of macro ($)$, or $)($ variant) or $@$ macro.
+        Returns five items:
             1) The macro-expanded text
             2) An object for looking up macro annotation (name, arguments, and icon
                creation function) given an AST node resulting from parsing the text.
@@ -215,7 +218,7 @@ class MacroParser:
 
     def _processMacro(self, modLineNum, modColNum, origText, macroStartIdx, origLineNum,
             annotations):
-        """Process a macro in origText between macroStartIdx and macroEndIdx, adding
+        """Process a macro in origText starting at macroStartIdx, adding
         entries to annotations object for associating data from the named macro and the
         argument string with appropriate AST node.  Returns text to substitute for the
         macro before passing it on to the Python parser, and the next index and line
@@ -259,6 +262,12 @@ class MacroParser:
                     'Ctx macro only allows argument types e, d, f, s, i, D, K, and C')
             replaceText = makeMacroPlaceholder(modLineNum, modColNum, macroArgs)
             iconFn = ctxMacroFn
+        elif macroName == "Entry":
+            errMsg = verifyEntryMacroArgs(macroArgs)
+            if errMsg is not None:
+                raise MacroFailException(origText, macroStartIdx, origLineNum, errMsg)
+            replaceText = makeMacroPlaceholder(modLineNum, modColNum, macroArgs)
+            _, iconFn = self.macroList.get(macroName)
         else:
             macroData = self.macroList.get(macroName)
             if macroData is None:
@@ -374,48 +383,66 @@ class MacroParser:
         conversion to Python AST.  Returns a list of top-level AST nodes and the index
         and line number where parsing stopped.  On failure, raises MacroFailException
         or ReprocSyntaxErrExcept."""
-        #... Note that entry icons have multiple arguments, and this will need to be
-        #    extended to recongnize $)($ form.
         # Do macro text substitution and index macro data into annotations structure.
         # Note that annotations (indexed by line and column) are relative to expanded
         # text, extracted from the macro argument, *not* the entire text buffer.
-        expandedText, annotations, lineNumTranslate, endIdx, lineNum = self.expandMacros(
-            origText, startIdx, lineNum)
-        if endIdx + 3 > len(origText) or origText[endIdx: endIdx + 3] != '$)$':
-            raise MacroFailException(origText, startIdx, lineNum,
-                message='Expected end of macro argument code "$)$"')
-        endIdx += 3
-        # Strip leading spaces from first line.  We support whitespace padding around
-        # macro arguments even though we don't normally write them that way (we do in the
-        # case of a wrap between the macro and the arg, and users who hand-edit the file
-        # will also expect this to work).  The Python parser, however, will see leading
-        # whitespace as indent (at least in the expression case where we're not doctoring
-        # it based on parseCtxType) so we need to strip it off.  We leave the newlines in
-        # but prefix them with line a continuation character ('\') to help correspond
-        # input lines with output lines.
-        prefixNewlines = ''
-        argLineNum = 1
-        nStripped = 0
-        for i, c in enumerate(expandedText):
-            if c == '\n':
-                prefixNewlines += '\\\n'
-                argLineNum += 1
-                nStripped = 0
-            elif c != ' ':
-                break
+        argAsts = []
+        while True:
+            expandedText, annotations, lineNumTranslate, endIdx, lineNum = \
+                self.expandMacros(origText, startIdx, lineNum)
+            argEndMacroMatch = endMacroArgPattern.match(origText[endIdx: endIdx + 5])
+            if argEndMacroMatch is None:
+                raise MacroFailException(origText, startIdx, lineNum,
+                    message='Expected end of macro argument code "$)$"')
+            endIdx += len(argEndMacroMatch.group(0))
+            isContinued = argEndMacroMatch.group(1) is not None
+            continueParseType = argEndMacroMatch.group(2)
+            # Strip leading spaces from first line.  We support whitespace padding around
+            # macro arguments even though we don't normally write them that way (we do in
+            # the case of a wrap between the macro and the arg, and users who hand-edit
+            # the file will also expect this to work).  The Python parser, however, will
+            # see leading whitespace as indent (at least in the expression case where
+            # we're not doctoring it based on parseCtxType) so we need to strip it off.
+            # We leave the newlines in but prefix them with line a continuation character
+            # ('\') to help correspond input lines with output lines.
+            prefixNewlines = ''
+            argLineNum = 1
+            nStripped = 0
+            for i, c in enumerate(expandedText):
+                if c == '\n':
+                    prefixNewlines += '\\\n'
+                    argLineNum += 1
+                    nStripped = 0
+                elif c != ' ':
+                    break
+                else:
+                    nStripped += 1
             else:
-                nStripped += 1
-        else:
-            return (), endIdx, lineNum
-        if i != 0:
-            # Replace the stripped spaces and newlines with continuation newlines
-            expandedText = prefixNewlines + expandedText[i:]
-            # Adjust the annotations to reflect the edit (just the line containing text)
-            annotations.offsetLineColIds(-nStripped, argLineNum)
-        # Pass the macro-expanded text through the Python parser to convert to AST form.
-        argAst = parseExpandedTextToAsts(expandedText, origText, annotations,
-            lineNumTranslate, False, parseCtxType, 'macro argument')
-        return (argAst,), endIdx, lineNum
+                return (), endIdx, lineNum
+            if i != 0:
+                # Replace the stripped spaces and newlines with continuation newlines
+                expandedText = prefixNewlines + expandedText[i:]
+                # Adjust the annotations to reflect the edit (just the line containing text)
+                annotations.offsetLineColIds(-nStripped, argLineNum)
+            # Pass the macro-expanded text through the Python parser to convert to AST
+            # form.  Note that omitted parse types must be converted to 'e' for
+            # parseExpandedTextToAsts to treat the code as an expression rather than as
+            # a code block
+            if parseCtxType is None:
+                parseCtxType = 'e'
+            argAst = parseExpandedTextToAsts(expandedText, origText, annotations,
+                lineNumTranslate, False, parseCtxType, 'macro argument')
+            argAsts.append(argAst)
+            # If this is a terminating macro paren $)$, we're done. Otherwise set up for
+            # parsing the next macro argument
+            if not isContinued:
+                return argAsts, endIdx, lineNum
+            startIdx = endIdx
+            if continueParseType not in macroArgContextTypes:
+                raise MacroFailException(origText, startIdx, lineNum,
+                    "Bad macro argument context code %s in '$)%s($'" %
+                        (continueParseType, continueParseType))
+            parseCtxType = continueParseType
 
     def parsePosMacro(self, text, startIdx, startLineNum):
         """Called during parsing of files or pasted text when parsing has stopped (currently
@@ -499,6 +526,8 @@ class AnnotationList:
         elif nodeClass is ast.Call:
             leftNode = node.func
         elif nodeClass in (ast.Attribute, ast.Subscript):
+            # Note that we probably could calculate col_offset for ast.Attribute from
+            # end_col_offset and length of .attr string, if that ever becomes necessary.
             leftNode = node.value
         elif nodeClass is ast.IfExp:
             leftNode = node.body
@@ -594,12 +623,14 @@ def makeMacroPlaceholder(line, col, ctxMacroArgs=None):
     coded with an ID based on line an column for situations where the parser does not
     tag an associated AST node with them, we can recover the corresponding macro data.
     While usually these macros substitute a simple identifier, macro args that include
-    K, D, or C, will return keyword, dictionary, and comprehension syntax."""
+    K, D, C, or A will return keyword, dictionary, comprehension, or attribute syntax."""
     if ctxMacroArgs is not None:
         if 'K' in ctxMacroArgs:
             return PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col)) + '=None'
         if 'D' in ctxMacroArgs:
             return PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col)) + ':None'
+        if 'A' in ctxMacroArgs:
+            return '.' + PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col))
         if 'C' in ctxMacroArgs:
             return 'for' + PLACEHOLDER_NAME_TEMPLATE + str(makeLineColId(line, col)) + \
                 'in None'
@@ -777,7 +808,7 @@ def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslat
             ctxMask = (maskLen, 1)
             expandedText = '[' + CPRH_PARSE_STUB + ' ' + expandedText + ']'
             annotations.offsetLineColIds(maskLen)
-    elif parseCtx in ('e', None):
+    elif parseCtx in ('e', 'l', None):
         ctxMask = None
     else:
         ctxMask = None
@@ -830,6 +861,9 @@ def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslat
         else:
             cprh = stmtAst.value.generators[0]
             return CprhForFakeAst(cprh.target, cprh.iter, cprh.is_async)
+    elif parseCtx == 'l':
+        stmtAst.value.isNakedTuple = True
+        return stmtAst.value
     else:  # parseCtx in ('a', 'e'):
         return stmtAst.value
 
@@ -838,8 +872,8 @@ def _recoverTextDataOmittedFromAst(text, moduleAst, annotations, forImport):
     source information, such as comments, original forms of constants, and redundant
     parens.  Process the original text and annotate AST nodes or add new ones to enable
     the icon creation code to reproduce this information."""
-    comments, elses, consts, commentOnlyLines, posToLParen, posToRParen = _extractTokens(
-        text, annotations, forImport)
+    comments, elses, consts, commentOnlyLines, posToLParen, posToRParen, lParenToRParen \
+        = _extractTokens(text, annotations, forImport)
     line = _annotateAstWithComments(comments, elses, commentOnlyLines, moduleAst.body)
     # There may be comments left between the end of the parsed code and end of the file
     # or @pos macro range.  Append those to the body in the form of fake asts
@@ -848,7 +882,7 @@ def _recoverTextDataOmittedFromAst(text, moduleAst, annotations, forImport):
         for line in commentLines:
             moduleAst.body.append(CommentFakeAst(*comments[line]))
     _annotateAstConsts(consts, moduleAst)
-    _annotateUserParens(moduleAst, posToLParen, posToRParen)
+    _annotateUserParens(moduleAst, posToLParen, posToRParen, lParenToRParen)
 
 def _extractTokens(text, annotations, forImport):
     """ Return six dictionaries:
@@ -857,10 +891,14 @@ def _extractTokens(text, annotations, forImport):
           holds start column number)
         3. mapping line/col pairs to source strings for strings and numbers
         4. (a set, not a dict) records line numbers of lines that contain only a comment
-        5. mapping line/col pairs to a list of integers uniquely identifying open/close
-           paren pairs whose open paren *precedes* the token starting at (line, col).
-        6. mapping line/col pairs to a list of integers uniquely identifying paren pairs
-           whose close paren follows the token ending at (line, col)
+        5. mapping line/col pairs to a list of unique identifiers for paren pairs whose
+           open paren *precedes* the token starting at (line, col).  (Note that the
+           unique identifier, happens to be the line/col pair of the open-paren.)
+        6. mapping line/col pairs to a list of unique identifiers for paren pairs whose
+           close paren follows the token ending at (line, col)
+        9. mapping from paren-pair identifiers to close-paren (line, col) position.
+           Again, note that the unique identifier for the paren pair IS the line and
+           column of the open paren, so no additional mapping is needed to locate that.
     annotations argument is used to attach comment macro annotations, and to know  how to
     interpret line breaks in the column (by interpreting the macro arguments to detect
     "w" argument indicating that the comment should be wrapped)."""
@@ -874,6 +912,7 @@ def _extractTokens(text, annotations, forImport):
     posToConstSrcStr = {}
     posToLParen = {}
     posToRParen = {}
+    lParenToRParen = {}
     freeParenCount = 0
     commentOnlyLines = set()
     # The tokenize module won't just take a text string.  It needs a utf-8 coded
@@ -977,6 +1016,7 @@ def _extractTokens(text, annotations, forImport):
                             posToRParen[lastNonParenTokenEnd] = []
                     matchLabel = parenStack.pop()
                     posToRParen[lastNonParenTokenEnd].append(matchLabel)
+                    lParenToRParen[matchLabel] = token.start
             elif token.type == tokenize.OP and token.exact_type == tokenize.LPAR:
                 parenLabel = token.start
                 parenStack.append(parenLabel)
@@ -1000,7 +1040,7 @@ def _extractTokens(text, annotations, forImport):
                     freeParenCount = 0
                 lastNonParenTokenEnd = token.end
     return lineNumToComment, lineNumToClause, posToConstSrcStr, commentOnlyLines,\
-        posToLParen, posToRParen
+        posToLParen, posToRParen, lParenToRParen
 
 def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, startLine=0):
     """Augment the AST structures in bodyAsts with the comment data accumulated in the
@@ -1180,7 +1220,8 @@ def _annotateAstConsts(astPosToSrcTable, astNode):
     annotator = ConstAnnotator(astPosToSrcTable)
     annotator.visit(astNode)
 
-def _annotateUserParens(astNode, posToLParen, posToRParen, allocated=None):
+def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
+        allocated=None):
     """Recursive function to traverse the AST tree annotating or adding synthetic AST
     nodes for unnecessary parens in the source code (to be created as CursorParenIcons
     or, in some cases by creating tuples instead of filling in series sites).  Uses
@@ -1219,8 +1260,9 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, allocated=None):
                 childUnmatchedLParens = childUnmatchedRParens = None
                 childParensNeeded = None
             else:
-                childUnmatchedLParens, childUnmatchedRParens, childParensNeeded =\
-                    _annotateUserParens(childNode, posToLParen, posToRParen, allocated)
+                childUnmatchedLParens, childUnmatchedRParens, childParensNeeded = \
+                    _annotateUserParens(childNode, posToLParen, posToRParen,
+                        lParenToRParen, allocated)
             if childUnmatchedLParens is not None:
                 unmatchedLParens += childUnmatchedLParens
                 if isParenArgField:
@@ -1264,8 +1306,9 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, allocated=None):
         else:
             newChild = childNodes
         while len(parensNeeded) > 0:
-            parenLineCol = parensNeeded.pop()
-            newChild = UserParenFakeAst(newChild, parenLineCol)
+            lParenLineCol = parensNeeded.pop()
+            rParenLineCol = lParenToRParen[lParenLineCol]
+            newChild = UserParenFakeAst(newChild, lParenLineCol, rParenLineCol)
         if isinstance(childNodes, (list, tuple)):
             if newChild is not childNodes[idx]:
                 childNodes[idx] = newChild
@@ -1498,12 +1541,13 @@ class SegmentedText:
 
     def wrapCtxMacro(self, breakLevel, parseCtx=None, parentCtx=None, needsCont=False):
         """Surround the segmented text string with a context macro ($Ctx($  $)$) with the
-        given parse context (defaults to expression).  Also checks that the existing
-        string is not an $Empty$ macro or already surrounded in a context macro. Checking
-        for doubling up, here, makes it easier for the calling code, since some context
-        needs are determined by the parent icon (such as a name or target context), and
-        some are determined by the child icon ("as", keyword assignment, dictionary
-        element).  Note that this method requires that the SegmentedText object be non-
+        given parse context (defaults to expression).  If the existing string contains a
+        $Empty$, $Ctx$, or $Entry$ macro, combines them appropriately, rather than
+        doubling up.  Allowing either icons or their parents or both to declare the need
+        for a context macro, simplifies the code, since some context needs are more
+        easily determined by the parent (such as a name or target context), and some are
+        more easily determined by the child (such as as", keyword assignment, dictionary
+        elements).  Note that this method requires that the SegmentedText object be non-
         empty and that breakLevel be numeric (as opposed to None), as neither of these
         would be desirable for a $Ctx$ macro.  Also note that if there is an existing
         context macro, the parse context will not be changed (as the only way Ctx macros
@@ -1524,6 +1568,17 @@ class SegmentedText:
                     self.segments[0] = '$Ctx:' + parentCtx + self.segments[0][5:]
                 else:
                     self.segments[0] = '$Ctx:' + parentCtx + self.segments[0][3:]
+            for i in range(1, len(self.segments), 2):
+                self.segments[i] -= 100
+            return
+        elif self._isSingleEntryMacro():
+            # Existing entry macro.  Update with possible new parent context, but do
+            # not wrap a new macro around.  Reduce the break level of the existing text.
+            if parentCtx is not None:
+                if self.segments[0][6] == ':':
+                    self.segments[0] = '$Entry:' + parentCtx + self.segments[0][7:]
+                else:
+                    self.segments[0] = '$Entry:' + parentCtx + self.segments[0][5:]
             for i in range(1, len(self.segments), 2):
                 self.segments[i] -= 100
             return
@@ -1549,6 +1604,22 @@ class SegmentedText:
         breakValue = _encodeBreakValue(breakLevel, 1 if needsCont else 0)
         self.segments[:0] = [fragMacro, breakValue]
         self.segments += [breakValue, '$)$']
+
+    def unwrapCtxMacro(self):
+        """Strip a $Ctx$ macro from its argument and return the parseContext character.
+        Be sure to call isCtxMacro() to confirm that this is indeed a single $Ctx$ macro
+        of the proper form for stripping, as this would create a huge mess if later code
+        were to hand-generate a $Ctx$ macro without the normal break conventions used by
+        wrapCtxMacro."""
+        if self.segments[0][4] != ':':
+            parseCtx = ''
+        if self.segments[0][4] == '(':
+            # $Ctx:($ is technically bad form, but be prepared if something writes it...
+            parseCtx = ''
+        else:
+            parseCtx = self.segments[0][-3]
+        self.segments = self.segments[2:-2]
+        return parseCtx
 
     def concat(self, breakLevel, otherSegText, needsContinue=False):
         """Append another SegmentedText object to the end of the accumulated text.  If
@@ -1823,13 +1894,28 @@ class SegmentedText:
         argument."""
         if not ctxMacroPattern.match(self.segments[0]) or self.segments[-1][-3:] != '$)$':
             return False
-        # The segmented text string begins with $Ctx and ends with $)$, but we still need
-        # to show that the paren level does not reach 0 before the end of the string.
-        # If it does, this is not a single macro.  Note that we're not bothering to parse
-        # inside of the segments, as theoretically a single segment should not contain
-        # both open and close parens.  If there are multiple paren types within a segment
-        # or the paren level does not return to 0 at the end, we simply return False, as
-        # the only consequence of being wrong is an unnecessary nested $Ctx$ macro.
+        return self._macroArgsSpanText()
+
+    def _isSingleEntryMacro(self):
+        """Return True if the entire contents of the object is a single Entry macro.
+        Unfortunately, it is not as simple as checking for $Entry at the start and $)$ at
+        the end, because of the annoying possibility of a binary operator with a $Ctx
+        macro as its right operand and another argument-containing macro as its right
+        argument."""
+        if self.segments[0][:6] != '$Entry':
+            return False
+        return self._macroArgsSpanText()
+
+    def _macroArgsSpanText(self):
+        """Count segments containing $( and $) as a quick method to determine the macro
+        paren level at the end of the string.  Returns True if the paren-level returns to
+        zero at the end of the text."""
+        # Note that we're not bothering to parse inside of the segments, as theoretically
+        # a single segment will only contain both open and close parens for continuations
+        # of the (entry icon) macro argument list ('$)($').  If there are multiple open
+        # or multiple close parens within a segment or the paren level does not return to
+        # zero at the end, we simply return False, as the only consequence of being wrong
+        # is an unnecessary nested $Ctx$ macro.
         macroParenLevel = 0
         for i in range(0, len(self.segments), 2):
             seg = self.segments[i]
@@ -2183,12 +2269,14 @@ class RelImportNameFakeAst:
         self.level = level
 
 class UserParenFakeAst(ast.AST):
-    def __init__(self, argAst, startLineCol):
+    def __init__(self, argAst, lParenLineCol, rParenLineCol):
         # Unlike the other fake asts, this one needs ast.walk to be able to traverse it
         self._fields = ('arg',)
         self.arg = argAst
-        self.lineno = startLineCol[0]
-        self.col_offset = startLineCol[1]
+        self.lineno = lParenLineCol[0]
+        self.col_offset = lParenLineCol[1]
+        self.end_lineno = rParenLineCol[0]
+        self.end_col_offset = rParenLineCol[1] + 1  # Include rParen itself
 
 class CommentFakeAst(ast.AST):
     def __init__(self, annotation, text):
@@ -2234,6 +2322,37 @@ def strAt(text, start, str):
     if start < 0:
         return False
     return text[start:start+len(str)] == str
+
+def verifyEntryMacroArgs(macroArgs):
+    """Verify that the macro arguments for the $Entry$ macro are correct.  If the
+    arguments are acceptable, returns None (note: None means good, here).  If not,
+    returns an appropriate error message."""
+    # This really should be in entryicon.py, and it would sure be nice if macro icon-
+    # creation functions could raise syntax error exceptions, but currently, they can't.
+    if macroArgs is None or macroArgs == '':
+        return None
+    singleQuoteStartIdx = macroArgs.find("'")
+    singleQuoteEndIdx = macroArgs.rfind("'")
+    doubleQuoteStartIdx = macroArgs.find('"')
+    doubleQuoteEndIdx = macroArgs.rfind('"')
+    if singleQuoteStartIdx == -1 and doubleQuoteStartIdx == -1:
+        stringStart = stringEnd = None
+    elif singleQuoteStartIdx != -1 and singleQuoteStartIdx != singleQuoteEndIdx:
+        stringStart = singleQuoteStartIdx
+        stringEnd = singleQuoteEndIdx
+    elif doubleQuoteStartIdx != -1 and doubleQuoteStartIdx != doubleQuoteEndIdx:
+        stringStart = doubleQuoteStartIdx
+        stringEnd = doubleQuoteEndIdx
+    else:
+        return "Unterminated string in Entry macro"
+    if stringStart is not None:
+        macroArgs = macroArgs[:stringStart] + macroArgs[stringEnd+1:]
+    for arg in macroArgs:
+        if arg not in {None, 'e', 'd', 's', 'f', 'i', 'c', 'a', 'l', 'A', 'D', 'K'}:
+            return "Bad macro argument '%s'.  Entry macro only accepts arguments A, " \
+                "D, and K, single or double quoted strings, and code argument types " \
+                "e, d, s, f, and i" % arg
+    return None
 
 def _moduleTest():
     macroParser = MacroParser()
