@@ -57,7 +57,8 @@ builtInMacros = {}
 # AST nodes whose text syntax includes parens (mapped to the name of the field(s) that
 # contain the arguments that appear within the parens).
 astNodesWithParens = {ast.Call:('args', 'keywords'), ast.Tuple:('elts',),
-    ast.FunctionDef:('args',), ast.AsyncFunctionDef:('args',), ast.ClassDef:('bases',)}
+    ast.GeneratorExp:('elt', 'generators'), ast.FunctionDef:('args',),
+    ast.AsyncFunctionDef:('args',), ast.ClassDef:('bases',)}
 
 class MacroParser:
     macroPattern = re.compile("\\$([^$]+)\\$")
@@ -872,8 +873,8 @@ def _recoverTextDataOmittedFromAst(text, moduleAst, annotations, forImport):
     source information, such as comments, original forms of constants, and redundant
     parens.  Process the original text and annotate AST nodes or add new ones to enable
     the icon creation code to reproduce this information."""
-    comments, elses, consts, commentOnlyLines, posToLParen, posToRParen, lParenToRParen \
-        = _extractTokens(text, annotations, forImport)
+    comments, elses, consts, commentOnlyLines, parenData = _extractTokens(text,
+        annotations, forImport)
     line = _annotateAstWithComments(comments, elses, commentOnlyLines, moduleAst.body)
     # There may be comments left between the end of the parsed code and end of the file
     # or @pos macro range.  Append those to the body in the form of fake asts
@@ -882,7 +883,7 @@ def _recoverTextDataOmittedFromAst(text, moduleAst, annotations, forImport):
         for line in commentLines:
             moduleAst.body.append(CommentFakeAst(*comments[line]))
     _annotateAstConsts(consts, moduleAst)
-    _annotateUserParens(moduleAst, posToLParen, posToRParen, lParenToRParen)
+    _annotateUserParens(moduleAst, parenData)
 
 def _extractTokens(text, annotations, forImport):
     """ Return six dictionaries:
@@ -910,9 +911,7 @@ def _extractTokens(text, annotations, forImport):
     lineNumToComment = {}
     lineNumToClause = {}
     posToConstSrcStr = {}
-    posToLParen = {}
-    posToRParen = {}
-    lParenToRParen = {}
+    parenData = ParenData()
     freeParenCount = 0
     commentOnlyLines = set()
     # The tokenize module won't just take a text string.  It needs a utf-8 coded
@@ -1006,17 +1005,12 @@ def _extractTokens(text, annotations, forImport):
                         # Empty argument list or tuple gets pending open parens and
                         # subsequent close parens keyed to left side of the close paren
                         if freeParenCount > 0:
-                            posToLParen[token.start] = parenStack[-freeParenCount:]
+                            parenData.addLParens(token.start,
+                                parenStack[-freeParenCount:])
                             freeParenCount = 0
                         lastNonParenTokenEnd = token.start
-                        posToRParen[lastNonParenTokenEnd] = []
-                    else:
-                        endParenList = posToRParen.get(lastNonParenTokenEnd)
-                        if endParenList is None:
-                            posToRParen[lastNonParenTokenEnd] = []
                     matchLabel = parenStack.pop()
-                    posToRParen[lastNonParenTokenEnd].append(matchLabel)
-                    lParenToRParen[matchLabel] = token.start
+                    parenData.addRParenMatch(lastNonParenTokenEnd, token.start, matchLabel)
             elif token.type == tokenize.OP and token.exact_type == tokenize.LPAR:
                 parenLabel = token.start
                 parenStack.append(parenLabel)
@@ -1036,11 +1030,11 @@ def _extractTokens(text, annotations, forImport):
                 lastNonParenTokenEnd = None
             elif token.type != tokenize.NL:
                 if freeParenCount > 0:
-                    posToLParen[token.start] = parenStack[-freeParenCount:]
+                    parenData.addLParens(token.start, parenStack[-freeParenCount:])
                     freeParenCount = 0
                 lastNonParenTokenEnd = token.end
     return lineNumToComment, lineNumToClause, posToConstSrcStr, commentOnlyLines,\
-        posToLParen, posToRParen, lParenToRParen
+        parenData
 
 def _annotateAstWithComments(comments, clauses, commentOnlyLines, bodyAsts, startLine=0):
     """Augment the AST structures in bodyAsts with the comment data accumulated in the
@@ -1220,12 +1214,11 @@ def _annotateAstConsts(astPosToSrcTable, astNode):
     annotator = ConstAnnotator(astPosToSrcTable)
     annotator.visit(astNode)
 
-def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
-        allocated=None):
+def _annotateUserParens(astNode, parenData):
     """Recursive function to traverse the AST tree annotating or adding synthetic AST
     nodes for unnecessary parens in the source code (to be created as CursorParenIcons
     or, in some cases by creating tuples instead of filling in series sites).  Uses
-    posToLParen and posToRParen dictionaries created by _extractTokens to find parens
+    dictionaries created by _extractTokens and stored in parenData to find parens
     enclosing the node.  If the node has both left and right parens, check that each of
     their values (line/col tuple) match and either annotate the AST node as surrounded
     by parens (for Tuple nodes), or add a synthetic AST that can generate an inserted
@@ -1238,8 +1231,6 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
     with (the left side of) astNode, 2) unmatched right parens associated with (the right
     side of) astNode, 3) parens matched across astNode that it thinks need to be added
     around it."""
-    if allocated is None:
-        allocated = set()
     if not isinstance(astNode, ast.AST):
         return None, None, None
     unmatchedLParens = []
@@ -1261,8 +1252,7 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
                 childParensNeeded = None
             else:
                 childUnmatchedLParens, childUnmatchedRParens, childParensNeeded = \
-                    _annotateUserParens(childNode, posToLParen, posToRParen,
-                        lParenToRParen, allocated)
+                    _annotateUserParens(childNode, parenData)
             if childUnmatchedLParens is not None:
                 unmatchedLParens += childUnmatchedLParens
                 if isParenArgField:
@@ -1273,7 +1263,7 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
             if childParensNeeded is not None and len(childParensNeeded) > 0:
                 childNodesRequestingParens.append((field, i, childParensNeeded))
     # Claim outer argument parens for this node if it is a type that has parens
-    ownParensRemoved = False
+    ownParensRemoved = None
     if astNode.__class__ in astNodesWithParens:
         # If parens match *around* the argument list (which is what happens in the
         # multi-argument case) we've found the AST node's parens.
@@ -1284,10 +1274,10 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
                     'line ', astNode.lineno)
                 return None, None, None
             match = unmatchedLParens[-1]
-            allocated.add(match)
+            parenData.markAsAllocated(match)
             unmatchedLParens = [p for p in unmatchedLParens if p != match]
             unmatchedRParens = [p for p in unmatchedRParens if p != match]
-            ownParensRemoved = True
+            ownParensRemoved = match
         # If the node's parens were not found above, and there is just a single
         # argument node, and it is requesting parens: claim the outermost of those as
         # astNode's parens (except in the case of a tuple whose single element syntax
@@ -1296,8 +1286,7 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
                 not isinstance(astNode, ast.Tuple):
             argFields = astNodesWithParens[astNode.__class__]
             if sum([len(getattr(astNode, f)) for f in argFields]) == 1:
-                ownParensRemoved = True
-                childNodesRequestingParens[0][2].pop(0)
+                ownParensRemoved = childNodesRequestingParens[0][2].pop()
     # Create the parens requested for the child nodes not claimed, above.
     for field, idx, parensNeeded in childNodesRequestingParens:
         childNodes = getattr(astNode, field)
@@ -1307,7 +1296,7 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
             newChild = childNodes
         while len(parensNeeded) > 0:
             lParenLineCol = parensNeeded.pop()
-            rParenLineCol = lParenToRParen[lParenLineCol]
+            rParenLineCol = parenData.getRParenPosFromLParenPos(lParenLineCol)
             newChild = UserParenFakeAst(newChild, lParenLineCol, rParenLineCol)
         if isinstance(childNodes, (list, tuple)):
             if newChild is not childNodes[idx]:
@@ -1330,38 +1319,34 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
     elif isinstance(astNode, ast.Call):
         # Open parens surrounding the call will start before the function name (and
         # thus the starting row/col of the AST), but the parens of the call itself will
-        # either be associated with its arguments and assigned in the code above, or
-        # (in the no-arg case), with the end paren of the function.
-        # Look for left and right parens associated with the position of the right paren
-        # of the call (which should happen only in the case where the call has no args)
-        noArgLParenList = _getNotAllocated(posToLParen, astNode.end_lineno,
-            astNode.end_col_offset-1, allocated)
-        noArgRParenList = _getNotAllocated(posToRParen, astNode.end_lineno,
-            astNode.end_col_offset-1, allocated)
-        if ownParensRemoved:
-            if len(noArgLParenList) != 0:
-                print('_annotateUserParens associated multiple paren with Call node')
-        elif len(noArgRParenList) > 0 and len(noArgLParenList) > 0:
-            if len(noArgLParenList) != 1:
-                print('_annotateUserParens associated multiple paren with Call node')
-            elif len(noArgRParenList) < 1:
-                print('_annotateUserParens did not find matching number of parens '
-                    'surrounding Call node')
-            elif noArgLParenList[0] != noArgRParenList[0]:
-                print('_annotateUserParens failed to match parens around call node')
-            else:
-                # Found matching call parens in no-arg case: claim the paren pair
-                if unmatchedRParens is not None and len(unmatchedRParens) > 0:
-                    print('_annotateUserParens in unexpected (simultaneous multi-arg and '
-                        'no-arg states)')
-                allocated.add(noArgRParenList[0])
-                unmatchedRParens = [p for p in noArgRParenList if p != noArgRParenList[0]]
+        # either be associated with its arguments and assigned in the code above, or can
+        # can be missed because 1) the call has no arguments, or 2) the call has a
+        # keyword as its first argument (and keyword ASTS are missing line/col data, so
+        # the open paren gets missed).  Unlike the other paren-owning nodes, ast.Call
+        # nodes have an ending line/col position that we can reliably use to find the
+        # associated end (right) paren.
+        match = parenData.getLParenPosFromRParenPos((astNode.end_lineno,
+            astNode.end_col_offset - 1))
+        if match is None:
+            print("_annotateUserParens couldn't find parens associated with Call node, "
+                  "line", astNode.lineno)
+        if ownParensRemoved is None:
+            # Claim the detected paren pair
+            if parenData.isAllocated(match):
+                print("_annotateUserParens assigned parens associated with Call "
+                      "node to something else, line ", astNode.lineno)
+            parenData.markAsAllocated(match)
+            unmatchedRParens = [p for p in unmatchedRParens if p != match]
+        elif ownParensRemoved != match:
+            # Verify the parens detected earlier against those found from the node
+            print("_annotateUserParens associated wrong parens with Call node, line",
+                  astNode.lineno)
         # Get the unmatched left parens associated with the function name (We don't
         # propagate unmatched left parens associated with the args, because they can't
         # surround the function as the function name is in between (if that happened,
         # we've already printed an error)
-        unmatchedLParens = _getNotAllocated(posToLParen, astNode.lineno,
-            astNode.col_offset, allocated)
+        unmatchedLParens = parenData.getUnallocatedLParens(astNode.lineno,
+            astNode.col_offset)
     elif isinstance(astNode, ast.Tuple):
         # For both an empty tuple and a single-element tuple, the right paren will be
         # associated with the left edge of the close-paren.  For an empty tuple, the
@@ -1371,14 +1356,17 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
         # Optional tuple parens are represented by setting an attribute on the tuple AST
         # node telling the icon creation function to create an explicit tuple icon rather
         # than splitting the tuple elements across the icon's series sites.
-        if ownParensRemoved:
+        if ownParensRemoved is not None:
+            if ownParensRemoved != (astNode.lineno, astNode.col_offset):
+                print("_annotateUserParens associated wrong parens with Tuple, line",
+                    astNode.lineno)
             astNode.tupleHasParens = True
-        noArgLParenList = _getNotAllocated(posToLParen, astNode.end_lineno,
-            astNode.end_col_offset-1, allocated)
+        noArgLParenList = parenData.getUnallocatedLParens(astNode.end_lineno,
+            astNode.end_col_offset-1)
         if len(noArgLParenList) > 0:
             unmatchedLParens = noArgLParenList + unmatchedLParens
-        noArgRParenList = _getNotAllocated(posToRParen, astNode.end_lineno,
-            astNode.end_col_offset-1, allocated)
+        noArgRParenList = parenData.getUnallocatedRParenMatch(astNode.end_lineno,
+            astNode.end_col_offset-1)
         if len(noArgRParenList) > 0:
             unmatchedRParens = unmatchedRParens + noArgRParenList
         if not ownParensRemoved and len(unmatchedLParens) > 0 and \
@@ -1387,7 +1375,7 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
                 print('_annotateUserParens found un-matched parens around tuple')
                 return None, None, None
             match = unmatchedLParens[-1]
-            allocated.add(match)
+            parenData.markAsAllocated(match)
             unmatchedLParens = [p for p in unmatchedLParens if p != match]
             unmatchedRParens = [p for p in unmatchedRParens if p != match]
             astNode.tupleHasParens = True
@@ -1408,10 +1396,10 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
         # icon creation function, which is a cheap way to eliminate intermediate AST
         # structures that don't become icons.
         if hasattr(astNode, 'col_offset'):
-            unmatchedLParens += _getNotAllocated(posToLParen, astNode.lineno,
-                astNode.col_offset, allocated)
-            unmatchedRParens += _getNotAllocated(posToRParen, astNode.end_lineno,
-                astNode.end_col_offset, allocated)
+            unmatchedLParens += parenData.getUnallocatedLParens(astNode.lineno,
+                astNode.col_offset)
+            unmatchedRParens += parenData.getUnallocatedRParenMatch(astNode.end_lineno,
+                astNode.end_col_offset)
     # Determine if user parens need to be reinserted around the node
     parensNeeded = []
     while len(unmatchedLParens) > 0 and len(unmatchedRParens) > 0:
@@ -1423,15 +1411,61 @@ def _annotateUserParens(astNode, posToLParen, posToRParen, lParenToRParen,
             return None, None, None
         unmatchedLParens = [p for p in unmatchedLParens if p != match]
         unmatchedRParens = [p for p in unmatchedRParens if p != match]
-        allocated.add(match)
+        parenData.markAsAllocated(match)
         parensNeeded.append(match)
     return unmatchedLParens, unmatchedRParens, parensNeeded
 
-def _getNotAllocated(annDict, line, col, allocated):
-    parenPosList = annDict.get((line, col))
-    if parenPosList is None:
-        return []
-    return [parenPos for parenPos in parenPosList if parenPos not in allocated]
+class ParenData:
+    """Data that _annotateUserParens needs for reconstructing the parens that the Python
+    parser discards, collected during lexical analysis in _extractTokens.  It also tracks
+    the disposition of paren pairs during processing in _annotateUserParens.  Parens are
+    indexed by line/col pairs representing their locations in the macro-expanded save
+    text.  Both their 'true' position and their 'reference' position are recorded.  For
+    left (open) parens, the reference position is the start of the next non-paren token
+    that follows them.  For right (close) parens, it is the end of the last non-paren
+    token that precedes them.  Pairing is determined during lexical analysis.  Both the
+    analysis and reconstruction phases use the left-paren (true) location as a unique
+    identifier for the pair."""
+    def __init__(self):
+        self.allocated = set()
+        self.refPosToLParens = {}
+        self.rParenRefPosToLParenMatches = {}
+        self.lParenPosToRParenPos = {}
+        self.rParenPosToLParenPos = {}
+
+    def addLParens(self, refPos, parenPosList):
+        self.refPosToLParens[refPos] = parenPosList
+
+    def addRParenMatch(self, refPos, rParenPos, matchingLParenPos):
+        if self.rParenRefPosToLParenMatches.get(refPos) is None:
+            self.rParenRefPosToLParenMatches[refPos] = []
+        self.rParenRefPosToLParenMatches[refPos].append(matchingLParenPos)
+        self.lParenPosToRParenPos[matchingLParenPos] = rParenPos
+        self.rParenPosToLParenPos[rParenPos] = matchingLParenPos
+
+    def getRParenPosFromLParenPos(self, lParenPos):
+        return self.lParenPosToRParenPos.get(lParenPos)
+
+    def getLParenPosFromRParenPos(self, rParenPos):
+        return self.rParenPosToLParenPos.get(rParenPos)
+
+    def getUnallocatedLParens(self, refLine, refCol):
+        return self._getNotAllocated(self.refPosToLParens, refLine, refCol)
+
+    def getUnallocatedRParenMatch(self, refLine, refCol):
+        return self._getNotAllocated(self.rParenRefPosToLParenMatches, refLine, refCol)
+
+    def _getNotAllocated(self, annDict, refLine, refCol):
+        parenPosList = annDict.get((refLine, refCol))
+        if parenPosList is None:
+            return []
+        return [parenPos for parenPos in parenPosList if parenPos not in self.allocated]
+
+    def markAsAllocated(self, lParenPos):
+        self.allocated.add(lParenPos)
+
+    def isAllocated(self, lParenPos):
+        return lParenPos in self.allocated
 
 def _commentLinesBetween(lineToCommentMap, startLine, endLine):
     commentList = None

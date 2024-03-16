@@ -1690,14 +1690,14 @@ class CallIcon(icon.Icon):
                 elif kwArgEncountered and not export:
                     needsCtx = True
                 argBrkLvl = brkLvl + (1 if needsCtx else 0)
-                argText = icon.argSaveText(argBrkLvl, site, contNeeded, export)
+                argText = icon.argSaveText(argBrkLvl, site, cont=False, export=export)
                 if needsCtx:
-                    argText.wrapCtxMacro(brkLvl, parentCtx='K', needsCont=contNeeded)
+                    argText.wrapCtxMacro(brkLvl, parentCtx='K', needsCont=False)
                 argTextList.append(argText)
             text.concat(brkLvl, argTextList[0])
             for argText in argTextList[1:]:
-                text.add(None, ', ', contNeeded)
-                text.concat(brkLvl, argText, contNeeded)
+                text.add(None, ', ', needsContinue=False)
+                text.concat(brkLvl, argText, needsContinue=False)
         text.add(None, ')')
         if self.closed:
             text = icon.addAttrSaveText(text, self, brkLvl-1, contNeeded, export)
