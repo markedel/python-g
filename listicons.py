@@ -972,18 +972,20 @@ class ListIcon(ListTypeIcon):
                 raise icon.IconExecException(self, "Can't assign to empty list")
             if isinstance(ctx, ast.Del):
                 raise icon.IconExecException(self, "Can't delete empty list")
-            elts = []
+            eltIcons = []
         else:
-            for site in self.sites.argIcons:
-                if site.att is None:
-                    raise icon.IconExecException(self, "Missing argument(s)")
+            eltIcons = [site.att for site in self.sites.argIcons]
+            if eltIcons[-1] is None:  # Allow trailing comma
+                eltIcons = eltIcons[:-1]
+            if None in eltIcons:
+                raise icon.IconExecException(self, "Missing argument(s)")
             if self.sites.attrIcon.att is None and isinstance(ctx, (ast.Store, ast.Del)):
-                for site in self.sites.argIcons:
-                    if not site.att.canProcessCtx:
+                for ic in eltIcons:
+                    if not ic.canProcessCtx:
                         ctxName = 'assignment' if isinstance(ctx, ast.Store) else 'del'
-                        raise icon.IconExecException(site.att,
+                        raise icon.IconExecException(ic,
                             "Not a valid target for %s" % ctxName)
-            elts = [site.att.createAst() for site in self.sites.argIcons]
+        elts = [ic.createAst() for ic in eltIcons]
         listContentAst = ast.List(elts=elts,  ctx=ctx, lineno=self.id, col_offset=0)
         # If this is not a mutable icon, we're done
         if self.object is None:
@@ -1115,7 +1117,9 @@ class TupleIcon(ListTypeIcon):
         if self.sites.argIcons[0].att is not None and len(self.sites.argIcons) <= 1 and \
                 not self.noParens and not self.isComprehension():
             self.sites.argIcons.insertSite(1)
-            self.commaTypeover = 1
+            # Setting typeover is questionable, as we don't know what caused the change
+            # but a good guess is "something adjacent" unless this represents data.
+            self.commaTypeover = None if self.object is not None else 1
             self.window.watchTypeover(self)
             self.window.updateTypeoverStates(draw=False)
         elif len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is None and \
@@ -1170,15 +1174,17 @@ class TupleIcon(ListTypeIcon):
         if self.isComprehension():
             return icon.composeAttrAst(self, createComprehensionAst(self))
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
-            elts = []
+            eltIcons = []
         elif len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is not None \
                 and self.sites.argIcons[1].att is None:
-            elts = [self.sites.argIcons[0].att.createAst()]  # Traditional form: (1, )
+            eltIcons = [self.sites.argIcons[0].att]  # Traditional form: (1, )
         else:
-            for site in self.sites.argIcons:
-                if site.att is None:
-                    raise icon.IconExecException(self, "Missing argument(s)")
-            elts = [site.att.createAst() for site in self.sites.argIcons]
+            eltIcons = [site.att for site in self.sites.argIcons]
+            if eltIcons[-1] is None:  # Allow trailing comma
+                eltIcons = eltIcons[:-1]
+            if None in eltIcons:
+                raise icon.IconExecException(self, "Missing argument(s)")
+        elts = [ic.createAst() for ic in eltIcons]
         ctx = nameicons.determineCtx(self)
         hasAttribute = not self.noParens and self.sites.attrIcon.att is not None
         if not hasAttribute and isinstance(ctx, (ast.Store, ast.Del)):
@@ -1285,10 +1291,11 @@ class DictIcon(ListTypeIcon):
             elts = []
             isDict = True if self.object is None else type(self.object) is dict
         else:
-            for site in self.sites.argIcons:
-                if site.att is None:
-                    raise icon.IconExecException(self, "Missing argument(s)")
             elts = [site.att for site in self.sites.argIcons]
+            if elts[-1] is None:  # Allow trailing comma
+                elts = elts[:-1]
+            if None in elts:
+                raise icon.IconExecException(self, "Missing argument(s)")
             # Check for consistency: are we a set or a dictionary constant
             isDict = len(elts) == 0 or isinstance(elts[0], DictElemIcon) or \
              isinstance(elts[0], StarStarIcon)
@@ -1459,6 +1466,8 @@ class DictIcon(ListTypeIcon):
             isDict = True
         elif dictElemCount < nonDictCount:
             isDict = False
+        elif len(nonEmptyArgs) == 0:
+            isDict = True
         else:
             isDict = isinstance(nonEmptyArgs[0], DictElemIcon)
         # Return a set listing the violating icons.
@@ -1538,7 +1547,7 @@ class CallIcon(icon.Icon):
         attrSiteY = leftHeight // 2 + icon.ATTR_SITE_OFFSET
         self.sites.add('attrOut', 'attrOut', 0, attrSiteY)
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', leftWidth,
-                leftHeight // 2)
+                leftHeight // 2, allowsTrailingComma=True)
         width, height = self._size()
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
@@ -1587,7 +1596,7 @@ class CallIcon(icon.Icon):
                 rParenImg.paste(icon.attrInImage, (attrInXOff, attrInYOff))
                 self.drawList.append(((parenX, 0), rParenImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip)
+        self._drawEmptySites(toDragImage, clip, allowTrailingComma=True)
 
     def argIcons(self):
         return [site.att for site in self.sites.argIcons]
@@ -1738,12 +1747,15 @@ class CallIcon(icon.Icon):
             raise icon.IconExecException(self, "Unclosed temporary icon")
         argAsts = []
         kwdArgAsts = []
-        for site in self.sites.argIcons:
-            arg = site.att
-            if arg is None:
-                if site.name == 'argIcons_0':
-                    continue  # 1st site can be empty, meaning "no arguments"
+        argIcons = [site.att for site in self.sites.argIcons]
+        if len(argIcons) == 1 and argIcons[0] is None:
+            argIcons = []
+        else:
+            if argIcons[-1] is None:  # Allow trailing comma
+                argIcons = argIcons[:-1]
+            if None in argIcons:
                 raise icon.IconExecException(self, "Missing argument(s)")
+        for arg in argIcons:
             if isinstance(arg, ArgAssignIcon):
                 key = arg.sites.leftArg.att
                 value = arg.sites.rightArg.att
@@ -3646,14 +3658,15 @@ def createCallIconFromAst(astNode, window):
             fieldName, macroArgs, iconCreateFn, argAsts = key.fieldMacroAnnotations[0]
         else:
             fieldName = macroArgs = argAsts = None
-        if fieldName == 'Ctx' and 'K' in macroArgs:
+        forKeywordField = macroArgs is not None and 'K' in macroArgs
+        if fieldName == 'Ctx' and forKeywordField:
             # This is a Ctx macro with K (masquerade as keyword) argument, use macro arg
             argIcons.append(icon.createFromAst(argAsts[0], window))
-        elif fieldName == 'Empty' and 'K' in macroArgs:
+        elif fieldName == 'Empty' and forKeywordField:
             # This is an Empty macro with K (masquerade as keyword) argument, stuffed in
             # to the key field.  Make an empty argument
             argIcons.append(None)
-        elif fieldName in ('Entry', 'Empty') and 'K' in macroArgs:
+        elif fieldName in ('Entry', 'Empty') and forKeywordField:
             # This is an Entry macro with K (masquerade as keyword) argument, stuffed
             # in to the key field.  We don't have an AST, but are allowed to call the
             # $Entry$ macro's icon creation function with an AST of None.

@@ -2495,7 +2495,7 @@ class EntryIcon(icon.Icon):
             text.add(None, ':' + macroArgs + '$')
         return text
 
-    def createAst(self):
+    def createAst(self, attrOfAst=None):
         raise icon.IconExecException(self, "Remove text-entry field")
 
     def execute(self):

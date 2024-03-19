@@ -6,6 +6,8 @@
 import winsound
 from PIL import Image
 from operator import itemgetter
+from dataclasses import dataclass
+from typing import Optional
 import comn
 import iconsites
 import icon
@@ -258,6 +260,20 @@ class Cursor:
             self.selectToCursor(ic, site, evt.keysym)
         else:
             self.setTo(cursorType, ic, site, pos)
+
+    @dataclass
+    class SavedState:
+        cursorType: str
+        ic: Optional[icon.Icon]
+        site: Optional[str]
+        pos:Optional[tuple]
+
+    def saveState(self):
+        return self.SavedState(self.type, self.icon, self.site, pos=self.pos)
+
+    def restoreState(self, state, eraseOld=True, drawNew=False, placeEntryText=True):
+        self.setTo(state.cursorType, state.ic, state.site, state.pos, eraseOld=True,
+            drawNew=False, placeEntryText=True)
 
     def selectToCursor(self, ic, site, direction):
         """Modify selection based on cursor movement (presumably with Shift key held)"""

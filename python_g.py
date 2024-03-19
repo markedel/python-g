@@ -256,7 +256,7 @@ class Window:
             width=width, height=height)
 
         iconFrame = tk.Frame(panes, background='white')
-        self.imgFrame = tk.Frame(iconFrame, bg="")
+        self.imgFrame = tk.Frame(iconFrame, bg="", takefocus=True)
         self.imgFrame.bind("<Expose>", self._exposeCb)
         self.imgFrame.bind("<Configure>", self._configureCb)
         self.imgFrame.bind("<Button-1>", self._buttonPressCb)
@@ -435,7 +435,10 @@ class Window:
         self.top.destroy()
 
     def selectedIcons(self):
-        """Return a list of the icons in the window that are currently selected."""
+        """Return a list of the icons in the window that are currently selected.  Due to
+        the odd method by which this is implemented (see below), performance will be
+        enhanced somewhat if code that deletes all the icons from the selection, calls
+        self.clearSelection() once it no longer needs to poll the selection."""
         # Selection was initially a property of icons, but that caused performance issues
         # because finding the current selection required traversing all icons.  Now the
         # selection is held in a set, but to support existing code which does not expect
@@ -469,7 +472,7 @@ class Window:
             self.selectedSet.remove(ic)
 
     def clearSelection(self):
-        self.selectedSet = set()
+        self.selectedSet.clear()
 
     def watchMutableIcon(self, ic):
         self.liveMutableIcons.add(ic)
@@ -575,13 +578,14 @@ class Window:
     def _openCb(self, evt=None):
         filename = tkinter.filedialog.askopenfilename(defaultextension=".pyg", filetypes=[
             ("Python-g file", ".pyg"), ("Python file", ".py"), ("Python file", ".pyw")],
-            parent=self.top, title="Open")
+            parent=self.imgFrame, title="Open")
         print("tkinter filedialog returns", repr(filename))
         if filename is None or filename == '':
             return
         existingWindow = appData.findWindowWithFile(filename)
         if existingWindow is not None:
-            reload = tkinter.messagebox.askokcancel(message="Reload %s" % filename)
+            reload = tkinter.messagebox.askokcancel(message="Reload %s" % filename,
+                parent=self.imgFrame)
             if reload:
                 existingWindow.top.destroy()
             else:
@@ -595,9 +599,15 @@ class Window:
             self.saveFile(self.filename)
 
     def _saveAsCb(self, evt=None):
+        if self.filename is None:
+            initialDir = None
+            initialFile = None
+        else:
+            initialDir, initialFile = os.path.split(self.filename)
         filename = tkinter.filedialog.asksaveasfilename(defaultextension=".pyg",
             filetypes=[("Python-g file", ".pyg"), ("Python file", ".py"),
-            ("Python file", ".pyw")], parent=self.top, title="Save As")
+            ("Python file", ".pyw")], initialfile=initialFile, initialdir=initialDir,
+            parent=self.imgFrame, title="Save As")
         if filename is None or filename == '':
             return
         self.saveFile(filename)
@@ -802,6 +812,7 @@ class Window:
                 entryIcon.appendPendingArgs([pendingAttr])
                 self.cursor.setToText(entryIcon, drawNew=False)
                 rejectReason = entryIcon.addText(char)
+                self.clearSelection()
             elif len(selectedIcons) == 0:
                 rejectReason = "No cursor"
             else:
@@ -1038,7 +1049,12 @@ class Window:
         self.refresh(redraw=True)
 
     def _focusInCb(self, evt):
-        pass
+        # This is a workaround for a weird issue with the text widget in the output pane.
+        # Despite having takefocus set to False, as soon as this widget is clicked, not
+        # only does it take focus, but it holds on and won't let go even when the icon
+        # pane is explicitly clicked.  It would be nice to understand why.
+        if evt.widget == self.outputPane:
+            self.imgFrame.focus_set()
 
     def _focusOutCb(self, evt):
         self.cursor.erase()
@@ -1276,6 +1292,7 @@ class Window:
     def _cutCb(self, _evt=None):
         self._copyCb()
         self.removeIcons(self.selectedIcons())
+        self.clearSelection()
         self.refreshDirty(addUndoBoundary=True)
 
     def _copyCb(self, evt=None):
@@ -1374,6 +1391,7 @@ class Window:
                 selectedRect = icon.containingRect(self.selectedIcons())
                 pastePos = selectedRect[:2]
                 self.removeIcons(self.selectedIcons())
+                self.clearSelection()
         # We now know where to put the pasted icons: If replaceParent is True, replace
         # the icon at replaceSite.  Otherwise place the icons at the top level of the
         # window at position given by pastePos
@@ -1406,6 +1424,7 @@ class Window:
         selected = self.selectedIcons()
         if selected:
             self.removeIcons(selected)
+            self.clearSelection()
             self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == "icon":
             # Edit or remove the icon to the right of the cursor
@@ -1444,6 +1463,7 @@ class Window:
             selectedIcons = self.selectedIcons()
             if len(selectedIcons) > 0:
                 self.removeIcons(selectedIcons)
+                self.clearSelection()
             elif self.cursor.type == "icon":
                 if self.cursor.siteType in ('seqIn', 'seqOut'):
                     cursorIc = self.cursor.icon
@@ -2024,6 +2044,7 @@ class Window:
         self.buttonDownTime = None
 
     def _startRectSelect(self, evt):
+        self.rectSelectCursor = self.cursor.saveState()
         self.cursor.removeCursor()
         self.inRectSelect = True
         self.lastRectSelect = None
@@ -2068,6 +2089,13 @@ class Window:
     def _endRectSelect(self):
         self._eraseRectSelect()
         self.inRectSelect = False
+        # It's unclear whether we actually want to remove the cursor after a rectangular
+        # selection, but we definitely don't want to if no selection was made.  Using
+        # selectedSet rather than selectedIcons() might be a questionable choice as it
+        # may be wrong, but it's also much cheaper.
+        if len(self.selectedSet) == 0:
+            self.cursor.restoreState(self.rectSelectCursor)
+            self.cursor.draw()
 
     def _startStmtSelect(self, seqSiteIc, evt):
         self.unselectAll()
@@ -2362,6 +2390,8 @@ class Window:
             ic.insertChildren(elems, 'argIcons', 0)
         elif isinstance(obj, (int, float)) or obj is None:
             ic = nameicons.NumericIcon(obj, window=self)
+        elif isinstance(obj, str):
+            ic = stringicon.StringIcon(initReprStr=repr(obj), window=self)
         elif isinstance(obj, complex):
             # Complex should probably be a numeric icon subtype or a specialty icon of
             # its own, or maybe just left as an object type.
@@ -2392,7 +2422,8 @@ class Window:
             style = icon.STYLE_EXEC_ERR if ic==excepIcon else 0
             ic.draw(clip=iconRect, style=style)
         self.refresh(iconRect, redraw=False)
-        tkinter.messagebox.showerror("Error Executing", message=message)
+        tkinter.messagebox.showerror("Error Executing", message=message,
+            parent=self.imgFrame)
         for ic in excepIcon.traverse():
             ic.draw(clip=iconRect)
         self.refresh(iconRect, redraw=False)
@@ -2400,7 +2431,8 @@ class Window:
     def _showSyntaxErr(self, _evt=None):
         errHighlight = self.popupIcon.errHighlight
         if errHighlight is not None:
-            tkinter.messagebox.showerror("Syntax Error", message=errHighlight.text, )
+            tkinter.messagebox.showerror("Syntax Error", message=errHighlight.text,
+                parent=self.imgFrame)
 
     def _select(self, ic, op='select'):
         """Change the selection.  Options are 'select': selects single icon, 'toggle':
@@ -4025,7 +4057,10 @@ class App:
         if filename is None:
             return
         print("before open file")
-        if not window.openFile(filename):
+        if window.openFile(filename):
+            window.top.lift()
+            window.top.focus_force()
+        else:
             window.close()
 
     def resetBlinkTimer(self, holdTime=CURSOR_BLINK_RATE):
@@ -4038,7 +4073,7 @@ class App:
     def _blinkCursor(self):
         focusWidget = self.root.focus_get()
         for window in self.windows:
-            if window.top == focusWidget:
+            if focusWidget in (window.top, window.imgFrame):
                 window.cursor.blink()
                 break
         self.blinkCancelId = self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)

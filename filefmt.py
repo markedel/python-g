@@ -676,10 +676,12 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModu
             icons, parseEndIdx, lineNum = _parseTextToIcons(text, startIdx, lineNum,
                 window, source, forImport)
         except ReprocSyntaxErrExcept as excep:
-            tkinter.messagebox.showerror("Syntax Error", message=str(excep))
+            tkinter.messagebox.showerror("Syntax Error", message=str(excep),
+                parent=window.imgFrame)
             return None
         except MacroFailException as excep:
-            tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep))
+            tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep),
+                parent=window.imgFrame)
             return None
         if len(icons) > 0:
             if asModule and pos is None:
@@ -698,10 +700,12 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModu
             pos, argCode, parseEndIdx, lineNum = window.macroParser.parsePosMacro(text,
                 parseEndIdx, lineNum)
         except ReprocSyntaxErrExcept as excep:
-            tkinter.messagebox.showerror("Syntax Error", message=str(excep))
+            tkinter.messagebox.showerror("Syntax Error", message=str(excep),
+                parent=window.imgFrame)
             return None
         except MacroFailException as excep:
-            tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep))
+            tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep),
+                parent=window.imgFrame)
             return None
         if argCode is not None:
             # @ (pos) macro had an argument.  Such arguments either can't be part of a
@@ -723,7 +727,8 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModu
             if text[parseEndIdx:parseEndIdx+2] != "$@":
                 tkinter.messagebox.showerror("Error Parsing Macros",
                     message=formatMacroFailMessage(text, parseEndIdx, lineNum,
-                    "@ macro with code argument cannot be followed by code"))
+                    "@ macro with code argument cannot be followed by code"),
+                    parent=window.imgFrame)
                 return None
         startIdx = parseEndIdx
 
