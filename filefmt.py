@@ -36,7 +36,7 @@ CPRH_PARSE_STUB = '___pyg_cprh_parse_stub'
 # code (code that Python considers incompatible with the parent context and would not
 # be able to parse):
 #   a   attribute
-#   s   as clause
+#   s   'as' clause
 #   d   dictionary element
 #   c   comprehension clause
 #   e   expression
@@ -481,12 +481,6 @@ class MacroParser:
             macroArgCodeList = None
         x = int(match.group(1))
         y = int(match.group(3))
-        # If the macro is followed by a newline, consume that as well, to prevent it from
-        # being converted to an extraneous vertical blank icon.
-        while text[endIdx] == ' ':
-            endIdx += 1
-        if text[endIdx] == '\n':
-            endIdx += 1
         return (x, y), macroArgCodeList, endIdx, endLineNum
 
 class AnnotationList:
@@ -656,9 +650,10 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModu
     describing the error.  "source" is the name to use in the error dialog as the file
     (or other source) from which the text originated.  If 'asModule' is True, code before
     the first $@$ macro will be attached to the window's module anchor icon (window.
-    modSeqIcon).  Returns list of top-level icons on success and None on failure."""
+    modSeqIcon).  Returns a list of (per-sequence) lists of top-level icons on success
+    and None on failure."""
     pos = None if asModule else (0, 0)
-    topLevelIcons = []
+    sequences = []
     startIdx = 0
     lineNum = 1
     while True:
@@ -693,9 +688,9 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModu
                     icons[0].rect = icon.moveRect(icons[0].rect, (10, 10))
             else:
                 moveIconToPos(icons[0], pos)
-            topLevelIcons += icons
+            sequences.append(icons)
         if parseEndIdx == len(text):
-            return topLevelIcons
+            return sequences
         try:
             pos, argCode, parseEndIdx, lineNum = window.macroParser.parsePosMacro(text,
                 parseEndIdx, lineNum)
@@ -707,17 +702,47 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModu
             tkinter.messagebox.showerror("Error Parsing Macro", message=str(excep),
                 parent=window.imgFrame)
             return None
-        if argCode is not None:
+        if argCode is None:
+            # If the macro is followed by a newline, consume that as well, to prevent it
+            # from being converted to an extraneous vertical blank icon.
+            while text[parseEndIdx] == ' ':
+                parseEndIdx += 1
+            if text[parseEndIdx] == '\n':
+                parseEndIdx += 1
+                lineNum += 1
+        else:
             # @ (pos) macro had an argument.  Such arguments either can't be part of a
             # series (attributes and comprehensions), or can but shouldn't (dictionary
-            # elements and "as" clauses).  Build icons for the argument and make sure
-            # that nothing follows the macro but another pos macro.
+            # elements and "as" clauses).  Start by consuming the rest of the line
+            # containing the @ macro, which is allowed to include a statement comment,
+            # for which we need to do all of the comment processing that's normally done
+            # elsewhere.
+            stmtComment = None
+            while parseEndIdx < len(text) and text[parseEndIdx] == ' ':
+                parseEndIdx += 1
+            if parseEndIdx < len(text) and text[parseEndIdx] == '#':
+                commentEndIdx = parseEndIdx
+                while commentEndIdx < len(text):
+                    if text[commentEndIdx] == '\n':
+                        break
+                commentText = text[parseEndIdx+1:commentEndIdx]
+                if len(commentText) > 0 and commentText[0] == ' ':
+                    commentText = commentText[1:]
+                commentText = commentText.replace('\\n', '\n')
+                commentAst = CommentFakeAst(None, commentText)
+                stmtComment = icon.createFromAst(commentAst, window)
+                parseEndIdx = commentEndIdx
+            # Create icons from the argument code AST
             topIcon = icon.createFromAst(argCode[0], window)
             moveIconToPos(topIcon, pos)
-            topLevelIcons.append(topIcon)
+            if stmtComment is not None:
+                stmtComment.attachStmtComment(topIcon)
+            sequences.append([topIcon])
+            # Make sure there's nothing else between the code-containing @ macro and
+            # either the end of file or next @ macro, and maintain the line count.
             while True:
                 if parseEndIdx >= len(text):
-                    return topLevelIcons
+                    return sequences
                 c = text[parseEndIdx]
                 if c == '\n':
                     lineNum += 1
@@ -738,9 +763,10 @@ def registerBuiltInMacro(name, subs="", iconCreateFn=None):
     builtInMacros[name] = subs, iconCreateFn
 
 def _parseTextToIcons(text, startIdx, startLineNum, window, source, forImport):
-    """Internal version of parseTextToIcons that returns an additional value of the
-    text index at which parsing stopped (EOF or $@$ or $)$ macros), and takes an
-    additional parameter (startIdx) of the text index at which to start parsing."""
+    """Internal version of parseTextToIcons that returns a single sequence and an
+    additional value of the text index at which parsing stopped (EOF or $@$ or $)$
+    macros).  It also takes an additional parameter (startIdx) of the text index at
+    which to start parsing."""
     stmtList, endIdx, endLineNum = parseTextToAsts(window.macroParser, text, startIdx,
         startLineNum, source, forImport)
     if stmtList is None:
@@ -2131,7 +2157,7 @@ class SegTextComment:
             else:
                 words = comn.splitWords(line)
                 wrappedLine = continueWrap.join(comn.wordWrap(words, lineWrapMargin,
-                    firstLineMax=perLineMargin, lastLineMax=lineWrapMargin+1))
+                    firstLineMax=perLineMargin, lastLineMax=lineWrapMargin+1)[0])
             perLineMargin = lineWrapMargin
             wrappedLines.append(wrappedLine)
         outText = nonContinueWrap.join(wrappedLines)

@@ -604,15 +604,19 @@ class ReturnIcon(SeriesStmtIcon):
         if len(self.sites.values) == 1 and self.sites.values[0].att is None:
             valueAst = None
         else:
-            for site in self.sites.values:
+            for site in self.sites.values[:-1]:
                 if site.att is None:
                     raise icon.IconExecException(self, "Missing argument(s)")
-            valueAsts = [site.att.createAst() for site in self.sites.values]
-            if len(valueAsts) == 1:
+            trailingComma = self.sites.values[-1].att is None
+            if trailingComma:
+                valueAsts = [site.att.createAst() for site in self.sites.values[:-1]]
+            else:
+                valueAsts = [site.att.createAst() for site in self.sites.values]
+            if len(valueAsts) == 1 and not trailingComma:
                 valueAst = valueAsts[0]
             else:
                 valueAst = ast.Tuple(valueAsts, ctx=ast.Load(), lineno=self.id,
-                 col_offset=0)
+                    col_offset=0)
         return ast.Return(value=valueAst, lineno=self.id, col_offset=0)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):

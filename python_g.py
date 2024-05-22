@@ -21,6 +21,7 @@ import parenicon
 import commenticon
 import undo
 import filefmt
+import expredit
 from PIL import Image, ImageDraw, ImageWin, ImageGrab
 import time
 import tkinter.messagebox
@@ -54,7 +55,12 @@ CURSOR_BLINK_RATE = 500
 
 SNAP_DIST = 8
 
+# Distance to search around icons to find appropriate cursor sites
 SITE_SELECT_DIST = 8
+
+# Extension to SITE_SELECT_DIST for empty sites to allow clicking anywhere in the
+# highlighted area
+EMPTY_SITE_EXT_DIST = 7
 
 # How far to the left of an icon does the statement select/drag band extend
 SEQ_SELECT_WIDTH = 15
@@ -238,6 +244,8 @@ class Window:
         menu.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
         menu.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
         menu.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
+        menu.add_command(label="Split", command=self._splitCb, accelerator="Ctrl+T")
+        menu.add_command(label="Join", command=self._joinCb, accelerator="Ctrl+J")
 
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Run", menu=menu, underline=0)
@@ -276,6 +284,8 @@ class Window:
         self.top.bind("<Control-x>", self._cutCb)
         self.top.bind("<Control-c>", self._copyCb)
         self.top.bind("<Control-v>", self._pasteCb)
+        self.top.bind("<Control-t>", self._splitCb)
+        self.top.bind("<Control-j>", self._joinCb)
         self.top.bind("<Delete>", self._deleteCb)
         self.top.bind("<BackSpace>", self._backspaceCb)
         self.top.bind("<Escape>", self._cancelCb)
@@ -399,7 +409,8 @@ class Window:
         # window content gets dragged above or left of (0,0) do we allow scrolling to
         # that region.  When that area does get exposed, the module sequence snap point
         # needs to be clearly visible.
-        self.modSeqIcon = ModuleAnchorIcon(self)
+        with self.pauseUndoRecording():
+            self.modSeqIcon = ModuleAnchorIcon(self)
         page = Page(forModSeq=self.modSeqIcon)
         self.sequences.append(page)
         self.topIcons[self.modSeqIcon] = page
@@ -414,13 +425,14 @@ class Window:
             text = f.read()
         print("done")
         _base, ext = os.path.splitext(filename)
-        icons = filefmt.parseTextToIcons(text, self, source=filename,
+        seqs = filefmt.parseTextToIcons(text, self, source=filename,
             forImport=ext!=".pyg", asModule=True)
-        if icons is None:
+        if seqs is None:
             return False
-        if len(icons) == 0:
+        if len(seqs) == 0 or len(seqs) == 1 and len(seqs[0]) == 0:
             return True
-        self.addTop(icons)
+        for seq in seqs:
+            self.addTop(seq)
         print('start layout', time.monotonic())
         redrawRect = self.layoutDirtyIcons(filterRedundantParens=False)
         print('finish layout', time.monotonic())
@@ -446,6 +458,10 @@ class Window:
         # make performance significantly WORSE when more than half of the icons in the
         # window are selected).  It is intended that there will be a formal mechanism for
         # removing icons, after which this code can be removed.
+        self._pruneSelectedIcons()
+        return list(self.selectedSet)
+
+    def _pruneSelectedIcons(self):
         removeSet = set()
         for ic in self.selectedSet:
             if isStmtComment(ic):
@@ -456,7 +472,6 @@ class Window:
                 print("Removing deleted icon from selection")
                 removeSet.add(ic)
         self.selectedSet -= removeSet
-        return list(self.selectedSet)
 
     def isSelected(self, ic):
         """Return True if an icon is in the current selection, False if not."""
@@ -556,6 +571,8 @@ class Window:
         popup.add_command(label="Copy", command=self._copyCb, accelerator="Ctrl+C")
         popup.add_command(label="Paste", command=self._pasteCb, accelerator="Ctrl+V")
         popup.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
+        popup.add_command(label="Split", command=self._splitCb, accelerator="Ctrl+T")
+        popup.add_command(label="Join", command=self._joinCb, accelerator="Ctrl+J")
 
         # Add context-sensitive items to pop-up menu
         if self.popupIcon is not None:
@@ -821,7 +838,6 @@ class Window:
                 rejectReason = "Multiple selections (ambiguous replace)"
         if rejectReason is not None:
             # Text was rejected, beep and flash the error reason
-            cursors.beep()
             self.displayTypingError(rejectReason)
         else:
             # Text was accepted.  Note that no undo boundary is added here, as .addText
@@ -1314,102 +1330,172 @@ class Window:
     def _pasteCb(self, evt=None):
         print('start icon creation', time.monotonic())
         if self.cursor.type == "typeover":
-            cursors.beep()
+            self.displayTypingError("Can't paste into type-over region")
             return
+        text = None
         if self.cursor.type == "text":
-            # If the user is pasting in to the entry icon use clipboard text, only
+            # If the user is pasting in to the entry icon, string, or comment, use the
+            # clipboard text, if possible.
             try:
                 text = self.top.clipboard_get(type="STRING")
             except:
-                return
-            self.requestRedraw(self.cursor.icon.hierRect())
-            rejectReason = self.cursor.icon.addText(text)
-            if rejectReason is not None:
-                # Text was rejected, beep and flash the error reason
-                cursors.beep()
-                self.displayTypingError(rejectReason)
-            else:
-                self.refreshDirty()  # Undo boundary added by addText
-            return
+                text = None
+            if text is not None:
+                # Try a text insert, first.  If rejected, don't complain about it, yet,
+                # because it could be code that the entry icon can't handle in text form,
+                # but that the insertion code can handle in PYG form or after parsing
+                # in plain Python form..
+                self.requestRedraw(self.cursor.icon.hierRect())
+                textRejectReason = self.cursor.icon.addText(text)
+                if textRejectReason is None:
+                    self.refreshDirty()  # Undo boundary added by addText
+                    return
         # Look at what is on the clipboard and make the best possible conversion to icons
         try:
             iconString = self.top.clipboard_get(type="PYG")
         except:
             iconString = None
         if iconString is not None:
-            pastedIcons = filefmt.parseTextToIcons(iconString, self)
+            pastedSeqs = filefmt.parseTextToIcons(iconString, self)
+            if pastedSeqs is None:
+                return  # Rejection reason was already presented in dialog-form
         else:
             # Couldn't get our icon data format.  Try string as python code
-            try:
-                text = self.top.clipboard_get(type="STRING")
-            except:
-                text = None
+            if text is None:
+                try:
+                    text = self.top.clipboard_get(type="STRING")
+                except:
+                    text = None
             # Try to parse the string as Python code
             if text is not None:
-                pastedIcons = filefmt.parseTextToIcons(text, self)
-                # Not usable python code, put in to single icon as string
-                if pastedIcons is None:
-                    pastedIcons = [stringicon.StringIcon(repr(text), self)]
+                pastedSeqs = filefmt.parseTextToIcons(text, self)
+                if pastedSeqs is None:
+                    return  # Rejection reason was already presented in dialog-form
             else:
-                # No text available in a form we can use.  Try for image
+                # No text available in a form we can use.  Try for image.  Currently,
+                # image only pastes as background image.  Eventually, needs to be some
+                # way to choose image expression icon.
                 clipImage = ImageGrab.grabclipboard()
                 if clipImage is None:
-                    return
-                pastedIcons = [icon.ImageIcon(clipImage, self, (0, 0))]
-        if pastedIcons is None or len(pastedIcons) == 0:
-            return  # Nothing usable on the clipboard
+                    self.displayTypingError("No usable data on the clipboard to paste")
+                elif self.cursor.type != "window":
+                    self.displayTypingError("(Currently) can only paste images as "
+                        "background")
+                else:
+                    pastedIcon = icon.ImageIcon(clipImage, self, self.cursor.pos)
+                    self.addTop(pastedIcon)
+                    self.refreshDirty(addUndoBoundary=True)
+                return
         # There was something clipboard that could be converted to icon form.  Figure out
-        # where to put it
-        iconOutputSite = pastedIcons[0].posOfSite("output")
-        replaceParent = None
-        replaceSite = None
-        pastePos = None
-        if self.cursor.type == "window":
-            x, y = self.cursor.pos
-            if iconOutputSite is not None:
-                xOff, yOff = iconOutputSite
-                x -= xOff
-                y -= yOff
-            pastePos = x, y
+        # where to put it.  If there's a selection, replace it, otherwise paste it at
+        # the current cursor position
+        self._pruneSelectedIcons()
+        if len(self.selectedSet) > 0:
+            cursorIcon, cursorSite = self.replaceSelectedIcons(pastedSeqs)
+            if cursorIcon is None and cursorSite is None:
+                self.displayTypingError("Can't paste code containing top-level "
+                    "statements into this context")
+                return
+        elif self.cursor.type is None:
+            self.displayTypingError("No cursor or selection")
+            return
+        elif self.cursor.type == "window":
+            cursorIcon, cursorSite = self.insertIconsFromSequences(None, None,
+                pastedSeqs, self.cursor.pos)
+        elif self.cursor.type == "text":
+            # If we get here, the cursor is in a text editing icon, and a text insert was
+            # already tried and failed, but we were able to parse the clipboard content
+            # as code.  The target icon should be an entry icon, because we always
+            # provide STRING content along with PYG, and the other text icons will digest
+            # any text.  While we can't yet handle the general case of pasting code in
+            # the middle of text, we can handle pasting after (if the text was parseable
+            # with a delimiter, or, of course, if there's no text).  This is allowed for
+            # two reasons: 1) to allow pastes to consume pending arguments, and 2) for
+            # keystroke efficiency, since not doing so requires users to type an extra
+            # delimiter before pasting, making us worse than a text editor in some cases.
+            entryIc = self.cursor.icon
+            if not isinstance(entryIc, entryicon.EntryIcon):
+                print('Unexpected text destination in _pasteCb')
+                return
+            # We're being expected to paste at the cursor location, but unfortunately,
+            # that general case is beyond our current capability.  All we can do is
+            # paste before or after.
+            if entryIc.cursorPos != len(entryIc.text):
+                self.displayTypingError("Pasting code objects in to a text entry field "
+                    "is only allowed at the rightmost cursor position.")
+                return
+            if len(entryIc.text) != 0 and not entryIc.canPlaceEntryText():
+                self.displayTypingError("Can only paste code in text entry field after "
+                    "valid (or empty) text")
+                return
+            # Instantiate the text in the entry icon by removing pending args and calling
+            # focusOut (the pending arguments are right-of the pasted code, so we can
+            # only append them after it). focusOut sets the cursor icon and site to the
+            # right of whatever was entered.  This could be a window cursor if the text
+            # was empty, but should not be a text cursor (at least I hope not)
+            pendingArgs = entryIc.listPendingArgs()
+            insertAtPos = None
+            if len(entryIc.text) == 0:
+                insertAtIcon = entryIc.attachedIcon()
+                insertAtSite = entryIc.attachedSite()
+                removedEntryIcon = False
+            else:
+                entryIc.popPendingArgs('all')
+                if not entryIc.focusOut():
+                    print('Failed to place entry text when canPlaceEntryText accepted')
+                    entryIc.appendPendingArgs(pendingArgs)
+                    return
+                if self.cursor.type == 'text':
+                    print("Paste in entry field failed to place text (got text cursor)")
+                    return
+                if self.cursor.type == 'window':
+                    insertAtIcon = insertAtSite = None
+                    insertAtPos = self.cursor.pos
+                elif self.cursor.type == 'icon':
+                    insertAtIcon = self.cursor.icon
+                    insertAtSite = self.cursor.site
+                else:
+                    print("Paste in entry field failed to place text (no cursor)")
+                    return
+                removedEntryIcon = True
+            # Insert the pasted code after the entry text
+            cursorIcon, cursorSite = self.insertIconsFromSequences(insertAtIcon,
+                insertAtSite, pastedSeqs, atPos = insertAtPos)
+            if cursorIcon is None and cursorSite is None:
+                self.displayTypingError("Can't paste code containing top-level "
+                    "statements into this context")
+                if len(pendingArgs) > 0:
+                    entryIc.appendPendingArgs(pendingArgs)
+                    self.insertIconsFromSequences(self.cursor.icon,
+                        self.cursor.site, [[entryIc]])
+                    self.cursor.setToText(entryIc)
+                self.refreshDirty(addUndoBoundary=True)
+                return
+            # If there were pending args, use the original entry icon to place them.
+            # The entry icon will be in one of two state: 1) still in place and still
+            # holding its pending arguments (removedEntryIc==False), or 2) removed from
+            # the tree and missing its pending arguments (removedEntryIc==True).  In the
+            # second case, restore its pending args and insert it after the pasted code
+            # before calling its remove() method to place its pending args.
+            if len(pendingArgs) > 0:
+                if removedEntryIcon:
+                    entryIc.text = ''  # Just in case
+                    entryIc.appendPendingArgs(pendingArgs)
+                    self.insertIconsFromSequences(cursorIcon, cursorSite, [[entryIc]])
+                self.cursor.setToText(entryIc)
+                entryIc.remove()
+            else:
+                if not removedEntryIcon:  # Entry icon would have been empty with no args
+                    entryIc.remove()
+            self.refreshDirty(addUndoBoundary=True)
+            return
         elif self.cursor.type == "icon":
-            if self.cursor.siteType != "input" or len(pastedIcons) != 1:
-                cursors.beep()
+            cursorIcon, cursorSite = self.insertIconsFromSequences(self.cursor.icon,
+                self.cursor.site, pastedSeqs)
+            if cursorIcon is None and cursorSite is None:
+                self.displayTypingError("Can't paste code containing top-level "
+                    "statements into this context")
                 return
-            replaceParent = self.cursor.icon
-            replaceSite = self.cursor.site
-        else:
-            # There's no cursor.  See if there's a selection
-            selectedIcons = self.selectedIcons()
-            if len(selectedIcons) == 0:
-                cursors.beep()
-                return
-            selectedIcons = findTopIcons(self.selectedIcons())
-            if len(selectedIcons) == 1 and len(pastedIcons) == 1:
-                replaceParent = selectedIcons[0].parent()
-                replaceSite = replaceParent.siteOf(selectedIcons[0])
-            else:
-                selectedRect = icon.containingRect(self.selectedIcons())
-                pastePos = selectedRect[:2]
-                self.removeIcons(self.selectedIcons())
-                self.clearSelection()
-        # We now know where to put the pasted icons: If replaceParent is True, replace
-        # the icon at replaceSite.  Otherwise place the icons at the top level of the
-        # window at position given by pastePos
-        if replaceParent is not None:
-            topIcon = replaceParent.topLevelParent()
-            self.requestRedraw(topIcon.hierRect())
-            replaceParent.replaceChild(pastedIcons[0], replaceSite)
-            self.cursor.setToIconSite(replaceParent, replaceSite)
-        else:  # Place at top level
-            x, y = pastePos
-            for topIcon in pastedIcons:
-                for ic in topIcon.traverse():
-                    ic.rect = comn.offsetRect(ic.rect, x, y)
-            self.addTop(pastedIcons)
-            if iconOutputSite is None:
-                self.cursor.removeCursor()
-            else:
-                self.cursor.setToBestCoincidentSite(pastedIcons[0], "output")
         print('start layout', time.monotonic())
         self.requestRedraw(self.layoutDirtyIcons(filterRedundantParens=False))
         print('finish layout', time.monotonic())
@@ -1419,6 +1505,10 @@ class Window:
             print('end redraw/refresh', time.monotonic())
             self.refreshRequests.clear()
         self.undo.addBoundary()
+        if cursorSite is None:
+            self.cursor.setToText(cursorIcon)
+        else:
+            self.cursor.setToIconSite(cursorIcon, cursorSite)
 
     def _deleteCb(self, evt=None):
         selected = self.selectedIcons()
@@ -1454,6 +1544,213 @@ class Window:
             self.refreshDirty(addUndoBoundary=False)
         else:
             cursors.beep()
+
+    def _splitCb(self, evt):
+        #... this should probably do something with selections
+        if self.cursor.type == 'text':
+            if isinstance(self.cursor.icon, commenticon.CommentIcon):
+                cursorIc = self.cursor.icon
+                if cursorIc.cursorPos >= len(cursorIc.string):
+                    self.displayTypingError("Move cursor to desired location for split "
+                        "(splitting on right side of comment does nothing)")
+                elif cursorIc.cursorPos == 0 and cursorIc.attachedToStmt is None:
+                    self.displayTypingError("Move cursor to desired location for split "
+                        "(splitting on left side of comment does nothing)")
+                else:
+                    cursorIc.splitAtCursor()
+                    self.refreshDirty(addUndoBoundary=True)
+                return
+            elif isinstance(self.cursor.icon, stringicon.StringIcon):
+                self.displayTypingError("String continuation is automatic, so Python "
+                    "string concatenation syntax is not used (split operation would "
+                    "do nothing).  Use text operations to edit strings.")
+                return
+            elif isinstance(self.cursor.icon, entryicon.EntryIcon):
+                entryIc = self.cursor.icon
+                if entryIc.cursorPos == 0:
+                    # Split left of entry icon
+                    splitAtIcon = self.cursor.icon.parent()
+                    if splitAtIcon is None:
+                        self.displayTypingError("Already at left of statement")
+                        return
+                    splitAtSite = splitAtIcon.siteOf(self.cursor.icon)
+                elif entryIc.cursorPos == len(entryIc.text) and \
+                        not entryIc.hasPendingArgs():
+                    # Split right of entry icon
+                    splitAtIcon, splitAtSite = icon.rightmostSite(entryIc)
+                elif entryIc.cursorPos == len(entryIc.text):
+                    # Split between entryIc text and pending args
+                    if entryIc.parent() is not None:
+                        failMsg = expredit.canSplitStmtAtSite(entryIc.attachedIcon(),
+                            entryIc.attachedSite())
+                        if failMsg is not None:
+                            self.displayTypingError(failMsg)
+                            return
+                    # Split the statement at the site where the entry icon is, making it
+                    # the start of stmt2, move its text into a new entry icon, and insert
+                    # that at the site of the split, then try to place both entry icons.
+                    newEntryIc = entryicon.EntryIcon(initialString=entryIc.text,
+                        window = entryIc.window)
+                    entryIc.text = ''
+                    atIcon, atSite = entryIc.attachedIcon(), entryIc.attachedSite()
+                    if atIcon is None:
+                        icon.insertSeq(newEntryIc, entryIc, before=True)
+                        self.addTop(newEntryIc)
+                        stmt1 = entryIc
+                    else:
+                        stmt1, stmt2 = expredit.splitStmtAtSite(atIcon, atSite)
+                        atIcon, atSite = icon.rightmostSite(stmt1)
+                        cursorIc, _ = expredit.insertAtSite(atIcon, atSite, newEntryIc)
+                        stmt1 = cursorIc.topLevelParent()
+                    if newEntryIc.topLevelParent() in self.topIcons:
+                        newEntryIc.focusOut(removeIfNotFocused=True)
+                        stmt1 = self.cursor.icon.topLevelParent()
+                    if entryIc.topLevelParent() in self.topIcons:
+                        entryIc.focusOut(removeIfNotFocused=True)
+                    self.cursor.setToIconSite(stmt1, 'seqOut')
+                    self.refreshDirty(addUndoBoundary=True)
+                    return
+                else:
+                    self.displayTypingError("Can't split entry text with split command")
+                    return
+        elif self.cursor.type == 'icon':
+            splitAtIcon = self.cursor.icon
+            splitAtSite = self.cursor.site
+        else:
+            self.displayTypingError("Place the cursor where you want to split")
+            return
+        # If the cursor is at the right of the statement, check if there's a statement
+        # comment that the user might be trying to split off.
+        stmtIcon = self.cursor.icon.topLevelParent()
+        rightmostIc, rightmostSite = icon.rightmostSite(stmtIcon)
+        if splitAtIcon is rightmostIc and splitAtSite == rightmostSite:
+            stmtComment = stmtIcon.hasStmtComment()
+            if stmtComment is not None:
+                self.requestRedraw(stmtComment.hierRect())
+                stmtComment.detachStmtComment()
+                icon.insertSeq(stmtComment, stmtIcon)
+                self.addTop(stmtComment)
+                self.cursor.setToIconSite(stmtIcon, 'seqOut')
+                self.refreshDirty(addUndoBoundary=True)
+                return
+        failMsg = expredit.canSplitStmtAtSite(splitAtIcon, splitAtSite)
+        if failMsg is not None:
+            self.displayTypingError(failMsg)
+            return
+        # Split the statement
+        self.requestRedraw(stmtIcon.hierRect())
+        stmt1, stmt2 = expredit.splitStmtAtSite(splitAtIcon, splitAtSite)
+        # Place the cursor on the seqOut site of the first stmt, handling the dumb case
+        # where stmt1 would get substituted when it's the entry icon holding the cursor.
+        if self.cursor.type == 'text' and self.cursor.icon is stmt1:
+            self.cursor.icon.focusOut()
+            stmt1 = self.cursor.icon.topLevelParent()
+        self.cursor.setToIconSite(stmt1, 'seqOut')
+        # If the new statement (stmt2) has an entry icon on the left, it may now be
+        # possible to remove it.
+        leftIc = stmt2
+        while True:
+            if isinstance(leftIc, entryicon.EntryIcon) and \
+                    leftIc.topLevelParent() in self.topIcons:
+                leftIc.focusOut(removeIfNotFocused=True)
+                break
+            coincSite = leftIc.hasCoincidentSite()
+            if coincSite is None:
+                break
+            leftIc = leftIc.childAt(coincSite)
+            if leftIc is None:
+                break
+        self.refreshDirty(addUndoBoundary=True)
+
+    def _joinCb(self, evt):
+        #... this should probably do something with selections
+        failMsg = "Place the cursor between the statements you want to join"
+        if self.cursor.type == 'text' and isinstance(self.cursor.icon,
+                commenticon.CommentIcon):
+            cursorIc = self.cursor.icon
+            if cursorIc.cursorPos == 0 and  cursorIc.attachedToStmt is None and \
+                    cursorIc.prevInSeq() is not None and \
+                    (isinstance(cursorIc.prevInSeq(), commenticon.CommentIcon) or
+                     cursorIc.prevInSeq().hasStmtComment()):
+                topStmtIcon = cursorIc.prevInSeq()
+                joinedStmtTopIcon = cursorIc
+            elif cursorIc.cursorPos == len(cursorIc.string):
+                if cursorIc.attachedToStmt is None:
+                    topStmtIcon = cursorIc
+                else:
+                    topStmtIcon = cursorIc.attachedToStmt
+                joinedStmtTopIcon = topStmtIcon.nextInSeq()
+                if joinedStmtTopIcon is None:
+                    self.displayTypingError(failMsg)
+                    return
+                if not isinstance(joinedStmtTopIcon, (commenticon.CommentIcon,
+                        commenticon.VerticalBlankIcon)):
+                    self.displayTypingError("Can't join code to end of comment")
+                    return
+            else:
+                self.displayTypingError(failMsg)
+                return
+        elif self.cursor.type == "icon":
+            cursorTopIcon = self.cursor.icon.topLevelParent()
+            if self.cursor.site == 'seqIn':
+                topStmtIcon = cursorTopIcon.prevInSeq()
+            elif self.cursor.site == 'seqOut':
+                topStmtIcon = cursorTopIcon
+            elif expredit.isLeftmostSite(self.cursor.icon, self.cursor.site):
+                topStmtIcon = cursorTopIcon.prevInSeq()
+            else:
+                topStmtIcon = cursorTopIcon
+            if topStmtIcon is None:
+                self.displayTypingError(failMsg)
+                return
+            joinedStmtTopIcon = topStmtIcon.nextInSeq()
+            if joinedStmtTopIcon is None:
+                self.displayTypingError(failMsg)
+                return
+        else:
+            self.displayTypingError(failMsg)
+            return
+        self.requestRedraw(topStmtIcon.hierRect(), filterRedundantParens=True)
+        self.requestRedraw(joinedStmtTopIcon.hierRect())
+        if isinstance(joinedStmtTopIcon, commenticon.VerticalBlankIcon):
+            joinedStmtTopIcon.window.replaceTop(joinedStmtTopIcon, None)
+            self.refreshDirty(addUndoBoundary=True)
+            return
+        elif isinstance(topStmtIcon, commenticon.VerticalBlankIcon):
+            topStmtIcon.window.replaceTop(topStmtIcon, None)
+            self.refreshDirty(addUndoBoundary=True)
+            return
+        if isinstance(joinedStmtTopIcon, commenticon.CommentIcon):
+            joinedStmtTopIcon.window.replaceTop(joinedStmtTopIcon, None)
+            if isinstance(topStmtIcon, commenticon.CommentIcon):
+                cursorPos = topStmtIcon.cursorPos
+                topStmtIcon.mergeTextFromComment(joinedStmtTopIcon)
+                self.cursor.setToText(topStmtIcon, cursorPos)
+            else:
+                stmtComment = topStmtIcon.hasStmtComment()
+                if stmtComment is not None:
+                    cursorPos = stmtComment.cursorPos
+                    stmtComment.mergeTextFromComment(joinedStmtTopIcon)
+                    self.cursor.setToText(stmtComment, cursorPos)
+                else:
+                    joinedStmtTopIcon.attachStmtComment(topStmtIcon)
+                    rightmostIc, rightmostSite = icon.rightmostSite(topStmtIcon)
+                    self.cursor.setToIconSite(rightmostIc, rightmostSite)
+            self.refreshDirty(addUndoBoundary=True)
+            return
+        elif isinstance(topStmtIcon, commenticon.CommentIcon):
+            self.displayTypingError("Can't join code to right of comment")
+            return
+        cursorIcon, cursorSite = expredit.joinStmts(topStmtIcon)
+        if cursorIcon is None and cursorSite is None:
+            self.displayTypingError("Statement being joined on the right is a top-"
+                "level statement that can't be embedded in other code.")
+            return
+        elif cursorSite is None:
+            self.cursor.setToText(cursorIcon)
+        else:
+            self.cursor.setToIconSite(cursorIcon, cursorSite)
+        self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceCb(self, evt=None):
         if self.cursor.type == "text":
@@ -1838,7 +2135,7 @@ class Window:
                 stationaryInputs.append((pos, sHgt, ic, "seqOut", name, None))
             if draggingComment and winIcon.parent() is None and not isinstance(winIcon,
                     (commenticon.CommentIcon, commenticon.VerticalBlankIcon,
-                    icon.BlockEnd)):
+                    icon.BlockEnd, ModuleAnchorIcon)):
                 ic, name = icon.rightmostSite(winIcon)
                 x, y = ic.posOfSite(name)
                 x += icon.STMT_COMMENT_OFFSET
@@ -2489,7 +2786,9 @@ class Window:
         if refreshRegion.get() is not None:
             self.refresh(refreshRegion.get(), redraw=True)
 
-    def displayTypingError(self, errText):
+    def displayTypingError(self, errText, quiet=False):
+        if not quiet:
+            cursors.beep()
         self.typingErrPane.config(text=errText)
         self.typingErrPane.grid(row=0, column=0, sticky=tk.EW)
         if self.typingErrCancelId is not None:
@@ -2849,24 +3148,25 @@ class Window:
             needReorder = []
             stmtComment = topIcon.stmtComment if hasattr(topIcon, 'stmtComment') else None
             remainingIcons, assembledDeletions, removedTopIcon = \
-                splitDeletedIcons(topIcon, deletedSet, assembleDeleted, needReorder,
-                    watchSubs)
+                expredit.splitDeletedIcons(topIcon, deletedSet, assembleDeleted,
+                    needReorder, watchSubs)
             if remainingIcons is None:
                 newTopIcon = topIcon
             else:
                 forSeq = topIcon.childAt('seqIn') or topIcon.childAt('seqOut')
-                newTopIcon = placeListToTopLevelIcon(remainingIcons, forSeq, watchSubs)
-            newTopIcon = reorderMarkedExprs(newTopIcon, needReorder)
+                newTopIcon = expredit.placeListToTopLevelIcon(remainingIcons, forSeq,
+                    watchSubs)
+            newTopIcon = expredit.reorderMarkedExprs(newTopIcon, needReorder)
             if assembleDeleted:
                 if assembledDeletions is None:
                     addToDelSeq = topIcon
                     addBlockEnd = False
                 else:
-                    addToDelSeq = placeListToTopLevelIcon(assembledDeletions, False,
-                        watchSubs)
+                    addToDelSeq = expredit.placeListToTopLevelIcon(assembledDeletions,
+                        False, watchSubs)
                     addBlockEnd = addToDelSeq is not None and hasattr(addToDelSeq,
                         'blockEnd')  # a for/if from a cprh subs
-                addToDelSeq = reorderMarkedExprs(addToDelSeq, needReorder)
+                addToDelSeq = expredit.reorderMarkedExprs(addToDelSeq, needReorder)
                 if addToDelSeq is not None:
                     deletedSeqList[iconToSeqId[topIcon]].append(addToDelSeq)
                     if addBlockEnd:
@@ -2965,6 +3265,362 @@ class Window:
                             topIc.layoutDirty = True
             return deletedSeqs
         return None
+
+    def replaceSelectedIcons(self, insertedSequences):
+        """Remove the selected icons from the window and replace them with those listed
+        in insertedSequences.  Both removeIcons and insertIcons can be disjoint,
+        in which case, replace the topmost (and leftmost if there's a tie) contiguous
+        group of icons with icons in insertedSequences, and delete the remaining selected
+        icons.  If insertedSequences contains statement-only icons and the first
+        contiguous selection happens to be within code that cannot be broken apart to
+        insert such statements, the replacement will not be performed and the function
+        will return None, None.  On success, the function will return the icon and site
+        on which to place the cursor."""
+        firstSelection, firstStmtOfSelection, firstIconOfSelection,\
+            iconAfterFirstSelection, spansStmtBoundaries, startsOnStmtBoundary,\
+            endsOnStmtBoundary = self.findFirstContiguousSelection()
+        # Figure out insert site based on the first contiguous selection.  Set
+        # insertSiteIcon and insertSite to a site that will survive icon removal.  The
+        # site also subtly indicates the type of insertion in the same way as the cursor
+        # would: a sequence site implies a statement break, where a non-sequence site
+        # implies that a merge with the statement is desired (if possible).
+        insertPos = None
+        insertSiteIcon = firstIconOfSelection.parent()
+        while insertSiteIcon is not None and insertSiteIcon in self.selectedSet:
+            insertSiteIcon = insertSiteIcon.parent()
+        if insertSiteIcon is not None:
+            insertSite = insertSiteIcon.siteOf(firstIconOfSelection, recursive=True)
+        elif isStmtComment(firstIconOfSelection):
+            insertSiteIcon, insertSite = icon.rightmostSite(firstStmtOfSelection)
+        else:
+            # the selection starts on a statement boundary.  If it also ends on one, we
+            # want a pure statement insertion, so provide a sequence site.
+            if not startsOnStmtBoundary:
+                print('*** firstIconOfSelection having no parent somehow does not '
+                      'imply that we started on a stmt boundary')
+            if endsOnStmtBoundary:
+                if firstStmtOfSelection.childAt('seqIn') is not None:
+                    insertSiteIcon = firstStmtOfSelection.childAt('seqIn')
+                    insertSite = 'seqOut'
+                elif iconAfterFirstSelection is not None:
+                    insertSiteIcon = iconAfterFirstSelection
+                    insertSite = 'seqIn'
+                else:
+                    # The selection includes the entire sequence.  We'll also need the
+                    # position to insert
+                    insertSiteIcon = None
+                    insertPos = firstStmtOfSelection.pos()
+            else:
+                # The selection starts but does not end on a statement boundary.  Set the
+                # insertion point to the output (or equivalent) of the first icon after
+                # the selection, which we can then at least try to convert to a better
+                # site after removeIcons (... or maybe this should happen in insert).
+                for siteId in iconsites.parentSiteTypes:
+                    if iconAfterFirstSelection.hasSite(siteId):
+                        insertSiteIcon = iconAfterFirstSelection
+                        insertSite = siteId
+                        break
+                else:
+                    raise Exception('replaceSelectedIcons failed to find suitable'
+                        'insertion site')
+        # The one case we can't handle is when the inserted code contains statement-only
+        # icons, and the destination is within an enclosing icon.  Figure out if that is
+        # the case and bail out and return the failure indicator (None, None) before
+        # making any changes.
+        for seq in insertedSequences:
+            if expredit.isStmtLevelOnly(seq[0]):
+                insertingStmtOnlyIcons = True
+                break
+        else:
+            insertingStmtOnlyIcons = False
+        if insertingStmtOnlyIcons and insertSiteIcon is not None:
+            enclosingIcon, enclosingSite = entryicon.findEnclosingSite(insertSiteIcon,
+                insertSite)
+            if enclosingIcon is not None:
+                return None, None
+        # Remove the selected icons
+        watchSubs = {insertSiteIcon:None}
+        self.removeIcons(self.selectedIcons(), watchSubs=watchSubs)
+        # ... not sure if some site name conversion might also be necessary, here
+        if watchSubs[insertSiteIcon] is not None:
+            insertSiteIcon = watchSubs[insertSiteIcon]
+        # Insert the new icons where the first selection section was removed
+        return self.insertIconsFromSequences(insertSiteIcon, insertSite,
+            insertedSequences, insertPos)
+
+    def insertIconsFromSequences(self, atIcon, atSite, insertedSequences, atPos=None):
+        """Insert all of the icons in list of (already sequence-connected) sequences in
+        insertedSequences.  For pasting at a window-cursor, set atIcon to None and
+        specify atPos as the position in the window at which to place them.  If
+        insertedSequences contains statement-only icons and the insertion site is within
+        code that cannot be broken apart to insert such statements, the insertion will
+        not be performed and the function will return None, None.  On success, return
+        the icon and site on which to place the cursor after the operation."""
+        if atIcon is None:
+            # We're "inserting" to the window background, and not integrating with other
+            # icons.  Unlike insertions into existing code, we don't aggregate them, but
+            # instead add them as individual new sequences. maintaining their relative
+            # positions, but offset to atPos.
+            cursorStmt = insertedSequences[-1][-1]
+            for seq in insertedSequences:
+                x, y = atPos
+                seqStartIcon = seq[0]
+                seqStartIcon.rect = comn.offsetRect(seqStartIcon.rect, x, y)
+                if seqStartIcon.childAt('seqOut') is None and isinstance(seqStartIcon,
+                        entryicon.EntryIcon) and seqStartIcon.text == '':
+                    # Since we're placing something on the window background, take the
+                    # opportunity to remove unneeded placeholder entry icons.
+                    pendingArgs = seqStartIcon.listPendingArgs()
+                    nonEmptyArgs = list(icon.placementListIter(pendingArgs,
+                        includeEmptySeriesSites=False))
+                    if len(nonEmptyArgs) == 1:
+                        seqStartIcon.popPendingArgs("all")
+                        arg = nonEmptyArgs[0][0]
+                        filefmt.moveIconToPos(arg, seqStartIcon.pos())
+                        subsIc = listicons.subsCanonicalInterchangeIcon(arg)
+                        if subsIc is not None:
+                            arg = subsIc
+                        self.addTop(arg)
+                        if seqStartIcon is cursorStmt:
+                            cursorStmt = arg
+                    else:
+                        self.addTop(seq)
+                else:
+                    self.addTop(seq)
+            return icon.rightmostSite(cursorStmt)
+        # Check for insertion of comprehension icons or 'for' or 'if' icons that can be
+        # substituted them, on comprehension-compatible sites.  Since these can only be
+        # inserted at very specific sites, we can handle them up-front and keep them from
+        # complicating the later code.
+        if len(insertedSequences) == 1 and isinstance(insertedSequences[0][0],
+                (blockicons.ForIcon, blockicons.IfIcon, listicons.CprhIfIcon,
+                listicons.CprhIfIcon)) and len(insertedSequences[0]) <= 2:
+            cprhProxyIc, cprhIdx = listicons.isProxyForCprhSite(atIcon, atSite,
+                allowNonEmpty=True, includeParenIcon=True)
+            if cprhProxyIc is not None:
+                if isinstance(insertedSequences[0][0], (blockicons.ForIcon,
+                        blockicons.IfIcon)):
+                    subsIcons, alsoRemove = restoreFromCanonicalInterchangeIcon(
+                        insertedSequences[0][0], 'cprhIn')
+                    if subsIcons is not None:
+                        listicons.placeArgsInclCprh([subsIcons], cprhProxyIc,
+                            iconsites.makeSeriesSiteId('cprhIcons', cprhIdx))
+                        return icon.rightmostSite(subsIcons[-1])
+        # The one case we can't handle is when the inserted code contains statement-only
+        # icons, and the destination is within an enclosing icon that bounds it from
+        # being split.  Bail out and return failure indication if that is the case.
+        insertingStmtOnlyIcons = insertingNonExprIcons = False
+        numExprsInserted = numStmtsInserted = 0
+        for ic in (i for seq in insertedSequences for i in seq):
+            if expredit.isStmtLevelOnly(ic) and \
+                    not isinstance(ic, commenticon.VerticalBlankIcon):
+                insertingStmtOnlyIcons = True
+            if ic.hasSite('output'):
+                if isinstance(ic, listicons.TupleIcon) and ic.noParens:
+                    numExprsInserted += 2  # Anything > 1 is all the same
+                else:
+                    numExprsInserted += 1
+            elif not isinstance(ic, commenticon.VerticalBlankIcon):
+                insertingNonExprIcons = True
+            numStmtsInserted += 1
+        isLeftmostSite = expredit.isLeftmostSite(atIcon, atSite)
+        rightmostIcon, rightmostSite = icon.rightmostSite(atIcon.topLevelParent())
+        isRightmostSite = rightmostIcon == atIcon and (atSite == rightmostSite or
+            atSite == 'seqOut')
+        enclosingIcon, enclosingSite = entryicon.findEnclosingSite(atIcon, atSite)
+        if insertingStmtOnlyIcons and not isLeftmostSite and not isRightmostSite:
+            if not expredit.openOnRight(enclosingIcon, enclosingSite):
+                return None, None
+        self.requestRedraw(atIcon.topLevelParent().hierRect())
+        # Choose how to do the insert: whether to treat statements in the inserted code
+        # as list elements or to leave them as statements or individual expressions.
+        insertAsStmts = insertAsIndividual = insertAsList = insertAsStmtComment = False
+        if isinstance(insertedSequences[0][0], commenticon.CommentIcon) and \
+                not (isLeftmostSite or atSite in ('seqIn', 'seqOut')):
+            # The inserted code starts with a comment, and the insertion site is neither
+            # a sequence site nor the left site of the stmt.  (excluding the left site is
+            # a somewhat random choice, mostly for text-editor-accustomed users who might
+            # want to paste a line-comment there).
+            insertAsStmtComment = True
+        elif insertingStmtOnlyIcons or atSite in ('seqIn', 'seqOut'):
+            # We're inserting icons that must be at the statement level or inserting
+            # specifically at the statement (at a sequence site).
+            insertAsStmts = True
+        elif atIcon.isCursorOnlySite(atSite) and \
+                atIcon.__class__ in cursors.stmtIcons and \
+                atIcon.typeOf(atSite) == 'attrIn':
+            # We're appending to a statement that can't be appended to, such as pass
+            # or def, and need to redirect to the seqOut site
+            atSite = 'seqOut'
+            insertAsStmts = True
+        elif not insertingNonExprIcons and numExprsInserted > 1 and (
+                enclosingIcon is not None and
+                enclosingIcon.typeOf(enclosingSite) == 'input' or
+                enclosingIcon is None and atIcon.topLevelParent().hasSite('output')):
+            # The criteria for list-style insertion are there are multiple icons, all
+            # compatible with input sites, and that the destination site is either
+            # enclosed by an input-capable site or not enclosed and capable of being
+            # part of a series.
+            insertAsList = True
+        elif numStmtsInserted == 1 and not \
+                isinstance(insertedSequences[0][0], commenticon.VerticalBlankIcon):
+            insertAsIndividual = True
+        else:
+            insertAsStmts = True
+        # Insert the new icons
+        if insertAsStmtComment:
+            # The first inserted icon is a comment and the destination is vetted as
+            # accepting one.  If there are more statements left, insert them after the
+            # statement to which we attached the comment.  Note that we don't split at
+            # the insertion site as we would normally do for insertion, mirroring the
+            # way statement comments can be typed anywhere in the statement.
+            insertSeqStart, topInsertedIcons = concatenateSequences(insertedSequences)
+            commentIc = insertSeqStart
+            nextIc = commentIc.nextInSeq()
+            commentIc.replaceChild(None, 'seqOut')
+            topParent = atIcon.topLevelParent()
+            commentIc.attachStmtComment(topParent)
+            if nextIc is not None:
+                icon.insertSeq(nextIc, topParent)
+                self.addTop(topInsertedIcons[1:])
+            cursorIcon = topInsertedIcons[-1]
+            cursorSite = 'seqOut'
+        elif insertAsStmts:
+            insertSeqStart, topInsertedIcons = concatenateSequences(insertedSequences)
+            if atSite in ('seqIn', 'seqOut'):
+                # When a sequence site is specified we don't do any merging of statement
+                # code, just insert them in the sequence at the specified site.
+                icon.insertSeq(insertSeqStart, atIcon, before=atSite=='seqIn')
+                self.addTop(topInsertedIcons)
+                cursorIcon = topInsertedIcons[-1]
+                cursorSite = 'seqOut'
+            else:
+                # We're not starting at a stmt boundary, merge first stmt from inserted
+                # code with the first inserted stmt, and prepend the last inserted stmt
+                # to the code after the insert position.  For this operation, we take the
+                # simpler but more wasteful approach of inserting the statements, first
+                # (without merging) then attempting to join them to the surrounding code
+                # in subsequent operation(s).  Note that statement comment transfer is
+                # handled by the 'split' and 'join' calls.
+                cursorIcon, cursorSite = icon.rightmostSite(topInsertedIcons[-1])
+                if isLeftmostSite:
+                    # Insert the sequence before the statement holding the insertion
+                    # site and merge the last statement of the sequence with it.
+                    topParent = atIcon.topLevelParent()
+                    lastInsertedStmt = topInsertedIcons[-1]
+                    icon.insertSeq(insertSeqStart, topParent, before=True)
+                    self.addTop(topInsertedIcons)
+                    expredit.joinStmts(lastInsertedStmt)
+                elif isRightmostSite:
+                    # Merge the first element of the sequence with the statement holding
+                    # the insertion site, and splice the remaining ones in to the
+                    # sequence, after it
+                    topParent = atIcon.topLevelParent()
+                    icon.insertSeq(insertSeqStart, topParent)
+                    atIcon.window.addTop(topInsertedIcons)
+                    expredit.joinStmts(topParent)
+                else:
+                    # The sequence is to be inserted in the middle of the statement
+                    # holding the insertion site. (we verified, earlier, that this was
+                    # possible):
+                    # 1) split the statement holding the insertion site around the
+                    #    insertion site,
+                    # 2) insert the remaining icons at the site of the split
+                    # 3) join the last inserted statement with the right half of the
+                    #    split expression.
+                    leftStmt, rightStmt = expredit.splitStmtAtSite(atIcon, atSite)
+                    icon.insertSeq(insertSeqStart, leftStmt)
+                    atIcon.window.addTop(topInsertedIcons)
+                    expredit.joinStmts(leftStmt)
+                    expredit.joinWithPrev(rightStmt)
+        elif insertAsIndividual:
+            insertedTopIcon = insertedSequences[0][0]
+            insertedStmtComment = insertedTopIcon.hasStmtComment()
+            if insertedStmtComment is not None:
+                insertedStmtComment.detachStmtComment()
+            cursorIcon, cursorSite = expredit.insertAtSite(atIcon, atSite,
+                insertedTopIcon)
+            # Merge-in the statement comment (if any) from the inserted tree (relocation
+            # of the statement comment associated with the tree above atIcon is already
+            # done for us by insertAtSite and reorderMarkedExprs)
+            if insertedStmtComment is not None:
+                newTopIcon = cursorIcon.topLevelParent()
+                stmtComment = newTopIcon.hasStmtComment()
+                if stmtComment is None:
+                    insertedStmtComment.attachStmtComment(newTopIcon)
+                else:
+                    stmtComment.mergeTextFromComment(insertedStmtComment)
+        elif insertAsList:
+            # Convert the inserted sequences into a single list, removing sequence links.
+            insertList, strippedComments = cvtSeqsToList(insertedSequences)
+            cursorIcon, cursorSite = expredit.insertListAtSite(atIcon, atSite, insertList)
+            # Merge any statement comments from the list elements (insertListAtSite will
+            # transfer a statement comment across any reparenting).
+            if len(strippedComments) > 0:
+                topIcon = cursorIcon.topLevelParent()
+                stmtComment = topIcon.hasStmtComment()
+                if stmtComment is None:
+                    stmtComment = strippedComments.pop(0)
+                    stmtComment.attachStmtComment(topIcon)
+                for comment in strippedComments:
+                    stmtComment.mergeTextFromComment(comment)
+        return cursorIcon, cursorSite
+
+    def findFirstContiguousSelection(self):
+        # Find the first statement statement containing a selection based on the rules
+        # used for save file/clipboard ordering (...not sure if we should be using these
+        # rules, since vertical position of ...)
+        _, _, seqIter = next(self._findtSequencesForOutput(forClipboard=True))
+        firstSelectedStmt = next(seqIter)
+        # iterate in lexical order over the icons in the statement to find the find the
+        # first contiguous selection.
+        selection = None
+        firstIconOfSelection = None
+        startsOnStmtBoundary = True
+        spansStmtBoundaries = False
+        for ic in expredit.lexicalTraverse(firstSelectedStmt):
+            if ic in self.selectedSet:
+                if selection is None:
+                    # Found the start of the selection
+                    selection = [ic]
+                    firstIconOfSelection = ic
+                else:
+                    selection.append(ic)
+            else:
+                if selection is None:
+                    startsOnStmtBoundary = False
+                else:
+                    # Found the end of the selection within the first statement
+                    return selection, firstSelectedStmt, firstIconOfSelection, ic, \
+                        spansStmtBoundaries, startsOnStmtBoundary, False
+        if selection is None:
+            print('findFirstContiguousSelection internal consistency error')
+            return None, None, None, False, False, False
+        prevStmt = firstSelectedStmt
+        for stmt in seqIter:
+            if stmt is not prevStmt.nextInSeq():
+                # This statement is not contiguous with the previous one
+                return selection, firstSelectedStmt, firstIconOfSelection, \
+                    spansStmtBoundaries, startsOnStmtBoundary, True
+            # If we have not yet determined whether the selection spans a statement
+            # boundary, explicitly check that the selection crosses the first icon
+            if not spansStmtBoundaries:
+                firstIconOfNextStmt = next(expredit.lexicalTraverse(stmt))
+                if firstIconOfNextStmt not in self.selectedSet:
+                    # The selection does not continue to the second statement
+                    return selection, firstSelectedStmt, firstIconOfSelection, \
+                        firstIconOfNextStmt, False, startsOnStmtBoundary, True
+                spansStmtBoundaries = True
+            for ic in expredit.lexicalTraverse(stmt):
+                if ic not in self.selectedSet:
+                    # The selection ends in the middle of the statement
+                    return selection, firstSelectedStmt, firstIconOfSelection, ic, \
+                        spansStmtBoundaries, startsOnStmtBoundary, False
+                selection.append(ic)
+        # There are no more selected statements to process, therefore, the selection ends
+        # on a statement boundary.
+        return selection, firstSelectedStmt, firstIconOfSelection, stmt.nextinSeq(), \
+            spansStmtBoundaries, startsOnStmtBoundary, True
 
     def saveFile(self, filename):
         _base, ext = os.path.splitext(filename)
@@ -3255,7 +3911,7 @@ class Window:
         structures.  If this icon is part of a sequence, use removeTop, instead, because
         ordering of removal is necessary to rebuild page structures when the operation
         is undone."""
-        self.undo.registerRemoveFromTopLevel(ic, ic.rect[:2] if lastOfSeq else None)
+        self.undo.registerRemoveFromTopLevel(ic, lastOfSeq)
         page = self.topIcons.get(ic)
         page.layoutDirty = True
         page.iconCount -= 1
@@ -3310,7 +3966,9 @@ class Window:
         icon will take it over if it can, or the owned block will be dedented back to the
         parent sequence.  alreadyRemoved can be specified as True of removeTop has
         already been called on the old icon (which may be necessary to comply with the
-        required ordering of operations for undo)."""
+        required ordering of operations for undo).  Passing new as None is allowed as a
+        method for removing a single statement from a sequence without the additional
+        overhead associated with removeIcons."""
         # Note that order is important here, because the page infrastructure duplicates
         # some of the information in the icon sequences.  .removeTop should always be
         # called before tearing down the sequence connections, and .addTop should always
@@ -3334,7 +3992,7 @@ class Window:
             old.replaceChild(None, 'seqOut')
             old.blockEnd.replaceChild(None, 'seqIn')
             old.blockEnd.replaceChild(None, 'seqOut')
-            if not isinstance(nextInSeq, icon.BlockEnd):
+            if not isinstance(nextInSeq, icon.BlockEnd) and new is not None:
                 new.replaceChild(nextInSeq, 'seqOut')
             if hasattr(new, 'blockEnd'):
                 # New icon takes over old icon's code block (by transferring site
@@ -3353,30 +4011,36 @@ class Window:
                 if hasattr(new, 'blockEnd'):
                     # BlockEnd (which is already attached to new icon's seqOut) linked in
                     new.blockEnd.replaceChild(nextInSeq, 'seqOut')
-                else:
+                elif new is not None:
                     # Neither icon can own a code block
                     new.replaceChild(nextInSeq, 'seqOut')
         prevInSeq = old.prevInSeq(includeModuleAnchor=True)
         if prevInSeq:
             old.replaceChild(None, 'seqIn')
-            new.replaceChild(prevInSeq, 'seqIn')
-        oldSite = old.sites.lookup("output")
-        newSite = new.sites.lookup("output")
-        oldX, oldY = old.rect[:2]
-        if oldSite is None or newSite is None:
-            newX, newY = oldX, oldY
-        else:
-            newX = oldX + oldSite.xOffset - newSite.xOffset
-            newY = oldY + oldSite.yOffset - newSite.yOffset
-        new.rect = icon.moveRect(new.rect, (newX, newY))
-        if hasattr(new, 'blockEnd'):
-            self.addTop((new, new.blockEnd))
-        else:
-            self.addTop(new)
-        if transferStmtComment and hasattr(old, 'stmtComment'):
-            stmtComment = old.stmtComment
-            stmtComment.detachStmtComment()
-            stmtComment.attachStmtComment(new)
+            if new is None:
+                prevInSeq.replaceChild(nextInSeq, 'seqOut')
+            else:
+                new.replaceChild(prevInSeq, 'seqIn')
+        if new is None and prevInSeq is None:
+            filefmt.moveIconToPos(nextInSeq, old.pos())
+        if new is not None:
+            oldSite = old.sites.lookup("output")
+            newSite = new.sites.lookup("output")
+            oldX, oldY = old.rect[:2]
+            if oldSite is None or newSite is None:
+                newX, newY = oldX, oldY
+            else:
+                newX = oldX + oldSite.xOffset - newSite.xOffset
+                newY = oldY + oldSite.yOffset - newSite.yOffset
+            new.rect = icon.moveRect(new.rect, (newX, newY))
+            if hasattr(new, 'blockEnd'):
+                self.addTop((new, new.blockEnd))
+            else:
+                self.addTop(new)
+            if transferStmtComment and hasattr(old, 'stmtComment'):
+                stmtComment = old.stmtComment
+                stmtComment.detachStmtComment()
+                stmtComment.attachStmtComment(new)
 
     def addTop(self, icons):
         """Place an icon or icons on the window at the top level.  If the icons are
@@ -3696,7 +4360,7 @@ class Window:
     def siteSelected(self, evt):
         """Look for icon sites near button press, if found return icon and site"""
         btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
-        left = btnX - SITE_SELECT_DIST
+        left = btnX - SITE_SELECT_DIST - EMPTY_SITE_EXT_DIST
         right = btnX + SITE_SELECT_DIST
         top = btnY - SITE_SELECT_DIST
         bottom = btnY + SITE_SELECT_DIST
@@ -3722,6 +4386,10 @@ class Window:
                     else:
                         continue  # not a visible site type
                     dist = (abs(btnX - x) + abs(btnY - y))
+                    if siteType == 'input' and siteIcon.childAt(siteName) is None:
+                        # For empty sites, extend search range past middle of pink area
+                        dist = min(dist, abs(btnX - x - EMPTY_SITE_EXT_DIST) +
+                            abs(btnY - y))
                     if dist < minDist or (dist == minDist and
                      minSite[2] in ("attrOut", "output")):  # Prefer inputs, for now
                         minDist = dist
@@ -4115,6 +4783,14 @@ def clipboardRepr(icons, offset):
 def orderTopIcons(topIcons):
     """Given a list of top icons, returns a list of groups of those icons that appear on
     the same sequence, in the order in which they appear in that sequence."""
+    # Since this can be expensive, short-cut the process for a single icon.  The single
+    # icon case is common on its own, and but more importantly, code such as that in
+    # replaceIcons that feed removeIcons per-statement, would multiply this expense by
+    # the number of statements processed.
+    if len(topIcons) == 0:
+        return []
+    if len(topIcons) == 1:
+        return [[next(iter(topIcons))]]
     unsequenced = set(topIcons)
     sequences = []
     for topIc in topIcons:
@@ -4194,622 +4870,6 @@ def findSeries(icons):
     series['individual'] = list(individuals)
     return series
 
-def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs):
-    """Remove icons in set, toDelete, from ic and the icons below it in the hierarchy,
-    and return a pair of results, the first representing the icons remaining in the tree
-    and the second representing the icons removed from the tree (if assembleDeleted is
-    True).  A value of None indicates that ic remains in the corresponding tree.  If not
-    None, the value will be a placement-list (see icon.placeArgs) style list (possibly
-    empty), representing the remaining icons that need to replace it in the corresponding
-    tree.  If ic itself appears in toDelete, it will appear in the deleted icon placement
-    list but will not be detached from its parent. The function calls itself recursively,
-    creating a single tree (or placement list of trees) out of the remaining icons and
-    (if requested via assembleDeleted), a single tree or list out of the deleted icons.
-    If necessary, it inserts placeholder icons to retain icons that cannot otherwise be
-    attached to incompatible sites.  In addition to the two trees, splitDeletedIcons
-    returns a boolean value indicating whether it *also* moved ic.  While the premise of
-    the function is that it rearranges only the trees *under* ic, unfortunately there are
-    cases where ic has to move down the hierarchy (as a consequence of owning a list that
-    needs to move up).  If the function moves ic, and ic is a top-level icon, it will
-    also call removeTop() on it (which needs to be done first for undo to work properly),
-    and main purpose of the returned boolean value is to inform the calling function that
-    this has been done so it won't repeat the operation.  While the function will do the
-    single-level reordering necessary to propagate lists upward in the hierarchy, it
-    leaves  arithmetic reordering (which may involve multiple levels) to the caller.  The
-    caller should provide a list in needReorder to receive a list of operators that
-    should be checked for precedence inversions.  watchSubs can be set to None, or to a
-    dictionary whose keys are icons for which the caller wants to be notified of
-    substitutions (see removeIcons description for details)."""
-    # Note that this code can be confusing to read, because rather than keep the deleted
-    # and non-deleted trees separate, it immediately categorizes them into the tree that
-    # will remain attached to ic (withIc) and the tree that will be detached from it
-    # (splitFromIc).  This reduces duplication in the code but also adds an extra layer
-    # of indirection.  Also, when reading the code, remember that a 'None' return from a
-    # recursive call to splitDeletedIcons means that the icon was *not split* which is
-    # easy to misconstrue as 'deleted'.
-    icDeleted = ic in toDelete
-    splitList = []
-    argsDetached = False
-    subsList = None
-    removedTopIcon = False
-    for siteOrSeries in ic.sites.traverseLexical():
-        if isinstance(siteOrSeries, iconsites.IconSiteSeries):
-            # Site series
-            isCprhSeries = siteOrSeries.type == 'cprhIn'
-            splitSeriesList = []
-            for site in list(siteOrSeries):
-                if site.att is None:
-                    # Empty sites are considered an attribute of the icon (as we can't
-                    # delete the absence of something), so stay with it, deleted or not.
-                    continue
-                if icDeleted:
-                    splitFromIc, withIc, _ = splitDeletedIcons(site.att, toDelete,
-                        assembleDeleted, needReorder, watchSubs)
-                else:
-                    withIc, splitFromIc, _ = splitDeletedIcons(site.att, toDelete,
-                        assembleDeleted, needReorder, watchSubs)
-                if assembleDeleted or icDeleted:
-                    if splitFromIc is None:
-                        splitSeriesList.append([site.att])
-                    elif len(splitFromIc) > 0:
-                        splitSeriesList.append(splitFromIc)
-                if withIc is not None:
-                    # The attached icon needs to be removed (withIc will be None if the
-                    # argument was unchanged but a (potentially empty) place-list if
-                    # there are icons to reintegrate).  If there is a replacement list,
-                    # reduce it to a series and splice it in to the series site.  The
-                    # code uses the fact that sites are renamed on insert and delete, to
-                    # get the current series index regardless of prior insertions and
-                    # deletions.  That is, unless this is either a comprehension site,
-                    # or the first item to place is itself a comprehension.  Cprh sites
-                    # are series sites on icons, but are individuals in a place-list.
-                    argsDetached = True
-                    if isCprhSeries:
-                        replaceCprhArgWithPlaceList(ic, site.name, withIc)
-                    elif len(withIc) > 0 and isinstance(ic, (listicons.TupleIcon,
-                            listicons.ListIcon,  listicons.DictIcon)) and \
-                            siteOrSeries.name == 'argIcons' and \
-                            len(ic.sites.argIcons) <= 1 and (isinstance(withIc[0],
-                            (listicons.CprhForIcon, listicons.CprhIfIcon)) or
-                            listicons.canPlaceCprhArgsFromEntry(None, withIc,
-                            'argIcons_0', True)):
-                        replaceCprhArgWithPlaceList(ic, 'argIcons_0', withIc)
-                    else:
-                        seriesIcons = placeListToSeries(withIc)
-                        if len(seriesIcons) == 0:
-                            ic.replaceChild(None, site.name)
-                        else:
-                            ic.replaceChild(seriesIcons[0], site.name)
-                            name, idx = iconsites.splitSeriesSiteId(site.name)
-                            ic.insertChildren(seriesIcons[1:], name, idx+1)
-            if assembleDeleted or icDeleted:
-                # splitList contains a list of placelists from each of the sites of the
-                # series.  In the comprehension case, these go directly in to splitList,
-                # but in the normal series case we integrate them as (comma separated)
-                # series (provided there are more than one).
-                if isCprhSeries:
-                    for p in splitSeriesList:
-                        appendToPlaceList(splitList, p, needReorder)
-                else:
-                    if len(splitSeriesList) == 1:
-                        appendToPlaceList(splitList, splitSeriesList[0], needReorder)
-                    elif len(splitSeriesList) > 1:
-                        for p in splitSeriesList:
-                            appendToPlaceList(splitList, [placeListToSeries(p)],
-                                needReorder)
-        elif siteOrSeries.att is not None:
-            # Individual site
-            if icDeleted:
-                splitFromIc, withIc, _ = splitDeletedIcons(siteOrSeries.att, toDelete,
-                    assembleDeleted, needReorder, watchSubs)
-            else:
-                withIc, splitFromIc, _ = splitDeletedIcons(siteOrSeries.att, toDelete,
-                    assembleDeleted, needReorder, watchSubs)
-            if assembleDeleted or icDeleted:
-                if splitFromIc is None:
-                    appendToPlaceList(splitList, [siteOrSeries.att], needReorder)
-                elif len(splitFromIc) > 0:
-                    appendToPlaceList(splitList, splitFromIc, needReorder)
-            if withIc is not None:
-                # Deletion resulted in a placement list (though it may be empty).  If it
-                # can be reduced to a single icon, replace the existing attached icon
-                # with it.  If placeList contains a single series and we're trying to put
-                # it on ic's rightmost site, move ic into the series and punt the the
-                # place list up to the next level in the hope that somewhere above us is
-                # a series it can be merged into.
-                argsDetached = True
-                subsList = placeOnSingleSite(ic, siteOrSeries, withIc, subsList,
-                    needReorder, watchSubs)
-                removedTopIcon = isinstance(subsList, (list, tuple))
-    if subsList is None and isinstance(ic, entryicon.EntryIcon):
-        if argsDetached:
-            ic.pruneEmptyPendingArgSites()
-        if ic.text == '':
-            # The icon is a placeholder entry icon.  If the there's just one pending
-            # argument and it's compatible with the site: get rid of the placeholder.
-            pendingArgs = ic.listPendingArgs()
-            nonEmptyArgs = [ic for ic, _, _ in icon.placementListIter(pendingArgs,
-                includeEmptySeriesSites=False)]
-            if len(nonEmptyArgs) == 0:
-                # Everything has been stripped off of placeholder icon, get rid of it
-                subsList = []
-            elif len(nonEmptyArgs) == 1 and ic.attachedIcon() is not None and \
-                    iconsites.matingSiteType[ic.attachedSiteType()] in \
-                    (s.type for s in nonEmptyArgs[0].sites.parentSites()):
-                # Entry icon has a single pending arg that's compatible with parent site.
-                # remove the entry icon.  (Note that this is stupidly testing against the
-                # original parent.  Testing the new parent is more complicated, so we do
-                # this and let the parent iteration recreate the placeholder if we're
-                # wrong.  This will also miss some opportunities for cleanup, though, in
-                # practice I haven't found any cases not handled by other placeholder-
-                # trimming code)
-                ic.popPendingArgs('all')
-                subsList = [nonEmptyArgs[0]]
-    # If ic is a naked tuple, deletion of its content could leave it empty or owning a
-    # single element.  If so, remove it.
-    if subsList is None and isinstance(ic, listicons.TupleIcon) and ic.noParens and \
-            len(ic.sites.argIcons) == 1:
-        argIcon = ic.childAt('argIcons_0')
-        if argIcon is None:
-            subsList = []
-        else:
-            ic.replaceChild(None, 'argIcons_0')
-            subsList = [argIcon]
-    if icDeleted:
-        return splitList, subsList, removedTopIcon
-    else:
-        return subsList, splitList, removedTopIcon
-
-def placeListToTopLevelIcon(placeList, forSequence, watchSubs=None):
-    """Create an icon tree from a placement-list-format list of icons (placeList).
-    Specify forSequence if the icon will need to be part of a sequence (for which icons
-    that attach only to attribute and comprehension sites need a placeholder icon to
-    adapt).  Note that this can return a block-owning icon if the placelist contains a
-    single comprehension clause, because we return the corresponding for/if stmt.
-    watchSubs can be set to a dictionary of icons for whom callers need a record of icon
-    substitutions (see window.removeIcons)."""
-    if len(placeList) == 0:
-        return None
-    numInputs = 0
-    for entry in placeList:
-        if isinstance(entry, list):
-            numInputs += len(entry)
-        elif entry.hasSiteType('output'):
-            numInputs += 1
-    firstIc = placeList[0]
-    if numInputs <= len(placeList)//2 and not isinstance(firstIc, (list, tuple)):
-        # Less than half of the place list entries have output sites, so use an entry
-        # icon to join them, rather than a list.  If the first item in placeList
-        # needs an entry icon, just put the whole place list in that, but if it
-        # doesn't, create the first element without and hang an entry icon with the
-        # remaining elements off of the rightmost icon of the first.
-        if isinstance(firstIc, entryicon.EntryIcon):
-            # Not sure if any of our callers will do this, but it's easy to handle
-            firstIc.appendPendingArgs(placeList)
-            return firstIc
-        # We really shouldn't be doing substitution, here, as it complicates everything.
-        # Unfortunately, our caller may be assembling a sequence and our only alternatives
-        # are to hand it a comprehension, or a comprehension embedded in an entry icon.
-        if isinstance(firstIc, (listicons.CprhForIcon, listicons.CprhIfIcon)):
-            subsIc = listicons.subsCanonicalInterchangeIcon(firstIc)
-            if subsIc is not None:
-                window = firstIc.window
-                if watchSubs is not None and firstIc in watchSubs:
-                    watchSubs[firstIc] = subsIc
-                firstIc = subsIc
-        if not forSequence or firstIc.hasSiteType('output') or \
-                firstIc.hasSiteType('seqIn'):
-            # The first element of placeList can stand alone: hang the remaining
-            # elements off of it with an entry icon
-            if len(placeList) == 1:
-                return firstIc  # Don't need an entry icon (no entries to add)
-            rightmostIc, rightmostSite = icon.rightmostSite(firstIc)
-            entryIc = entryicon.EntryIcon(window=firstIc.window)
-            entryIc.appendPendingArgs(placeList[1:])
-            entryIc.selectIfFirstArgSelected()
-            rightmostIc.replaceChild(entryIc, rightmostSite)
-            return firstIc
-        else:
-            # The first element of placeList requires an entry icon: make one big
-            # entry icon
-            entryIc = entryicon.EntryIcon(window=firstIc.window)
-            entryIc.appendPendingArgs(placeList)
-            entryIc.selectIfFirstArgSelected()
-            return entryIc
-    # Use placeListToSeries, to transform the list.  This is reasonable even for single
-    # icons, since placement lists are not allowed to contain statement-level icons, and
-    # anything else that needs a placeholder icon to be part of a series, also needs one
-    # to be part of a sequence.
-    seriesIcons = placeListToSeries(placeList)
-    if len(seriesIcons) == 0:
-        return None
-    elif len(seriesIcons) == 1:
-        return seriesIcons[0]
-    firstIcon, _, _ = icon.firstPlaceListIcon(placeList)
-    if firstIcon is None:
-        return None
-    topIcon = listicons.TupleIcon(window=firstIcon.window, noParens=True)
-    topIcon.insertChildren(seriesIcons, 'argIcons', 0)
-    topIcon.rect = icon.moveRect(topIcon.rect, firstIcon.rect[:2])
-    return topIcon
-
-def placeListToSeries(placeList):
-    """Convert the place list to a list of icons to be represented as a series (while
-    we do have the concept of a series of comprehension sites, this call returns only
-    the normal input-site series type)."""
-    seriesIcons = []
-    for entry in placeList:
-        if isinstance(entry, (list, tuple)):
-            # Series are expected to be inputs, add entire series
-            seriesIcons += entry
-        elif isinstance(entry, entryicon.EntryIcon) and entry.text == '':
-            # entry is an entry icon.  If it's all inputs, it can be dropped, and if
-            # it's not, it's still a valid series member.
-            pendingArgs = entry.listPendingArgs()
-            nonEmptyArgs = [ic for ic, _, _ in icon.placementListIter(pendingArgs,
-                includeEmptySeriesSites=False)]
-            if len(nonEmptyArgs) == 0:
-                continue
-            for ic in nonEmptyArgs:
-                if 'output' not in (s.name for s in ic.sites.parentSites()):
-                    seriesIcons.append(entry)
-                    break
-            else:
-                entry.popPendingArgs('all')
-                seriesIcons += nonEmptyArgs
-        elif entry is None or 'output' in (s.name for s in entry.sites.parentSites()):
-            # entry is icon that is compatible with an input
-            seriesIcons.append(entry)
-        else:
-            # entry is icon that is not compatible with an input site.  Since the
-            # deletion process merges icons into the placement list as it adds them, we
-            # know all possible merging is already done, and all we can do is create a
-            # placeholder icon.  The one exception is that we may have converted the
-            # prior icon to a placeholder (or it may already have been), in which case,
-            # we can just add the icon to the prior one's pending args.
-            if len(seriesIcons) > 0 and seriesIcons[-1] is not None and \
-                    isinstance(seriesIcons[-1], entryicon.EntryIcon):
-                entryIc = seriesIcons[-1]
-            else:
-                entryIc = entryicon.EntryIcon(window=entry.window)
-                seriesIcons.append(entryIc)
-                if entry.isSelected():
-                    entryIc.select(True)
-            entryIc.appendPendingArgs([entry])
-    return seriesIcons
-
-def placeOnSingleSite(toIcon, toSite, placeList, subsPlaceList, needReorder, watchSubs):
-    """Attempt to attach the icons in placeList to site toSite on icon toIcon.  If
-    placeList contains a single series, and the caller has some hope of merging the
-    the series with one higher up, attach the first element of the series to toSite, and
-    return a version of placeList with toIcon spliced in.  Alternatively, if toIcon is a
-    paren icon, a series can be placed on it by substituting it with a tuple icon.  If
-    neither such swaps were done, returns None.  If toIcon is already being substituted
-    with a place list (presumably by this function), the caller should pass it in
-    subsPlaceList, so that if a series is encountered in another argument of toIcon
-    (usually the left and right arguments of a binary operator), the function can return
-    a combined placement list.  needReorder and watchSubs are passed down from
-    splitDeletedIcons and window.removeIcons (see descriptions) to notify the caller of
-    expressions  needing reorder and icons that have been substituted."""
-    # splitDeletedIcons was originally only allowed to act on the arguments of the icon
-    # it was splitting.  Unfortunately, I didn't realize until long after designing it,
-    # that it would need to move lists upward in the hierarchy.  To do this, we allow
-    # splitDeletedIcons to produce a placement list for an icon that's not being deleted,
-    # which adds all kinds of complexity because we now have to remove that icon from the
-    # top level (since that always needs to be done first for undo), and tell the caller
-    # about it, and be prepared to operate on an icon that has been substituted with a
-    # placement list (for example, removing both brackets from '[a,b]*[c,d]').
-    firstIc = None
-    secondIc = None
-    for ic, _, _ in icon.placementListIter(placeList, includeEmptySeriesSites=False):
-        if firstIc is None:
-            firstIc = ic
-        else:
-            secondIc = ic
-            break
-    if firstIc is None:
-        # placeList contains no icons needing placement
-        toIcon.replaceChild(None, toSite.name)
-        return subsPlaceList
-    # If the destination icon is a cursor-paren, it may be possible to convert it to a
-    # tuple for the purpose of placing a multi-element list or one or more comprehension
-    # clauses.
-    if isinstance(toIcon, parenicon.CursorParenIcon) and toSite.name == 'argIcon' and \
-            not subsPlaceList:
-        cvtToTuple = False
-        insertArgs = None
-        insertCprhs = None
-        if secondIc is not None and len(placeList) == 1 and isinstance(placeList[0],
-                (list, tuple)) and len(placeList[0]) > 1:
-            # placeList contains a multi-element list: convert to tuple
-            cvtToTuple = True
-            insertArgs = placeList[0]
-        elif isinstance(placeList[0], (listicons.CprhForIcon, listicons.CprhIfIcon)):
-            # placeList starts with a comprehension clause.  If that's all it contains,
-            # then convert to tuple
-            cprhIcons = [ic for ic in placeList if isinstance(ic, (listicons.CprhForIcon,
-                listicons.CprhIfIcon))]
-            if len(cprhIcons) == len(placeList):
-                cvtToTuple = True
-                insertCprhs = cprhIcons
-        elif len(placeList) == 1 and listicons.canPlaceCprhArgsFromEntry(None, placeList,
-                'argIcons_0', True):
-            # placeList contains either a single placeholder entry icon containing
-            # comprehension clauses, or a single expression with a placeholder entry icon
-            # on its right that contains them: convert to tuple
-            cvtToTuple = True
-            placeList = listicons.promoteCprhArgsFromEntry(placeList, True)
-            if isinstance(placeList[0], (listicons.CprhForIcon, listicons.CprhIfIcon)):
-                insertCprhs = placeList
-            else:
-                insertArgs = placeList[:1]
-                insertCprhs = placeList[1:]
-        if cvtToTuple:
-            # We can convert to a tuple.  Note, however, that we're not actually doing
-            # the replacement, just returning the new tuple for splitDeletedIcons to
-            # process as the replacement for toIcon.
-            newTuple = listicons.TupleIcon(window=toIcon.window)
-            parent = toIcon.parent()
-            if parent is not None:
-                parent.replaceChild(None, parent.siteOf(toIcon))
-            elif toIcon in toIcon.window.topIcons:
-                toIcon.window.removeTop(toIcon)
-            if insertArgs is not None:
-                newTuple.insertChildren(insertArgs, 'argIcons_0')
-            if insertCprhs is not None:
-                newTuple.insertChildren(insertCprhs, 'cprhIcons_0')
-            filefmt.moveIconToPos(newTuple, toIcon.pos())
-            attr = toIcon.childAt('attrIcon') if toIcon.closed else None
-            if attr:
-                toIcon.replaceChild(None, 'attrIcon')
-                newTuple.replaceChild(attr, 'attrIcon')
-            toIcon.replaceChild(None, toSite.name)
-            if watchSubs is not None and toIcon in watchSubs:
-                watchSubs[toIcon] = newTuple
-            cursor = toIcon.window.cursor
-            if cursor.type == 'icon' and cursor.icon is toIcon:
-                cursor.icon = newTuple
-                if cursor.site == 'argIcon':
-                    cursor.site = 'argIcons_0'
-            return [newTuple]
-    if secondIc is None:
-        requiredParentSiteType = iconsites.matingSiteType[toSite.type]
-        if requiredParentSiteType in (s.type for s in firstIc.sites.parentSites()):
-            # There is only a single icon in placeList and it's a compatible type
-            checkReorder(firstIc, needReorder)
-            toIcon.replaceChild(firstIc, toSite.name)
-            return subsPlaceList
-    # if placeList contains a multi-element list, try to merge toIcon into placeList (see
-    # function description) and return the modified list
-    if len(placeList) == 1 and isinstance(placeList[0], (list, tuple)) and \
-            len(placeList[0]) > 1 and toSite.type == 'input':
-        parent = toIcon.parent()
-        if toSite is toIcon.sites.nthCursorSite(-1):
-            if subsPlaceList is None:
-                if parent is not None:
-                    parent.replaceChild(None, parent.siteOf(toIcon))
-                elif toIcon in toIcon.window.topIcons:
-                    toIcon.window.removeTop(toIcon)
-                toIcon.replaceChild(placeList[0][0], toSite.name)
-                checkReorder(toIcon, needReorder)
-                placeList[0][0] = toIcon
-                return placeList
-            elif len(subsPlaceList) == 1 and isinstance(subsPlaceList[0],
-                    (list, tuple)) and len(subsPlaceList[0]) > 0 and \
-                    subsPlaceList[0][-1] is toIcon:
-                # The icon is already being substituted out for a multi-element list
-                # with toIcon as the last element.  Merge the two lists by attaching the
-                # first element of the new place list (placeList) to the designated site
-                # on toIcon (now at the end of subsPlaceList), and adding the remaining
-                # elements from placeList after toIcon in subsPlaceList.
-                toIcon.replaceChild(placeList[0][0], toSite.name)
-                subsPlaceList[0] += placeList[0][1:]
-                return subsPlaceList
-        if toIcon.hasCoincidentSite() == toSite.name:
-            if parent is not None:
-                parent.replaceChild(None, parent.siteOf(toIcon))
-            elif toIcon in toIcon.window.topIcons:
-                toIcon.window.removeTop(toIcon)
-            toIcon.replaceChild(placeList[0][-1], toSite.name)
-            checkReorder(toIcon, needReorder)
-            placeList[0][-1] = toIcon
-            return placeList
-    # The list is not compatible, create an entry icon
-    entryIc = entryicon.EntryIcon(window=firstIc.window)
-    entryIc.appendPendingArgs(placeList)
-    entryIc.selectIfFirstArgSelected()
-    toIcon.replaceChild(entryIc, toSite.name)
-    return subsPlaceList
-
-def appendToPlaceList(placeList, toAdd, needReorder):
-    """Lexically merge a placement list, toAdd, to the end of an existing one, placeList,
-    assuming that all of the intervening icons have been removed.  This is used for
-    reconstructing an icon hierarchy following deletion, with the end goal of creating
-    either a tree with a single icon at the root, or a series that can be merged in to a
-    parent series or become a naked tuple at the top level.  Since reducing the list to a
-    single icon or a series the goal, the call tries to merge everything that can be
-    merged.  In particular, it tries to eliminate loose attributes and empty sites on
-    the left or right of an operator.  The caller needs to supply a list (needReorder) to
-    receive icons to be reexamined after reassembly for arithmetic reordering based on
-    precedence."""
-    if len(toAdd) == 0:
-        return
-    if len(placeList) == 0:
-        placeList += toAdd
-        return
-    if isinstance(placeList[-1], (listicons.CprhForIcon, listicons.CprhIfIcon)) and \
-            isinstance(toAdd[0], (listicons.CprhForIcon, listicons.CprhIfIcon)):
-        placeList += toAdd  # lists of cprh icons become individuals in place lists
-        return
-    placeListEndsWithList = isinstance(placeList[-1], (list, tuple))
-    toAddStartsWithList = isinstance(toAdd[0], (list, tuple))
-    if placeListEndsWithList and toAddStartsWithList:
-        # Both the end of placeList and the start of toAdd are series.  Just join them
-        placeList[-1] += toAdd[0]
-        placeList += toAdd[1:]
-        return
-    if placeListEndsWithList:
-        lastPlaceListIc = placeList[-1][-1]
-    else:
-        lastPlaceListIc = placeList[-1]
-    rightmostIc, rightmostSiteId = icon.rightmostSite(lastPlaceListIc)
-    firstToAddIc = toAdd[0][0] if isinstance(toAdd[0], (list, tuple)) else toAdd[0]
-    if not rightmostIc.isCursorOnlySite(rightmostSiteId):
-        matingType = iconsites.matingSiteType[rightmostIc.typeOf(rightmostSiteId)]
-    else:
-        matingType = None
-    if isinstance(firstToAddIc, entryicon.EntryIcon) or matingType in \
-            [s.type for s in firstToAddIc.sites.parentSites()]:
-        # We can attach the left icon from toAdd to the right icon from placeList
-        rightmostIc.replaceChild(firstToAddIc, rightmostSiteId)
-        checkReorder(rightmostIc, needReorder)
-        if toAddStartsWithList:
-            toAdd[0] = placeList[-1]
-            placeList[-1] = toAdd[0]
-            placeList += toAdd[1:]
-        else:
-            placeList += toAdd[1:]
-        return
-    firstIcCoincSite = firstToAddIc.hasCoincidentSite()
-    if firstIcCoincSite and \
-            not firstToAddIc.childAt(firstToAddIc.sites.firstCursorSite()) and \
-            icon.validateCompatibleChild(lastPlaceListIc, firstToAddIc, firstIcCoincSite):
-        # There's an empty site on the left of the left icon added, combine
-        firstToAddIc.replaceChild(lastPlaceListIc, firstIcCoincSite)
-        checkReorder(firstToAddIc, needReorder)
-        if placeListEndsWithList:  # and toAdd does not start with list, per above
-            return
-        placeList[-1] = toAdd[0]
-        placeList += toAdd[1:]
-        return
-    else:
-        # This function is tailored to the needs of removeIcons, which builds place lists
-        # outside-in, and, with the exception of input series, cannot ever re-unify a
-        # multi-item place-list.  If we just blindly tack additional items on to the
-        # the list, we'll just end up putting more icons in some future entry icon's
-        # pending args, so as long as the place list is not already multi-element, make
-        # the entry icon, here and add it to the rightmost icon in placeList.
-        if len(placeList) > 1:
-            placeList += toAdd
-        else:
-            rightmostEntry = placeList[0][-1] if isinstance(placeList[0], (list, tuple)) \
-                else placeList[0]
-            rightmostIc, rightmostSite = icon.rightmostSite(rightmostEntry)
-            for ic in rightmostIc.parentage(includeSelf=True):
-                if isinstance(ic, entryicon.EntryIcon):
-                    # There's already an entry icon, here.  Add to that, instead
-                    ic.appendPendingArgs(toAdd)
-                    break
-            else:
-                entryIc = entryicon.EntryIcon(window=rightmostIc.window)
-                entryIc.appendPendingArgs(toAdd)
-                entryIc.selectIfFirstArgSelected()
-                rightmostIc.replaceChild(entryIc, rightmostSite)
-
-def replaceCprhArgWithPlaceList(ic, siteName, placeList):
-    """Remove  icon currently attached to siteName (which must be a cprhIn site or
-    argIcons_0), and insert the icon(s) in placeList in its place.  This may place
-    non-cprh icons (adapted if necessary with a placeholder entry icon) on whatever is
-    occupying the previous site, which might be either the previous comprehension clause
-    or the comprehension expression (if siteName is the leftmost cprh clause).  It may
-    also add or remove sites from the cprhIcons series.  Note that because this may need
-    to place icons on the previous site, it requires that the previous site be already
-    fully assembled and accessible from ic with the expected site name (and, of course,
-    by extension, this call must be invoked left-to-right)."""
-    if len(placeList) == 0:
-        ic.replaceChild(None, siteName)
-        return
-    placeIdx, placeSeriesIdx = ic.canPlaceArgs(placeList, siteName, overwriteStart=True)
-    canPlace = False
-    placeOnPrev = None
-    placeOnSelf = None
-    if placeIdx is None:
-        # No arguments can be placed
-        placeOnPrev = placeList
-    elif icon.placeListAtEnd(placeList, placeIdx, placeSeriesIdx):
-        # All arguments can be placed
-        canPlace = True
-    elif icon.placeListEmpty(placeList, placeIdx, placeSeriesIdx):
-        # The only args that could be placed were empty
-        placeOnPrev = placeList
-    elif placeIdx != len(placeList) - 1:
-        # The site can be successfully replaced, but args remain
-        canPlace = True
-        placeOnSelf = placeList[placeIdx:]
-    if canPlace:
-        ic.placeArgs(placeList, siteName, overwriteStart=True)
-    else:
-        ic.replaceChild(None, siteName)
-    seriesName, idx = iconsites.splitSeriesSiteId(siteName)
-    if placeOnPrev is not None:
-        if idx == 0:
-            # Place the icons on the comprehension expression
-            placeSite = ic.sites.argIcons[0].name
-        else:
-            # Place the icons on the previous comprehension clause.  Note that we don't
-            # expect an empty comprehension site.  If there is one, we risk putting an
-            # entry icon there, which the entry icon doesn't support.
-            placeSite = iconsites.makeSeriesSiteId(seriesName, idx-1)
-            if ic.childAt(placeSite) is None:
-                print("Unexpected empty cprh site can't support entry icon")
-        placeAtEndOfArg(ic, placeSite, placeOnPrev)
-    if placeOnSelf is not None:
-        placeSite = iconsites.makeSeriesSiteId(seriesName, idx + placeIdx)
-        placeAtEndOfArg(ic, placeSite, placeOnSelf)
-
-def placeAtEndOfArg(ic, siteName, placeList):
-    """Place all of the icons in placeList after the icons attached to site, siteName, on
-    icon, ic.  If they need adaptation to make them fit, add an entry icon in between."""
-    siteTopIc = ic.childAt(siteName)
-    if siteTopIc is None:
-        placeOnIc = ic
-        placeOnSite = siteName
-    else:
-        placeOnIc, placeOnSite = icon.rightmostSite(siteTopIc)
-    prevPlaceIdx, prevPlaceSeriesIdx = placeOnIc.canPlaceArgs(placeList,
-        placeOnSite, overwriteStart=False)
-    if icon.placeListAtEnd(placeList, prevPlaceIdx, prevPlaceSeriesIdx):
-        # All arguments can be placed
-        placeOnIc.placeArgs(placeList, placeOnSite, overwriteStart=False)
-    else:
-        # Not all arguments can be placed, create an entry icon to adapt
-        entryIc = entryicon.EntryIcon(window=ic.window)
-        entryIc.appendPendingArgs(placeList)
-        entryIc.selectIfFirstArgSelected()
-        placeOnIc.replaceChild(entryIc, placeOnSite)
-
-def checkReorder(ic, needReorder):
-    """Deletion from expressions is done lexically, but the deletion operation itself is
-    done blindly on the icon hierarchy, so when a deletion operation reorders an
-    expression, it calls this to mark potentially affected icons to recheck the
-    precedence relationships to see if the new lexical order needs to cause rearrangement
-    of the hierarchy.  It marks them by adding the potentially affected icons to the list,
-    needReorder."""
-    if isinstance(ic, (opicons.UnaryOpIcon, opicons.BinOpIcon, opicons.IfExpIcon)):
-        needReorder.append(ic)
-
-def reorderMarkedExprs(topIcon, exprsNeedingReorder):
-    """Reorder the hierarchy of arithmetic expressions below topIcon, whose relative
-    precedences may have changed due to deletion of the icons around them.  The deletion
-    code marks expressions that need to be checked by adding icons to the list passed as
-    exprsNeedReorder.  The function reorders the icon hierarchy to match what it looks
-    like (lexically), rather than what the hierarchy itself implies.  Even though the
-    deletion code restarts this list for every top icon involved in deletion, we do a
-    second check that the icon is within the hierarchy of topIcon.  This is done beaause
-    the same routine is used for processing both the remaining icons in the expression
-    and the new tree of deleted icons that is (optionally) assembled by removeIcons.
-    Returns the (possibly replaced) top top icon of the statement."""
-    reorderExprTops = set()
-    for ic in exprsNeedingReorder:
-        if ic.topLevelParent() == topIcon:
-            reorderExprTops.add(reorderexpr.highestAffectedExpr(ic))
-    modifiedTopIcon = topIcon
-    for ic in reorderExprTops:
-        newTopIc = reorderexpr.reorderArithExpr(ic, skipReplaceTop=True)
-        if ic is topIcon and newTopIc is not ic:
-            modifiedTopIcon = newTopIc
-    return modifiedTopIcon
-
 def restoreFromCanonicalInterchangeIcon(ic, siteType):
     """Decides whether to substitute the site-specific version of a text-equivalent icon
     (see listicons.subsCanonicalInterchangeIcon for what this means).  If so, returns
@@ -4886,13 +4946,13 @@ def _makePrunedCopy(topIcon, keepSet, forSeq):
     stmtComment = copiedTopIcon.stmtComment if hasattr(copiedTopIcon, 'stmtComment') \
         else None
     needReorder = []
-    remainingIcons, _, _ = splitDeletedIcons(copiedTopIcon, deletedSet, False,
+    remainingIcons, _, _ = expredit.splitDeletedIcons(copiedTopIcon, deletedSet, False,
         needReorder, None)
     if remainingIcons is None:
         prunedCopy = copiedTopIcon
     else:
-        prunedCopy = placeListToTopLevelIcon(remainingIcons, forSeq, None)
-    prunedCopy = reorderMarkedExprs(prunedCopy, needReorder)
+        prunedCopy = expredit.placeListToTopLevelIcon(remainingIcons, forSeq, None)
+    prunedCopy = expredit.reorderMarkedExprs(prunedCopy, needReorder)
     # If the top icon was removed, move the statement comment to the new top icon (or
     # convert it to a line comment if the entire statement was removed).
     if stmtComment is not None:
@@ -4926,6 +4986,45 @@ def flagIndividual(iter):
         lastValue = value
     if lastValue is not None:
         yield isSingleValue, lastValue
+
+def concatenateSequences(sequences):
+    if len(sequences) == 0 or len(sequences) == 1 and len(sequences[0]) == 0:
+        return None
+    insertSeqStart = lastSeqStartIc = sequences[0][0]
+    if not insertSeqStart.hasSite('seqOut'):
+        entryIc = entryicon.EntryIcon(window=insertSeqStart.window)
+        entryIc.appendPendingArgs([insertSeqStart])
+        insertSeqStart = lastSeqStartIc = entryIc
+    for seq in sequences[1:]:
+        seqStartIc = seq[0]
+        if not seqStartIc.hasSite('seqOut'):
+            entryIc = entryicon.EntryIcon(window=seqStartIc.window)
+            entryIc.appendPendingArgs([seqStartIc])
+            seqStartIc = entryIc
+        icon.insertSeq(seqStartIc, icon.findSeqEnd(lastSeqStartIc))
+        lastSeqStartIc = seqStartIc
+    return insertSeqStart, list(icon.traverseSeq(insertSeqStart))
+
+def cvtSeqsToList(sequences):
+    listElems = []
+    strippedComments = []
+    for seq in sequences:
+        for ic in seq:
+            if isinstance(ic, commenticon.VerticalBlankIcon):
+                continue
+            if ic.childAt('seqOut'):
+                ic.replaceChild(None, 'seqOut')
+            if isinstance(ic, listicons.TupleIcon) and ic.noParens:
+                listElems += ic.argIcons()
+                for _ in range(len(ic.sites.argIcons)):
+                    ic.replaceChild(None, 'argIcons_0')
+            else:
+                listElems.append(ic)
+            if hasattr(ic, 'stmtComment'):
+                stmtComment = ic.stmtComment
+                stmtComment.detachStmtComment()
+                strippedComments.append(stmtComment)
+    return listElems, strippedComments
 
 class StreamToTextWidget:
     """Imitate an output text stream and append any text written to it to a specified

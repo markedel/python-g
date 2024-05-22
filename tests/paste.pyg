@@ -1,0 +1,85 @@
+# Tests paste and general code insertion functionality.
+
+# Copy each of the (vertical-space separated) items in the left two
+# columns below, and insert them at every possible location in the
+# groups in the right.  Verify that the result is a reaonable from a
+# lexical perspective, that the cursor placement after the operation
+# is reasonable, and that Undo properly reverses it.
+a
+
+a, b
+
+$Empty$ | a
+
+$Empty$ ** a  # **a
+
+a | $Empty$
+
+a ** $Empty$
+
+$Empty$ ** a, b  # **a,b
+
+$Empty$ | a, b
+
+a, b | $Empty$
+
+a, b ** $Empty$
+
+$Empty$ | a + $Empty$  # |a+
+
+$Empty$, a, $Empty$
+
+a
+b
+c
+
+a
+pass
+b
+$@+441+130$
+x
+
+x, y
+
+x, y, z  # x,y,z
+
+x + y  # x+y
+
+x | y + z * xx ** yy
+
+$Empty$, x, $Empty$  # x
+
+x - $:o$[]
+$@+172+132$
+pass
+a
+
+a
+pass
+
+pass
+a | $Empty$
+
+$Empty$ | a, b  # |a,b
+pass  # pass
+
+$Empty$, a  # ,a
+b  # b
+
+$Empty$, a
+b, $Empty$
+
+return  # return
+a
+b, c
+
+$@+442+369$
+$Empty$ | x + $Empty$
+$@+442+405$
+x + $:o$($Empty$)
+$@+442+447$
+x + y | z * xx ** yy
+$@+442+487$
+x + y * z | xx ** yy
+$@+442+520$
+$:o${a:b, c:d | a, b:e}

@@ -10,6 +10,8 @@ COMMENT_COLOR = (120, 140, 170, 255)
 COMMENT_POUND_COLOR = (190, 210, 240, 255)
 COMMENT_SPINE_COLOR = (200, 240, 255, 255)
 
+COMMENT_MIN_WIDTH = 15
+
 # Our fixed-width font for comments and strings (icon.textFont) is two pixels shorter
 # than the font we use for code.  For line comments, rather than make comment icons
 # shorter, or centering the text as we do in the string icon and statement comment, we
@@ -144,12 +146,7 @@ class CommentIcon(icon.Icon):
     def removeText(self, fromPos, toPos, isFwdDelete=False):
         if not (0 <= fromPos < toPos <= len(self.string)):
             return False
-        self.window.requestRedraw(self.topLevelParent().hierRect())
         removedText = self.string[fromPos:toPos]
-        self.string = self.string[:fromPos] + self.string[toPos:]
-        self.markLayoutDirty()
-        self.window.undo.registerCallback(self.insertText, removedText, fromPos,
-            isFwdDelete)
         if len(removedText) > 1:
             self.window.undo.addBoundary()
         elif isFwdDelete:
@@ -163,36 +160,29 @@ class CommentIcon(icon.Icon):
             if not (prevChar.isalnum() and removedText.isalnum() or
                     prevChar.isspace() and removedText.isspace()):
                 self.window.undo.addBoundary()
-        self.cursorPos = fromPos
+        self._removeText(fromPos, toPos, moveCursorTo=fromPos, isUnterminated=True)
         return True
 
-    def insertText(self, text, insertPos, undoFwdDelete=False):
+    def insertText(self, text, insertPos):
         if insertPos == 'end':
             insertPos = len(self.string)
         if text == "" or insertPos < 0 or insertPos > len(self.string):
             return ''  # Not sure this happens, but should not for addText
-        self.window.requestRedraw(self.topLevelParent().hierRect())
-        self.string = self.string[:insertPos] + text + self.string[insertPos:]
-        self.markLayoutDirty()
-        # Add an undo boundary *before* registering the operation for undo, because we
-        # want the boundaries mainly between words, and there's no way to tell where the
-        # end of a run of characters is, until the user types something else.
+        # Add an undo boundary *before* _insertText registers the operation for undo,
+        # because we want the boundaries mainly between words, and there's no way to tell
+        # where the end of a run of characters is, until the user types something else.
         if insertPos > 0:
             prevChar = self.string[insertPos-1]
             if prevChar.isalnum() and not (text.isalnum() or text.isspace()) or \
                     prevChar.isspace() and not text.isspace() or \
                     not text.isalnum() and not text.isspace():
                 self.window.undo.addBoundary()
-        self.window.undo.registerCallback(self.removeText, insertPos,
-            insertPos + len(text))
         if len(text) > 1 or not (text.isspace() or text.isalnum()):
             # Multi-character (currently only pastes) and punctuation/delimiter inserts
             # are always worthy of undo
             self.window.undo.addBoundary()
-        if undoFwdDelete:
-            self.cursorPos = insertPos
-        else:
-            self.cursorPos = insertPos + len(text)
+        cursorTo = insertPos + len(text)
+        self._insertText(insertPos, text, moveCursorTo=cursorTo, isUnterminated=True)
         return None
 
     def addText(self, text):
@@ -450,12 +440,12 @@ class CommentIcon(icon.Icon):
         currentHeight = 0
         startWidth = min(len(text), int(self.window.margin // charWidth))
         minWidth = min(int(math.sqrt(startWidth)), (self.window.margin // charWidth) // 2)
-        minWidth = max(min(15, startWidth), minWidth)
+        minWidth = max(min(COMMENT_MIN_WIDTH, startWidth), minWidth)
         words = comn.splitWords(text)
         widths = []
         lineLists = []
-        for width in range(startWidth+1, minWidth-1, -1):
-            lines = comn.wordWrap(words, width)
+        for widthReq in range(startWidth+1, minWidth-1, -1):
+            lines, width = comn.wordWrap(words, widthReq)
             if len(lines) > currentHeight:
                 for i in range(len(lines) - currentHeight):
                     widths.append(None)
@@ -517,6 +507,71 @@ class CommentIcon(icon.Icon):
             self.sites.add('seqIn', 'seqIn', seqX, 1)
             self.sites.add('seqOut', 'seqOut', seqX, comn.rectHeight(self.rect) - 2)
         self.window.undo.registerCallback(self.attachStmtComment, attachedStmt)
+
+    def mergeTextFromComment(self, otherComment, before=False, sep=' '):
+        """Merge the text from another comment into this comment (separated by a newline
+        character).  If 'before' is True, insert the other comment text before the
+        existing text in 'self'.  Otherwise, insert it after."""
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        if otherComment is None:
+            return
+        if before:
+            self._insertText(0, otherComment.string + sep)
+        else:
+            self._insertText(len(self.string), sep + otherComment.string)
+        self.markLayoutDirty()
+
+    def splitAtCursor(self):
+        if self.cursorPos >= len(self.string):
+            return
+        if self.cursorPos == 0:
+            attachedStmt = self.attachedToStmt
+            if attachedStmt is not None:
+                self.detachStmtComment()
+                icon.insertSeq(self, attachedStmt)
+                self.window.addTop(self)
+            return
+        if self.string[self.cursorPos] == ' ':
+            splitText = self.string[self.cursorPos + 1:]
+            self._removeText(self.cursorPos, len(self.string))
+        elif self.cursorPos > 0 and self.string[self.cursorPos - 1] == ' ':
+            splitText = self.string[self.cursorPos:]
+            self._removeText(self.cursorPos - 1, len(self.string))
+        else:
+            splitText = self.string[self.cursorPos:]
+            self._removeText(self.cursorPos, len(self.string))
+        newComment = CommentIcon(text=splitText, window=self.window)
+        if self.attachedToStmt is not None:
+            icon.insertSeq(newComment, self.attachedToStmt.topLevelParent())
+        else:
+            icon.insertSeq(newComment, self)
+        self.window.addTop(newComment)
+        self.window.cursor.setToText(newComment, 0)
+
+    def _insertText(self, pos, text, moveCursorTo=None, isUnterminated=False):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        self.markLayoutDirty()
+        self.string = self.string[:pos] + text + self.string[pos:]
+        if moveCursorTo is not None:
+            movedCursorFrom = self.cursorPos
+            self.cursorPos = moveCursorTo
+        else:
+            movedCursorFrom = None
+        self.window.undo.registerCallback(self._removeText, pos, pos + len(text),
+           movedCursorFrom, isUnterminated=isUnterminated)
+
+    def _removeText(self, fromPos, toPos, moveCursorTo=None, isUnterminated=False):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        self.markLayoutDirty()
+        removedText = self.string[fromPos:toPos]
+        self.string = self.string[:fromPos] + self.string[toPos:]
+        if moveCursorTo is not None:
+            movedCursorFrom = self.cursorPos
+            self.cursorPos = moveCursorTo
+        else:
+            movedCursorFrom = None
+        self.window.undo.registerCallback(self._insertText, fromPos, removedText,
+            movedCursorFrom, isUnterminated=isUnterminated)
 
 class VerticalBlankIcon(icon.Icon):
     def __init__(self, window, location=None):

@@ -23,8 +23,8 @@ class UndoRedoList:
     def registerIconDelete(self, ic):
         self._addUndoRedoEntry(IconDeleted(ic))
 
-    def registerRemoveFromTopLevel(self, ic, topOfSeq):
-        self._addUndoRedoEntry(RemoveFromTopLevel(ic, topOfSeq))
+    def registerRemoveFromTopLevel(self, ic, isNewSeq):
+        self._addUndoRedoEntry(RemoveFromTopLevel(ic, isNewSeq))
 
     def registerAddToTopLevel(self, ic, newSeq):
         self._addUndoRedoEntry(AddToTopLevel(ic, newSeq))
@@ -38,8 +38,8 @@ class UndoRedoList:
     def registerRemoveSeriesSite(self, ic, seriesName, insertIdx):
         self._addUndoRedoEntry(RemoveSeriesSite(ic, seriesName, insertIdx))
 
-    def registerCallback(self, callback, *args):
-        self._addUndoRedoEntry(Callback(callback, args))
+    def registerCallback(self, callback, *args, isUnterminated=False):
+        self._addUndoRedoEntry(Callback(callback, args), isUnterminated=isUnterminated)
 
     def addBoundary(self):
         """Undo boundaries mark the completion of a command and therefore define the
@@ -107,15 +107,40 @@ class UndoRedoList:
         # Update dirty layouts and redraw the areas affected
         self.window.refreshDirty(addUndoBoundary=False, minimizePendingArgs=False)
 
-    def _addUndoRedoEntry(self, undoEntry):
+    def _addUndoRedoEntry(self, undoEntry, isUnterminated=False):
         """Add undo entry to the appropriate list (undo or redo) based upon whether
         operations are being recorded in the context of processing an undo command,
         or driven by an an original operation or a redo operation.  Also clears the
-        redo list if new operations are done outside of the context of undo/redo"""
+        redo list if new operations are done outside of the context of undo/redo.  If
+        isUnterminated is set to True, the next undo entry added will also cause the
+        insertion of a boundary, provided that it does not also have isUnterminated set.
+        The use of isUnterminated is obviously limited to commands that can tag all of
+        the entries that they generate, making it mostly useless for anything that needs
+        to manipulate the icon tree.  It's main use is for word boundaries in text icons,
+        where we can't know whether a character entry should have an undo boundary until
+        we see the next operation."""
         if self._inUndo:
             undoList =  self.redoList
         else:
             undoList = self.undoList
+        if len(undoList) > 0 and isinstance(undoList[-1], Boundary):
+            # When the user executes an undo command, they want the cursor to return to
+            # its location just before the change, as opposed to the end of the last
+            # change.  You might ask, why not just add the boundary at the beginning of
+            # the command, then?  I'm not sure anymore, but it is certainly easier to
+            # organize the code that way, since we don't always know if an action will be
+            # possible until we've started processing it.
+            undoList[-1].updateCursorAndEntryIcon(self.window)
+        if len(undoList) > 0 and hasattr(undoList[-1], 'isUnterminated') and \
+                not isUnterminated:
+            # For a very narrow set of cases (mainly text character entry), instead of
+            # delimiting a command with an undo boundary, we leave off the boundary
+            # because we don't yet know if the user has finished whatever grouping we're
+            # accumulating (e.g. characters in a word).  If the previous entry has the
+            # isUnterminated attribute set and this one doesn't: add a boundary.
+            self.undoList.append(Boundary(self.window))
+        if isUnterminated:
+            undoEntry.isUnterminated = True
         undoList.append(undoEntry)
         if not self._inRedo and not self._inUndo:
             self.redoList = []
@@ -133,16 +158,19 @@ class Boundary:
             self.cursorIcon = None
             self.entryText = None
         else:
-            cursor = window.cursor
-            self.cursorType = cursor.type
-            self.cursorWindow = cursor.window
-            self.cursorPos = cursor.pos
-            self.cursorIcon = cursor.icon
-            self.cursorSite = cursor.site
-            if cursor.type == "text" and cursor.icon.__class__.__name__ == 'EntryIcon':
-                self.entryText = window.cursor.icon.text
-            else:
-                self.entryText = None
+            self.updateCursorAndEntryIcon(window)
+
+    def updateCursorAndEntryIcon(self, window):
+        cursor = window.cursor
+        self.cursorType = cursor.type
+        self.cursorWindow = cursor.window
+        self.cursorPos = cursor.pos
+        self.cursorIcon = cursor.icon
+        self.cursorSite = cursor.site
+        if cursor.type == "text" and cursor.icon.__class__.__name__ == 'EntryIcon':
+            self.entryText = window.cursor.icon.text
+        else:
+            self.entryText = None
 
     def restoreCursorAndEntryIcon(self, window):
         cursor = window.cursor
@@ -216,9 +244,10 @@ class IconDeleted(UndoListEntry):
         return None
 
 class RemoveFromTopLevel(UndoListEntry):
-    def __init__(self, ic, topOfSeq):
+    def __init__(self, ic, isNewSeq):
         self.icon = ic
-        self.topOfSeq = topOfSeq
+        self.isNewSeq = isNewSeq
+        self.restorePos = ic.pos()
 
     def undo(self, undoData):
         parent = self.icon.parent()
@@ -231,7 +260,7 @@ class RemoveFromTopLevel(UndoListEntry):
             print('Undo RemoveFromTopLevel removing parent (is this normal?)')
             parentSite = self.icon.siteOf(parent)
             self.icon.replaceChild(None, parentSite)
-        undoData.window.addTopSingle(self.icon, pos=self.topOfSeq, newSeq=self.topOfSeq)
+        undoData.window.addTopSingle(self.icon, pos=self.restorePos, newSeq=self.isNewSeq)
         self.icon.markLayoutDirty()
         return None
 

@@ -903,6 +903,11 @@ class Icon:
         if hasattr(self, 'coincidentSite') and self.coincidentSite is not None:
             return self.coincidentSite
 
+    def hasStmtComment(self):
+        """If this is at statement-level (top) icon and has a statement comment
+        associated with it, return the comment icon."""
+        return self.stmtComment if hasattr(self, 'stmtComment') else None
+
     def textRepr(self):
         """Produce Python-equivalent text for clipboard text representation"""
         return repr(self)
@@ -1744,7 +1749,9 @@ def insertSeq(seqStartIc, atIc, before=False):
     seqEndIc = findSeqEnd(seqStartIc)
     if before:
         prevIcon = atIc.sites.seqIn.att
-        if prevIcon is not None:
+        if prevIcon is None:
+            filefmt.moveIconToPos(seqStartIc, atIc.pos())
+        else:
             prevIcon.replaceChild(seqStartIc, 'seqOut')
         atIc.replaceChild(seqEndIc, 'seqIn')
     else:
@@ -1779,8 +1786,16 @@ def rightmostSite(ic, ignoreAutoParens=False):
         return rightmostSite(ic.rightArg(), ignoreAutoParens)
     lastCursorSite = ic.sites.lastCursorSite()
     if lastCursorSite is None:
+        if ic.hasSite('seqOut'):
+            # BlockEnd (I think) is the only case with no site on the right
+            return ic, 'seqOut'
         print("rightmostSite passed icon with no acceptable cursor site", ic.dumpName())
         return ic, list(ic.sites.allSites())[-1].name
+    if lastCursorSite[:10] == 'cprhIcons_':
+        # There's some question whether lastCursorSite() should be returning non-cursor-
+        # capable sites, but because traversal ordering is now used for other purposes,
+        # it is possible to get a non-traversable site (for this one pargicular case).
+        lastCursorSite = ic.sites.argIcons[-1].name
     child = ic.childAt(lastCursorSite)
     if child is None:
         return ic, lastCursorSite
@@ -2108,6 +2123,9 @@ def validateCompatibleChild(child, parent, siteOrSeriesName):
         return True  # Anything can have an empty site
     if isEntryIcon(child):
         return True  # Anything can host an entry icon
+    if iconsites.isSeriesSiteId(siteOrSeriesName):
+        # Caller can pass either the series name or a site name in the series
+        siteOrSeriesName, _ = iconsites.splitSeriesSiteId(siteOrSeriesName)
     parentSiteOrSeries = getattr(parent.sites, siteOrSeriesName)
     for childParentSite in child.sites.parentSites():
         if iconsites.matingSiteType[parentSiteOrSeries.type] == childParentSite.type:

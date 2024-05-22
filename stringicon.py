@@ -230,7 +230,7 @@ class StringIcon(icon.Icon):
                     not text.isalnum() and not text.isspace():
                 self.window.undo.addBoundary()
         self.window.undo.registerCallback(self.removeText, insertPos,
-            insertPos + len(text))
+            insertPos + len(text), isUnterminated=True)
         if len(text) > 1 or not (text.isspace() or text.isalnum()):
             # Multi-character (currently only pastes) and punctuation/delimiter inserts
             # are always worthy of undo
@@ -767,7 +767,7 @@ class StringIcon(icon.Icon):
             widths = []
             lineLists = []
             for width in range(startWidth+1, minWidth-1, -1):
-                lines = comn.wordWrap(words, width)
+                lines, _ = comn.wordWrap(words, width)
                 if len(lines) > currentHeight:
                     for i in range(len(lines) - currentHeight):
                         widths.append(None)

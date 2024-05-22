@@ -382,8 +382,9 @@ class IconSiteList:
 
     def lastCursorSite(self):
         """Return siteId for the rightmost site (in cursor traversal) of the site list.
-        Note that sites marked with 'cursorSkip' will be included, however, currently no
-        icons end with a cursorSkip site (or are ever likely to)."""
+        Note that sites marked with 'cursorSkip' will be included.  Currently, the only
+        case of this is unclosed and naked tuples, which can have a comprehension site
+        on the right."""
         lastSite = self.nthCursorSite(-1)
         if lastSite is None:
             return None
@@ -493,6 +494,10 @@ def nextSeriesSiteId(siteId):
     name, idx = splitSeriesSiteId(siteId)
     return makeSeriesSiteId(name, idx+1)
 
+def prevSeriesSiteId(siteId):
+    name, idx = splitSeriesSiteId(siteId)
+    return makeSeriesSiteId(name, idx-1)
+
 def hasLowerCoincidentSite(ic, siteId):
     """Returns True if there is an icon lower in the hierarchy sharing this site of ic"""
     if ic is None or ic.typeOf(siteId) != "input":
@@ -518,10 +523,35 @@ def highestCoincidentIcon(ic, arithOnly=False):
             return ic
         ic = parent
 
-def lowestCoincidentSite(ic, site):
-    """Return the icon and site occupying the lowest coincident input site at ic, site"""
+def highestCoincidentSite(ic, site):
+    """Return highest icon and site at the highest level in the icon hierarchy that is
+    coincident with the given icon (ic) and site."""
+    if not isCoincidentSite(ic, site):
+        return ic, site
+    while True:
+        parent = ic.parent()
+        if parent is None:
+            return ic, site
+        parentSite = parent.siteOf(ic)
+        if not isCoincidentSite(parent, parentSite):
+            return parent, parentSite
+        site = parentSite
+        ic = parent
+
+def lowestCoincidentSite(ic, site=None):
+    """Return the icon and site occupying the lowest coincident input site at (ic, site).
+    site can also be passed as None, to answer the question: "what is the lowest level
+    coincident site to that holding ic.".  Note that in the site=None case the function
+    can return None, None."""
     # ic itself does not need to have a coincident site (site is coincident with itself)
-    child = ic.childAt(site)
+    if site is None:
+        child = ic
+        ic = ic.parent()
+        if ic is None:
+            return None, None
+        site = ic.siteOf(child)
+    else:
+        child = ic.childAt(site)
     if child is None:
         return ic, site
     childSite = child.hasCoincidentSite()

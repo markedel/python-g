@@ -30,6 +30,9 @@ ENTRY_ICON_GAP = 3
 
 PEN_MARGIN = 6
 
+# Maximum number of characters for a single paste operation into an entry icon
+MAX_ENTRY_PASTE = 80
+
 compareOperators = {'<', '>', '<=', '>=', '==', '!='}
 binaryOperators = {'+', '-', '*', '**', '/', '//', '%', '@', '<<', '>>', '&', '|', '^'}
 unaryOperators = {'+', '-', '~', 'not'}
@@ -48,7 +51,7 @@ numPattern = re.compile('^[+-]?(([\\d_]*\\.?[\\d_]*)|(0[xX][0-9a-fA-F]*)|(0[oO][
  '(((\\d[\\d_]*\\.?[\\d_]*)|([\\d_]*\\.?[\\d_]*\\d))[eE][+-]?[\\d_]*))?$')
 attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
-opDelimPattern = re.compile('[a-zA-Z\\d_.\\(\\[\\{\\s+-~"\']')
+opDelimPattern = re.compile('[a-zA-Z#\\d_.\\(\\[\\{\\s+-~"\']')
 stringPattern = re.compile("^(f|fr|rf|b|br|rb|u|r)?['\"]$", re.IGNORECASE)
 textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
@@ -188,7 +191,7 @@ class EntryIcon(icon.Icon):
             self.hasFocus = True
             self.markLayoutDirty()
 
-    def focusOut(self, removeIfPossible=True):
+    def focusOut(self, removeIfPossible=True, removeIfNotFocused=False):
         """Remove cursor focus from the icon.  If removeIfPossible is True, try to place
         the text as it currently stands, replacing the entry icon with whatever it
         generates.  Returns False only if removal was requested and current text or
@@ -207,7 +210,7 @@ class EntryIcon(icon.Icon):
         to another entry icon by its forCursor site and focusOut is called but cannot
         place its content, it merges the icon with the parent and returns the special
         result "merged"."""
-        if not self.hasFocus:
+        if not self.hasFocus and not removeIfNotFocused:
             return not removeIfPossible
         self.focusChanged = True
         self.hasFocus = False
@@ -610,34 +613,46 @@ class EntryIcon(icon.Icon):
             return None
         return attIcon.typeOf(attIcon.siteOf(self))
 
-    def addText(self, char):
-        """Add a character at the cursor.  If that resulted in changes to the icon
-        structure in the window, also adds an undo boundary.  Note that while most
-        commands add an undo boundary after all icon manipulation is finished, addText
-        only adds one if it modified the icon structure, and may make changes to the
-        icon structure *after* adding the boundary, leaving the undo stack
+    def addText(self, text):
+        """Add a single character or text at the cursor.  If that resulted in changes to
+        the icon structure in the window, also adds an undo boundary.  Note that while
+        most commands add an undo boundary after all icon manipulation is finished,
+        addText only adds one on word boundaries, or if it modified the icon structure,
+        and may generate undo records *after* adding the boundary, leaving the undo stack
         "unterminated".  This also handles spaces, as both a command to complete the
         current entry, and as in internal space following "async" and 'not".  Returns
         error string on failure, None on success."""
-        if char == ' ' and not (self.text[:3] == 'not' and self.cursorPos == 3 and
+        if len(text) > MAX_ENTRY_PASTE:
+            text = text[:MAX_ENTRY_PASTE]
+        if len(text) > 1:
+            # This is a multi-character paste, and could come from anywhere.  Trim and
+            # Filter out non-usable characters.  We accept all of the printable ascii
+            # characters, as well as the weird Unicode ones that Python 3.0 allows in
+            # identifiers (via the string .isidentifier() method), though some of these
+            # may not be available in our chosen font.
+            text = text.replace('\t', '    ')
+            chars = [c for c in text if 32 <= ord(c) < 0xff or c.isidentifier()]
+            if len(chars) < len(text):
+                text = ''.join(chars)
+        if text == ' ' and not (self.text[:3] == 'not' and self.cursorPos == 3 and
                 self.attachedToAttribute() or
                 self.text[:5] in ('async', 'yield') and self.cursorPos == 5):
             # Move the space to the end to turn it in to command to delimit from any
             # cursor position.  Note above the exceptions for "async" and "not".  In
             # these cases the user needs to be able to be able to insert an internal
             # space in the text, so we can't take this action.
-            newText = self.text + char
+            newText = self.text + text
             newCursorPos = len(newText)
         else:
-            newText = self.text[:self.cursorPos] + char + self.text[self.cursorPos:]
-            newCursorPos = self.cursorPos + len(char)
+            newText = self.text[:self.cursorPos] + text + self.text[self.cursorPos:]
+            newCursorPos = self.cursorPos + len(text)
         rejectMessage = self._setText(newText, newCursorPos)
         if rejectMessage is not None:
             # the resulting text was rejected.  If cursorPos was as the end of the
             # entry (or space was typed to add a delimiter), beep and do not update.
             # If not, just enter the updated text
             if newCursorPos == len(newText):
-                if char == ' ':
+                if text == ' ':
                     # User added space delimiter.  If we had something that would
                     # otherwise have been self delimiting, try again w/o the delimiter.
                     parseResult, _, _ = self.parseEntryText(self.text)
@@ -1176,13 +1191,18 @@ class EntryIcon(icon.Icon):
         elif self.attachedIcon() is None or self.attachedSite() in ('seqIn', 'seqOut'):
             handlerIc = None
             parseResult = parseTopLevelText(newText, self.window)
+            if wasRejected(parseResult) and self.childAt('seqIn') is None and \
+                    self.childAt('seqOut') is None:
+                altParseResult = parseWindowBgText(newText, self.window)
+                if not wasRejected(altParseResult):
+                    parseResult = altParseResult
         else:  # Currently no other cursor places, must be expr
             parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=False)
             if parseResult is None:
                 forSeries = self.attachedIcon() is not None and \
                     iconsites.isSeriesSiteId(self.attachedSite())
                 parseResult = parseExprText(newText, self.window, forSeriesSite=forSeries)
-        if parseResult[:7] == "reject:" and self.attachedSiteType() == 'input':
+        if wasRejected(parseResult) and self.attachedSiteType() == 'input':
             coincidentSite = self.attachedIcon().hasCoincidentSite()
             if coincidentSite is not None and coincidentSite == self.attachedSite():
                 highestCoincIcon = iconsites.highestCoincidentIcon(self.attachedIcon())
@@ -1216,7 +1236,7 @@ class EntryIcon(icon.Icon):
             return None
         parseResult, handlerIc, prepend = self.parseEntryText(newText)
         # print('parse result', parseResult)
-        if parseResult[:7] == "reject:":
+        if wasRejected(parseResult):
             self.removeIfEmpty()
             return parseResult[7:]
         self.window.requestRedraw(self.topLevelParent().hierRect(),
@@ -1546,14 +1566,11 @@ class EntryIcon(icon.Icon):
         # print('parse result', parseResult)
         # We assume that the entry text is something legal, waiting for a delimiter.
         # It should not be something self-delimiting.
-        if parseResult[:7] == "reject:" or parseResult in ("accept", "typeover", "comma",
+        if wasRejected(parseResult) or parseResult in ("accept", "typeover", "comma",
                 "colon", "openBracket", "endBracket", "openBreace", "endBrace",
                 "openParen", "endParen", "makeFunction", "makeSubscript"):
             return False
-        # Parser emitted an icon.  Splice it in to the hierarchy in place of the entry
-        # icon (ignoring, for now, that the entry icon may have to be reinstated if there
-        # are pending args/attrs or remaining to be placed).  Figure out where the cursor
-        # or entry icon should end up after the operation.
+        # Parser emitted an icon.  Evaluate if it would be usable.
         ic, remainingText = parseResult
         if remainingText != " ":
             print("Remaining text in canPlaceEntry text was not injected delimiter")
@@ -2431,10 +2448,25 @@ class EntryIcon(icon.Icon):
         return None
 
     def duplicate(self, linkToOriginal=False):
-        # ...  This is untested, as the only use of duplicate so far is copy-to-clipboard,
-        #      and entry icons still don't have a createSaveText method.
         ic = EntryIcon(initialString=self.text, window=self.window)
-        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        if linkToOriginal:
+            ic.copiedFrom = self
+        dupArgs = []
+        for pendingArg in self.listPendingArgs():
+            if isinstance(pendingArg, list):
+                seriesList = []
+                for seriesArg in pendingArg:
+                    if seriesArg is None:
+                        seriesList.append(None)
+                    else:
+                        seriesList.append(seriesArg.duplicate(
+                            linkToOriginal=linkToOriginal))
+                dupArgs.append(seriesList)
+            elif pendingArg is None:
+                dupArgs.append(None)
+            else:
+                dupArgs.append(pendingArg.duplicate(linkToOriginal=linkToOriginal))
+        ic.appendPendingArgs(dupArgs)
         return ic
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
@@ -2815,6 +2847,30 @@ def parseTopLevelText(text, window):
             return "reject:@ must be followed by decorator function name"
     return parseExprText(text, window)
 
+def parseWindowBgText(text, window):
+    """Do supplementary parsing for text typed outside of a sequence (on the window
+    background.  We don't allow users to type the full range of out-of-context icons,
+    there, mostly because without the context, we will parse them as something else.
+    However, we do allow them to type attributes, mainly because if they drag an
+    attribute to the window background and click to text-edit it, we don't want them to
+    lose their work because we are unable to re-parse it.  As a bonus they also get the
+    ability to compose attributes from scratch without another icon as root.  Of course,
+    they won't be so lucky with the other out-of-context items.  If they backspace into
+    an argument assignment or a dictionary element, they will get something different
+    back on re-typing."""
+    if len(text) == 0:
+        return "accept"
+    if text == '.' or attrPattern.fullmatch(text):
+        return "accept"  # Legal attribute pattern
+    op = text[:-1]
+    delim = text[-1]
+    if attrPattern.fullmatch(op) and op[1:] not in keywords:
+        return nameicons.AttrIcon(op[1:], window), delim
+    return "reject:Expecting an operator, attribute, or delimiter"
+
+def wasRejected(parseResult):
+    return isinstance(parseResult, str) and parseResult[:7] == 'reject:'
+
 def runIconTextEntryHandlers(entryIc, text, onAttr):
     """Look for icon text entry handlers above the entry icon and execute in order,
     until one returns a result or we hit the top.  If a handler fired, return the
@@ -3105,36 +3161,48 @@ def transferToParentList(fromIc, startIdx, aboveIc, seriesSiteName='argIcons'):
     recipient.insertChildren(args, siteName, siteIdx)
     return recipient
 
-def findEnclosingSite(startIc):
+def findEnclosingSite(startIc, startSite=None):
     """Search upward in the hierarchy above startIc to find a parent that bounds the
     scope of expression-processing, such as a sequence (expressions can't cross commas)
     or parens.  If found, return the icon and site at which startIc is (indirectly)
-    attached.  If the search reaches the top, return None for the icon."""
+    attached.  If the search reaches the top, return None for the icon.  If startSite is
+    specified, startIc is included in search as candidate for enclosing icon."""
     # This is very similar to reorderexpr.highestAffectedExpr and might be worth unifying
     # with it, but note that this stops at arithmetic parens where that continues upward.
-    for ic in startIc.parentage(includeSelf=True):
+    if startSite is None:
+        parent = startIc.parent()
+        if parent is None:
+            return None, None
+        ic = startIc
+        site = parent.siteOf(ic)
+    else:
+        parent = startIc
+        ic = None
+        site = startSite
+    while True:
+        if site != 'attrIcon':
+            # The largest class of icons that bound expressions are sequences.  As a
+            # shortcut, just look for a series site
+            if iconsites.isSeriesSiteId(site):
+                return parent, site
+            # ic is not on a series site. Look for the remaining types that enclose their
+            # arguments but are not series: cursor-parens, auto-parens of BinOp icons,
+            # statements that take single arguments, and the center site of an inline-if.
+            parentClass = parent.__class__
+            if parentClass in (opicons.BinOpIcon, opicons.IfExpIcon) and \
+                    parent.hasParens or \
+                    parentClass in (opicons.DivideIcon, parenicon.CursorParenIcon,
+                        subscripticon.SubscriptIcon, listicons.CprhForIcon,
+                        listicons.CprhIfIcon) or \
+                    parentClass is opicons.IfExpIcon and site == 'testExpr' or \
+                    parentClass is assignicons.AugmentedAssignIcon and \
+                        site == 'targetIcon' or parentClass in cursors.stmtIcons:
+                return parent, site
+        ic = parent
         parent = ic.parent()
         if parent is None:
             return None, None
         site = parent.siteOf(ic)
-        if site == 'attrIcon':
-            continue
-        # The largest class of icons that bound expressions are sequences.  As a
-        # shortcut, just look for a series site
-        if iconsites.isSeriesSiteId(site):
-            return parent, site
-        # ic is not on a series site.  Look for the remaining types that enclose their
-        # arguments but are not series: cursor-parens, auto-parens of BinOp icons,
-        # statements that take single arguments, and the center site of an inline-if.
-        parentClass = parent.__class__
-        if parentClass in (opicons.BinOpIcon, opicons.IfExpIcon) and parent.hasParens or \
-                parentClass in (opicons.DivideIcon, parenicon.CursorParenIcon,
-                    subscripticon.SubscriptIcon, listicons.CprhForIcon,
-                    listicons.CprhIfIcon) or \
-                parentClass is opicons.IfExpIcon and site == 'testExpr' or \
-                parentClass is assignicons.AugmentedAssignIcon and site == 'targetIcon' \
-                or parentClass in cursors.stmtIcons:
-            return parent, site
 
 def _findParenTypeover(entryIc, token):
     """If there is an icon with active typeover matching token ("endBracket", "endBrace",
@@ -3183,7 +3251,8 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
     to pass None as splitTo, provided that the top level is the appropriate stopping
     point.  It is important to note that this call expects that splitTo has already been
     vetted as holding the root of the expression (probably by findEnclosingSite), and
-    will fail badly if it does not."""
+    will fail badly if it does not.  Also note that if splitAt is attached via an
+    attribute site, replaceLeft must be capable of attachment to an attribute site."""
     if splitAt.parent() is None:
         return replaceLeft, replaceRight
     leftArg = replaceLeft
@@ -3221,13 +3290,39 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
             # Parent was not an arithmetic operator or had parens
             raise Exception('Bounding expression found in "splitExprAtIcon" function')
         if child is splitAt and childSiteType == 'attrIn':
-            parent.replaceChild(None, childSite)
+            if replaceLeft is not None and replaceLeft.hasSite('attrOut'):
+                parent.replaceChild(replaceLeft, 'attrIcon')
+            else:
+                parent.replaceChild(None, childSite)
         child = parent
     else:
         if splitTo is not None:
             raise Exception(
                 '"splitExprAtIcon" function reached top without finding splitTo')
     return leftArg, rightArg
+
+def splitExprAtSite(splitAtIc, splitAtSite, splitTo):
+    """Split an expression about a specified site, returning a tree of icons lexically
+    left of the site and a tree of icons lexically right of it.  Either or both of the
+    returned trees can be None if there is nothing left or right of the site up to
+    splitTo.  Like splitExprAtIcon, specifying None in splitTo means it is safe to split
+    all the way to the top level.  It is also safe to specify splitAtIc as the same icon
+    as splitTo, to indicate that the site is directly on the splitTo icon, though the
+    boring result is an empty left tree and the right tree holding everything attached to
+    to the site (as a consequence of all enclosing sites being right-of the icons they
+    hold).  Note that the icon holding the split site will not necessarily end up on the
+    left side.  If this is important, use the highest coincident site corresponding to
+    (splitAtIc, splitAtSite)"""
+    child = splitAtIc.childAt(splitAtSite)
+    if splitAtIc is splitTo:
+        return None, child
+    if child is None:
+        coincSite = splitAtIc.hasCoincidentSite()
+        if coincSite is not None and coincSite == splitAtSite:
+            return splitExprAtIcon(splitAtIc, splitTo, None, splitAtIc)
+        else:
+            return splitExprAtIcon(splitAtIc, splitTo, splitAtIc, None)
+    return splitExprAtIcon(child, splitTo, None, child)
 
 def _canCloseParen(entryIc):
     """Determine if it is safe to close a newly-entered open-paren/bracket/brace.  Also

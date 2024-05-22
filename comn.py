@@ -184,7 +184,8 @@ def wordWrap(words, maxLineLength, firstLineMax=None, lastLineMax=None):
     and their equivalents at the end of the line the way we need them treated for
     displaying strings and comments and wrapping comments in the save-file format.  In
     all three of these cases, we need to both preserve all characters, and if possible,
-    place space characters before the wrap."""
+    place space characters before the wrap.  Returns a list of line strings and the
+    length in characters of the actual longest line."""
     if firstLineMax is None:
         firstLineMax = maxLineLength
     if lastLineMax is None:
@@ -195,6 +196,7 @@ def wordWrap(words, maxLineLength, firstLineMax=None, lastLineMax=None):
     lineWords = []
     maxLength = firstLineMax
     lastWordIdx = len(words) - 1
+    maxUsedLineLen = 0
     for i, word in enumerate(words):
         if i == lastWordIdx and len(lines) > 0:
             maxLength = lastLineMax
@@ -213,5 +215,7 @@ def wordWrap(words, maxLineLength, firstLineMax=None, lastLineMax=None):
             lineLen = len(word)
             lineWords = [word]
             maxLength = maxLineLength
+        if lineLen > maxUsedLineLen:
+            maxUsedLineLen = lineLen
     lines.append(''.join(lineWords))
-    return lines
+    return lines, maxUsedLineLen

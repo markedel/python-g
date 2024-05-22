@@ -15,6 +15,7 @@ import subscripticon
 import entryicon
 import infixicon
 import reorderexpr
+import expredit
 
 UNASSOC_IF_IDENT = '___pyg_cprh_unassoc_if'
 UNASSOC_IF_MACRO_NAME = 'CprhUnassocIf'
@@ -1028,14 +1029,10 @@ class TupleIcon(ListTypeIcon):
            appearance alone to distinguish tuples from parens.  The problem was that it
            made using conventional text-editing techniques for converting back and forth,
            impossible to use, requiring users to learn new editing methods.
-        2) The concept of a paren-less (naked) tuple is necessary to allow typing of
-           lists that precede the assignment operator.  They are also used in dragging
-           elements from one list to another.  Naked tuples are only allowed in three
-           places: 1) on the top level, 2) being dragged, and 3) as the pending arg of
-           the entry icon.  In the entry icon, it allows the entire list to be easily
-           dragged away as a unit.  The entry icon holds the list without parens
-           because parens have too much meaning to the user, who will interpret them
-           as gathering the arguments in to a single object."""
+        2) Paren-less (naked) tuples are legal top-level syntax in Python, and while
+           (mostly) useless in that form, are very important for Python-g as both as a
+           transitional form for users to type on the way to typing an assignment
+           operator, and as a way to work with series data on the window background."""
     def __init__(self, window, noParens=False, closed=True, obj=None, typeover=False,
                  location=None):
         self.noParens = noParens
@@ -1055,7 +1052,7 @@ class TupleIcon(ListTypeIcon):
         if len(self.sites.argIcons) == 1 and self.sites.argIcons[0].att is None:
             return []
         if len(self.sites.argIcons) == 2 and self.sites.argIcons[0].att is not None and \
-         self.sites.argIcons[1] is None:
+                self.sites.argIcons[1] is None:
             # Special case of single item tuple allowed to have missing arg
             return [self.sites.argIcons.att[0]]
         return [site.att for site in self.sites.argIcons]
@@ -3041,7 +3038,7 @@ def backspaceListIcon(ic, site, evt):
                 if cursorOnIcon:
                     win.cursor.setToIconSite(parent, parentSite)
 
-def backspaceComma(ic, cursorSite, evt, joinOccupied=True):
+def backspaceComma(ic, cursorSite, evt):
     """Backspace when cursor is at the comma site of an icon with a sequence.  Deletes
     empty site left or right of the comma, or if both sites are occupied and joinOccupied
     is True, join them with an entry icon."""
@@ -3065,54 +3062,14 @@ def backspaceComma(ic, cursorSite, evt, joinOccupied=True):
         win.cursor.setToIconSite(rightmostIcon, rightmostSite)
         win.requestRedraw(redrawRect)
         return True
-    # Neither the cursor site nor the prior site is empty.  Does either clause have an
-    # adjacent empty site?
-    if rightmostIcon.typeOf(rightmostSite) != 'input' or \
-            rightmostIcon.childAt(rightmostSite):
-        leftEmptyIc, leftEmptySite = None, None
+    # Neither the cursor site nor the prior site is empty: merge them together
+    ic.replaceChild(None, cursorSite)
+    cursorIcon, cursorSite = expredit.insertAtSite(rightmostIcon, rightmostSite,
+        childAtCursor, cursorLeft=True)
+    if cursorSite is None:
+        win.cursor.setToText(cursorIcon)
     else:
-        leftEmptyIc, leftEmptySite = rightmostIcon, rightmostSite
-    lowestIc, lowestSite = iconsites.lowestCoincidentSite(ic, cursorSite)
-    if lowestIc.childAt(lowestSite):
-        rightEmptyIc, rightEmptySite = None, None
-    else:
-        rightEmptyIc, rightEmptySite = lowestIc, lowestSite
-    if leftEmptyIc and not rightEmptyIc:
-        # Empty site left of cursor, merge right side in to that and reorder arithmetic
-        ic.replaceChild(None, cursorSite)
-        leftEmptyIc.replaceChild(childAtCursor, leftEmptySite)
-        reorderexpr.reorderArithExpr(leftEmptyIc)
-        win.cursor.setToIconSite(leftEmptyIc, leftEmptySite)
-        win.requestRedraw(redrawRect, filterRedundantParens=True)
-        return True
-    if rightEmptyIc and not leftEmptyIc:
-        # Empty site right of cursor, merge left side in to that and reorder arithmetic
-        ic.replaceChild(None, prevSite)
-        rightEmptyIc.replaceChild(childAtPrevSite, rightEmptySite)
-        reorderexpr.reorderArithExpr(rightEmptyIc)
-        win.cursor.setToIconSite(rightmostIcon, rightmostSite)
-        win.requestRedraw(redrawRect, filterRedundantParens=True)
-        win.updateTypeoverStates()
-        return True
-    # Left and right sites both have content and can only be merged by inserting an entry
-    # icon.  Stitch together the two sites with an entry icon in the middle
-    if not joinOccupied:
-        return False
-    win.requestRedraw(redrawRect, filterRedundantParens=True)
-    entryIcon = entryicon.EntryIcon(window=win)
-    if leftEmptyIc and rightEmptyIc:
-        # There are empty sites both left and right.  Put the right clause into the empty
-        # site of the left clause and put the entry icon into the right empty site.
-        ic.replaceChild(None, cursorSite)
-        rightEmptyIc.replaceChild(entryIcon, rightEmptySite)
-        leftEmptyIc.replaceChild(childAtCursor, leftEmptySite)
-        reorderexpr.reorderArithExpr(leftEmptyIc)
-    else:
-        ic.replaceChild(None, cursorSite)
-        rightmostIcon.replaceChild(entryIcon, rightmostSite)
-        entryIcon.appendPendingArgs([childAtCursor])
-    win.cursor.setToText(entryIcon, drawNew=False)
-    return True
+        win.cursor.setToIconSite(cursorIcon, cursorSite)
 
 def highlightSeriesErrorsForContext(series, ctx):
     if isinstance(series[0].att, StarIcon) and ctx == 'store' and len(series) <= 1:
@@ -3390,6 +3347,8 @@ def canPlaceCprhArgsFromEntry(ic, placeList, siteName, overwriteStart):
     if len(placeList) == 0 or isinstance(placeList[0], (list, tuple)):
         return False
     firstEntry = placeList[0]
+    if firstEntry is None:
+        return False
     if siteName == 'argIcons_0':
         if not firstEntry.hasSite('output'):
             return False
