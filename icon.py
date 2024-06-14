@@ -1810,10 +1810,12 @@ def rightmostFromSite(ic, siteId):
         return ic, siteId
     return rightmostSite(argIcon)
 
-def findAttrOutputSite(ic):
+def findAttrOutputSite(ic, inclEntryIc=True):
     if hasOutputSite(ic):
         return ic
     for i in ic.parentage():
+        if not inclEntryIc and isEntryIcon(i):
+            return None
         if hasOutputSite(i):
             return i
     return None

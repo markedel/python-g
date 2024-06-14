@@ -511,14 +511,25 @@ class CommentIcon(icon.Icon):
     def mergeTextFromComment(self, otherComment, before=False, sep=' '):
         """Merge the text from another comment into this comment (separated by a newline
         character).  If 'before' is True, insert the other comment text before the
-        existing text in 'self'.  Otherwise, insert it after."""
+        existing text in 'self'.  Otherwise, insert it after.  If otherComment held the
+        cursor (either text or seqIn/Out), also transfer that to self."""
         self.window.requestRedraw(self.topLevelParent().hierRect())
+        originalTextLen = len(self.string)
         if otherComment is None:
             return
         if before:
             self._insertText(0, otherComment.string + sep)
         else:
             self._insertText(len(self.string), sep + otherComment.string)
+        # If the other comment held cursor, transfer it
+        cursor = self.window.cursor
+        if cursor.icon is otherComment and cursor.type in('text', 'icon'):
+            otherPos = 0 if cursor.type == 'icon' else otherComment.cursorPos
+            if before:
+                self.cursorPos = otherPos
+            else:
+                self.cursorPos = originalTextLen + len(sep) + otherPos
+            cursor.setToText(self, placeEntryText=False)
         self.markLayoutDirty()
 
     def splitAtCursor(self):

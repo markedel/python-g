@@ -98,9 +98,9 @@ class EntryIcon(icon.Icon):
         outSiteY = self.height // 2
         self.sites.add('output', 'output', 0, outSiteY)
         self.sites.add('attrOut', 'attrOut', 0, outSiteY + icon.ATTR_SITE_OFFSET)
-        self.sites.add('seqIn', 'seqIn', 0, outSiteY)
+        self.sites.add('seqIn', 'seqIn', 0, 1)
         seqOutIndent = comn.BLOCK_INDENT if willOwnBlock else 0
-        self.sites.add('seqOut', 'seqOut', seqOutIndent, outSiteY)
+        self.sites.add('seqOut', 'seqOut', seqOutIndent, self.height-2)
         width = self._width()
         self.sites.add('forCursor', 'attrIn', width, outSiteY + icon.ATTR_SITE_OFFSET,
             cursorOnly=True)

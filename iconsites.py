@@ -513,13 +513,14 @@ def isCoincidentSite(ic, siteId):
 
 def highestCoincidentIcon(ic, arithOnly=False):
     """Return highest icon with an output coincident with that of ic.  There is an
-    optional (arithOnly=True) exception for naked tuples.  This is needed when the
-    call is used to help find the top of an arithmetic expression"""
+    optional (arithOnly=True) exception for naked tuples and assignments.  This is needed
+    when the call is used to help find the top of an arithmetic expression"""
     while True:
         parent = ic.parent()
         if parent is None or not isCoincidentSite(parent, parent.siteOf(ic)):
             return ic
-        if arithOnly and hasattr(parent, 'noParens') and parent.noParens:
+        if arithOnly and (hasattr(parent, 'noParens') and parent.noParens or
+                parent.__class__.__name__ in ('AssignIcon', 'AugmentedAssignIcon')):
             return ic
         ic = parent
 

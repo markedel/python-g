@@ -1386,6 +1386,9 @@ class Window:
                     self.addTop(pastedIcon)
                     self.refreshDirty(addUndoBoundary=True)
                 return
+        if len(pastedSeqs) == 0:
+            self.displayTypingError("Clipboard data was blank")
+            return
         # There was something clipboard that could be converted to icon form.  Figure out
         # where to put it.  If there's a selection, replace it, otherwise paste it at
         # the current cursor position
@@ -2317,8 +2320,11 @@ class Window:
                     filefmt.moveIconToPos(subsIc, ic.pos())
                     topDraggedIcons.append(subsIc)
                     topDraggedIcons.append(subsIc.blockEnd)
+                    arg = subsIc
                 else:
                     topDraggedIcons.append(arg)
+                if self.cursor.type in ('icon', 'text') and self.cursor.icon is ic:
+                    self.cursor.setToIconSite(arg, cursors.topSite(arg))
         self.addTop(topDraggedIcons)
         self.dragging = None
         self.snapped = None
@@ -3403,9 +3409,33 @@ class Window:
                     subsIcons, alsoRemove = restoreFromCanonicalInterchangeIcon(
                         insertedSequences[0][0], 'cprhIn')
                     if subsIcons is not None:
-                        listicons.placeArgsInclCprh([subsIcons], cprhProxyIc,
-                            iconsites.makeSeriesSiteId('cprhIcons', cprhIdx))
+                        listicons.placeArgsInclCprh(subsIcons, atIcon, atSite)
                         return icon.rightmostSite(subsIcons[-1])
+        # Another peculiar special case, is inserting a single block owning statement
+        # (such as for or while) with a empty block to the left of a statement-level
+        # icon with an output or attribute-out site.  Even though we're inserting a
+        # block-end-icon, it still *looks* like a single statement, and so we treat it
+        # as such, and do the insert as a prefix.
+        if len(insertedSequences) == 1 and isinstance(insertedSequences[0][0],
+                (blockicons.ForIcon, blockicons.IfIcon, blockicons.WhileIcon,
+                blockicons.WithIcon)) and len(insertedSequences[0]) <= 2 and \
+                expredit.isLeftmostSite(atIcon, atSite):
+            insIc = insertedSequences[0][0]
+            insStmtComment = insIc.hasStmtComment()
+            exprTop = atIcon.topLevelParent()
+            existingStmtComment = exprTop.hasStmtComment()
+            self.replaceTop(exprTop, insIc, transferStmtComment=False)
+            if existingStmtComment is not None:
+                existingStmtComment.detachStmtComment()
+            cursorIcon, cursorSite = expredit.insertAtSite(*icon.rightmostSite(insIc),
+                exprTop, cursorLeft=True)
+            # Merge-in the statement comments
+            if existingStmtComment is not None:
+                if insStmtComment is None:
+                    existingStmtComment.attachStmtComment(insIc)
+                else:
+                    insStmtComment.mergeTextFromComment(existingStmtComment)
+            return cursorIcon, cursorSite
         # The one case we can't handle is when the inserted code contains statement-only
         # icons, and the destination is within an enclosing icon that bounds it from
         # being split.  Bail out and return failure indication if that is the case.
@@ -3423,15 +3453,19 @@ class Window:
             elif not isinstance(ic, commenticon.VerticalBlankIcon):
                 insertingNonExprIcons = True
             numStmtsInserted += 1
-        isLeftmostSite = expredit.isLeftmostSite(atIcon, atSite)
+        isLeftmostSite = expredit.isLeftmostSite(atIcon, atSite) or atSite == 'seqIn'
         rightmostIcon, rightmostSite = icon.rightmostSite(atIcon.topLevelParent())
         isRightmostSite = rightmostIcon == atIcon and (atSite == rightmostSite or
             atSite == 'seqOut')
+        topIcon = atIcon.topLevelParent()
         enclosingIcon, enclosingSite = entryicon.findEnclosingSite(atIcon, atSite)
-        if insertingStmtOnlyIcons and not isLeftmostSite and not isRightmostSite:
-            if not expredit.openOnRight(enclosingIcon, enclosingSite):
-                return None, None
-        self.requestRedraw(atIcon.topLevelParent().hierRect())
+        if insertingStmtOnlyIcons and not isLeftmostSite and not isRightmostSite and \
+            not (expredit.openOnRight(enclosingIcon, enclosingSite) or
+                isinstance(enclosingIcon, assignicons.AssignIcon) and
+                numStmtsInserted == 1 and
+                isinstance(insertedSequences[0][0], assignicons.AssignIcon)):
+            return None, None
+        self.requestRedraw(topIcon.hierRect())
         # Choose how to do the insert: whether to treat statements in the inserted code
         # as list elements or to leave them as statements or individual expressions.
         insertAsStmts = insertAsIndividual = insertAsList = insertAsStmtComment = False
@@ -3442,10 +3476,26 @@ class Window:
             # a somewhat random choice, mostly for text-editor-accustomed users who might
             # want to paste a line-comment there).
             insertAsStmtComment = True
-        elif insertingStmtOnlyIcons or atSite in ('seqIn', 'seqOut'):
-            # We're inserting icons that must be at the statement level or inserting
-            # specifically at the statement (at a sequence site).
+        elif atSite in ('seqIn', 'seqOut'):
+            # We're inserting specifically at the statement (at a sequence site).
             insertAsStmts = True
+        elif insertingStmtOnlyIcons:
+            # We're inserting icons that must stay at the statement level.  Assignments
+            # are a special case, because while they need to be on the top level, they
+            # also have sites on the right, allowing them to be "appended" to things.
+            insIc = insertedSequences[0][0]
+            topIcon = atIcon.topLevelParent()
+            if numStmtsInserted == 1 and (
+                    isinstance(insIc, assignicons.AssignIcon) and (isRightmostSite or (
+                     isinstance(enclosingIcon, assignicons.AssignIcon) or
+                     isinstance(enclosingIcon, listicons.TupleIcon) and
+                      enclosingIcon.noParens)) or
+                    isinstance(insIc, assignicons.AugmentedAssignIcon) and
+                     isRightmostSite and expredit.leftSiteIsEmpty(insIc) and
+                     topIcon.hasSite('output')):
+                insertAsIndividual = True
+            else:
+                insertAsStmts = True
         elif atIcon.isCursorOnlySite(atSite) and \
                 atIcon.__class__ in cursors.stmtIcons and \
                 atIcon.typeOf(atSite) == 'attrIn':
@@ -3479,12 +3529,18 @@ class Window:
             nextIc = commentIc.nextInSeq()
             commentIc.replaceChild(None, 'seqOut')
             topParent = atIcon.topLevelParent()
-            commentIc.attachStmtComment(topParent)
+            existingStmtComment = topParent.hasStmtComment()
+            if existingStmtComment is None:
+                commentIc.attachStmtComment(topParent)
+            else:
+                existingStmtComment.mergeTextFromComment(commentIc, before=True)
             if nextIc is not None:
                 icon.insertSeq(nextIc, topParent)
                 self.addTop(topInsertedIcons[1:])
-            cursorIcon = topInsertedIcons[-1]
-            cursorSite = 'seqOut'
+                cursorIcon = topInsertedIcons[-1]
+                cursorSite = 'seqOut'
+            else:
+                cursorIcon, cursorSite = icon.rightmostSite(topParent)
         elif insertAsStmts:
             insertSeqStart, topInsertedIcons = concatenateSequences(insertedSequences)
             if atSite in ('seqIn', 'seqOut'):
@@ -3503,10 +3559,18 @@ class Window:
                 # in subsequent operation(s).  Note that statement comment transfer is
                 # handled by the 'split' and 'join' calls.
                 cursorIcon, cursorSite = icon.rightmostSite(topInsertedIcons[-1])
+                topParent = atIcon.topLevelParent()
+                if not topParent.hasSite('seqOut'):
+                    # We are going to make a multi-statement sequence, and we can't do
+                    # that if we're inserting on an icon that can't be part of a
+                    # sequence (such as an attribute alone on the window background).
+                    entryIc = entryicon.EntryIcon(window=atIcon.window)
+                    topParent.replaceWith(entryIc)
+                    entryIc.appendPendingArgs([topParent])
+                    topParent = entryIc
                 if isLeftmostSite:
                     # Insert the sequence before the statement holding the insertion
                     # site and merge the last statement of the sequence with it.
-                    topParent = atIcon.topLevelParent()
                     lastInsertedStmt = topInsertedIcons[-1]
                     icon.insertSeq(insertSeqStart, topParent, before=True)
                     self.addTop(topInsertedIcons)
@@ -3515,7 +3579,6 @@ class Window:
                     # Merge the first element of the sequence with the statement holding
                     # the insertion site, and splice the remaining ones in to the
                     # sequence, after it
-                    topParent = atIcon.topLevelParent()
                     icon.insertSeq(insertSeqStart, topParent)
                     atIcon.window.addTop(topInsertedIcons)
                     expredit.joinStmts(topParent)
@@ -3532,7 +3595,8 @@ class Window:
                     icon.insertSeq(insertSeqStart, leftStmt)
                     atIcon.window.addTop(topInsertedIcons)
                     expredit.joinStmts(leftStmt)
-                    expredit.joinWithPrev(rightStmt)
+                    if rightStmt is not None:
+                        expredit.joinWithPrev(rightStmt)
         elif insertAsIndividual:
             insertedTopIcon = insertedSequences[0][0]
             insertedStmtComment = insertedTopIcon.hasStmtComment()
@@ -3549,7 +3613,8 @@ class Window:
                 if stmtComment is None:
                     insertedStmtComment.attachStmtComment(newTopIcon)
                 else:
-                    stmtComment.mergeTextFromComment(insertedStmtComment)
+                    stmtComment.mergeTextFromComment(insertedStmtComment,
+                        before=isLeftmostSite)
         elif insertAsList:
             # Convert the inserted sequences into a single list, removing sequence links.
             insertList, strippedComments = cvtSeqsToList(insertedSequences)

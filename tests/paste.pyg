@@ -36,6 +36,8 @@ c
 a
 pass
 b
+
+$:o$(a)
 $@+441+130$
 x
 
@@ -73,13 +75,25 @@ return  # return
 a
 b, c
 
+$:o${a, b}
 $@+442+369$
 $Empty$ | x + $Empty$
-$@+442+405$
+
+$Empty$ += x
+$@+436+448$
 x + $:o$($Empty$)
-$@+442+447$
+$@+436+490$
 x + y | z * xx ** yy
-$@+442+487$
+$@+436+530$
 x + y * z | xx ** yy
-$@+442+520$
-$:o${a:b, c:d | a, b:e}
+$@+175+545:a($.nert$)$
+$@+436+563$
+$:o${x:y, z:xx | yy, zz:xxx}
+$@+173+577$
+for b in c:
+    $:x$pass
+$@+444+597:a($.wang$)$
+$@+436+631$
+$Ctx($x * y$)$, z = xx, yy = zz * zzz
+$@+436+669$
+(x for y in z if xx)

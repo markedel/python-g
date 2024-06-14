@@ -1,6 +1,7 @@
 # Copyright Mark Edel  All rights reserved
 from PIL import Image
 import ast
+import re
 import comn
 import icon
 import iconlayout
@@ -9,8 +10,9 @@ import nameicons
 import listicons
 import opicons
 import entryicon
-import parenicon
-import cursors
+import expredit
+
+tgtSiteNamePattern = re.compile('targets(\d?)_')
 
 assignDragImage = comn.asciiToImage((
  "......",
@@ -147,7 +149,7 @@ class AssignIcon(icon.Icon):
         self.markLayoutDirty()
 
     def removeTargetGroup(self, idx):
-        if idx <= 0 or idx >= len(self.tgtLists):
+        if idx < 0 or idx >= len(self.tgtLists):
             raise Exception('Bad index for removing target group from assignment icon')
         seriesName = 'targets%d' % idx
         for site in self.sites.getSeries(seriesName):
@@ -719,6 +721,227 @@ class AugmentedAssignIcon(icon.Icon):
                     newTuple.insertChild(arg, "argIcons", i)
             win.replaceTop(self, newTuple)
         return entryIcon
+
+def insertAssignIcon(atIcon, atSite, insertedAssign):
+    if isinstance(atIcon, AssignIcon):
+        return combineAssignIcons(atIcon, atSite, insertedAssign)
+    elif isinstance(atIcon, listicons.TupleIcon) and atIcon.noParens:
+        return insertAssignInNakedTuple(atIcon, atIcon, atSite, insertedAssign)
+    else:
+        enclosingIc, splitSite = entryicon.findEnclosingSite(atIcon)
+        if isinstance(enclosingIc, AssignIcon):
+            return combineAssignIcons(atIcon, atSite, insertedAssign)
+        elif isinstance(enclosingIc, listicons.TupleIcon) and enclosingIc.noParens:
+            return insertAssignInNakedTuple(enclosingIc, atIcon, atSite, insertedAssign)
+        else:
+            print('insertAssignIcon did not find assign or naked tuple icon')
+            return atIcon, atSite
+
+def insertAssignInNakedTuple(tupleIc, atIcon, atSite, insertedAssign):
+    # Split the expression holding the insert site
+    entries = tupleIc.argIcons()
+    if atIcon is tupleIc:
+        splitSite = atSite
+    else:
+        splitSite = tupleIc.siteOf(atIcon, recursive=True)
+    _, splitIdx = iconsites.splitSeriesSiteId(splitSite)
+    left, right = entryicon.splitExprAtSite(atIcon, atSite, tupleIc)
+    # Strip icons off of the tuple
+    for _ in entries:
+        tupleIc.replaceChild(None, 'argIcons_0')
+    # Replace it with the new assignment icon
+    tupleIc.window.replaceTop(tupleIc, insertedAssign)
+    # Add icons left of split to the start of the existing targets0 series
+    expredit.insertListAtSite(insertedAssign, 'targets0_0', (left,))
+    insertedAssign.insertChildren(entries[:splitIdx], 'targets0_0')
+    # Add icons right of the split to the end of the values series
+    rightIc, rightSite = icon.rightmostSite(insertedAssign)
+    if right is None:
+        cursorIc, cursorSite = rightIc, rightSite
+    else:
+        cursorIc, cursorSite = expredit.insertListAtSite(rightIc, rightSite, (right,))
+    nextValuesIdx = len(insertedAssign.sites.values)
+    insertedAssign.insertChildren(entries[splitIdx+1:], 'values',nextValuesIdx)
+    return cursorIc, cursorSite
+
+def combineAssignIcons(atIcon, atSite, insertedAssign):
+    if isinstance(atIcon, AssignIcon):
+        assignIc = atIcon
+        splitSite = atSite
+    else:
+        assignIc, splitSite = entryicon.findEnclosingSite(atIcon)
+        if not isinstance(assignIc, AssignIcon):
+            print('combineAssignIcons did not find assign icon')
+            return atIcon, atSite
+    # Strip the inserted icon of its entries
+    entries = []
+    for tgtList in insertedAssign.tgtLists:
+        tgts = [site.att for site in getattr(insertedAssign.sites, tgtList.siteSeriesName)]
+        tgtsSite = iconsites.makeSeriesSiteId(tgtList.siteSeriesName, 0)
+        for _ in tgts:
+            insertedAssign.replaceChild(None, tgtsSite)
+        entries.append(tgts)
+    values = [site.att for site in insertedAssign.sites.values]
+    for _ in values:
+        insertedAssign.replaceChild(None, 'values_0')
+    entries.append(values)
+    # Split the expression across atSite
+    left, right = entryicon.splitExprAtSite(atIcon, atSite, assignIc)
+    # Insert the entries removed from the inserted icon into assignIc
+    splitSeriesName, splitIdx = iconsites.splitSeriesSiteId(splitSite)
+    numInsGroups = len(entries) - 1
+    if splitSeriesName == 'values':
+        # Assign icon was inserted in the value series.  Turn the values before the
+        # insertion site into targets, add new targets for..., and insert the last set
+        # of elements at the start of the values series
+        iconsToMove = [site.att for site in assignIc.sites.values][:splitIdx]
+        for _ in range(splitIdx+1):
+            assignIc.replaceChild(None, 'values_0')
+        newTgtGrpIdxs = [len(assignIc.tgtLists) + i for i in range(numInsGroups)]
+        for newTgtGrpIdx in newTgtGrpIdxs:
+            assignIc.addTargetGroup(newTgtGrpIdx)
+        iconsToMove.append(left)
+        firstNewTgtGrp = f"targets{newTgtGrpIdxs[0]}"
+        assignIc.insertChildren(iconsToMove, firstNewTgtGrp, 0)
+        expredit.insertListAtSite(*icon.rightmostFromSite(assignIc,
+             iconsites.makeSeriesSiteId(firstNewTgtGrp, splitIdx)), entries[0])
+        for i, grpIdx in enumerate(newTgtGrpIdxs[1:]):
+            grpStartSiteId = f"targets{grpIdx}_0"
+            assignIc.insertChildren(entries[i + 1], grpStartSiteId)
+        assignIc.insertChildren(entries[-1], 'values_0')
+        lastInsSite = iconsites.makeSeriesSiteId('values', len(entries[-1]) - 1)
+        rightOfInsId, rightOfInsSite = icon.rightmostFromSite(assignIc, lastInsSite)
+        if right is not None:
+            expredit.insertListAtSite(rightOfInsId, rightOfInsSite, (right,))
+    else:
+        # Assign icon was inserted in a target series.  The inserted clauses all become
+        # targets..
+        assignIc.replaceChild(left, splitSite, leavePlace=True)
+        series = getattr(assignIc.sites, splitSeriesName)
+        iconsToMove = [site.att for site in series][splitIdx + 1:]
+        removeFromSite = iconsites.makeSeriesSiteId(splitSeriesName, splitIdx + 1)
+        for _ in range(splitIdx + 1, len(series)):
+            assignIc.replaceChild(None, removeFromSite)
+        expredit.insertListAtSite(*icon.rightmostFromSite(assignIc, splitSite), entries[0])
+        newTgtGrpIdxs = [int(splitSeriesName[7:]) + 1 + i for i in range(numInsGroups)]
+        for newTgtGrpIdx in newTgtGrpIdxs:
+            assignIc.addTargetGroup(newTgtGrpIdx)
+        for i, groupIdx in enumerate(newTgtGrpIdxs):
+            grpStartSiteId = f"targets{groupIdx}_0"
+            assignIc.insertChildren(entries[i+1], grpStartSiteId)
+        lastInsSite = f"targets{newTgtGrpIdxs[-1]}_{len(entries[-1])-1}"
+        rightOfInsId, rightOfInsSite = icon.rightmostFromSite(assignIc, lastInsSite)
+        if right is not None:
+            expredit.insertListAtSite(rightOfInsId, rightOfInsSite, (right,))
+        assignIc.insertChildren(iconsToMove, iconsites.nextSeriesSiteId(lastInsSite))
+    return rightOfInsId, rightOfInsSite
+
+def splitAssignAtTargetSite(assignIc, atIcon, atSite):
+    """Split an assignment statement into two statements at (atIcon, atSite).  Note that
+    this only handles splitting at sites attached to assignIc at its target sites (this
+    is used by the more general expredit.splitStmtAtSite, which has common code for
+    splitting icons with series' that are unconstrained on the right).  The calling code
+    is also expected to have verified that there is no enclosing icon separating the
+    specified site from the assignment icon.  assignIc can be on augmented assignment
+    icon.  The fact that Python does not support expressions in the target of an
+    augmented assign, makes this is kind of useless, but Python-g does, so it needs to be
+    supported for completeness (the ability to split between the target and the operator
+    actually is useful)."""
+    if isinstance(assignIc, AugmentedAssignIcon):
+        left, right = entryicon.splitExprAtSite(atIcon, atSite, assignIc)
+        if left is None:
+            return assignIc, None
+        assignIc.replaceChild(right, 'targetIcon')
+        icon.insertSeq(left, assignIc, before=True)
+        assignIc.window.addTop(left)
+        return left, assignIc
+    if atIcon is assignIc:
+        splitSite = atSite
+        if atSite == 'targets0_0':
+            return assignIc, None  # Splitting left of icon is a noop
+    else:
+        splitSite = assignIc.siteOf(atIcon, recursive=True)
+        if splitSite is None or splitSite[:7] != 'targets':
+            print("splitAssignAtTargetSite failed to find assign icon or expected site")
+            return assignIc, None
+    tgtGrpIdx = getTgtGrpIdx(splitSite)
+    seriesName, seriesIdx = iconsites.splitSeriesSiteId(splitSite)
+    left, right = entryicon.splitExprAtSite(atIcon, atSite, assignIc)
+    siteSeries = getattr(assignIc.sites, seriesName)
+    iconsForValuesSeries = [site.att for site in siteSeries[:seriesIdx]]
+    leftSeriesSite = iconsites.makeSeriesSiteId(seriesName, 0)
+    for _ in range(seriesIdx):
+        assignIc.replaceChild(None, leftSeriesSite)
+    assignIc.replaceChild(right, leftSeriesSite)
+    if left is not None:
+        iconsForValuesSeries.append(left)
+    if tgtGrpIdx == 0:
+        # We're splitting the first target group, so no group removal or shifting
+        # necessary, and the new stmt will be either a naked tuple, or an individual
+        if len(iconsForValuesSeries) == 1:
+            newStmt = iconsForValuesSeries[0]
+        else:
+            newStmt = listicons.TupleIcon(assignIc.window, noParens=True)
+            newStmt.insertChildren(iconsForValuesSeries, 'argIcons_0')
+        icon.insertSeq(newStmt, assignIc, before=True)
+        assignIc.window.addTop(newStmt)
+        return newStmt, assignIc
+    # We're splitting a target group other than group 0, so we need to make a new
+    # assignment icon and transfer everything left of the split site, to it.
+    newAssignStmt = AssignIcon(numTargets=tgtGrpIdx, window = assignIc.window)
+    icon.insertSeq(newAssignStmt, assignIc, before=True)
+    assignIc.window.addTop(newAssignStmt)
+    newAssignStmt.insertChildren(iconsForValuesSeries, 'values_0')
+    for idx in range(tgtGrpIdx):
+        iconsToMove = [site.att for site in getattr(assignIc.sites, 'targets0')]
+        for _ in iconsToMove:
+            assignIc.replaceChild(None, 'targets0_0')
+        assignIc.removeTargetGroup(0)
+        leftSeriesSite = iconsites.makeSeriesSiteId('targets' + str(idx), 0)
+        newAssignStmt.insertChildren(iconsToMove, leftSeriesSite)
+    return newAssignStmt, assignIc
+
+def joinAssignIcons(stmt1, stmt2):
+    stmt1Comment = stmt1.hasStmtComment()
+    stmt2Comment = stmt2.hasStmtComment()
+    stmt1.window.replaceTop(stmt2, None)
+    rightmostIc, rightmostSite = icon.rightmostSite(stmt1)
+    combineAssignIcons(rightmostIc, rightmostSite, stmt2)
+    # Merge any statement comments associated with the two statements
+    if stmt1Comment is not None and stmt2Comment is not None:
+        stmt1Comment.mergeTextFromComment(stmt2Comment)
+    elif stmt2Comment is not None:
+        stmt2Comment.attachStmtComment(stmt1)
+    return rightmostIc, rightmostSite
+
+def joinToAssignIcon(toStmt, assignIcon):
+    """Implement join command between a statement compatible with an assignIcon's target
+    field (toStmt) on the left, with an assignment icon (assignIcon) on the right.  A
+    compatible statement is any icon at the top level with an output site."""
+    toStmtComment = toStmt.hasStmtComment()
+    assignStmtComment = assignIcon.hasStmtComment()
+    toStmt.window.replaceTop(toStmt, None)
+    if isinstance(assignIcon, AugmentedAssignIcon):
+        cursorIcAndSite = expredit.insertAtSite(assignIcon, 'targetIcon', toStmt)
+    elif isinstance(toStmt, listicons.TupleIcon) and toStmt.noParens:
+        argIcons = toStmt.argIcons()
+        for _ in argIcons:
+            toStmt.replaceChild(None, 'argIcons_0')
+        cursorIcAndSite = expredit.insertListAtSite(assignIcon, 'targets0_0', argIcons)
+    elif hasattr(toStmt, 'closed') and not toStmt.closed:
+        return expredit.insertAtSite(assignIcon, 'targets0_0', toStmt)
+    else:
+        cursorIcAndSite = expredit.insertListAtSite(assignIcon, 'targets0_0', (toStmt,))
+    # Merge any statement comments associated with the two statements
+    if toStmtComment is not None and assignStmtComment is not None:
+        assignStmtComment.mergeTextFromComment(toStmtComment, before=True)
+    elif toStmtComment is not None:
+        toStmtComment.attachStmtComment(assignIcon)
+    return cursorIcAndSite
+
+def getTgtGrpIdx(siteName):
+    match = tgtSiteNamePattern.match(siteName)
+    return int(match.group(1))
 
 def createAssignIconFromAst(astNode, window):
     topIcon = AssignIcon(len(astNode.targets), window)

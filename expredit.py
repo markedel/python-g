@@ -4,9 +4,12 @@ import listicons
 import entryicon
 import parenicon
 import opicons
+import assignicons
 import infixicon
 import reorderexpr
 import filefmt
+import cursors
+import blockicons
 
 def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
     """Insert a single tree of icons into another tree of icons.  Note that this is low-
@@ -22,6 +25,8 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
     return the appropriate cursor position to the left of the insertion (approximately
     equivalent to  (atIcon, atSite), but adjusted for arithmetic reordering and
     positioned inside any added placeholder entry icon."""
+    if topInsertedIcon is None:
+        return atIcon, atSite
     insRightIc, insRightSite = icon.rightmostSite(topInsertedIcon)
     # We accept output sites At the top level, since the cursor can be attached to them.
     if atIcon.typeOf(atSite) in iconsites.parentSiteTypes:
@@ -33,15 +38,17 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
             atIcon = parent
         else:
             # Reverse the insertion, replacing the tree holding the insert point with
-            # the tree being inserted before it.  Note that in the initial replaceTop
-            # call, we're passing transferStmtComment as False, because we don't yet
-            # know whether the recursive call to insertAtSite will be keeping the
-            # inserted code as a distinct statement, or merging it with the existing
-            # statement.
+            # the tree being inserted before it.  insertAtSite does not do statement
+            # comment transfer itself, but it is expected to preserve the comment on the
+            # top-level statement on which it is inserting (normally happens implicitly
+            # via our calls to replaceTop, but must be done explicitly, here).
+            stmtComment = atIcon.hasStmtComment()
             atIcon.window.replaceTop(atIcon, topInsertedIcon, transferStmtComment=False)
             rightIcOfIns, rightSiteOfIns = icon.rightmostSite(topInsertedIcon)
             cursorIc, cursorSite = insertAtSite(rightIcOfIns, rightSiteOfIns, atIcon,
                 cursorLeft=True)
+            if stmtComment is not None:
+                stmtComment.attachStmtComment(cursorIc.topLevelParent())
             if cursorLeft:
                 return cursorLeftOfIcon(atIcon)
             return cursorIc, cursorSite
@@ -61,42 +68,80 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
     # If the inserted code is statement-level-only, we can only insert it at either the
     # leftmost or rightmost sites, or within expressions that can be split all the way to
     # the top level.
-    rightmostIc, rightmostSite = icon.rightmostSite(atIcon.topLevelParent())
+    topParent = atIcon.topLevelParent()
+    rightmostIc, rightmostSite = icon.rightmostSite(topParent)
     if isStmtLevelOnly(topInsertedIcon):
+        # Assignment icons are statement-level, but also have an input site on the right,
+        # which allows them to be appended to icons with an output.  They can also be
+        # inserted within other assignment statements
+        if atIcon is rightmostIc and atSite == rightmostSite and \
+                topParent.hasSite('output') and \
+                (isinstance(topInsertedIcon, assignicons.AssignIcon) or
+                 isinstance(topInsertedIcon, assignicons.AugmentedAssignIcon) and
+                    leftSiteIsEmpty(topInsertedIcon)):
+            # Appending an assignment statement to a top-level icon with an output site
+            if isinstance(topParent, listicons.TupleIcon) and topParent.noParens and \
+                    not isinstance(topInsertedIcon, assignicons.AugmentedAssignIcon):
+                insIcons = topParent.argIcons()
+                for _ in insIcons:
+                    topParent.replaceChild(None, 'argIcons_0')
+            else:
+                insIcons = (topParent,)
+            topParent.window.replaceTop(topParent, topInsertedIcon)
+            if leftSiteIsEmpty(topInsertedIcon) and len(insIcons) == 1:
+                insIc, insSite = lowestLeftSite(topInsertedIcon)
+                insIc.replaceChild(topParent, insSite)
+            else:
+                topInsertedIcon.insertChildren(insIcons, 'targets0_0')
+            return insRightIc, insRightSite
+        if isinstance(topInsertedIcon, assignicons.AssignIcon) and (
+                isinstance(topParent, assignicons.AssignIcon) or
+                isinstance(topParent, listicons.TupleIcon) and topParent.noParens):
+            # Insert an assignment icon inside of existing assignment or naked tuple
+            return assignicons.insertAssignIcon(atIcon, atSite, topInsertedIcon)
+        # The leftmost and rightmost sites are always usable for inserting statement-
+        # level icons, because they are adjacent to the statement boundary.
         if atIcon is rightmostIc and (atSite == rightmostSite or atSite == 'seqOut'):
-            # The rightmost site is a safe places to start a new statement, and we must
-            # because the inserted icon has to be kept at the statement level.
-            icon.insertSeq(topInsertedIcon, atIcon.topLevelParent())
+            # Inserting at rightmost site: we must start a new statement, as the inserted
+            # icon must be kept at the statement level.
+            if not topParent.hasSite('seqOut'):
+                # We're appending to the right of a free attribute
+                entryIc = entryicon.EntryIcon(window=atIcon.window)
+                entryIc.appendPendingArgs([topParent])
+                topParent.window.replaceTop(topParent, entryIc)
+                topParent = entryIc
+            icon.insertSeq(topInsertedIcon, topParent)
             atIcon.window.addTop(topInsertedIcon)
             if cursorLeft:
                 return topInsertedIcon, 'seqIn'
             return insRightIc, insRightSite
         if isLeftmostSite(atIcon, atSite):
-            # The leftmost site is also safe because it can be a statement boundary, but
-            # we may still be able to join the two.
-            topDestIc = atIcon.topLevelParent()
-            if isStmtLevelOnly(topDestIc):
+            # Inserting at the leftmost site.  It may be possible to prefix the inserted
+            # statement to the existing statement.  If not, make a new statement
+            if isStmtLevelOnly(topParent):
                 # Absolutely has to be a new statement
-                icon.insertSeq(topInsertedIcon, topDestIc, before=True)
+                icon.insertSeq(topInsertedIcon, topParent, before=True)
                 atIcon.window.addTop(topInsertedIcon)
                 if cursorLeft:
                     return topInsertedIcon, 'seqIn'
                 return insRightIc, insRightSite
             else:
-                # Attempt to join by reversing the places of the two icons and
-                # recursively calling insertAtSite.
-                atIcon.window.replaceTop(topDestIc, topInsertedIcon,
+                # Try to prefix the inserted statement to the existing one.  This may
+                # be dead code, as I can't find any examples that reach here.  If not,
+                # consider replacing with better code in unused.py that replaces the
+                # recursive call with appendAtSite (written, but couldn't exercise)
+                print('Not dead code: remove this print stmt and update comment')
+                atIcon.window.replaceTop(topParent, topInsertedIcon,
                     transferStmtComment=False)
-                insertAtSite(insRightIc, insRightSite, topDestIc)
+                insertAtSite(insRightIc, insRightSite, topParent)
                 if cursorLeft:
                     return cursorLeftOfIcon(topInsertedIcon.topLevelParent())
                 return insRightIc, insRightSite
-        # Sites not at the left or right are only possible if we can split the
-        # expression around them
+        # Inserting a statement-only icon at sites in the middle of an expression is
+        # possible if we can split the expression around them.
         enclosingIcon, enclosingSite = entryicon.findEnclosingSite(atIcon, atSite)
         if enclosingIcon is not None:
             return None, None
-        topParent = atIcon.topLevelParent()
         left, right = entryicon.splitExprAtSite(atIcon, atSite, None)
         if left is not topParent:
             atIcon.window.replaceTop(topParent, left)
@@ -121,6 +166,8 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
         needReorder)
     # Stitch relocatedTree to the right of the inserted icon tree.  If the sites are
     # compatible, just attach, otherwise add a placeholder entry icon.
+    isUnclosed = hasattr(topInsertedIcon, 'closed') and not topInsertedIcon.closed
+    addToUnclosedSeries = None
     if relocatedTree is None:
         cursorIcon, cursorSite = insRightIc, insRightSite
     elif icon.validateCompatibleChild(relocatedTree, insRightIc, insRightSite):
@@ -128,12 +175,25 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
         if insRightIc.typeOf(rightmostSite) == 'input':
             checkReorder(insRightIc, needReorder)
         cursorIcon, cursorSite = insRightIc, insRightSite
+    elif isUnclosed and relocatedTree.hasSite('output'):
+        addToUnclosedSeries = relocatedTree
+        cursorIcon, cursorSite = insRightIc, insRightSite
     else:
         entryIc = entryicon.EntryIcon(window=atIcon.window)
         entryIc.appendPendingArgs([relocatedTree])
         insRightIc.replaceChild(entryIc, insRightSite)
         cursorIcon, cursorSite = entryIc, None
     reorderMarkedExprs(atIcon.topLevelParent(), needReorder, replaceTop=True)
+    # If we inserted an unclosed series or cursor paren icon, incorporate any adjacent
+    # series entries into it (per required tree ordering with unclosed series).
+    if isUnclosed:
+        if addToUnclosedSeries is not None:
+            if isinstance(topInsertedIcon, parenicon.CursorParenIcon):
+                topInsertedIcon = entryicon.cvtCursorParenToTuple(topInsertedIcon, False,
+                False)
+            insertIdx = len(topInsertedIcon.sites.argIcons)
+            topInsertedIcon.insertChild(addToUnclosedSeries, 'argIcons', insertIdx)
+        entryicon.reopenParen(topInsertedIcon)
     if cursorLeft:
         return cursorLeftIc, cursorLeftSite
     return cursorIcon, cursorSite
@@ -143,22 +203,37 @@ def appendAtSite(atIc, atSite, topInsertedIcon, needReorder):
     including making use of empty site on the left (which will affect the hierarchy above
     the given site) or adapting it with a placeholder.  Assumes that the caller has
     filtered out all the cases where topInsertedIcon can't be attached."""
+    if topInsertedIcon is None:
+        return atIc, atSite
+    # If the inserted icon is a placeholder, check if we can strip it off and use its
+    # first pending argument, instead.
+    if isinstance(topInsertedIcon, entryicon.EntryIcon) and topInsertedIcon.text == '':
+        pendingArgs = topInsertedIcon.listPendingArgs()
+        if len(pendingArgs) == 0:
+            return atIc, atSite
+        arg1 = pendingArgs[0]
+        if icon.validateCompatibleChild(arg1, atIc, atSite):
+            topInsertedIcon.popPendingArgs(0)
+            if topInsertedIcon.hasPendingArgs():
+                rightmostIcon, rightmostSite = icon.rightmostSite(arg1)
+                rightmostIcon.replaceChild(topInsertedIcon, rightmostSite)
+            topInsertedIcon = arg1
+    # If the inserted code is directly compatible with the requested site: just attach
     if icon.validateCompatibleChild(topInsertedIcon, atIc, atSite):
-        # The inserted code is directly compatible with the requested site: just attach
         atIc.replaceChild(topInsertedIcon, atSite)
         if atIc.typeOf(atSite) == 'input':
             checkReorder(topInsertedIcon, needReorder)
         return atIc, atSite
-    else:
-        # If the insertion site is not directly compatible with the top of the inserted
-        # tree, it still may be possible to join the two trees without a placeholder.
-        # If the inserted code has an empty site on the left, it may be possible to
-        # move code from above the insertion site into that empty site.  Empty sites on
-        # the left of the tree are, by nature, input sites, as only binary operators have
-        # them.
-        if leftSiteIsEmpty(topInsertedIcon) and atSite == 'attrIcon':
-            leftIc, leftSite = lowestLeftSite(topInsertedIcon)
-            attrRoot = icon.findAttrOutputSite(atIc)
+    # If the insertion site is not directly compatible with the top of the inserted
+    # tree, it still may be possible to join the two trees without a placeholder.
+    # If the inserted code has an empty site on the left, it may be possible to
+    # move code from above the insertion site into that empty site.  Empty sites on
+    # the left of the tree are, by nature, input sites, as only binary operators have
+    # them.
+    if leftSiteIsEmpty(topInsertedIcon) and atSite == 'attrIcon':
+        leftIc, leftSite = lowestLeftSite(topInsertedIcon)
+        attrRoot = icon.findAttrOutputSite(atIc)
+        if attrRoot is not None:
             attrRootParent = attrRoot.parent()
             if attrRootParent is None:
                 atIc.window.replaceTop(attrRoot, topInsertedIcon)
@@ -170,17 +245,16 @@ def appendAtSite(atIc, atSite, topInsertedIcon, needReorder):
                 attrRootParent.replaceChild(topInsertedIcon, attrRootSite)
             checkReorder(topInsertedIcon, needReorder)
             return atIc, atSite
-        else:
-            # The inserted code could not be joined at the insert site, and must be
-            # adapted with a placeholder icon
-            entryIc = entryicon.EntryIcon(window=atIc.window)
-            entryIc.appendPendingArgs([topInsertedIcon])
-            if atIc.typeOf(atSite) == "cprhIn":
-                # While users can't put a cursor on a comprehension site, they can do an
-                # insertion at one by means of a selection that starts on one
-                atIc, atSite = listicons.proxyForCprhSite(atIc, atSite)
-            atIc.replaceChild(entryIc, atSite)
-            return entryIc, None
+    # The inserted code could not be joined at the insert site, and must be
+    # adapted with a placeholder icon
+    entryIc = entryicon.EntryIcon(window=atIc.window)
+    entryIc.appendPendingArgs([topInsertedIcon])
+    if atIc.typeOf(atSite) == "cprhIn":
+        # While users can't put a cursor on a comprehension site, they can do an
+        # insertion at one by means of a selection that starts on one
+        atIc, atSite = listicons.proxyForCprhSite(atIc, atSite)
+    atIc.replaceChild(entryIc, atSite)
+    return entryIc, None
 
 def insertListAtSite(atIcon, atSite, seriesIcons, mergeAdjacent=True, cursorLeft=False):
     """Insert a series of icons into another tree of icons.  Note that this is low-level
@@ -199,7 +273,7 @@ def insertListAtSite(atIcon, atSite, seriesIcons, mergeAdjacent=True, cursorLeft
     the insertion (approximately equivalent to (atIcon, atSite), but adjusted for
     arithmetic reordering and positioned after any added comma or inside any added
     placeholder entry icon."""
-    if len(seriesIcons) == 0:
+    if len(seriesIcons) == 0 or len(seriesIcons) == 1 and seriesIcons[0] is None:
         return atIcon, atSite
     # Use insertAtSite for single entries where no new series elements are needed.
     # Weeding out those cases makes it safe to do the prep-work for adding elements
@@ -369,10 +443,32 @@ def joinStmts(firstStmt):
     nextStmt = firstStmt.nextInSeq()
     if nextStmt is None:
         return None, None
+    # Handle special cases of assignment statements and joining across block-end icons
+    if isinstance(firstStmt, assignicons.AssignIcon) and \
+            isinstance(nextStmt, assignicons.AssignIcon):
+        return assignicons.joinAssignIcons(firstStmt, nextStmt)
+    if isinstance(nextStmt, (assignicons.AssignIcon, assignicons.AugmentedAssignIcon)) \
+            and firstStmt.hasSite('output'):
+        return assignicons.joinToAssignIcon(firstStmt, nextStmt)
+    if isinstance(firstStmt, icon.BlockEnd) or isinstance(nextStmt, icon.BlockEnd):
+        if isinstance(firstStmt, icon.BlockEnd):
+            blockOwner, blockEnd, joinIc = firstStmt.prevInSeq(), firstStmt, nextStmt
+        else:
+            blockOwner, blockEnd, joinIc = firstStmt, nextStmt, nextStmt.nextInSeq()
+        if isinstance(blockOwner, (blockicons.ForIcon, blockicons.IfIcon,
+                blockicons.WhileIcon, blockicons.WithIcon)):
+            if joinIc is not None and (joinIc.hasSite('output') or
+                    joinIc.hasSite('attrOut')):
+                blockEnd.window.removeTop(joinIc)
+                blockEnd.replaceChild(joinIc.childAt('seqOut'), 'seqOut')
+                joinIc.replaceChild(None, 'seqIn')
+                joinIc.replaceChild(None, 'seqOut')
+                return insertAtSite(*icon.rightmostSite(blockOwner), joinIc,
+                    cursorLeft=True)
     if isStmtLevelOnly(nextStmt):
         return None, None
     rightmostIcon, rightmostSite = icon.rightmostSite(firstStmt)
-    if rightmostIcon.isCursorOnlySite(rightmostSite):
+    if rightmostIcon.isCursorOnlySite(rightmostSite) or rightmostSite == 'seqOut':
         return None, None
     firstStmt.window.requestRedraw(firstStmt.hierRect())
     firstStmtComment = firstStmt.hasStmtComment()
@@ -389,8 +485,9 @@ def joinStmts(firstStmt):
         firstStmtSeriesSite = rightmostSite
     elif rightmostSite == 'attrIcon':
         enclIcon, enclSite = entryicon.findEnclosingSite(rightmostIcon, rightmostSite)
-        if enclIcon is None and not nextStmtNakedTuple or \
-                enclIcon is not None and iconsites.isSeriesSiteId(enclSite):
+        if enclIcon is not None and iconsites.isSeriesSiteId(enclSite) or \
+                enclIcon is None and not nextStmtNakedTuple and \
+                icon.findAttrOutputSite(rightmostIcon, inclEntryIc=False) is not None:
             firstStmtSeriesIc = rightmostIcon
             firstStmtSeriesSite = rightmostSite
     # If we're merging the first statement into the second, do so and return
@@ -424,9 +521,11 @@ def joinStmts(firstStmt):
             nextStmt.replaceChild(None, 'argIcons_0')
         cursorIc, cursorSite = insertListAtSite(firstStmtSeriesIc, firstStmtSeriesSite,
             argIcons, cursorLeft=True)
-    elif firstStmtSeriesSite is not None and nextStmt.hasSite('output'):
+    elif firstStmtSeriesSite is not None and nextStmt.hasSite('output') and \
+            not isinstance(nextStmt, entryicon.EntryIcon):
         # If the first statement can accept a series and the next statement is compatible
-        # with a series, let insertListAtSite decide what to do with it.
+        # with a series, let insertListAtSite decide what to do with it (excluding entry
+        # icons, which can join directly to the last argument).
         cursorIc, cursorSite = insertListAtSite(firstStmtSeriesIc, firstStmtSeriesSite,
             [nextStmt], cursorLeft=True)
     else:
@@ -458,6 +557,9 @@ def canSplitStmtAtSite(atIcon, atSite):
     if atIcon is rightmostIc and atSite == rightmostSite:
         return "Split command at right edge of statement does nothing"
     enclosingIcon, enclosingSite = entryicon.findEnclosingSite(atIcon, atSite)
+    if isinstance(enclosingIcon, (assignicons.AssignIcon,
+            assignicons.AugmentedAssignIcon)):
+        return None
     # Figure out if the enclosing icon ends in a series that reaches the rightmost edge
     # of the statement, such as naked tuples, unclosed parens/brackets/braces, and series
     # statements.
@@ -492,6 +594,9 @@ def splitStmtAtSite(atIcon, atSite):
         icon.insertSeq(right, topParent)
         atIcon.window.addTop(right)
         return topParent, right
+    if isinstance(enclosingIcon, (assignicons.AssignIcon,
+            assignicons.AugmentedAssignIcon)) and enclosingSite[:6] == 'target':
+        return assignicons.splitAssignAtTargetSite(enclosingIcon, atIcon, atSite)
     # Split to enclosing icon (which canSplitStmtAtSite determined to be a series, open
     # to the right of the statement)
     if atIcon is enclosingIcon:
@@ -532,8 +637,9 @@ def splitStmtAtSite(atIcon, atSite):
     if len(iconsToMove) == 0:
         return topParent, None  # Shouldn't happen if verified with canSplitStmtAtSite
     elif len(iconsToMove) == 1:
-        icon.insertSeq(iconsToMove[0], topParent)
-        atIcon.window.addTop(iconsToMove[0])
+        if iconsToMove[0] is not None:
+            icon.insertSeq(iconsToMove[0], topParent)
+            atIcon.window.addTop(iconsToMove[0])
         return topParent, iconsToMove[0]
     else:
         newTuple = listicons.TupleIcon(window=atIcon.window, noParens=True)
@@ -723,6 +829,29 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None
                 # trimming code)
                 ic.popPendingArgs('all')
                 subsList = [nonEmptyArgs[0]]
+            # If we're stripping off the entry icon and it held the cursor, move it to a
+            # parent or connected icon.  (This is a hackish patch for a very specific
+            # problem that probably needs a more general solution.  splitDeletedIcons
+            # does not normally concern itself with cursors, but unfortunately has no
+            # mechanism for reporting dropped, as opposed to explicitly deleted, icons)
+            cursor = ic.window.cursor
+            if subsList is not None and cursor.icon is ic and cursor.type in ('icon',
+                    'text'):
+                entryParent = ic.parent()
+                if entryParent is not None:
+                    cursor.setToIconSite(entryParent, entryParent.siteOf(ic),
+                        placeEntryText=False)
+                elif ic.childAt('seqIn') is not None:
+                    cursor.setToIconSite(ic.childAt('seqIn'), 'seqOut',
+                        placeEntryText=False)
+                elif ic.childAt('seqOut') is not None:
+                    cursor.setToIconSite(ic.childAt('seqOut'), 'seqIn',
+                        placeEntryText=False)
+                elif len(subsList) > 0:
+                    cursor.setToIconSite(subsList[0], cursors.topSite(subsList[0]),
+                        placeEntryText=False)
+                else:
+                    cursor.setToWindowPos(ic.pos(), placeEntryText=False)
     # If ic is a naked tuple, deletion of its content could leave it empty or owning a
     # single element.  If so, remove it.
     if subsList is None and isinstance(ic, listicons.TupleIcon) and ic.noParens and \
@@ -733,6 +862,22 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None
         else:
             ic.replaceChild(None, 'argIcons_0')
             subsList = [argIcon]
+        # If we're stripping off a tuple icon that held the cursor, move it to an
+        # adjacent icon (see explanation above in similar code, above, for entry icons)
+        cursor = ic.window.cursor
+        if subsList is not None and cursor.icon is ic and cursor.type == 'icon':
+            if argIcon is not None:
+                if cursor.site == 'argIcons_0':
+                    cursor.setToIconSite(subsList[0], 'output', placeEntryText=False)
+                else:
+                    cursor.setToIconSite(*icon.rightmostSite(argIcon),
+                        placeEntryText=False)
+            elif ic.childAt('seqIn') is not None:
+                cursor.setToIconSite(ic.childAt('seqIn'), 'seqIn', placeEntryText=False)
+            elif ic.childAt('seqOut') is not None:
+                cursor.setToIconSite(ic.childAt('seqOut'), 'seqOut', placeEntryText=False)
+            else:
+                cursor.setToWindowPos(ic.pos(), placeEntryText=False)
     if icDeleted:
         return splitList, subsList, removedTopIcon
     else:
@@ -1230,7 +1375,7 @@ def isLeftmostSite(ic, site, withinIc=None):
     # In reading this code, remember that 'site' is the site of ic that we're evaluating,
     # as opposed to the ic's site in its parent (as often seen in similar code).
     parent = ic.parent()
-    if parent is None and site == 'output':
+    if parent is None and site in ('output', 'attrOut'):
         return True
     while True:
         coincSite = ic.hasCoincidentSite()

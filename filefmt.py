@@ -725,6 +725,7 @@ def parseTextToIcons(text, window, source="Pasted text", forImport=False, asModu
                 while commentEndIdx < len(text):
                     if text[commentEndIdx] == '\n':
                         break
+                    commentEndIdx += 1
                 commentText = text[parseEndIdx+1:commentEndIdx]
                 if len(commentText) > 0 and commentText[0] == ' ':
                     commentText = commentText[1:]

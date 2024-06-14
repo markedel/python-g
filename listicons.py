@@ -1247,7 +1247,7 @@ class TupleIcon(ListTypeIcon):
     def dumpName(self):
         if self.noParens:
             return "(naked tuple)"
-        return "(" + ("" if self.closed else self.rightText)
+        return "(" + (self.rightText if self.closed else "")
 
 class DictIcon(ListTypeIcon):
     def __init__(self, window, closed=True, obj=None, typeover=False, location=None):
