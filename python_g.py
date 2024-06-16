@@ -1549,7 +1549,12 @@ class Window:
             cursors.beep()
 
     def _splitCb(self, evt):
-        #... this should probably do something with selections
+        # This is inconsistent in its treatment of comments and entry icons (whose text
+        # we actually split) and strings (which we treat as a unit and don't split), but
+        # I'm not sure yet what splitting strings should actually do, because if it
+        # breaks apart statements like the other two, it's not particularly useful, but
+        # if it breaks strings into list elements, it's not consistent with everything
+        # else. ... Also should do something with selections.
         if self.cursor.type == 'text':
             if isinstance(self.cursor.icon, commenticon.CommentIcon):
                 cursorIc = self.cursor.icon
@@ -1564,10 +1569,18 @@ class Window:
                     self.refreshDirty(addUndoBoundary=True)
                 return
             elif isinstance(self.cursor.icon, stringicon.StringIcon):
-                self.displayTypingError("String continuation is automatic, so Python "
-                    "string concatenation syntax is not used (split operation would "
-                    "do nothing).  Use text operations to edit strings.")
-                return
+                cursorIc = self.cursor.icon
+                if cursorIc.cursorPos < len(cursorIc.string) / 2:
+                    parent = cursorIc.parent()
+                    if parent is None:
+                        splitAtIcon = cursorIc
+                        splitAtSite = 'output'
+                    else:
+                        splitAtIcon = parent
+                        splitAtSite = parent.siteOf(cursorIc)
+                else:
+                    splitAtIcon = cursorIc
+                    splitAtSite = 'attrIcon'
             elif isinstance(self.cursor.icon, entryicon.EntryIcon):
                 entryIc = self.cursor.icon
                 if entryIc.cursorPos == 0:
@@ -1652,7 +1665,7 @@ class Window:
         # If the new statement (stmt2) has an entry icon on the left, it may now be
         # possible to remove it.
         leftIc = stmt2
-        while True:
+        while leftIc is not None:
             if isinstance(leftIc, entryicon.EntryIcon) and \
                     leftIc.topLevelParent() in self.topIcons:
                 leftIc.focusOut(removeIfNotFocused=True)
@@ -1661,38 +1674,54 @@ class Window:
             if coincSite is None:
                 break
             leftIc = leftIc.childAt(coincSite)
-            if leftIc is None:
-                break
         self.refreshDirty(addUndoBoundary=True)
 
     def _joinCb(self, evt):
         #... this should probably do something with selections
         failMsg = "Place the cursor between the statements you want to join"
-        if self.cursor.type == 'text' and isinstance(self.cursor.icon,
-                commenticon.CommentIcon):
-            cursorIc = self.cursor.icon
-            if cursorIc.cursorPos == 0 and  cursorIc.attachedToStmt is None and \
-                    cursorIc.prevInSeq() is not None and \
-                    (isinstance(cursorIc.prevInSeq(), commenticon.CommentIcon) or
-                     cursorIc.prevInSeq().hasStmtComment()):
-                topStmtIcon = cursorIc.prevInSeq()
-                joinedStmtTopIcon = cursorIc
-            elif cursorIc.cursorPos == len(cursorIc.string):
-                if cursorIc.attachedToStmt is None:
-                    topStmtIcon = cursorIc
+        if self.cursor.type == 'text':
+            if isinstance(self.cursor.icon, commenticon.CommentIcon):
+                cursorIc = self.cursor.icon
+                if cursorIc.cursorPos == 0 and  cursorIc.attachedToStmt is None and \
+                        cursorIc.prevInSeq() is not None and \
+                        (isinstance(cursorIc.prevInSeq(), commenticon.CommentIcon) or
+                         cursorIc.prevInSeq().hasStmtComment()):
+                    topStmtIcon = cursorIc.prevInSeq()
+                    joinedStmtTopIcon = cursorIc
+                elif cursorIc.cursorPos == len(cursorIc.string):
+                    if cursorIc.attachedToStmt is None:
+                        topStmtIcon = cursorIc
+                    else:
+                        topStmtIcon = cursorIc.attachedToStmt
+                    joinedStmtTopIcon = topStmtIcon.nextInSeq()
+                    if joinedStmtTopIcon is None:
+                        self.displayTypingError(failMsg)
+                        return
+                    if not isinstance(joinedStmtTopIcon, (commenticon.CommentIcon,
+                            commenticon.VerticalBlankIcon)):
+                        self.displayTypingError("Can't join code to end of comment")
+                        return
                 else:
-                    topStmtIcon = cursorIc.attachedToStmt
-                joinedStmtTopIcon = topStmtIcon.nextInSeq()
-                if joinedStmtTopIcon is None:
                     self.displayTypingError(failMsg)
                     return
-                if not isinstance(joinedStmtTopIcon, (commenticon.CommentIcon,
-                        commenticon.VerticalBlankIcon)):
-                    self.displayTypingError("Can't join code to end of comment")
-                    return
-            else:
-                self.displayTypingError(failMsg)
-                return
+            else:  # Both entry icon and string icon
+                textIc = self.cursor.icon
+                parent = textIc.parent()
+                if textIc.cursorPos == 0 and (parent is None or
+                        expredit.isLeftmostSite(parent, parent.siteOf(textIc))):
+                    # Join left of entry icon (with previous statement)
+                    joinedStmtTopIcon = textIc.topLevelParent()
+                    topStmtIcon = joinedStmtTopIcon.prevInSeq()
+                    if topStmtIcon is None:
+                        self.displayTypingError(failMsg)
+                        return
+                else:
+                    # Join with next statement
+                    topStmtIcon = textIc.topLevelParent()
+                    joinedStmtTopIcon = topStmtIcon.nextInSeq()
+                    if joinedStmtTopIcon is None:
+                        self.displayTypingError(failMsg)
+                        return
         elif self.cursor.type == "icon":
             cursorTopIcon = self.cursor.icon.topLevelParent()
             if self.cursor.site == 'seqIn':

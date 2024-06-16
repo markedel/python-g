@@ -581,8 +581,9 @@ def splitStmtAtSite(atIcon, atSite):
         left, right = entryicon.splitExprAtSite(atIcon, atSite, None)
         if left is not topParent:
             atIcon.window.replaceTop(topParent, left)
-        icon.insertSeq(right, left)
-        atIcon.window.addTop(right)
+        if right is not None:
+            icon.insertSeq(right, left)
+            atIcon.window.addTop(right)
         return left, right
     if isinstance(enclosingIcon, parenicon.CursorParenIcon):
         # An unclosed cursor paren icon encloses the split site (which canSplitStmtAtSite
