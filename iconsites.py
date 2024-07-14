@@ -296,7 +296,7 @@ class IconSiteList:
     def removeSeriesSiteByNameAndIndex(self, ic, seriesName, idx):
         """Remove a site from a series given the series name and index"""
         series = getattr(self, seriesName)
-        if isinstance(series, IconSiteSeries):
+        if isinstance(series, IconSiteSeries) and idx < len(series):
             if len(series.sites) == 1:  # Leave a single site for insertion
                 series.sites[0].attach(ic, None)
             else:

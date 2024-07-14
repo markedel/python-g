@@ -1116,11 +1116,20 @@ class EntryIcon(icon.Icon):
                 # No pending arguments
                 prevIcon = self.prevInSeq(includeModuleAnchor=True)
                 nextIcon = self.nextInSeq()
+                stmtComment = self.hasStmtComment()
                 if hasattr(self, 'blockEnd'):
                     self.window.removeIcons([self, self.blockEnd])
                 else:
                     self.window.removeIcons([self])
-                if prevIcon:
+                if stmtComment is not None:
+                    # The entry icon was top-level statement and (before the remove),
+                    # owned a comment which presumably removeIcons has now converted into
+                    # a line-comment and put in our place.
+                    if not stmtComment in self.window.topIcons:
+                        print("Removed entry icon with stmt comment, expected "
+                            "removeIcons to insert as line comment")
+                    self.window.cursor.setToIconSite(stmtComment, 'prefixInsert')
+                elif prevIcon:
                     self.window.cursor.setToIconSite(prevIcon, 'seqOut')
                 elif nextIcon and not (hasattr(self, 'blockEnd') and
                         nextIcon is self.blockEnd):

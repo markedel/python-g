@@ -851,8 +851,13 @@ class Window:
         entryIcon = entryicon.EntryIcon(window=self,
             location=self.cursor.icon.rect[:2])
         if self.cursor.siteType == "output":
-            entryIcon.appendPendingArgs([self.cursor.icon])
-            self.replaceTop(self.cursor.icon, entryIcon)
+            if isinstance(self.cursor.icon, commenticon.CommentIcon):
+                commentIc = self.cursor.icon
+                self.replaceTop(commentIc, entryIcon)
+                commentIc.attachStmtComment(entryIcon)
+            else:
+                entryIcon.appendPendingArgs([self.cursor.icon])
+                self.replaceTop(self.cursor.icon, entryIcon)
         elif self.cursor.siteType == "attrOut":
             entryIcon.appendPendingArgs([self.cursor.icon])
             self.replaceTop(self.cursor.icon, entryIcon)
@@ -1728,6 +1733,8 @@ class Window:
                 topStmtIcon = cursorTopIcon.prevInSeq()
             elif self.cursor.site == 'seqOut':
                 topStmtIcon = cursorTopIcon
+            elif self.cursor.site == 'prefixInsert':
+                topStmtIcon = cursorTopIcon.prevInSeq()
             elif expredit.isLeftmostSite(self.cursor.icon, self.cursor.site):
                 topStmtIcon = cursorTopIcon.prevInSeq()
             else:
@@ -1742,37 +1749,13 @@ class Window:
         else:
             self.displayTypingError(failMsg)
             return
-        self.requestRedraw(topStmtIcon.hierRect(), filterRedundantParens=True)
-        self.requestRedraw(joinedStmtTopIcon.hierRect())
-        if isinstance(joinedStmtTopIcon, commenticon.VerticalBlankIcon):
-            joinedStmtTopIcon.window.replaceTop(joinedStmtTopIcon, None)
-            self.refreshDirty(addUndoBoundary=True)
-            return
-        elif isinstance(topStmtIcon, commenticon.VerticalBlankIcon):
-            topStmtIcon.window.replaceTop(topStmtIcon, None)
-            self.refreshDirty(addUndoBoundary=True)
-            return
-        if isinstance(joinedStmtTopIcon, commenticon.CommentIcon):
-            joinedStmtTopIcon.window.replaceTop(joinedStmtTopIcon, None)
-            if isinstance(topStmtIcon, commenticon.CommentIcon):
-                cursorPos = topStmtIcon.cursorPos
-                topStmtIcon.mergeTextFromComment(joinedStmtTopIcon)
-                self.cursor.setToText(topStmtIcon, cursorPos)
-            else:
-                stmtComment = topStmtIcon.hasStmtComment()
-                if stmtComment is not None:
-                    cursorPos = stmtComment.cursorPos
-                    stmtComment.mergeTextFromComment(joinedStmtTopIcon)
-                    self.cursor.setToText(stmtComment, cursorPos)
-                else:
-                    joinedStmtTopIcon.attachStmtComment(topStmtIcon)
-                    rightmostIc, rightmostSite = icon.rightmostSite(topStmtIcon)
-                    self.cursor.setToIconSite(rightmostIc, rightmostSite)
-            self.refreshDirty(addUndoBoundary=True)
-            return
-        elif isinstance(topStmtIcon, commenticon.CommentIcon):
+        if isinstance(topStmtIcon, commenticon.CommentIcon) and \
+                not isinstance(joinedStmtTopIcon, (commenticon.CommentIcon,
+                commenticon.VerticalBlankIcon)):
             self.displayTypingError("Can't join code to right of comment")
             return
+        self.requestRedraw(topStmtIcon.hierRect(), filterRedundantParens=True)
+        self.requestRedraw(joinedStmtTopIcon.hierRect())
         cursorIcon, cursorSite = expredit.joinStmts(topStmtIcon)
         if cursorIcon is None and cursorSite is None:
             self.displayTypingError("Statement being joined on the right is a top-"
@@ -2327,6 +2310,12 @@ class Window:
                     statIcon.insertChild(movIcon, siteName)
             elif siteType == 'seqOut':
                 icon.insertSeq(movIcon, statIcon)
+            elif siteType == 'seqIn' and siteName == 'prefixInsert':
+                # This is the insert site of a line comment, used to convert it to a
+                # statement comment
+                topDraggedIcons.remove(movIcon)
+                self.replaceTop(statIcon, movIcon)
+                statIcon.attachStmtComment(movIcon)
             elif siteType == 'seqIn':
                 icon.insertSeq(movIcon, statIcon, before=True)
         # Dropping an entry icon on the top level outside of a sequence may allow it to
@@ -3081,7 +3070,8 @@ class Window:
                                 return ic  # Point is adjacent to connector to next icon
         return None
 
-    def removeIcons(self, icons, assembleDeleted=False, watchSubs=None):
+    def removeIcons(self, icons, assembleDeleted=False, watchSubs=None,
+            preserveSite=None):
         """Remove icons from window icon list, request redraw of affected areas of the
         display (does not perform redraw, call refreshDirty() to draw marked changes).
         If assembleDeleted is True, applies the same reassembly techniques to the removed
@@ -3091,7 +3081,10 @@ class Window:
         substitutions (for example, removeIcons might convert a paren-icon to a tuple so
         that it can merge a list that got promoted because its brackets were deleted).
         When the method returns, any icons specified in watchSubs will be mapped to the
-        icon that replaced them."""
+        icon that replaced them.  preserveSite can be set to a tuple to save it from
+        conversion to paren or removal (in the case of a naked tuple) when down to a
+        single argument (used in replacement, which is implemented as removal followed by
+        insert)."""
         if len(icons) == 0:
             return []
         # deletedSet more efficiently determines if an icon is on the deleted list
@@ -3181,17 +3174,18 @@ class Window:
         ignoreRemovedBlockEnds = set()
         for topIcon in topIcons:
             needReorder = []
-            stmtComment = topIcon.stmtComment if hasattr(topIcon, 'stmtComment') else None
+            stmtComment = topIcon.hasStmtComment()
             remainingIcons, assembledDeletions, removedTopIcon = \
                 expredit.splitDeletedIcons(topIcon, deletedSet, assembleDeleted,
-                    needReorder, watchSubs)
+                    needReorder, watchSubs, preserveSite)
             if remainingIcons is None:
                 newTopIcon = topIcon
             else:
                 forSeq = topIcon.childAt('seqIn') or topIcon.childAt('seqOut')
                 newTopIcon = expredit.placeListToTopLevelIcon(remainingIcons, forSeq,
                     watchSubs)
-            newTopIcon = expredit.reorderMarkedExprs(newTopIcon, needReorder)
+            newTopIcon = expredit.reorderMarkedExprs(newTopIcon, needReorder,
+                watchSubs=watchSubs)
             if assembleDeleted:
                 if assembledDeletions is None:
                     addToDelSeq = topIcon
@@ -3201,7 +3195,8 @@ class Window:
                         False, watchSubs)
                     addBlockEnd = addToDelSeq is not None and hasattr(addToDelSeq,
                         'blockEnd')  # a for/if from a cprh subs
-                addToDelSeq = expredit.reorderMarkedExprs(addToDelSeq, needReorder)
+                addToDelSeq = expredit.reorderMarkedExprs(addToDelSeq, needReorder,
+                    watchSubs=watchSubs)
                 if addToDelSeq is not None:
                     deletedSeqList[iconToSeqId[topIcon]].append(addToDelSeq)
                     if addBlockEnd:
@@ -3212,6 +3207,9 @@ class Window:
                         deletedSeqList[iconToSeqId[topIcon]].append(stmtComment)
                     else:
                         stmtComment.attachStmtComment(addToDelSeq)
+            else:
+                if stmtComment is not None and stmtComment in deletedSet:
+                    stmtComment.detachStmtComment()
             if newTopIcon is None:
                 if stmtComment is not None and stmtComment not in deletedSet:
                     stmtComment = topIcon.stmtComment
@@ -3311,77 +3309,203 @@ class Window:
         insert such statements, the replacement will not be performed and the function
         will return None, None.  On success, the function will return the icon and site
         on which to place the cursor."""
-        firstSelection, firstStmtOfSelection, firstIconOfSelection,\
-            iconAfterFirstSelection, spansStmtBoundaries, startsOnStmtBoundary,\
-            endsOnStmtBoundary = self.findFirstContiguousSelection()
+        firstStmtOfSelection, firstIconOfSelection, iconAfterFirstSelection, \
+            spansStmtBoundaries, startsOnStmtBoundary, endsOnStmtBoundary = \
+            self.findFirstContiguousSelection()
         # Figure out insert site based on the first contiguous selection.  Set
         # insertSiteIcon and insertSite to a site that will survive icon removal.  The
         # site also subtly indicates the type of insertion in the same way as the cursor
         # would: a sequence site implies a statement break, where a non-sequence site
         # implies that a merge with the statement is desired (if possible).
-        insertPos = None
-        insertSiteIcon = firstIconOfSelection.parent()
-        while insertSiteIcon is not None and insertSiteIcon in self.selectedSet:
-            insertSiteIcon = insertSiteIcon.parent()
-        if insertSiteIcon is not None:
-            insertSite = insertSiteIcon.siteOf(firstIconOfSelection, recursive=True)
-        elif isStmtComment(firstIconOfSelection):
+        recalcInsertSite = None
+        insertPos = insertSiteIcon = insertSite = None
+        if isinstance(firstIconOfSelection, commenticon.CommentIcon) and \
+                firstIconOfSelection.attachedToStmt is not None:
+            # The selection starts with a statement comment.  Using the rightmost site
+            # of the statement to which it is attached, allows the user to either replace
+            # the comment, or insert code (or a comment followed by code).  Note, that we
+            # don't consider the next statement to be contiguous, which only means that
+            # we forgo the text-editor analog of merging the last inserted statement with
+            # the remainder of a partially-selected statement at the selection end.
             insertSiteIcon, insertSite = icon.rightmostSite(firstStmtOfSelection)
-        else:
-            # the selection starts on a statement boundary.  If it also ends on one, we
-            # want a pure statement insertion, so provide a sequence site.
-            if not startsOnStmtBoundary:
-                print('*** firstIconOfSelection having no parent somehow does not '
-                      'imply that we started on a stmt boundary')
+        elif startsOnStmtBoundary:
+            # The selection starts on a statement boundary.  Insert site may change after
+            # deletion of selected icons, or may encompass the entire sequence.
             if endsOnStmtBoundary:
-                if firstStmtOfSelection.childAt('seqIn') is not None:
+                # Selection is a range of complete statements.  To prevent the insert
+                # function from concatenating, specify sequence site as destination.
+                if firstStmtOfSelection.childAt('seqIn') is None:
+                    if iconAfterFirstSelection is None:
+                        # Selection encompasses the entire sequence.  Insert at
+                        # position, instead of icon site
+                        insertPos = firstStmtOfSelection.pos()
+                    else:
+                        insertSiteIcon = iconAfterFirstSelection
+                        insertSite = 'seqIn'
+                else:
                     insertSiteIcon = firstStmtOfSelection.childAt('seqIn')
                     insertSite = 'seqOut'
-                elif iconAfterFirstSelection is not None:
-                    insertSiteIcon = iconAfterFirstSelection
-                    insertSite = 'seqIn'
-                else:
-                    # The selection includes the entire sequence.  We'll also need the
-                    # position to insert
-                    insertSiteIcon = None
-                    insertPos = firstStmtOfSelection.pos()
             else:
-                # The selection starts but does not end on a statement boundary.  Set the
-                # insertion point to the output (or equivalent) of the first icon after
-                # the selection, which we can then at least try to convert to a better
-                # site after removeIcons (... or maybe this should happen in insert).
-                for siteId in iconsites.parentSiteTypes:
-                    if iconAfterFirstSelection.hasSite(siteId):
-                        insertSiteIcon = iconAfterFirstSelection
-                        insertSite = siteId
-                        break
-                else:
-                    raise Exception('replaceSelectedIcons failed to find suitable'
-                        'insertion site')
-        # The one case we can't handle is when the inserted code contains statement-only
-        # icons, and the destination is within an enclosing icon.  Figure out if that is
-        # the case and bail out and return the failure indicator (None, None) before
-        # making any changes.
-        for seq in insertedSequences:
-            if expredit.isStmtLevelOnly(seq[0]):
-                insertingStmtOnlyIcons = True
-                break
+                recalcInsertSite = iconAfterFirstSelection
         else:
+            # Selection starts in the middle of the statement
+            if isinstance(firstIconOfSelection, tuple):
+                # The selection starts with an empty site (findFirstContiguousSelection
+                # returns a tuple containing icon and site to indicate this).
+                insertSiteIcon, insertSite = firstIconOfSelection
+            else:
+                leftSite = firstIconOfSelection.hasCoincidentSite()
+                if leftSite is None or firstIconOfSelection.childAt(leftSite) is None:
+                    insertSiteIcon = firstIconOfSelection.parent()
+                    while insertSiteIcon in self.selectedSet:
+                        # firstIconOfSelection is lexically first, but may be a (left
+                        # argument) child of an icon that is part of the selected range
+                        insertSiteIcon = insertSiteIcon.parent()
+                    if insertSiteIcon is None:
+                        # The first icon of the selection can be the top icon, but only
+                        # if it is a binary operator with a populated site on the left
+                        print("replaceSelectedIcons failed to find insert site")
+                        return None, None
+                    insertSite = insertSiteIcon.siteOf(firstIconOfSelection,
+                        recursive=True)
+                else:
+                    # The first icon of the selection has a coincident site on the left
+                    leftSiteIcon = firstIconOfSelection.childAt(leftSite)
+                    insertSiteIcon, insertSite = icon.rightmostSite(leftSiteIcon)
+        # If the insert site is enclosed by a bounding icon and the inserted code
+        # contains statement-only icons, we may not be able to split around them.
+        # Bail out and return failure indication if that is the case.
+        if not (startsOnStmtBoundary or endsOnStmtBoundary):
             insertingStmtOnlyIcons = False
-        if insertingStmtOnlyIcons and insertSiteIcon is not None:
+            numStmtsInserted = 0
+            for ic in (i for seq in insertedSequences for i in seq):
+                if expredit.isStmtLevelOnly(ic) and \
+                        not isinstance(ic, commenticon.VerticalBlankIcon):
+                    insertingStmtOnlyIcons = True
+                numStmtsInserted += 1
             enclosingIcon, enclosingSite = entryicon.findEnclosingSite(insertSiteIcon,
                 insertSite)
-            if enclosingIcon is not None:
+            if insertingStmtOnlyIcons and  \
+                not (expredit.openOnRight(enclosingIcon, enclosingSite) or
+                    isinstance(enclosingIcon, assignicons.AssignIcon) and
+                    numStmtsInserted == 1 and
+                    isinstance(insertedSequences[0][0], assignicons.AssignIcon) or
+                    isinstance(insertedSequences[0][0],  (blockicons.ForIcon,
+                    blockicons.IfIcon, listicons.CprhIfIcon, listicons.CprhIfIcon)) and
+                    numStmtsInserted <= 2 and listicons.isProxyForCprhSite(
+                    insertSiteIcon, insertSite, True, True)[0] is not None):
+                # ... Yipes, what a horrible 'if'.  This really needs to be modularized
                 return None, None
+        # removeIcons and insertIconsFromSequences (surprisingly) will properly handle
+        # statement comment transfer in most cases.  The single case where they need
+        # help is with the comments of fully-deleted statements in the range being
+        # replaced.  removeIcons transforms these into line comments that can prevent the
+        # insertion from spanning the deleted range.  Temporarily remove these to restore
+        # after we know where it's safe to insert them as line comments, or whether we
+        # need to coalesce them into a single (weird) statement comment.
+        removedComments = []
+        if spansStmtBoundaries:
+            if startsOnStmtBoundary:
+                startStmt = firstStmtOfSelection
+            else:
+                startStmt = firstStmtOfSelection.nextInSeq()
+            if endsOnStmtBoundary:
+                endStmt = None if iconAfterFirstSelection is None else \
+                    iconAfterFirstSelection.prevInSeq()
+            else:
+                endStmt = iconAfterFirstSelection.topLevelParent().prevInSeq()
+            if endStmt is not None and endStmt.nextInSeq() is not startStmt:
+                stmt = startStmt
+                while stmt is not None:
+                    stmtComment = stmt.hasStmtComment()
+                    if stmtComment is not None:
+                        stmtComment.detachStmtComment()
+                        removedComments.append(stmtComment)
+                    if stmt is endStmt:
+                        break
+                    stmt = stmt.nextinSeq()
         # Remove the selected icons
-        watchSubs = {insertSiteIcon:None}
-        self.removeIcons(self.selectedIcons(), watchSubs=watchSubs)
-        # ... not sure if some site name conversion might also be necessary, here
-        if watchSubs[insertSiteIcon] is not None:
-            insertSiteIcon = watchSubs[insertSiteIcon]
+        self.requestRedraw(firstStmtOfSelection.hierRect())
+        stmtBeforeSelection = firstStmtOfSelection.prevInSeq()
+        if iconAfterFirstSelection is not None:
+            self.requestRedraw(iconAfterFirstSelection.topLevelParent().hierRect())
+        if recalcInsertSite:
+            watchedIcon = recalcInsertSite
+        elif insertSiteIcon is not None:
+            watchedIcon = insertSiteIcon
+        else:
+            watchedIcon = None
+        watchSubs = {watchedIcon:None} if watchedIcon is not None else None
+        self.removeIcons(self.selectedIcons(), watchSubs=watchSubs, preserveSite=
+            insertSiteIcon if isinstance(insertSiteIcon, listicons.TupleIcon) else None)
+        if watchedIcon is not None and watchSubs[watchedIcon] is not None:
+            # removeIcons did a substitution on the intended insert site
+            if recalcInsertSite is not None:
+                recalcInsertSite = watchSubs[watchedIcon]
+            elif insertSiteIcon is not None:
+                # Failed to figure out a test case for this code.  Is it dead?
+                insertSiteIcon = watchSubs[watchedIcon]
+                if isinstance(insertSiteIcon, parenicon.CursorParenIcon):
+                    insertSite = 'argIcon'
+                elif isinstance(insertSiteIcon, listicons.TupleIcon):
+                    insertSite = 'argIcons_0'
+                elif isinstance(insertSiteIcon, opicons.BinOpIcon):
+                    insertSite = 'leftArg'
+                else:
+                    print("*** replaceSelectedIcons: need support for this substitution")
+        # removeIcons might also have added an entry icon or naked tuple on top of the
+        # first icon after the selection.  If so, redirect the insert site, there.
+        if recalcInsertSite:
+            topIcon = recalcInsertSite.topLevelParent()
+            insertSiteIcon = topIcon
+            for siteName in ('output', 'prefixInsert', 'attrOut'):
+                if topIcon.hasSite(siteName):
+                    insertSite = siteName
+                    break
+            else:
+                insertSite = 'seqIn'  # cprh icons can produce for/if with no output site
         # Insert the new icons where the first selection section was removed
-        return self.insertIconsFromSequences(insertSiteIcon, insertSite,
+        cursorIc, cursorSite = self.insertIconsFromSequences(insertSiteIcon, insertSite,
             insertedSequences, insertPos)
+        # removeIcons operates entirely per-statement (does not join statements across
+        # removed selections), but for a paste, this is what users will expect (I think),
+        # so if the selection ended in the middle of a statement, join it to the last
+        # inserted statement.
+        # ... (and I think it's what they well expect on a delete command, but we're
+        #     not doing yet)
+        if not endsOnStmtBoundary:
+            lastInsertedStmt = cursorIc.topLevelParent()
+            if not (lastInsertedStmt is None or isinstance(lastInsertedStmt,
+                    (commenticon.CommentIcon, commenticon.VerticalBlankIcon))):
+                newCursorIc, newCursorSite = expredit.joinStmts(lastInsertedStmt)
+                if newCursorIc is not None and newCursorSite is not None:
+                    cursorIc, cursorSite = newCursorIc, newCursorSite
+        # Restore any removed statement comments.  If the end result of the replacement
+        # was a single statement, we make them into a single newline-separated statement
+        # comment, otherwise, insert them as line-comments before the stmt containing
+        # the cursor.
+        if len(removedComments) > 0:
+            # To determine whether we did a single-line replacement, compare the cursor
+            # position returned from insertIconsFromSequences and the last statement in
+            # the sequence with no selection (the stmt prior to firstStmtOfSelection).
+            # The cursor position takes in to account all of the changes we have made,
+            # and the prior statement is guaranteed to survive those changes (note that
+            # this can be None if the selection starts in the first stmt of the sequence.
+            cursorStmt = cursorIc.topLevelParent()
+            if cursorStmt.prevInSeq() is stmtBeforeSelection:
+                existingComment = cursorStmt.hasStmtComment()
+                if existingComment is None:
+                    stmtComment = removedComments.pop(0)
+                    stmtComment.attachStmtComment(cursorStmt)
+                else:
+                    stmtComment = existingComment
+                for comment in removedComments:
+                    stmtComment.mergeTextFromComment(comment, sep='\n')
+            else:
+                for comment in removedComments:
+                    icon.insertSeq(comment, cursorStmt, before=True)
+                    cursorStmt.window.addTop(comment)
+        return cursorIc, cursorSite
 
     def insertIconsFromSequences(self, atIcon, atSite, insertedSequences, atPos=None):
         """Insert all of the icons in list of (already sequence-connected) sequences in
@@ -3441,7 +3565,7 @@ class Window:
                         listicons.placeArgsInclCprh(subsIcons, atIcon, atSite)
                         return icon.rightmostSite(subsIcons[-1])
         # Another peculiar special case, is inserting a single block owning statement
-        # (such as for or while) with a empty block to the left of a statement-level
+        # (such as for or while) with an empty block to the left of a statement-level
         # icon with an output or attribute-out site.  Even though we're inserting a
         # block-end-icon, it still *looks* like a single statement, and so we treat it
         # as such, and do the insert as a prefix.
@@ -3579,6 +3703,19 @@ class Window:
                 self.addTop(topInsertedIcons)
                 cursorIcon = topInsertedIcons[-1]
                 cursorSite = 'seqOut'
+            elif atSite == 'prefixInsert':
+                # The insert site is the special site before a line comment for dropping
+                # pasting, or typing code that will convert it to a statement comment
+                nextInsertStmts = insertSeqStart.nextInSeq()
+                if nextInsertStmts is not None:
+                    insertSeqStart.replaceChild(None, 'seqOut')
+                self.replaceTop(atIcon, insertSeqStart)
+                atIcon.attachStmtComment(insertSeqStart)
+                if nextInsertStmts is not None:
+                    icon.insertSeq(nextInsertStmts, insertSeqStart)
+                    self.addTop(topInsertedIcons[1:])
+                cursorIcon = topInsertedIcons[-1]
+                cursorSite = 'seqOut'
             else:
                 # We're not starting at a stmt boundary, merge first stmt from inserted
                 # code with the first inserted stmt, and prepend the last inserted stmt
@@ -3661,59 +3798,93 @@ class Window:
         return cursorIcon, cursorSite
 
     def findFirstContiguousSelection(self):
-        # Find the first statement statement containing a selection based on the rules
-        # used for save file/clipboard ordering (...not sure if we should be using these
-        # rules, since vertical position of ...)
-        _, _, seqIter = next(self._findtSequencesForOutput(forClipboard=True))
-        firstSelectedStmt = next(seqIter)
-        # iterate in lexical order over the icons in the statement to find the find the
-        # first contiguous selection.
-        selection = None
+        """Find the first (top left) selected icon(s) in the window.  Returns:
+        1) The top-level statement icon containing the start of the selection
+        2) The (lexically) leftmost icon of the selection (start of selection).  If the
+           selection starts with an empty site (which it can because this is lexical
+           traversal) returns a tuple of the parent and parent site name.
+        3) The (lexically) first un-selected icon after the selection
+        4) (True/False) Whether the selection spans statement boundaries
+        5) (True/False) Whether the selection starts on a statement boundary
+        6) (True/False) Whether the selection ends on a statement boundary"""
+        # Find the top left selected icon
+        topLeft = 99999999, 99999999
+        topLeftIc = None
+        for ic in self.selectedIcons():
+            pos = ic.pos()
+            if pos[1] < topLeft[1] or pos[1] == topLeft[1] and pos[0] < topLeft[0]:
+                topLeft = pos
+                topLeftIc = ic
+        if topLeftIc is None:
+            return None, None, None, False, False, False
+        firstSelectedStmt = topLeftIc.topLevelParent()
+        if isinstance(topLeftIc, commenticon.CommentIcon) and \
+                topLeftIc.attachedToStmt is not None:
+            # The selection starts with a statement-comment.  While we might the next
+            # next statement as being contiguous with the comment, this would not lead
+            # to processing it differently in most circumstances
+            stmt = topLeftIc.attachedToStmt
+            return stmt, topLeftIc, stmt.nextInSeq(), False, False, True
+        # Iterate in lexical order over the icons in the statement to find the find the
+        # start of the selection and whether it continues to the end of the statement.
+        # If it does not, we're done and can return the result.
+        foundSelection = None
         firstIconOfSelection = None
         startsOnStmtBoundary = True
         spansStmtBoundaries = False
         for ic in expredit.lexicalTraverse(firstSelectedStmt):
-            if ic in self.selectedSet:
-                if selection is None:
+            if isinstance(ic, tuple):  # Empty site indicator (NOT tuple icon)
+                # Empty site: What we do depends upon whether the parent is selected or
+                # not.  If the parent is selected, we consider the empty site part of the
+                # selection, and part of the contiguous run.  If not, then we consider it
+                # to be unselected and therefore, the end of the contiguous selection.
+                parent, parentSite = ic
+                if parent in self.selectedSet:
+                    if not foundSelection:
+                        # Found the start of the selection
+                        foundSelection = True
+                        firstIconOfSelection = parent, parentSite
+                    continue
+                return firstSelectedStmt, firstIconOfSelection, None, \
+                    spansStmtBoundaries, startsOnStmtBoundary, False
+            elif ic in self.selectedSet:
+                if not foundSelection:
                     # Found the start of the selection
-                    selection = [ic]
+                    foundSelection = True
                     firstIconOfSelection = ic
-                else:
-                    selection.append(ic)
             else:
-                if selection is None:
-                    startsOnStmtBoundary = False
+                if not foundSelection:
+                    # The first icon is not selected.  For anything but a naked tuple,
+                    # we can declare that the statement does not start on a statement
+                    # boundary.  For naked tuple icons (which lexicalTraverse returns
+                    # before their content) defer to the next icon.
+                    if not (isinstance(ic, listicons.TupleIcon) and ic.noParens):
+                        startsOnStmtBoundary = False
                 else:
                     # Found the end of the selection within the first statement
-                    return selection, firstSelectedStmt, firstIconOfSelection, ic, \
+                    return firstSelectedStmt, firstIconOfSelection, ic, \
                         spansStmtBoundaries, startsOnStmtBoundary, False
-        if selection is None:
+        if not foundSelection:
             print('findFirstContiguousSelection internal consistency error')
             return None, None, None, False, False, False
-        prevStmt = firstSelectedStmt
-        for stmt in seqIter:
-            if stmt is not prevStmt.nextInSeq():
-                # This statement is not contiguous with the previous one
-                return selection, firstSelectedStmt, firstIconOfSelection, \
-                    spansStmtBoundaries, startsOnStmtBoundary, True
-            # If we have not yet determined whether the selection spans a statement
+        # The first contiguous selection reaches the right edge of the statement.  Scan
+        # (in lexical order) subsequent statements for the first un-selected icon.
+        for stmt in icon.traverseSeq(firstSelectedStmt, includeStartingIcon=False):
+            # If we haven't yet determined if the selection spans the first statement
             # boundary, explicitly check that the selection crosses the first icon
-            if not spansStmtBoundaries:
-                firstIconOfNextStmt = next(expredit.lexicalTraverse(stmt))
-                if firstIconOfNextStmt not in self.selectedSet:
-                    # The selection does not continue to the second statement
-                    return selection, firstSelectedStmt, firstIconOfSelection, \
-                        firstIconOfNextStmt, False, startsOnStmtBoundary, True
-                spansStmtBoundaries = True
-            for ic in expredit.lexicalTraverse(stmt):
+            for i, ic in enumerate(expredit.lexicalTraverse(stmt)):
                 if ic not in self.selectedSet:
-                    # The selection ends in the middle of the statement
-                    return selection, firstSelectedStmt, firstIconOfSelection, ic, \
-                        spansStmtBoundaries, startsOnStmtBoundary, False
-                selection.append(ic)
-        # There are no more selected statements to process, therefore, the selection ends
-        # on a statement boundary.
-        return selection, firstSelectedStmt, firstIconOfSelection, stmt.nextinSeq(), \
+                    if i == 0:
+                        # The selection ends at the start of this statement
+                        return firstSelectedStmt, firstIconOfSelection, \
+                            ic, spansStmtBoundaries, startsOnStmtBoundary, True
+                    else:
+                        # The selection ends in the middle of the statement
+                        spansStmtBoundaries = True
+                        return firstSelectedStmt, firstIconOfSelection, ic, \
+                            spansStmtBoundaries, startsOnStmtBoundary, False
+        # We reached the end of the sequence (therefore selection ends on stmt boundary)
+        return firstSelectedStmt, firstIconOfSelection, None, \
             spansStmtBoundaries, startsOnStmtBoundary, True
 
     def saveFile(self, filename):

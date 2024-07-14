@@ -6,6 +6,7 @@ import parenicon
 import opicons
 import assignicons
 import infixicon
+import commenticon
 import reorderexpr
 import filefmt
 import cursors
@@ -36,6 +37,12 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
             # but they can't be ruled out.  In this case, use the parent site instead.
             atSite = parent.siteOf(atIcon)
             atIcon = parent
+        elif isinstance(atIcon, commenticon.CommentIcon) and atSite == 'prefixInsert':
+            # Line comments have a special (cursor-only output) site for inserting code
+            # to the left of them in text-editor-style to convert them to a stmt comment
+            atIcon.window.replaceTop(atIcon, topInsertedIcon)
+            atIcon.attachStmtComment(topInsertedIcon)
+            return insRightIc, insRightSite
         else:
             # Reverse the insertion, replacing the tree holding the insert point with
             # the tree being inserted before it.  insertAtSite does not do statement
@@ -172,7 +179,11 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
         cursorIcon, cursorSite = insRightIc, insRightSite
     elif icon.validateCompatibleChild(relocatedTree, insRightIc, insRightSite):
         insRightIc.replaceChild(relocatedTree, insRightSite)
-        if insRightIc.typeOf(rightmostSite) == 'input':
+        if isinstance(relocatedTree, entryicon.EntryIcon) and \
+                len(relocatedTree.text) == 0:
+            # If we just inserted a placeholder icon, see if it can be stripped out
+            relocatedTree.remove()
+        if insRightIc.typeOf(insRightSite) == 'input':
             checkReorder(insRightIc, needReorder)
         cursorIcon, cursorSite = insRightIc, insRightSite
     elif isUnclosed and relocatedTree.hasSite('output'):
@@ -443,6 +454,29 @@ def joinStmts(firstStmt):
     nextStmt = firstStmt.nextInSeq()
     if nextStmt is None:
         return None, None
+    # Handle special cases of joining with comment icons
+    if isinstance(nextStmt, commenticon.VerticalBlankIcon):
+        nextStmt.window.replaceTop(nextStmt, None)
+        return firstStmt, 'seqOut'
+    elif isinstance(firstStmt, commenticon.VerticalBlankIcon):
+        firstStmt.window.replaceTop(firstStmt, None)
+        return nextStmt, 'seqIn'
+    if isinstance(nextStmt, commenticon.CommentIcon):
+        nextStmt.window.replaceTop(nextStmt, None)
+        if isinstance(firstStmt, commenticon.CommentIcon):
+            firstStmt.cursorPos = len(firstStmt.string)
+            firstStmt.mergeTextFromComment(nextStmt)
+            return firstStmt, None
+        else:
+            stmtComment = firstStmt.hasStmtComment()
+            if stmtComment is not None:
+                stmtComment.cursorPos = len(stmtComment.string)
+                stmtComment.mergeTextFromComment(nextStmt)
+                return stmtComment, None
+            else:
+                nextStmt.attachStmtComment(firstStmt)
+                rightmostIc, rightmostSite = icon.rightmostSite(firstStmt)
+                return rightmostIc, rightmostSite
     # Handle special cases of assignment statements and joining across block-end icons
     if isinstance(firstStmt, assignicons.AssignIcon) and \
             isinstance(nextStmt, assignicons.AssignIcon):
@@ -649,37 +683,51 @@ def splitStmtAtSite(atIcon, atSite):
         atIcon.window.addTop(newTuple)
         return topParent, newTuple
 
-def lexicalTraverse(topNode, includeStmtComment=True):
+def lexicalTraverse(topNode, includeStmtComment=True, parentIc=None, parentSite=None):
     """Both cursors.py and reorderexpr.py have lexical traversal code.  This version
-    simply visits icons in lexical (left to right, only) order, as opposed to the cursors
-    version that traverses cursor sites and the reorderexpr version that produces tokens
-    and avoids descending into subexpressions."""
+    simply visits icons beneath and including topNode in lexical (left to right, only)
+    order, as opposed to the cursors version that traverses cursor sites and the
+    reorderexpr version that produces tokens and avoids descending into subexpressions.
+    For empty sites, rather than yielding None, it yields a tuple of the parent icon and
+    parent site.  Recursive calls provide parentIc and parentSite instead of topNode
+    (which they set to None)."""
     if topNode is None:
-        yield None
-    elif isinstance(topNode, (opicons.BinOpIcon, infixicon.InfixIcon)):
-        # Body of icon is in the middle
-        yield from lexicalTraverse(topNode.leftArg())
-        yield topNode
-        yield from lexicalTraverse(topNode.rightArg())
-    elif isinstance(topNode, opicons.IfExpIcon):
-        yield from lexicalTraverse(topNode.childAt('trueExpr'))
-        yield topNode
-        yield from lexicalTraverse(topNode.childAt('testExpr'))
-        yield from lexicalTraverse(topNode.childAt('falseExpr'))
+        node = parentIc.childAt(parentSite)
     else:
-        yield topNode
-        for siteOrSeries in topNode.sites.traverseLexical():
+        node = topNode
+    if node is None:
+        if parentSite == 'output':
+            yield parentIc, parentSite
+        return
+    elif isinstance(node, (opicons.BinOpIcon, infixicon.InfixIcon)):
+        # Body of icon is in the middle
+        yield from lexicalTraverse(None, False, node, 'leftArg')
+        yield node
+        yield from lexicalTraverse(None, False, node, 'rightArg')
+    elif isinstance(node, opicons.DivideIcon):
+        yield from lexicalTraverse(None, False, node, 'topArg')
+        yield node
+        yield from lexicalTraverse(None, False, node, 'bottomArg')
+    elif isinstance(node, opicons.IfExpIcon):
+        yield from lexicalTraverse(None, False, node, 'trueExpr')
+        yield node
+        yield from lexicalTraverse(None, False, node, 'testExpr')
+        yield from lexicalTraverse(None, False, node, 'falseExpr')
+    else:
+        yield node
+        for siteOrSeries in node.sites.traverseLexical():
             if isinstance(siteOrSeries, iconsites.IconSiteSeries):
                 for site in siteOrSeries:
-                    yield from lexicalTraverse(site.att)
+                    yield from lexicalTraverse(None, False, node, site.name)
             else:
-                yield from lexicalTraverse(siteOrSeries.att)
+                yield from lexicalTraverse(None, False, node, siteOrSeries.name)
     if includeStmtComment:
-        stmtComment = topNode.hasStmtComment()
+        stmtComment = node.hasStmtComment()
         if stmtComment:
             yield stmtComment
 
-def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None):
+def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None,
+        preserveSite=None):
     """Remove icons in set, toDelete, from ic and the icons below it in the hierarchy,
     and return a pair of results, the first representing the icons remaining in the tree
     and the second representing the icons removed from the tree (if assembleDeleted is
@@ -704,7 +752,9 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None
     caller should provide a list in needReorder to receive a list of operators that
     should be checked for precedence inversions.  watchSubs can be set to None, or to a
     dictionary whose keys are icons for which the caller wants to be notified of
-    substitutions (see removeIcons description for details)."""
+    substitutions (see removeIcons description for details).  preserveSite can be set to
+    a tuple icon (destined for re-insertion in a replace operation) to keep it from being
+    removed when it gets down to a single entry."""
     # Note that this code can be confusing to read, because rather than keep the deleted
     # and non-deleted trees separate, it immediately categorizes them into the tree that
     # will remain attached to ic (withIc) and the tree that will be detached from it
@@ -856,7 +906,7 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None
     # If ic is a naked tuple, deletion of its content could leave it empty or owning a
     # single element.  If so, remove it.
     if subsList is None and isinstance(ic, listicons.TupleIcon) and ic.noParens and \
-            len(ic.sites.argIcons) == 1:
+            len(ic.sites.argIcons) == 1 and ic is not preserveSite:
         argIcon = ic.childAt('argIcons_0')
         if argIcon is None:
             subsList = []
@@ -917,7 +967,6 @@ def placeListToTopLevelIcon(placeList, forSequence, watchSubs=None):
         if isinstance(firstIc, (listicons.CprhForIcon, listicons.CprhIfIcon)):
             subsIc = listicons.subsCanonicalInterchangeIcon(firstIc)
             if subsIc is not None:
-                window = firstIc.window
                 if watchSubs is not None and firstIc in watchSubs:
                     watchSubs[firstIc] = subsIc
                 firstIc = subsIc
@@ -1313,7 +1362,7 @@ def checkReorder(ic, needReorder):
             infixicon.InfixIcon)):
         needReorder.append(ic)
 
-def reorderMarkedExprs(topIcon, exprsNeedingReorder, replaceTop=False):
+def reorderMarkedExprs(topIcon, exprsNeedingReorder, replaceTop=False, watchSubs=None):
     """Reorder the hierarchy of arithmetic expressions below topIcon, whose relative
     precedences may have changed due to deletion of the icons around them.  The deletion
     code marks expressions that need to be checked by adding icons to the list passed as
@@ -1331,7 +1380,8 @@ def reorderMarkedExprs(topIcon, exprsNeedingReorder, replaceTop=False):
             reorderExprTops.add(reorderexpr.highestAffectedExpr(ic))
     modifiedTopIcon = topIcon
     for ic in reorderExprTops:
-        newTopIc = reorderexpr.reorderArithExpr(ic, skipReplaceTop=True)
+        newTopIc = reorderexpr.reorderArithExpr(ic, skipReplaceTop=True,
+            watchSubs=watchSubs)
         if ic is topIcon and newTopIc is not ic:
             modifiedTopIcon = newTopIc
     if replaceTop and modifiedTopIcon is not topIcon:

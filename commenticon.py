@@ -76,12 +76,13 @@ class CommentIcon(icon.Icon):
         stringWidth = max((len(s) for s in self.wrappedString))
         self.annotation = ann  # No options, yet, but "fill" will be one
         width = int(stringWidth * charWidth) + poundImage.width + 2*icon.TEXT_MARGIN + 1
-        height = max(icon.minTxtHgt, (len(self.wrappedString) + 1) * lineSpacing) + 2 * \
+        height = max(icon.minTxtHgt, (len(self.wrappedString)) * lineSpacing) + 2 * \
             icon.TEXT_MARGIN + 1
         seqX = icon.dragSeqImage.width
         if not attachedToStmt:
             self.sites.add('seqIn', 'seqIn', seqX, 1)
             self.sites.add('seqOut', 'seqOut', seqX, height-2)
+            self.sites.add('prefixInsert', 'output', seqX-4, height//2, cursorOnly=True)
         self.sites.add('seqInsert', 'seqInsert', 0, icon.minTxtIconHgt // 2)
         if location is None:
             x, y = 0, 0
@@ -244,7 +245,7 @@ class CommentIcon(icon.Icon):
                     rightmostIc, rightmostSite = icon.rightmostSite(self.attachedToStmt)
                     self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
                 else:
-                    self.window.cursor.setToIconSite(self, 'seqIn')
+                    self.window.cursor.setToIconSite(self, 'prefixInsert')
             else:
                 self.cursorPos -= 1
         elif direction == "Right":
@@ -279,6 +280,7 @@ class CommentIcon(icon.Icon):
             top + layout.height)
         if not self.attachedToStmt:
             self.sites.seqOut.yOffset = layout.height - 2
+            self.sites.prefixInsert.yOffset = lineSpacing // 2
         self.sites.seqInsert.yOffset = icon.minTxtIconHgt // 2
         self.wrappedString = layout.wrappedString
         self.drawList = None
@@ -430,6 +432,20 @@ class CommentIcon(icon.Icon):
         else:
             icon.Icon.markLayoutDirty(self)
 
+    def snapLists(self, forCursor=False):
+        siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        if forCursor or self.attachedToStmt is not None:
+            return siteSnapLists
+        # prefixInsert is an output-type site, but we don't want it to snap to anything
+        if 'output' in siteSnapLists:
+            del siteSnapLists['output']
+        # Add snap site for converting line comment to stmt comment
+        def snapFn(ic, siteId):
+            return ic.hasSite('seqIn') and ic.hasSite('seqOut')
+        siteSnapLists['conditional'] = [(self, self.posOfSite('prefixInsert'),
+            'prefixInsert', 'seqIn', snapFn)]
+        return siteSnapLists
+
     def _enumerateStringLayouts(self):
         """Return a list of possible layouts for the string.  Layout includes a special
         field called wrappedString, which breaks self.string into individual lines."""
@@ -489,6 +505,7 @@ class CommentIcon(icon.Icon):
         if self.hasSite('seqIn'):
             self.sites.remove('seqIn')
             self.sites.remove('seqOut')
+            self.sites.remove('prefixInsert')
         self.markLayoutDirty()
         toIc.markLayoutDirty()
         self.window.undo.registerCallback(self.detachStmtComment)
@@ -506,6 +523,8 @@ class CommentIcon(icon.Icon):
             seqX = icon.dragSeqImage.width
             self.sites.add('seqIn', 'seqIn', seqX, 1)
             self.sites.add('seqOut', 'seqOut', seqX, comn.rectHeight(self.rect) - 2)
+            self.sites.add('prefixInsert', 'output', seqX-4, lineSpacing // 2,
+                cursorOnly=True)
         self.window.undo.registerCallback(self.attachStmtComment, attachedStmt)
 
     def mergeTextFromComment(self, otherComment, before=False, sep=' '):

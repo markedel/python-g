@@ -21,7 +21,8 @@ def _reduceOperatorStack(operatorStack, operandStack):
         print('_reduceOperatorStack: unexpected icon on operator stack')
     operandStack.append(stackOp)
 
-def reorderArithExpr(changedIcon, closeParenAt=None, skipReplaceTop=False):
+def reorderArithExpr(changedIcon, closeParenAt=None, skipReplaceTop=False,
+        watchSubs=None):
     """Reorders the arithmetic operators surrounding changed icon to agree with the text
     of the connected icons.  Because the icon representation reflects the hierarchy of
     operations, as opposed to the precedence and associativity of operators that the user
@@ -40,7 +41,13 @@ def reorderArithExpr(changedIcon, closeParenAt=None, skipReplaceTop=False):
 
     If the changed icon is a paren/bracket/brace that needs to be closed, pass it unclosed
     and use closeParenAt to specify the rightmost icon it should enclose.  If successful,
-    this function will close the paren/bracket/brace of changedIcon)."""
+    this function will close the paren/bracket/brace of changedIcon).
+
+    watchSubs can be specified as a dictionary for tracking icon substitutions, in this
+    case, when explicit (cursor) parenthesis get exchanged for operator parens and visa
+    versa.  As with watchSubs parameters to other calls, the dictionary should be indexed
+    by the icon(s) to be watched, and entries will be set to the icon that took their
+    place if the call made a substitution."""
 
     topNode = highestAffectedExpr(changedIcon)
     topNodeParent = topNode.parent()
@@ -108,7 +115,7 @@ def reorderArithExpr(changedIcon, closeParenAt=None, skipReplaceTop=False):
         changedIcon.close(typeover=True)
     # Re-link the icons to the new expression form based on the token tree
     # print('token tree') ; dumpTok(operandStack[0])
-    newTopNode = relinkExprFromTokens(operandStack[0])
+    newTopNode = relinkExprFromTokens(operandStack[0], watchSubs=watchSubs)
     # print('after reorder') ; icon.dumpHier(newTopNode)
     # If the top node of the expression changed, re-link that to its parent
     if newTopNode is not topNode:
@@ -283,7 +290,7 @@ class OperandToken:
 class MissingArgToken:
     pass
 
-def relinkExprFromTokens(token, parentIc=None, parentSite=None):
+def relinkExprFromTokens(token, parentIc=None, parentSite=None, watchSubs=None):
     """reorderArithExpr re-parses arithmetic expressions to a tree of token objects
     containing the icons being reordered.  This routine does the actual rewiring of the
     icon structure per the token tree.  Reordering the icons is postponed until after
@@ -298,13 +305,15 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
     elif isinstance(token, MissingArgToken):
         return None
     elif isinstance(token, UnaryOpToken):
-        arg = relinkExprFromTokens(token.arg, token.ic, 'argIcon')
+        arg = relinkExprFromTokens(token.arg, token.ic, 'argIcon', watchSubs)
         if arg.parent() is not token.ic:
             token.ic.replaceChild(arg, 'argIcon')
         return token.ic
     elif isinstance(token, BinaryOpToken):
-        leftArg = relinkExprFromTokens(token.leftArg, token.ic, token.leftArgSite)
-        rightArg = relinkExprFromTokens(token.rightArg, token.ic, token.rightArgSite)
+        leftArg = relinkExprFromTokens(token.leftArg, token.ic, token.leftArgSite,
+            watchSubs)
+        rightArg = relinkExprFromTokens(token.rightArg, token.ic, token.rightArgSite,
+            watchSubs)
         if token.ic.leftArg() is not leftArg:
             token.ic.replaceChild(leftArg, token.leftArgSite)
         if token.ic.rightArg() is not rightArg:
@@ -316,7 +325,7 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
         if isArithParenType and token.closed and isinstance(token.arg, BinaryOpToken) and\
                 opicons.needsParens(token.arg.ic, parentIc, parentSite=parentSite):
             # Binary op child icon will provide its own auto-parens
-            parenIc = relinkExprFromTokens(token.arg, parentIc, parentSite)
+            parenIc = relinkExprFromTokens(token.arg, parentIc, parentSite, watchSubs)
             outIc = parenIc
             if isinstance(token.parenIcon, parenicon.CursorParenIcon):
                 # a cursor paren icon is being deleted in favor of the binOp parens.
@@ -324,6 +333,8 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
                 deletedIconAttr = token.parenIcon.childAt('attrIcon')
                 if deletedIconAttr:
                     parenIc.replaceChild(deletedIconAttr, 'attrIcon')
+                if watchSubs is not None and token.parenIcon in watchSubs:
+                    watchSubs[token.parenIcon] = parenIc
                 cursor = parenIc.window.cursor
                 if cursor.type == 'icon' and cursor.icon is token.parenIcon:
                     cursorSite = token.arg.leftArgSite if cursor.site == 'argIcon' else \
@@ -337,11 +348,13 @@ def relinkExprFromTokens(token, parentIc=None, parentSite=None):
                         closed=token.closed)
                 contentSite = 'argIcon'
                 outIc = parenIc
+                if watchSubs is not None and token.ic in watchSubs:
+                    watchSubs[token.ic] = parenIc
             else:
                 parenIc = token.parenIcon
                 contentSite = token.contentSite
                 outIc = token.ic
-            arg = relinkExprFromTokens(token.arg, parenIc, contentSite)
+            arg = relinkExprFromTokens(token.arg, parenIc, contentSite, watchSubs)
             if parenIc.childAt(contentSite) is not arg:
                 parenIc.replaceChild(arg, contentSite)
         # If parens were shifted and the original parens had an attribute, transfer the

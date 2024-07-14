@@ -846,7 +846,8 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
         if winIcon.parent() is None:
             outSites = snapLists.get("output", [])
             if len(outSites) > 0:
-                cursorSites.append((*outSites[0][1], 'icon', winIcon, "output", None))
+                cursorSites.append((*outSites[0][1], 'icon', winIcon, outSites[0][2],
+                    None))
         if enterTextFields:
             if hasattr(winIcon, 'nearestCursorPos'):
                 cursorPos, (x, y) = winIcon.nearestCursorPos(cursorX, cursorY)

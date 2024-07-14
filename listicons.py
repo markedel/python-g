@@ -3018,8 +3018,11 @@ def backspaceListIcon(ic, site, evt):
                     print("Naked tuple removed in backspace of single element")
                     nextIc = ic.nextInSeq()
                     prevIc = ic.prevInSeq(includeModuleAnchor=True)
+                    stmtComment = ic.hasStmtComment()
                     win.removeIcons([ic])
-                    if prevIc is not None:
+                    if stmtComment:
+                        win.cursor.setToIconSite(stmtComment, 'prefixInsert')
+                    elif prevIc is not None:
                         win.cursor.setToIconSite(prevIc, 'seqOut')
                     elif nextIc is not None:
                         win.cursor.setToIconSite(nextIc, 'seqIn')
