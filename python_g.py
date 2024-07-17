@@ -3362,12 +3362,28 @@ class Window:
                         # argument) child of an icon that is part of the selected range
                         insertSiteIcon = insertSiteIcon.parent()
                     if insertSiteIcon is None:
-                        # The first icon of the selection can be the top icon, but only
-                        # if it is a binary operator with a populated site on the left
-                        print("replaceSelectedIcons failed to find insert site")
-                        return None, None
-                    insertSite = insertSiteIcon.siteOf(firstIconOfSelection,
-                        recursive=True)
+                        # The selection does not start on a statement boundary, but its
+                        # parents (all the way up) are also being deleted.  This can
+                        # happen for naked tuples and assignments being deleted out from
+                        # under their content.  Use rightmost site of the prior entry.
+                        topParent = firstStmtOfSelection.topLevelParent()
+                        if isinstance(topParent, assignicons.AssignIcon) or \
+                                isinstance(topParent, listicons.TupleIcon) and \
+                                topParent.noParens:
+                            topParentSite = topParent.siteOf(firstIconOfSelection,
+                                recursive=True)
+                            prevSite = iconsites.prevSeriesSiteId(topParentSite)
+                            if prevSite is None or topParent.childAt(prevSite) is None:
+                                print("replaceSelectedIcons failed to find insert site 1")
+                                return None, None
+                            insertSiteIcon, insertSite = icon.rightmostFromSite(
+                                topParent, prevSite)
+                        else:
+                            print("replaceSelectedIcons failed to find insert site 2")
+                            return None, None
+                    else:
+                        insertSite = insertSiteIcon.siteOf(firstIconOfSelection,
+                            recursive=True)
                 else:
                     # The first icon of the selection has a coincident site on the left
                     leftSiteIcon = firstIconOfSelection.childAt(leftSite)
@@ -3464,6 +3480,10 @@ class Window:
                     break
             else:
                 insertSite = 'seqIn'  # cprh icons can produce for/if with no output site
+            if insertSite == 'output':
+                coincSite = insertSiteIcon.hasCoincidentSite()
+                if coincSite is not None:
+                    insertSite = coincSite
         # Insert the new icons where the first selection section was removed
         cursorIc, cursorSite = self.insertIconsFromSequences(insertSiteIcon, insertSite,
             insertedSequences, insertPos)
@@ -3854,12 +3874,7 @@ class Window:
                     firstIconOfSelection = ic
             else:
                 if not foundSelection:
-                    # The first icon is not selected.  For anything but a naked tuple,
-                    # we can declare that the statement does not start on a statement
-                    # boundary.  For naked tuple icons (which lexicalTraverse returns
-                    # before their content) defer to the next icon.
-                    if not (isinstance(ic, listicons.TupleIcon) and ic.noParens):
-                        startsOnStmtBoundary = False
+                    startsOnStmtBoundary = False
                 else:
                     # Found the end of the selection within the first statement
                     return firstSelectedStmt, firstIconOfSelection, ic, \

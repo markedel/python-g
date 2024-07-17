@@ -689,8 +689,10 @@ def lexicalTraverse(topNode, includeStmtComment=True, parentIc=None, parentSite=
     order, as opposed to the cursors version that traverses cursor sites and the
     reorderexpr version that produces tokens and avoids descending into subexpressions.
     For empty sites, rather than yielding None, it yields a tuple of the parent icon and
-    parent site.  Recursive calls provide parentIc and parentSite instead of topNode
-    (which they set to None)."""
+    parent site.  Also note that this version does not emit naked tuple icons, which have
+    no lexical presence outside of the commas (that we ignore in all other cases).
+    Recursive calls provide parentIc and parentSite instead of topNode (which they set
+    to None)."""
     if topNode is None:
         node = parentIc.childAt(parentSite)
     else:
@@ -713,6 +715,23 @@ def lexicalTraverse(topNode, includeStmtComment=True, parentIc=None, parentSite=
         yield node
         yield from lexicalTraverse(None, False, node, 'testExpr')
         yield from lexicalTraverse(None, False, node, 'falseExpr')
+    elif isinstance(node, listicons.TupleIcon) and node.noParens:
+        for site in node.sites.argIcons:
+            yield from lexicalTraverse(None, False, node, site.name)
+    elif isinstance(node, assignicons.AssignIcon):
+        # We don't want to multiply yield the same icon, so we ignore the fact that we
+        # have identical-looking symbols between the target lists.
+        for tgtList in node.tgtLists:
+            for site in getattr(node.sites, tgtList.siteSeriesName):
+                yield from lexicalTraverse(None, False, node, site.name)
+        yield node
+        for site in node.sites.values:
+            yield from lexicalTraverse(None, False, node, site.name)
+    elif isinstance(node, assignicons.AugmentedAssignIcon):
+        yield from lexicalTraverse(None, False, node, 'targetIcon')
+        yield node
+        for site in node.sites.values:
+            yield from lexicalTraverse(None, False, node, site.name)
     else:
         yield node
         for siteOrSeries in node.sites.traverseLexical():

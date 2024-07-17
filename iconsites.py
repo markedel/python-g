@@ -496,6 +496,8 @@ def nextSeriesSiteId(siteId):
 
 def prevSeriesSiteId(siteId):
     name, idx = splitSeriesSiteId(siteId)
+    if idx == 0:
+        return None
     return makeSeriesSiteId(name, idx-1)
 
 def hasLowerCoincidentSite(ic, siteId):
