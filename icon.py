@@ -1,5 +1,5 @@
 # Copyright Mark Edel  All rights reserved
-from PIL import Image, ImageDraw, ImageFont, ImageMath, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageMath
 import comn
 import iconlayout
 import iconsites
@@ -60,7 +60,7 @@ TYPEOVER_COLOR = (220, 220, 220, 255)
 SELECT_TINT = (0, 0, 255, 40)
 EXEC_ERR_TINT = (255, 0, 0, 100)
 SYNTAX_ERR_TINT = (255, 64, 64, 40)
-PENDING_REMOVE_TINT = (255, 32, 32, 32)
+PENDING_REMOVE_TINT = (255, 10, 10, 100)
 BLACK = (0, 0, 0, 255)
 SEQ_RULE_COLOR = (165, 180, 165, 255)
 SEQ_CONNECT_COLOR = (70, 100, 70, 255)
@@ -75,10 +75,20 @@ STYLE_OUTLINE = 1
 STYLE_SELECTED = 2
 STYLE_SYNTAX_ERR = 4
 STYLE_EXEC_ERR = 8
+STYLE_PENDING_REMOVE = 16
 
-# Pixels below input/output site to place function/list/tuple icons insertion site
-INSERT_SITE_X_OFFSET = 2
-INSERT_SITE_Y_OFFSET = 5
+# Pixel offset from input/output site to series insertion site
+SERIES_INSERT_SITE_X_OFFSET = 0
+SERIES_INSERT_SITE_Y_OFFSET = 7
+
+# X distance in pixels from left edge of icon for the icon replacement site.
+REPLACE_SITE_X_OFFSET = 8
+# Y distance in pixels from (center-adjusted) parent site to icon replacement site.
+REPLACE_SITE_Y_OFFSET = 3
+
+# X distance in pixels from left edge of icon for the additional icon replacement site
+# (automatically added by iconsites.makeSnapLists for statement-level icons)
+STMT_REPLACE_SITE_X_OFFSET = -16
 
 # Pixels below input/output site to place attribute site
 # This should be based on font metrics, but for the moment, we have a hard-coded cursor
@@ -537,26 +547,76 @@ class Icon:
         if includeSelf:
             yield self.blockEnd
 
+    def drawListIdxToPartId(self, idx):
+        """Icons that are not drawn as a single monolithic image can have multiple parts
+        whose relative positioning may depend on intervening arguments or continuation
+        dynamics.  If the user grabs and drags one of these icons by such a part, we want
+        the mouse to continue to point to the same part of the same icon, even if the
+        dragged icons are laid out differently from how they originally appeared in the
+        code from which they were removed or copied.  Icon part IDs are a bit of a hack,
+        in that they take advantage of the icon's drawList to identify these parts, so
+        that most multi-part icons don't need to do anything to take advantage of this
+        capability.  The only ones that need to do anything are those with drawLists that
+        can vary across layout changes, such as those with intermittently drawn parts
+        (such as optional parens).  partIds are also used in drag-selection to uniquely
+        identify those separated components when they appear in different places in the
+        lexical ordering (for example parens have parts that appear both before and after
+        the icons they surround).  As such, they also need to match the partId values
+        returned from expredit.lexicalTraverse.  The special partId of 0 represents a
+        drawn image that is part of the icon, but is ignored in picking and lexical
+        traversal (commas being the only current example of such).  Note that there are
+        still some icons that delete their drawLists after drawing temporary sites for
+        dragging.  I'm not sure how these get through all the partId-related code without
+        dumping diagnostics or messing up dragging or target selection, but they may need
+        to be fixed at some point."""
+        if self.drawList is None:
+            print('drawListIdxToPartId missing drawlist (%s)?' % self.dumpName())
+            return None
+        img = self.drawList[idx][1]
+        if img is commaImage or img is commaTypeoverImage:
+            return 0
+        partId = 1
+        for i, (imgOffset, img) in enumerate(self.drawList):
+            if i == idx:
+                return partId
+            if img is not commaImage:
+                partId += 1
+        print('drawListIdxToPartId idx beyond end of drawList (%s)?' % self.dumpName())
+        return partId
+
+    def partIdToDrawListIdx(self, partId):
+        """Inverse of drawListIdxToPartId, uses drawListIdxToPartId, so icons do not need
+        to override to support their own mapping."""
+        if self.drawList is None or len(self.drawList) == 0:
+            print('No mapping for partId of icon %s' % self.dumpName())
+            return None
+        for idx in range(len(self.drawList)):
+            if partId == self.drawListIdxToPartId(idx):
+                return idx
+        print('Could not find partId %d of icon %s' % (partId, self.dumpName()))
+        return None
+
     def touchesPosition(self, x, y):
         """Return a non-zero integer value if any of the drawn part of the icon falls at
         x, y.  The returned value can be use to identify what sub-part of the icon was
         clicked, to the offsetOfPart() method.  Note that for most icons, this method
-        will only operate properly if the icon is *drawn* (not just laid-out)."""
+        will only operate properly if the icon is *drawn* (not just laid-out), as it uses
+        the alpha channel of the images in the self.drawList to judge whether the icon
+        is drawn there.  Icons that have opaque parts that they want ignored (commas
+        drawn with icon.commaImage are automatically ignored) or transparent parts they
+        want counted, can override this, though overriding drawListIdxToPartId to return
+        None or 0 for the entire entry may be simpler."""
         if not pointInRect((x, y), self.rect):
             return None
         if self.drawList is None:
             print('Missing drawlist (%s)?' % self.dumpName())
-        partId = 0
-        for imgOffset, img in self.drawList:
-            if img is commaImage:
-                continue
-            partId += 1
+        for i, (imgOffset, img) in enumerate(self.drawList):
             left, top = addPoints(self.rect[:2], imgOffset)
             imgX = x - left
             imgY = y - top
             if pointInRect((imgX, imgY), (0, 0, img.width, img.height)):
                 pixel = img.getpixel((imgX, imgY))
-                return partId if pixel[3] > 128 else None
+                return self.drawListIdxToPartId(i) if pixel[3] > 128 else 0
         return None
 
     def offsetOfPart(self, partId):
@@ -565,24 +625,98 @@ class Icon:
         method.  The calculation of partId used here (Icon superclass) for offsetOfPart
         and touchesPosition, works for most Python-syntax icons, but by the somewhat
         sleazy method of counting images in the icon's drawList and ignoring those that
-        point to icon.commaImage.  This will fail for icons that are not consistent in
-        their usage of drawList images or use something other than comma images as
-        separators between variable numbers of arguments (and, of course, will fail if it
-        hasn't been drawn yet).  Note, also, that it returns the position (top, left) of
-        the underlying pixmap used for drawing the part, which may not correspond to a
+        point to icon.commaImage.  Icons that are not consistent in their usage of
+        drawList images or use something other than comma images as separators between
+        variable numbers of arguments, can override this, but in most cases, its better
+        to override drawListIdxToPartId, as this will enable the base-class methods for
+        touchesPosition, offsetOfPart, partsLeftOfPoint, and partsRightOfPoint to use
+        the images in self.drawList. Note, also, that it returns the position (top, left)
+        of the underlying pixmap used for drawing the part, which may not correspond to a
         visible pixel (since this call is only used to determine offset relative to a
         previous icon layout, it only matters that the position has a consistent
         relationship to the drawn location of the part)."""
         if self.drawList is None or len(self.drawList) == 0:
             return 0, 0
-        iconPartId = 0
-        for imgOffset, img in self.drawList:
-            if img is commaImage:
-                continue
-            iconPartId += 1
-            if partId <= iconPartId:
+        for idx, (imgOffset, img) in enumerate(self.drawList):
+            if partId == self.drawListIdxToPartId(idx):
                 return imgOffset
         return self.drawList[-1][0]
+
+    def partIsLeftOfPoint(self, partId, x, y):
+        """If a visible part of the icon, designated by partId, is horizontally left of
+        point (x,y), return the distance to the closest opaque pixel.  Returns None if
+        the icon part has no opaque pixels left of x,y at the given y value.  Note that
+        all of the caveats associated with icon partIds (see touchesPosition and
+        offsetOfPart) apply.  In particular, the icon must be *drawn*, not just laid out
+        for this to be usable, and if self.drawList can vary, the icon needs to override
+        drawListIdxToPartId to provide a stable mapping of displayList images to partIds.
+        """
+        minX, minY, maxX, maxY = self.rect
+        if y < minY or y >= maxY or x < minX:
+            return None
+        drawListIdx = self.partIdToDrawListIdx(partId)
+        if drawListIdx is None:
+            return None
+        imgOffset, partImg = self.drawList[drawListIdx]
+        partX, partY = addPoints(self.rect[:2], imgOffset)
+        if y < partY or y >= partY + partImg.height or x < partX:
+            return None
+        imgX = x - partX
+        imgY = y - partY
+        if imgX >= partImg.width:
+            xDist = imgX - partImg.width
+            imgX = partImg.width - 1
+        else:
+            xDist = 0
+        while imgX >= 0:
+            pixel = partImg.getpixel((imgX, imgY))
+            if pixel[3] > 0:
+                # ... The criterion for opaque in touchesPosition is 128, but we
+                # definitely don't want to miss icon borders, so be sure to test this
+                break
+            xDist += 1
+            imgX -= 1
+        else:
+            # No opaque pixels found
+            return None
+        return xDist
+
+    def partIsRightOfPoint(self, partId, x, y):
+        """If a visible part of the icon, designated by partId, is horizontally left of
+        point (x,y), return the distance to the closest opaque pixel.  Note that all of
+        the caveats associated with icon partIds (see touchesPosition and offsetOfPart)
+        apply.  In particular, the icon must be *drawn*, not just laid out for this to be
+        usable.  If the icon part has no opaque pixels left of x,y at the given y value,
+        returns None."""
+        minX, minY, maxX, maxY = self.rect
+        if y < minY or y > maxY or x > maxX:
+            return None
+        drawListIdx = self.partIdToDrawListIdx(partId)
+        if drawListIdx is None:
+            return None
+        imgOffset, partImg = self.drawList[drawListIdx]
+        partX, partY = addPoints(self.rect[:2], imgOffset)
+        if y < partY or y >= partY + partImg.height or x >= partX + partImg.width:
+            return None
+        imgX = x - partX
+        imgY = y - partY
+        if imgX < 0:
+            xDist = -imgX
+            imgX = 0
+        else:
+            xDist = 0
+        while imgX < partImg.width:
+            pixel = partImg.getpixel((imgX, imgY))
+            if pixel[3] > 0:
+                # ... The criterion for opaque in touchesPosition is 128, but we
+                # definitely don't want to miss icon borders, so be sure to test this
+                break
+            xDist += 1
+            imgX += 1
+        else:
+            # No opaque pixels found
+            return None
+        return xDist
 
     def inRectSelect(self, rect):
         """Return True if rect overlaps any visible part of the icon (commas excepted).
@@ -594,7 +728,7 @@ class Icon:
         if self.drawList is None:
             print('Missing drawlist (%s)?' % self.dumpName())
         for imgOffset, img in self.drawList:
-            if img is commaImage:
+            if img is commaImage or img is commaTypeoverImage:
                 continue
             left, top = addPoints(self.rect[:2], imgOffset)
             right = left + img.width
@@ -997,9 +1131,12 @@ class Icon:
             style |= STYLE_SELECTED
         if self.errHighlight:
             style |= STYLE_SYNTAX_ERR
+        if self.window.highlightedForReplace is not None and \
+                self in self.window.highlightedForReplace:
+            style |= STYLE_PENDING_REMOVE
         for (imgOffsetX, imgOffsetY), img in self.drawList:
             pasteImageWithClip(outImg, tintSelectedImage(img, style),
-             (x + imgOffsetX, y + imgOffsetY), clip)
+                (x + imgOffsetX, y + imgOffsetY), clip)
 
     def _drawEmptySites(self, toDragImage, clip, skip=None, hilightEmptySeries=False,
             allowTrailingComma=False):
@@ -1482,6 +1619,8 @@ def tintSelectedImage(image, style):
     # each of the color highlights (rather than blending, we choose the most important)
     if style & STYLE_EXEC_ERR:
         color = EXEC_ERR_TINT
+    elif style & STYLE_PENDING_REMOVE:
+        color = PENDING_REMOVE_TINT
     elif style & STYLE_SELECTED:
         color = SELECT_TINT
     elif style & STYLE_SYNTAX_ERR:

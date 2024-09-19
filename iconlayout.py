@@ -166,8 +166,8 @@ class ListLayoutMgr:
         inputSites = self.icon.sites.getSeries(self.siteSeriesName)
         if len(inputSites) > 1 or len(inputSites) == 1 and inputSites[0].att is not None:
             x, y = self.icon.rect[:2]
-            x += icon.INSERT_SITE_X_OFFSET
-            y += icon.INSERT_SITE_Y_OFFSET
+            x += icon.SERIES_INSERT_SITE_X_OFFSET
+            y += icon.SERIES_INSERT_SITE_Y_OFFSET
             minXOffset = inputSites[0].xOffset
             bodySiteXOffset = inputSites[0].xOffset - self.bodySitePositions[0][0]
             bodySiteYOffset = inputSites[0].yOffset - self.bodySitePositions[0][1]

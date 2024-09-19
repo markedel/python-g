@@ -984,6 +984,21 @@ class EntryIcon(icon.Icon):
                 cursorType = 'icon'
                 site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
                 ic = self
+            if cursorType == 'icon' and ic is self:
+                # Geometric traversal would put the cursor on one of our sites.  Setting
+                # the cursor to an icon site means focusing out, which could remove the
+                # entry icon.  Instead, make the focusOut call preemptively, and if we
+                # do get deleted, put the cursor in a reasonable place.  focusOut will
+                # put the cursor at the right of the new icon, but if eometricTraverse
+                # chose one of our sequence sites, put it in a sequence site.
+                focusResult = self.focusOut(True)
+                if focusResult:
+                    ic = self.window.cursor.icon
+                    if site in ('seqIn', 'seqOut'):
+                        ic = self.window.cursor.icon.topLevelParent()
+                    else:
+                        ic = self.window.cursor.icon
+                        site = self.window.cursor.site
             self.window.cursor.setTo(cursorType, ic, site, pos)
         cursor.draw()
 

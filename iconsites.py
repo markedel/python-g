@@ -1,5 +1,6 @@
 # Copyright Mark Edel  All rights reserved
 import re
+import comn
 import icon
 
 parentSiteTypes = {'output', 'attrOut', 'cprhOut'}
@@ -463,16 +464,64 @@ class IconSiteList:
                 siteType = 'seqInsert'
             else:
                 siteType = site.type
-            # If the icon has an attrIn site with something connected, also give it an
-            # insertAttr site
-            if site.type == 'attrIn' and site.att is not None:
-                snapSites['insertAttr'] = [(ic, (x + site.xOffset,
-                 y + site.yOffset + icon.INSERT_SITE_Y_OFFSET), site.name)]
             # Add the snap site to the list
             if siteType not in snapSites:
                 snapSites[siteType] = []
             snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
              site.name))
+        # Add a replace site to the right of and slightly below the output site, unless
+        # that puts it too close to the right edge of the icon, in which case back it off
+        # by half of the exceeded distance.
+        if isinstance(ic, icon.BlockEnd):
+            # Giving BlockEnd icons replace sites would only bring pain
+            return snapSites
+        for site in self.allSites():
+            if site.type in parentSiteTypes:
+                parentSite = site
+                break
+        else:
+            if ic.hasSite('seqIn') and ic.hasSite('seqOut'):
+                parentSite = ic.sites.seqIn
+            else:
+                return snapSites
+        siteType = parentSite.type
+        if siteType == 'output':
+            replaceName = 'replaceExprIc'
+            depth = icon.OUTPUT_SITE_DEPTH
+        elif siteType == 'attrOut':
+            replaceName = 'replaceAttrIc'
+            depth = icon.ATTR_SITE_DEPTH
+        elif siteType == 'cprhOut':
+            replaceName = 'replaceCprhIc'
+            depth = 0
+        else:
+            replaceName = 'replaceStmtIc'
+            depth = icon.SEQ_SITE_DEPTH
+        xOffset = parentSite.xOffset + icon.REPLACE_SITE_X_OFFSET
+        distToRightEdge = comn.rectWidth(ic.rect) - (xOffset + depth)
+        if distToRightEdge < icon.REPLACE_SITE_X_OFFSET:
+            xOffset -= distToRightEdge // 2
+        if siteType == 'seqIn':
+            # If we didn't find an output site on which to base the replace site, use the
+            # sequence sites and guess that the icon body will be be vertically half way
+            # between (in there are cases where this is wrong, the specific icon(s) will
+            # need to correct it in their snapLists method).
+            yCenter = (ic.sites.seqIn.yOffset + ic.sites.seqOut.yOffset) // 2
+        else:
+            yCenter = parentSite.yOffset
+        yOffset = yCenter + icon.REPLACE_SITE_Y_OFFSET
+        if not ic.hasCoincidentSite():
+            # Icons that don't have sites on the left have to add their own replacement
+            # sites, because we can't calculate positioning at this low level
+            snapSites[replaceName] = [(ic, (x + xOffset, y + yOffset), replaceName)]
+        # For top-level icons, add an additional site to the left of the icon (in the
+        # margin) for full-stmt replacement.  While this is redundant with the replace
+        # site for many types of statements, for those with coincident input sites
+        # (particularly assignments), the top-level icon is not the lexically-first icon.
+        # Also, this enables a Shift+drag method for multi-stmt drop-target selection.
+        if ic.parent() is None:
+            xOffset = parentSite.xOffset + depth + icon.STMT_REPLACE_SITE_X_OFFSET
+            snapSites['replaceStmt'] = [(ic, (x + xOffset, y + yCenter), 'replaceStmt')]
         return snapSites
 
 def makeSeriesSiteId(seriesName, seriesIdx):

@@ -430,39 +430,22 @@ class AssignIcon(icon.Icon):
             listicons.backspaceComma(self, siteId, evt)
             return
 
-    def touchesPosition(self, x, y):
-        # Base class method can figure out from our drawList whether x, y touches the
-        # drawn part of the icon, but it can't identify the icon sub-part because our
-        # draw-list is unstable (since we sometimes draw a left input site).
-        if not icon.pointInRect((x, y), self.rect):
-            return None
-        if self.drawList is None:
-            print('Missing drawlist (%s)?' % self.dumpName())
+    def drawListIdxToPartId(self, idx):
+        # Give consistent partIds to '=' (3,6,9,12...) regardless of whether spines and
+        # connectors (1,2, 4,5, 7,8) are drawn.  Commas, per partId convention, always
+        # return 0, as they have a visual presence, but are not used for picking.
+        if self.drawList[idx][1] is icon.commaImage:
+            return 0
         partId = 0
-        for imgOffset, img in self.drawList:
-            if img.width <= assignDragImage.width:
+        for i in range(idx + 1):
+            img = self.drawList[i][1]
+            if img is icon.commaImage or img is icon.commaTypeoverImage:
                 continue
-            partId += 1
-            left, top = icon.addPoints(self.rect[:2], imgOffset)
-            imgX = x - left
-            imgY = y - top
-            if icon.pointInRect((imgX, imgY), (0, 0, img.width, img.height)):
-                pixel = img.getpixel((imgX, imgY))
-                return partId if pixel[3] > 128 else None
-        return None
-
-    def offsetOfPart(self, partId):
-        if self.drawList is None or len(self.drawList) == 0:
-            return 0, 0
-        iconPartId = 0
-        for imgOffset, img in self.drawList:
-            if img.width <= assignDragImage.width:
-                continue
-            iconPartId += 1
-            if partId <= iconPartId:
-                return imgOffset
-        print('assign icon offsetOfPart failed 2')
-        return self.drawList[-1][0]
+            if img is equalImage:
+                partId += 3 - (partId % 3)
+            else:
+                partId += 1  # Spine
+        return partId
 
 class AugmentedAssignIcon(icon.Icon):
     def __init__(self, op, window, location=None):
@@ -526,8 +509,6 @@ class AugmentedAssignIcon(icon.Icon):
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True,
             allowTrailingComma=True)
-        if temporaryDragSite:
-            self.drawList = None
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -656,10 +637,6 @@ class AugmentedAssignIcon(icon.Icon):
         elif siteName == "values":
             # Cursor is on comma input.  Delete if empty or previous site is empty
             listicons.backspaceComma(self, siteId, evt)
-
-    def offsetOfPart(self, partId):
-        width, _ = self.bodySize
-        return self.sites.values[0].xOffset - width, 0
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
         if clickPos is not None:

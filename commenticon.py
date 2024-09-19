@@ -2,6 +2,7 @@ from PIL import Image, ImageDraw
 import math
 import comn
 import icon
+import iconsites
 import iconlayout
 import filefmt
 import cursors
@@ -434,14 +435,30 @@ class CommentIcon(icon.Icon):
 
     def snapLists(self, forCursor=False):
         siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
-        if forCursor or self.attachedToStmt is not None:
+        if forCursor:
+            return siteSnapLists
+        # If this is a statement comment, we have no parent, and are given a seqInsert
+        # site, which is wrong. Instead, we need a replacement site that is conditional
+        # to comments.  Note that for statement comments, we're adding a site that's
+        # restricted to comments, whereas line comments can be replaced by anything.
+        if self.attachedToStmt is not None:
+            def snapFn(ic, siteId):
+                return isinstance(ic, CommentIcon) and siteId == 'seqInsert'
+            # seqInsX, seqInsY = siteSnapLists['seqInsert'][0][1]
+            # seqDragSiteDepth = seqInsX + icon.dragSeqImage.width - 1
+            replaceSiteX = self.rect[0] + icon.REPLACE_SITE_X_OFFSET
+            replaceSiteY = siteSnapLists['seqInsert'][0][1][1] + \
+                icon.REPLACE_SITE_Y_OFFSET
+            del siteSnapLists['seqInsert']
+            siteSnapLists['conditional'] = [(self, (replaceSiteX, replaceSiteY),
+                'replaceComment', 'seqIn', snapFn)]
             return siteSnapLists
         # prefixInsert is an output-type site, but we don't want it to snap to anything
         if 'output' in siteSnapLists:
             del siteSnapLists['output']
         # Add snap site for converting line comment to stmt comment
         def snapFn(ic, siteId):
-            return ic.hasSite('seqIn') and ic.hasSite('seqOut')
+            return isRightmostSiteOfStmt(ic, siteId)
         siteSnapLists['conditional'] = [(self, self.posOfSite('prefixInsert'),
             'prefixInsert', 'seqIn', snapFn)]
         return siteSnapLists
@@ -670,6 +687,12 @@ class VerticalBlankIcon(icon.Icon):
                 self.window.cursor.setToIconSite(nextIcon, 'seqIn')
             else:
                 self.window.cursor.setToWindowPos(self.pos())
+
+def isRightmostSiteOfStmt(ic, siteId):
+    if ic.childAt(siteId): # Just for efficiency, as this cheaply eliminates most sites
+        return False
+    rightmostIc, rightmostSite = icon.rightmostSite(ic.topLevelParent())
+    return rightmostIc is ic and rightmostSite == siteId
 
 # Note that most comment icons are not created by the (fake ast) method, below.  This is
 # only used for the case where there's statement to which to attach the comment, which

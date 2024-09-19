@@ -388,8 +388,6 @@ class BinOpIcon(icon.Icon):
                 self.drawList.append(((rParenX, rParenY), rParenImage))
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
-        if temporaryOutputSite or suppressSeqSites:
-            self.drawList = None  # Don't keep after drawing (see above)
 
     def depth(self, lDepth=None, rDepth=None):
         """Calculate factor which decides how much to pad the operator to help indicate
@@ -480,33 +478,24 @@ class BinOpIcon(icon.Icon):
         siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
         if not self.hasParens:
             del siteSnapLists['attrIn']
+        # Add replace site to the icon body (default snap site generation will add one to
+        # the parens (if any), but can't calculate it for icons that have arguments left
+        # of the icon body.
+        x, y = self.rect[:2]
+        opWidth = self.opSize[0] + self.depthWidth
+        leftX = self.sites.rightArg.xOffset + icon.OUTPUT_SITE_DEPTH - opWidth
+        centerX = leftX + opWidth // 2
+        siteX = min(leftX + icon.REPLACE_SITE_X_OFFSET, centerX)
+        siteY = self.sites.output.yOffset + icon.REPLACE_SITE_Y_OFFSET
+        siteSnapLists['replaceExprIc'] = [(self, (x+siteX, y+siteY), 'replaceExprIc')]
         return siteSnapLists
 
-    def touchesPosition(self, x, y):
-        # Base class method can figure out from our drawList whether x, y touches the
-        # drawn part of the icon, but it can't identify the icon sub-part because our
-        # draw-list is unstable (since we sometimes draw a left input site).
-        partId = icon.Icon.touchesPosition(self, x, y)
-        if partId is None:
-            return None
-        pos, img = self.drawList[partId-1]
-        if img == lParenImage:
-            return 1
-        if img == rParenImage:
-            return 3
-        return 2  # Icon body
-
-    def offsetOfPart(self, partId):
-        if partId == 1:
-            # Left paren
-            return self.sites.output.xOffset, 0
-        elif partId == 2:
-            # Icon body
-            width, height = self.opSize
-            return self.sites.rightArg.xOffset - width, 0
-        elif partId == 3:
-            # Right paren
-            return self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH, 0
+    def drawListIdxToPartId(self, idx):
+        if self.hasParens:
+            return idx + 1
+        elif self.parent() is None:
+            return idx + 1
+        return idx + 2
 
     def textRepr(self):
         leftArgText = icon.argTextRepr(self.sites.leftArg)
@@ -951,12 +940,14 @@ class IfExpIcon(icon.Icon):
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
         atTop = self.parent() is None
         suppressSeqSites = toDragImage is not None and self.prevInSeq() is None
-        temporaryOutputSite = suppressSeqSites and atTop and self.leftArg() is None
+        temporaryOutputSite = suppressSeqSites and atTop
         if temporaryOutputSite or suppressSeqSites:
             # When toDragImage is specified the icon is being dragged, and it must display
             # something indicating where its output site is where it would otherwise
-            # not normally draw anything, but don't keep this in self.drawList because
-            # it's not for normal use and won't be used again for picking or drawing.
+            # not normally draw anything.  Note that we now draw this in all cases where
+            # we're at the top level and not drawing sequence sites, even with a left
+            # argument that will bury it.  This is done to help drawListIdxToPartId
+            # return a consistent part ID when it doesn't know if we're in a drag image.
             self.drawList = None
         if self.drawList is None:
             self.drawList = []
@@ -1016,8 +1007,6 @@ class IfExpIcon(icon.Icon):
                 self.drawList.append(((rParenX, 0), rParenImage))
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
-        if temporaryOutputSite or suppressSeqSites:
-            self.drawList = None  # Don't keep after drawing (see above)
 
     def depth(self, lDepth=None, rDepth=None):
         """Calculate factor which decides how much to pad the operator to help indicate
@@ -1117,7 +1106,26 @@ class IfExpIcon(icon.Icon):
         siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
         if not self.hasParens:
             del siteSnapLists['attrIn']
+        # Add replace sites in the center of the 'if' and at the appropriate offset in
+        # the 'else' part.  Default snap site generation will add one to the parens (if
+        # any), but not to the icon body parts in either the paren or no-paren case, as
+        # it does not know where these are.
+        ifWidth, elseWidth, height = self.bodySize
+        x, y = self.rect[:2]
+        ifCenterX = self.sites.testExpr.xOffset - ifWidth // 2
+        elseCenterX = self.sites.falseExpr.xOffset - elseWidth // 2
+        bottomY = self.sites.output.yOffset + icon.REPLACE_SITE_Y_OFFSET
+        siteSnapLists['replaceExprIc'] = [
+            (self, (x+ifCenterX, y+bottomY), 'replaceExprIc'),
+            (self, (x+elseCenterX, y+bottomY), 'replaceExprIc')]
         return siteSnapLists
+
+    def drawListIdxToPartId(self, idx):
+        if self.hasParens:
+            return idx + 1
+        elif self.parent() is None:
+            return idx + 1
+        return idx + 2
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         hasParens = needsParens(self, forText=True)

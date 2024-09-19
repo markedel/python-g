@@ -1,6 +1,8 @@
 # Copyright Mark Edel  All rights reserved
 # Python-g main module
+import copy
 import io
+import math
 import tkinter as tk
 import tkinter.filedialog
 import ast
@@ -22,7 +24,7 @@ import commenticon
 import undo
 import filefmt
 import expredit
-from PIL import Image, ImageDraw, ImageWin, ImageGrab
+from PIL import Image, ImageDraw, ImageWin, ImageGrab, ImageEnhance
 import time
 import tkinter.messagebox
 import ctypes
@@ -84,6 +86,10 @@ SCROLL_RIGHT_PAD = SCROLL_BOTTOM_PAD = 9
 # per step.  A scale factor of .42 yields 50 pixels per step, which is a similar distance.
 MOUSE_WHEEL_SCALE = 0.42
 
+# Number of pixels of mouse movement to advance a structural drag target selection up one
+# level in the icon hierarchy
+TARGET_SELECT_STEP_DIST = 10
+
 # Max. number of statements allowed in a single page.  Splitting sequences in to pages
 # makes edits, scrolling, and finding icons within a region, more efficient.  It does
 # so by segmenting the list of top-level icons that when a long file is edited,
@@ -103,6 +109,11 @@ WIN_TITLE_PREFIX = "Python-G - "
 
 TYPING_ERR_COLOR = '#FFAAAA'
 TYPING_ERR_HOLD_TIME = 5000
+
+# How transparent (0.0=transparent - 1.0=opaque) to draw dragging icons.  0.25 is dark
+# enough to read but light enough to be able to make out text underneath, which allows
+# users to see icons highlighted for replacement.
+DRAG_OVLY_OPACITY = 0.25
 
 # anchorImage = comn.asciiToImage((
 #  ".......6%%6.......",
@@ -302,6 +313,10 @@ class Window:
         self.top.bind("<Control-l>", self._debugLayoutCb)
         self.top.bind("<Alt-l>", self._undebugLayoutCb)
         self.top.bind("<KeyRelease-Alt_L>", self._altReleaseCb)
+        self.top.bind("<KeyPress-Shift_L>", self._shiftPressCb)
+        self.top.bind("<KeyPress-Shift_R>", self._shiftPressCb)
+        self.top.bind("<KeyRelease-Shift_L>", self._shiftReleaseCb)
+        self.top.bind("<KeyRelease-Shift_R>", self._shiftReleaseCb)
         self.imgFrame.grid(row=0, column=0, sticky=tk.NSEW)
         self.xScrollbar = tk.Scrollbar(iconFrame, orient=tk.HORIZONTAL,
             width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
@@ -352,9 +367,13 @@ class Window:
         self.buttonDownIcPart = None
         self.doubleClickFlag = False
         self.dragging = None
+        self.dragTagetModePtrOffset = None
         self.dragImageOffset = None
         self.dragImage = None
+        self.snapped = None
+        self.transparentDragimage = None
         self.lastDragImageRegion = None
+        self.highlightedForReplace = set()
         self.inRectSelect = False
         self.lastRectSelect = None  # Note, in image coords (not content)
         self.inStmtSelect = False
@@ -1091,9 +1110,37 @@ class Window:
             return "break"
         return None
 
+    def _shiftPressCb(self, evt):
+        # If the shift key is pressed while dragging icons, we don't want the user to
+        # have to wait for mouse movement to engage target selection
+        if evt.state & SHIFT_MASK:
+            # The shift key repeats, but luckily the KeyPress binding gives us the old
+            # state, so we can filter the repeats from the key being held
+            return
+        if self.dragging and self.dragTagetModePtrOffset is None:
+            # As noted above, Tkinter dispatches this event before changing the key mask
+            # evt.state.  It *might* be safe to just clear the bit in evt, but I can't
+            # guarantee that this won't affect the calling Tkinter code, so make a copy.
+            evtCopy = copy.copy(evt)
+            evtCopy.state = evt.state | SHIFT_MASK
+            self._updateDrag(evtCopy)
+
+    def _shiftReleaseCb(self, evt):
+        # If the shift key is released while dragging icons, we want to disengage target
+        # selection immediately (as opposed to on the next mouse movement, which is how
+        # updateDrag is otherwise driven).
+        if self.dragging and self.dragTagetModePtrOffset is not None:
+            # Tkinter, for whatever reason, dispatches this event before changing the
+            # key mask in evt.state.  While it might be safe to just clear the SHIFT_MASK
+            # bit in evt, I can't guarantee that changing it won't affect the calling
+            # Tkinter code, so instead, we pass _updateDrag a modified copy.
+            evtCopy = copy.copy(evt)
+            evtCopy.state = evt.state & ~SHIFT_MASK
+            self._updateDrag(evtCopy)
+
     def _buttonPressCb(self, evt):
         if self.dragging:
-            self._endDrag()
+            self._endDrag(evt)
             return
         if self.buttonDownTime is not None:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
@@ -1151,7 +1198,7 @@ class Window:
         if self.buttonDownTime is None:
             return
         if self.dragging is not None:
-            self._endDrag()
+            self._endDrag(evt)
             self.buttonDownTime = None
         elif self.inRectSelect:
             self._endRectSelect()
@@ -1399,7 +1446,8 @@ class Window:
         # the current cursor position
         self._pruneSelectedIcons()
         if len(self.selectedSet) > 0:
-            cursorIcon, cursorSite = self.replaceSelectedIcons(pastedSeqs)
+            cursorIcon, cursorSite = self.replaceSelectedIcons(self.selectedSet,
+                pastedSeqs)
             if cursorIcon is None and cursorSite is None:
                 self.displayTypingError("Can't paste code containing top-level "
                     "statements into this context")
@@ -2067,8 +2115,7 @@ class Window:
         # tuples to reassemble the icons based on the expressions and sequences to which
         # they were originally attached.
         topDraggingIcons = [ic for seq in draggingSequences for ic in seq]
-        self.dragging = [ic for top in topDraggingIcons for ic in
-            top.traverse(inclStmtComment=True)]
+        self.dragging = draggingSequences
         # Recalculate layouts for dirty icons remaining in the window and those that will
         # be dragged, and refresh the whole display with icon outlines turned on.
         self.layoutDirtyIcons()
@@ -2078,19 +2125,25 @@ class Window:
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
         moveRegion = comn.AccumRects()
-        for ic in self.dragging:
-            moveRegion.add(ic.rect)
+        for ic in topDraggingIcons:
+            moveRegion.add(ic.hierRect())
         el, et, er, eb = moveRegion.get()
         self.dragImageOffset = el - self.buttonDownLoc[0], et - self.buttonDownLoc[1]
         self.dragImage = Image.new('RGBA', (er - el, eb - et), color=(0, 0, 0, 0))
         self.lastDragImageRegion = None
-        for ic in self.dragging:
-            ic.rect = comn.offsetRect(ic.rect, -el, -et)
-            ic.draw(self.dragImage, style=icon.STYLE_OUTLINE)
-            # Looks better without connectors, but not willing to remove permanently, yet
-            # icon.drawSeqSiteConnection(ic, image=self.dragImage)
+        for topIc in topDraggingIcons:
+            for ic in topIc.traverse(inclStmtComment=True):
+                ic.rect = comn.offsetRect(ic.rect, -el, -et)
+                ic.draw(self.dragImage, style=icon.STYLE_OUTLINE)
         for ic in topDraggingIcons:
             icon.drawSeqRule(ic, image=self.dragImage)
+        # Make an additional transparent copy of the drag image to use when snapped to a
+        # replacement site
+        alphaImage = self.dragImage.getchannel('A')
+        enhancer = ImageEnhance.Brightness(alphaImage)
+        alphaImg = enhancer.enhance(DRAG_OVLY_OPACITY)
+        self.transparentDragimage = self.dragImage.copy()
+        self.transparentDragimage.putalpha(alphaImg)
         # Fine-tune the positioning of the drag image based on the specific part of the
         # icon that the user dragged (for example, a right paren)
         if btnDownIcPartPos is not None:
@@ -2100,41 +2153,55 @@ class Window:
                 newPartOffset = icon.subtractPoints(btnDownIcPartPos, newPartPos)
                 self.dragImageOffset = icon.addPoints(self.dragImageOffset, newPartOffset)
         # Construct a master snap list for all mating sites between stationary and
-        # dragged icons
+        # dragged icons.  Earlier versions of this code carefully paired free outputs
+        # and seqInsert sites so the user could drag on a selection containing disjoint
+        # icons and have any one of them snap on to corresponding stationary sites.  This
+        # was unnecessary and counter productive, as the primary use-case for multi-
+        # sequence dragging is moving groups of icons, where any snapping is probably
+        # unintended and undesirable.  Now we just choose a single attachment site based
+        # on the clicked icon.
         draggingOutputs = []
         draggingSeqInserts = []
         draggingAttrOuts = []
         draggingCprhOuts = []
         draggingConditionals = []
-        for dragIcon in topDraggingIcons:
-            dragSnapList = dragIcon.snapLists()
-            for ic, (x, y), name in dragSnapList.get("output", []):
-                draggingOutputs.append(((x, y), ic, name))
-            for ic, (x, y), name in dragSnapList.get("seqInsert", []):
-                draggingSeqInserts.append(((x, y), ic, name))
-            for ic, (x, y), name in dragSnapList.get("attrOut", []):
-                draggingAttrOuts.append(((x, y), ic, name))
-            for ic, (x, y), name in dragSnapList.get("cprhOut", []):
-                draggingCprhOuts.append(((x, y), ic, name))
-            for ic, (x, y), name, siteType, test in dragSnapList.get("conditional", []):
-                draggingConditionals.append(((x, y), ic, name, test))
+        dragIcon = self.buttonDownIcon.topLevelParent()
+        dragIcon = icon.findSeqStart(dragIcon)
+        dragSnapList = dragIcon.snapLists()
+        for ic, (x, y), name in dragSnapList.get("output", []):
+            draggingOutputs.append(((x, y), ic, name))
+        for ic, (x, y), name in dragSnapList.get("seqInsert", []):
+            draggingSeqInserts.append(((x, y), ic, name))
+        for ic, (x, y), name in dragSnapList.get("attrOut", []):
+            draggingAttrOuts.append(((x, y), ic, name))
+        for ic, (x, y), name in dragSnapList.get("cprhOut", []):
+            draggingCprhOuts.append(((x, y), ic, name))
+        for ic, (x, y), name, siteType, test in dragSnapList.get("conditional", []):
+            draggingConditionals.append(((x, y), ic, name, test))
         stationaryInputs = []
-        draggingComment = any((isinstance(i, commenticon.CommentIcon) for i in
-            topDraggingIcons))
+        draggingComment = isinstance(dragIcon, commenticon.CommentIcon)
+        # The code has gone back and forth between supporting dedicated sites for list-
+        # style insert ('insertInput' type) and having a single insert site with modifier
+        # keys to disambiguate list insert from append/prepend.  Having just one type of
+        # insert site would make the sites less crowded, and could have a fairly easy to
+        # understand default behavior: if there is a matching open site then concatenate,
+        # otherwise add as list (if on series site), and use the shift key on drop to
+        # switch to the non-default option.  The current method trades higher required
+        # mouse precision, for less cognitive load on the user.
         for winIcon in self.findIconsInRegion(order='pick', inclModSeqIcon=True):
             snapLists = winIcon.snapLists()
-            for ic, pos, name in snapLists.get("input", []):
-                stationaryInputs.append((pos, 0, ic, "input", name, None))
-            for ic, pos, name in snapLists.get("insertInput", []):
-                stationaryInputs.append((pos, 0, ic, "insertInput", name, None))
-            for ic, pos, name in snapLists.get("attrIn", []):
-                stationaryInputs.append((pos, 0, ic, "attrIn", name, None))
-            for ic, pos, name in snapLists.get("insertAttr", []):
-                stationaryInputs.append((pos, 0, ic, "insertAttr", name, None))
-            for ic, pos, name in snapLists.get("cprhIn", []):
-                stationaryInputs.append((pos, 0, ic, "cprhIn", name, None))
-            for ic, pos, name in snapLists.get("insertCprh", []):
-                stationaryInputs.append((pos, 0, ic, "insertCprh", name, None))
+            if draggingComment:
+                # Allow comments to snap to all input types (for insert), but not to
+                # replace sites (except for whole-statement)
+                for snapType in ('input', 'attrIn', 'cprhIn', 'replaceStmt'):
+                    for ic, pos, name in snapLists.get(snapType, []):
+                        stationaryInputs.append((pos, 0, ic, snapType, name, None))
+            else:
+                for snapType in ('input', 'attrIn', 'cprhIn', 'insertInput',
+                        'replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
+                        'replaceStmtIc', 'replaceStmt'):
+                    for ic, pos, name in snapLists.get(snapType, []):
+                        stationaryInputs.append((pos, 0, ic, snapType, name, None))
             for ic, pos, name, siteType, test in snapLists.get("conditional", []):
                 stationaryInputs.append((pos, 0, ic, siteType, name, test))
             for ic, pos, name in snapLists.get("seqIn", []):
@@ -2163,19 +2230,21 @@ class Window:
             (sx, sy), sh, sIcon, sSiteType, sName, sTest = si
             matingSites = []
             for siteData in draggingOutputs:
-                if sSiteType in ('input', 'insertInput', 'seqIn', 'seqOut'):
+                if sSiteType in ('input', 'insertInput', 'seqIn', 'seqOut',
+                        'replaceExprIc', 'replaceStmtIc', 'replaceStmt'):
                     if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for siteData in draggingAttrOuts:
-                if sSiteType in ('attrIn', 'insertAttr'):
+                if sSiteType in ('attrIn', 'replaceAttrIc'):
                     if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for siteData in draggingCprhOuts:
-                if sSiteType in ('cprhIn', 'insertCprh'):
+                if sSiteType in ('cprhIn', 'replaceCprhIc'):
                     if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for siteData in draggingSeqInserts:
-                if sSiteType in ('seqIn', 'seqOut'):
+                if sSiteType in ('seqIn', 'seqOut', 'replaceStmtIc', 'replaceStmt',
+                        'replaceCprhIc'):
                     if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for pos, ic, name, test in draggingConditionals:
@@ -2190,27 +2259,54 @@ class Window:
     def _updateDrag(self, evt):
         if not self.dragging:
             return
-        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
-        x = snappedX = self.dragImageOffset[0] + btnX
-        y = snappedY = self.dragImageOffset[1] + btnY
+        if self.dragTagetModePtrOffset is not None and not evt.state & SHIFT_MASK:
+            # The user has released the shift key: cancel target selection and resume
+            # normal dragging
+            self.dragTagetModePtrOffset = None
         # If the drag results in mating sites being within snapping distance, change the
         # drag position to mate them exactly (snap them together)
-        self.snapped = None
-        nearest = SNAP_DIST + 1
-        for sx, sy, sHgt, sIcon, movIcon, siteType, siteName in self.snapList:
-            if sHgt == 0 or y < sy:
-                dist = abs(x-sx) + abs(y-sy)
-            elif y > sy + sHgt:
-                dist = abs(x-sx) + abs(y-sy-sHgt)
-                sy += sHgt
-            else:  # y is vertically within the range of a sequence site
-                dist = abs(x-sx)
-                sy = y
-            if dist < nearest:
-                nearest = dist
-                snappedX = sx
-                snappedY = sy
-                self.snapped = (sIcon, movIcon, siteType, siteName)
+        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+        if self.dragTagetModePtrOffset is not None:
+            # If we're in drag-target selection mode, allow the drag image to move, even
+            # though we're technically snapped to the highlighted site
+            snappedX = self.dragImageOffset[0] + btnX
+            snappedY = self.dragImageOffset[1] + btnY
+        else:
+            x = snappedX = self.dragImageOffset[0] + btnX
+            y = snappedY = self.dragImageOffset[1] + btnY
+            wasSnapped = self.snapped
+            self.snapped = None
+            nearest = SNAP_DIST + 1
+            for sx, sy, sHgt, sIcon, movIcon, siteType, siteName in self.snapList:
+                if sHgt == 0 or y < sy:
+                    dist = abs(x-sx) + abs(y-sy)
+                elif y > sy + sHgt:
+                    dist = abs(x-sx) + abs(y-sy-sHgt)
+                    sy += sHgt
+                else:  # y is vertically within the range of a sequence site
+                    dist = abs(x-sx)
+                    sy = y
+                if dist < nearest:
+                    nearest = dist
+                    snappedX = sx
+                    snappedY = sy
+                    self.snapped = (sIcon, movIcon, siteType, siteName)
+            # Commented out code below is useful for debugging snapping
+            # if not wasSnapped and self.snapped:
+            #     sIcon, movIcon, siteType, siteName = self.snapped
+            #     print("snapped %s to %s type %s name %s" % (movIcon.dumpName(),
+            #         sIcon.dumpName(), siteType, siteName))
+            # If the user has pressed the shift key while the dragging icons are snapped
+            # to a replace site, switch to drag target selection mode
+            if evt.state & SHIFT_MASK and self.snapped is not None:
+                sIcon, movIcon, siteType, siteName = self.snapped
+                if siteType in ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
+                        'replaceStmtIc', 'replaceStmt'):
+                    sIconSnapList = sIcon.snapLists()
+                    snapSiteX, snapSiteY = sIconSnapList[siteType][0][1]
+                    snapBtnX = snappedX - self.dragImageOffset[0]
+                    snapBtnY = snappedY - self.dragImageOffset[1]
+                    self.dragTagetModePtrOffset = snapSiteX-snapBtnX, snapSiteY-snapBtnY
         # Erase the old drag image
         width = self.dragImage.width
         height = self.dragImage.height
@@ -2218,133 +2314,124 @@ class Window:
         if self.lastDragImageRegion is not None:
             for r in exposedRegions(self.lastDragImageRegion, dragImageRegion):
                 self.refresh(r, redraw=False)
+        # Manage highlighting of icons showing pending replacements
+        useTransparentDragImage = False
+        if self.dragTagetModePtrOffset is not None:
+            sIcon, movIcon, siteType, siteName = self.snapped
+            btnToSiteX, btnToSiteY = self.dragTagetModePtrOffset
+            pointerX = btnX + btnToSiteX
+            pointerY = btnY + btnToSiteY
+            snapSiteX, snapSiteY = sIcon.snapLists()[siteType][0][1]
+            if siteType == 'replaceStmt':
+                highlightedIcons = expredit.extendDragTargetByStmt(sIcon, pointerX,
+                    pointerY)
+            elif pointerX <= snapSiteX and pointerY <= snapSiteY:
+                step = int(math.sqrt((snapSiteX - pointerX)**2 + \
+                    (snapSiteY - pointerY)**2) / TARGET_SELECT_STEP_DIST)
+                topReplaceIc = expredit.extendDefaultReplaceSite(movIcon, sIcon)
+                highlightedIcons = expredit.extendDragTargetStructural(topReplaceIc, step)
+                useTransparentDragImage = True
+            else:
+                highlightedIcons = expredit.extendDragTargetLexical(sIcon, pointerX,
+                    pointerY)
+        else:
+            snappedToReplaceSite = self.snapped is not None and (self.snapped[2] in
+                ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc', 'replaceStmtIc',
+                 'replaceStmt') or self.snapped[3] == 'replaceComment')
+            if snappedToReplaceSite:
+                sIcon, movIcon, siteType, siteName = self.snapped
+                topReplaceIc = expredit.extendDefaultReplaceSite(movIcon, sIcon)
+                highlightedIcons = set(topReplaceIc.traverse(inclStmtComment=
+                    self.snapped[2] == 'replaceStmt'))
+                useTransparentDragImage = True
+            else:
+                highlightedIcons = set()
+        if self.highlightedForReplace != highlightedIcons:
+            redrawRegion = comn.AccumRects()
+            for ic in self.highlightedForReplace | highlightedIcons:
+                redrawRegion.add(ic.rect)
+            self.highlightedForReplace = highlightedIcons
+            self.refresh(redrawRegion.get(), redraw=True, showOutlines=True)
         # Draw the image of the moving icons in their new locations directly to the
         # display (leaving self.image clean).  This makes dragging fast by eliminating
-        # individual icon drawing of while the user is dragging.
+        # individual icon drawing while the user is dragging.
         crop = self.contentToImageRect(dragImageRegion)
         dragImage = self.image.crop(crop)
-        dragImage.paste(self.dragImage, mask=self.dragImage)
+        if useTransparentDragImage:
+            dragImage.paste(self.transparentDragimage, mask=self.transparentDragimage)
+        else:
+            dragImage.paste(self.dragImage, mask=self.dragImage)
         self.drawImage(dragImage, self.contentToImageCoord(snappedX, snappedY))
         self.lastDragImageRegion = dragImageRegion
 
-    def _endDrag(self):
-        # self.dragging icons are not stored hierarchically, but are in draw order
-        topDraggedIcons = findTopIcons(self.dragging)
-        l, t, r, b = self.lastDragImageRegion
-        for ic in self.dragging:
-            ic.rect = comn.offsetRect(ic.rect, l, t)
+    def _endDrag(self, evt):
+        topDraggingIcons = [ic for seq in self.dragging for ic in seq]
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             statIcon, movIcon, siteType, siteName = self.snapped
             if siteName == "stmtComment":
-                topDraggedIcons.remove(movIcon)
-                if hasattr(statIcon, 'stmtComment'):
-                    statIcon.stmtComment.detachStmtComment()
-                movIcon.attachStmtComment(statIcon)
+                rightmostIc, rightmostSite = icon.rightmostSite(statIcon)
+                self.insertIconsFromSequences(rightmostIc, rightmostSite, self.dragging)
             elif siteType == "input":
-                topDraggedIcons.remove(movIcon)
-                if hasattr(movIcon, 'stmtComment'):
-                    # Icon owning stmt comment is no longer top icon.  Move or merge
-                    stmtComment = movIcon.stmtComment
-                    stmtComment.detachStmtComment()
-                    topParent = statIcon.topLevelParent()
-                    if hasattr(topParent, 'stmtComment'):
-                        topParent.stmtComment.insertText(' ' + stmtComment.string, "end")
-                    else:
-                        stmtComment.attachStmtComment(topParent)
-                if isinstance(movIcon, listicons.TupleIcon) and movIcon.noParens:
-                    if iconsites.isSeriesSiteId(siteName):
-                        # Splice in naked tuple to series
-                        statIcon.replaceChild(None, siteName)
-                        seriesName, seriesIdx = iconsites.splitSeriesSiteId(siteName)
-                        statIcon.insertChildren(movIcon.argIcons(), seriesName, seriesIdx)
-                    elif isinstance(statIcon, parenicon.CursorParenIcon) and \
-                            siteName == 'argIcon':
-                        # Convert paren to tuple, then splice in tuple series
-                        newTuple = entryicon.cvtCursorParenToTuple(statIcon,
-                            statIcon.closed, False)
-                        newTuple.replaceChild(None, 'argIcons_0')
-                        newTuple.insertChildren(movIcon.argIcons(), 'argIcons_0')
-                    else:
-                        movIcon.restoreParens()
-                        statIcon.replaceChild(movIcon, siteName)
+                if evt.state & SHIFT_MASK:
+                    self.insertIconsFromSequences(statIcon, siteName, self.dragging,
+                        asSeries=True)
                 else:
-                    statIcon.replaceChild(movIcon, siteName)
+                    self.insertIconsFromSequences(statIcon, siteName, self.dragging)
             elif siteType == "attrIn":
-                topDraggedIcons.remove(movIcon)
-                statIcon.replaceChild(movIcon, siteName)
+                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
             elif siteType == "insertInput":
-                topDraggedIcons.remove(movIcon)
-                seriesName, seriesIdx = iconsites.splitSeriesSiteId(siteName)
-                if seriesName[-3:] == "Dup":
-                    seriesName = seriesName[:-3]
-                if isinstance(movIcon, listicons.TupleIcon) and movIcon.noParens:
-                    # Splice in naked tuple
-                    statIcon.insertChildren(movIcon.argIcons(), seriesName, seriesIdx)
-                else:
-                    statIcon.insertChild(movIcon, seriesName, seriesIdx)
-            elif siteType == "insertAttr":
-                topDraggedIcons.remove(movIcon)
-                statIcon.insertAttr(movIcon)
+                self.insertIconsFromSequences(statIcon, siteName, self.dragging,
+                    asSeries=True)
             elif siteType == "cprhIn":
-                topDraggedIcons.remove(movIcon)
-                subsIcons, alsoRemove = restoreFromCanonicalInterchangeIcon(movIcon,
-                    siteType)
-                if subsIcons is not None:
-                    for ic in alsoRemove:
-                        topDraggedIcons.remove(ic)
-                    statIcon.replaceChild(None, siteName)
-                    statIcon.insertChildren(subsIcons, siteName)
-                else:
-                    statIcon.replaceChild(movIcon, siteName)
-                statIcon.close()
-            elif siteType == "insertCprh":
-                topDraggedIcons.remove(movIcon)
-                subsIcons, alsoRemove = restoreFromCanonicalInterchangeIcon(movIcon,
-                    siteType)
-                if subsIcons is not None:
-                    for ic in alsoRemove:
-                        topDraggedIcons.remove(ic)
-                    statIcon.insertChildren(subsIcons, siteName)
-                else:
-                    statIcon.insertChild(movIcon, siteName)
+                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+            elif siteName in ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
+                    'replaceStmtIc', 'replaceStmt', 'replaceComment'):
+                self.replaceSelectedIcons(self.highlightedForReplace, self.dragging)
             elif siteType == 'seqOut':
-                icon.insertSeq(movIcon, statIcon)
+                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
             elif siteType == 'seqIn' and siteName == 'prefixInsert':
                 # This is the insert site of a line comment, used to convert it to a
                 # statement comment
-                topDraggedIcons.remove(movIcon)
-                self.replaceTop(statIcon, movIcon)
-                statIcon.attachStmtComment(movIcon)
+                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
             elif siteType == 'seqIn':
-                icon.insertSeq(movIcon, statIcon, before=True)
-        # Dropping an entry icon on the top level outside of a sequence may allow it to
-        # be removed, since placeholders are not needed
-        unsequencedEntryIcons = [ic for ic in topDraggedIcons \
-            if isinstance(ic, entryicon.EntryIcon) and ic.parent() is None and \
-            ic.childAt('seqIn') is None and ic.childAt('seqOut') is None and ic.text == '']
-        for ic in unsequencedEntryIcons:
-            pendingArgs = ic.listPendingArgs()
-            nonEmptyArgs = list(icon.placementListIter(pendingArgs,
-                includeEmptySeriesSites=False))
-            if len(nonEmptyArgs) == 0:
-                topDraggedIcons.remove(ic)
-            if len(nonEmptyArgs) == 1:
-                topDraggedIcons.remove(ic)
-                ic.popPendingArgs("all")
-                arg = nonEmptyArgs[0][0]
-                subsIc = listicons.subsCanonicalInterchangeIcon(arg)
-                if subsIc is not None:
-                    filefmt.moveIconToPos(subsIc, ic.pos())
-                    topDraggedIcons.append(subsIc)
-                    topDraggedIcons.append(subsIc.blockEnd)
-                    arg = subsIc
-                else:
-                    topDraggedIcons.append(arg)
-                if self.cursor.type in ('icon', 'text') and self.cursor.icon is ic:
-                    self.cursor.setToIconSite(arg, cursors.topSite(arg))
-        self.addTop(topDraggedIcons)
+                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+        else:
+            # Not snapped.  Place on window background.  Dropping an entry icon on the
+            # top level outside of a sequence may allow it to be removed, since
+            # placeholders are not needed
+            l, t, r, b = self.lastDragImageRegion
+            for topIc in topDraggingIcons:
+                for ic in topIc.traverse(inclStmtComment=True):
+                    ic.rect = comn.offsetRect(ic.rect, l, t)
+            unsequencedEntryIcons = [ic for ic in topDraggingIcons \
+                if isinstance(ic, entryicon.EntryIcon) and ic.parent() is None and \
+                ic.childAt('seqIn') is None and ic.childAt('seqOut') is None and \
+                ic.text == '']
+            for ic in unsequencedEntryIcons:
+                pendingArgs = ic.listPendingArgs()
+                nonEmptyArgs = list(icon.placementListIter(pendingArgs,
+                    includeEmptySeriesSites=False))
+                if len(nonEmptyArgs) == 0:
+                    topDraggingIcons.remove(ic)
+                if len(nonEmptyArgs) == 1:
+                    topDraggingIcons.remove(ic)
+                    ic.popPendingArgs("all")
+                    arg = nonEmptyArgs[0][0]
+                    subsIc = listicons.subsCanonicalInterchangeIcon(arg)
+                    if subsIc is not None:
+                        filefmt.moveIconToPos(subsIc, ic.pos())
+                        topDraggingIcons.append(subsIc)
+                        topDraggingIcons.append(subsIc.blockEnd)
+                        arg = subsIc
+                    else:
+                        topDraggingIcons.append(arg)
+                    if self.cursor.type in ('icon', 'text') and self.cursor.icon is ic:
+                        self.cursor.setToIconSite(arg, cursors.topSite(arg))
+            self.addTop(topDraggingIcons)
         self.dragging = None
+        self.highlightedForReplace = set()
+        self.dragTagetModePtrOffset = None
         self.snapped = None
         self.snapList = None
         self.buttonDownTime = None
@@ -2363,6 +2450,13 @@ class Window:
         self.snapped = None
         self.snapList = None
         self.buttonDownTime = None
+        self.dragTagetModePtrOffset = None
+        if len(self.highlightedForReplace) > 0:
+            redrawRegion = comn.AccumRects()
+            for ic in self.highlightedForReplace:
+                redrawRegion.add(ic.rect)
+            self.refresh(redrawRegion.get(), redraw=True, showOutlines=True)
+            self.highlightedForReplace = set()
 
     def _startRectSelect(self, evt):
         self.rectSelectCursor = self.cursor.saveState()
@@ -3087,8 +3181,12 @@ class Window:
         insert)."""
         if len(icons) == 0:
             return []
-        # deletedSet more efficiently determines if an icon is on the deleted list
-        deletedSet = set(icons)
+        # If parameter 'icons' is not already a set, turn it into one to more efficiently
+        # determines if an icon is on the deleted list.
+        if isinstance(icons, set):
+            deletedSet = icons
+        else:
+            deletedSet = set(icons)
         # Cursors and selections can coexist, and it is possible for the cursor to be on
         # an icon that is being deleted.  If so, move it to an icon that will remain.
         if self.cursor.type in ("icon", "text") and self.cursor.icon in deletedSet \
@@ -3299,19 +3397,23 @@ class Window:
             return deletedSeqs
         return None
 
-    def replaceSelectedIcons(self, insertedSequences):
-        """Remove the selected icons from the window and replace them with those listed
-        in insertedSequences.  Both removeIcons and insertIcons can be disjoint,
-        in which case, replace the topmost (and leftmost if there's a tie) contiguous
-        group of icons with icons in insertedSequences, and delete the remaining selected
-        icons.  If insertedSequences contains statement-only icons and the first
-        contiguous selection happens to be within code that cannot be broken apart to
-        insert such statements, the replacement will not be performed and the function
-        will return None, None.  On success, the function will return the icon and site
-        on which to place the cursor."""
+    def replaceSelectedIcons(self, selectedSet, insertedSequences):
+        """Remove the icons listed in selectDict from the window and replace them with
+        those listed in insertedSequences.  Both the removed and inserted icons can be
+        disjoint, in which case, replace the topmost (and leftmost if there's a tie)
+        contiguous group of icons with icons in insertedSequences, and delete the
+        remaining selected icons.  If insertedSequences contains statement-only icons and
+        the first contiguous selection happens to be within code that cannot be broken
+        apart to insert such statements, the replacement will not be performed and the
+        function will return None, None.  On success, the function will return the icon
+        and site on which to place the cursor.  Note that while the window keeps track of
+        selected icons using a set (self.selectedSet), it is not directly usable for the
+        selectedSet parameter, as it can contain icons that have been deleted.  To remove
+        those icons and make it usable, call _pruneSelectedIcons() before passing it to
+        this function."""
         firstStmtOfSelection, firstIconOfSelection, iconAfterFirstSelection, \
             spansStmtBoundaries, startsOnStmtBoundary, endsOnStmtBoundary = \
-            self.findFirstContiguousSelection()
+            self.findFirstContiguousSelection(selectedSet)
         # Figure out insert site based on the first contiguous selection.  Set
         # insertSiteIcon and insertSite to a site that will survive icon removal.  The
         # site also subtly indicates the type of insertion in the same way as the cursor
@@ -3357,7 +3459,7 @@ class Window:
                 leftSite = firstIconOfSelection.hasCoincidentSite()
                 if leftSite is None or firstIconOfSelection.childAt(leftSite) is None:
                     insertSiteIcon = firstIconOfSelection.parent()
-                    while insertSiteIcon in self.selectedSet:
+                    while insertSiteIcon in selectedSet:
                         # firstIconOfSelection is lexically first, but may be a (left
                         # argument) child of an icon that is part of the selected range
                         insertSiteIcon = insertSiteIcon.parent()
@@ -3452,7 +3554,7 @@ class Window:
         else:
             watchedIcon = None
         watchSubs = {watchedIcon:None} if watchedIcon is not None else None
-        self.removeIcons(self.selectedIcons(), watchSubs=watchSubs, preserveSite=
+        self.removeIcons(selectedSet, watchSubs=watchSubs, preserveSite=
             insertSiteIcon if isinstance(insertSiteIcon, listicons.TupleIcon) else None)
         if watchedIcon is not None and watchSubs[watchedIcon] is not None:
             # removeIcons did a substitution on the intended insert site
@@ -3484,9 +3586,10 @@ class Window:
                 coincSite = insertSiteIcon.hasCoincidentSite()
                 if coincSite is not None:
                     insertSite = coincSite
-        # Insert the new icons where the first selection section was removed
+        # Insert (all) the new icons where the first selection section was removed
+        asSeries = insertSiteIcon is not None and iconsites.isSeriesSiteId(insertSite)
         cursorIc, cursorSite = self.insertIconsFromSequences(insertSiteIcon, insertSite,
-            insertedSequences, insertPos)
+            insertedSequences, insertPos, asSeries=asSeries, alwaysConsolidate=True)
         # removeIcons operates entirely per-statement (does not join statements across
         # removed selections), but for a paste, this is what users will expect (I think),
         # so if the selection ended in the middle of a statement, join it to the last
@@ -3527,19 +3630,59 @@ class Window:
                     cursorStmt.window.addTop(comment)
         return cursorIc, cursorSite
 
-    def insertIconsFromSequences(self, atIcon, atSite, insertedSequences, atPos=None):
+    def insertIconsFromSequences(self, atIcon, atSite, insertedSequences, atPos=None,
+            asSeries=False, alwaysConsolidate=False):
         """Insert all of the icons in list of (already sequence-connected) sequences in
         insertedSequences.  For pasting at a window-cursor, set atIcon to None and
         specify atPos as the position in the window at which to place them.  If
         insertedSequences contains statement-only icons and the insertion site is within
         code that cannot be broken apart to insert such statements, the insertion will
         not be performed and the function will return None, None.  On success, return
-        the icon and site on which to place the cursor after the operation."""
+        the icon and site on which to place the cursor after the operation.  If asSeries
+        is set to True, force insertion as a series element if possible.  In the case of
+        placing at a window location (atIcon==None and window position in atPos), the
+        inserted sequences are not combined into a single sequence or series as they are
+        in all other cases, but placed in separate sequences with their existing
+        positions offset by atPos (the user is relocating loose icons).  If this is not
+        the desired behavior (such as when processing a replace operation) setting
+        alwaysConsolidate to True, tells the function to combine the sequences as normal,
+        and also to treat atPos as overriding the position for the icon or sequence, as
+        opposed to an offset to its existing position."""
+        # Analyze the inserted sequences to determine what we will be able do with them
+        insertingStmtOnlyIcons = insertingNonExprIcons = False
+        numExprsInserted = numStmtsInserted = 0
+        for ic in (i for seq in insertedSequences for i in seq):
+            if expredit.isStmtLevelOnly(ic) and \
+                    not isinstance(ic, commenticon.VerticalBlankIcon):
+                insertingStmtOnlyIcons = True
+            if ic.hasSite('output'):
+                if isinstance(ic, listicons.TupleIcon) and ic.noParens:
+                    numExprsInserted += 2  # Anything > 1 is all the same
+                else:
+                    numExprsInserted += 1
+            elif not isinstance(ic, commenticon.VerticalBlankIcon):
+                insertingNonExprIcons = True
+            numStmtsInserted += 1
+        # Handle the case of "inserting" to the window background (not integrating with
+        # other icons).  Unlike insertions into existing code, we will not aggregate them
+        # (unless alwaysConsolidate is True), but instead add them as individual new
+        # sequences. maintaining their relative positions, but offset to atPos.
         if atIcon is None:
-            # We're "inserting" to the window background, and not integrating with other
-            # icons.  Unlike insertions into existing code, we don't aggregate them, but
-            # instead add them as individual new sequences. maintaining their relative
-            # positions, but offset to atPos.
+            if alwaysConsolidate:
+                if asSeries and not insertingNonExprIcons:
+                    insertList, strippedComments = cvtSeqsToList(insertedSequences)
+                    newTuple = listicons.TupleIcon(window=self, noParens=True)
+                    newTuple.insertChildren(insertList)
+                    if len(strippedComments) > 0:
+                        stmtComment = strippedComments.pop(0)
+                        stmtComment.attachStmtComment(newTuple)
+                        for comment in strippedComments:
+                            stmtComment.mergeTextFromComment(comment)
+                    topInsIcons =[newTuple]
+                else:
+                    _, topInsIcons = concatenateSequences(insertedSequences)
+                filefmt.moveIconToPos(topInsIcons[0], (0, 0))
+                insertedSequences = [topInsIcons]
             cursorStmt = insertedSequences[-1][-1]
             for seq in insertedSequences:
                 x, y = atPos
@@ -3612,24 +3755,10 @@ class Window:
         # The one case we can't handle is when the inserted code contains statement-only
         # icons, and the destination is within an enclosing icon that bounds it from
         # being split.  Bail out and return failure indication if that is the case.
-        insertingStmtOnlyIcons = insertingNonExprIcons = False
-        numExprsInserted = numStmtsInserted = 0
-        for ic in (i for seq in insertedSequences for i in seq):
-            if expredit.isStmtLevelOnly(ic) and \
-                    not isinstance(ic, commenticon.VerticalBlankIcon):
-                insertingStmtOnlyIcons = True
-            if ic.hasSite('output'):
-                if isinstance(ic, listicons.TupleIcon) and ic.noParens:
-                    numExprsInserted += 2  # Anything > 1 is all the same
-                else:
-                    numExprsInserted += 1
-            elif not isinstance(ic, commenticon.VerticalBlankIcon):
-                insertingNonExprIcons = True
-            numStmtsInserted += 1
         isLeftmostSite = expredit.isLeftmostSite(atIcon, atSite) or atSite == 'seqIn'
         rightmostIcon, rightmostSite = icon.rightmostSite(atIcon.topLevelParent())
-        isRightmostSite = rightmostIcon == atIcon and (atSite == rightmostSite or
-            atSite == 'seqOut')
+        isRightmostSite = rightmostIcon == atIcon and atSite == rightmostSite or \
+            atSite == 'seqOut'
         topIcon = atIcon.topLevelParent()
         enclosingIcon, enclosingSite = entryicon.findEnclosingSite(atIcon, atSite)
         if insertingStmtOnlyIcons and not isLeftmostSite and not isRightmostSite and \
@@ -3676,7 +3805,7 @@ class Window:
             # or def, and need to redirect to the seqOut site
             atSite = 'seqOut'
             insertAsStmts = True
-        elif not insertingNonExprIcons and numExprsInserted > 1 and (
+        elif not insertingNonExprIcons and (numExprsInserted > 1 or asSeries) and (
                 enclosingIcon is not None and
                 enclosingIcon.typeOf(enclosingSite) == 'input' or
                 enclosingIcon is None and atIcon.topLevelParent().hasSite('output')):
@@ -3817,8 +3946,8 @@ class Window:
                     stmtComment.mergeTextFromComment(comment)
         return cursorIcon, cursorSite
 
-    def findFirstContiguousSelection(self):
-        """Find the first (top left) selected icon(s) in the window.  Returns:
+    def findFirstContiguousSelection(self, selectedSet):
+        """Find the first (top left) icon(s) in the window in selectedSet.  Returns:
         1) The top-level statement icon containing the start of the selection
         2) The (lexically) leftmost icon of the selection (start of selection).  If the
            selection starts with an empty site (which it can because this is lexical
@@ -3830,7 +3959,7 @@ class Window:
         # Find the top left selected icon
         topLeft = 99999999, 99999999
         topLeftIc = None
-        for ic in self.selectedIcons():
+        for ic in selectedSet:
             pos = ic.pos()
             if pos[1] < topLeft[1] or pos[1] == topLeft[1] and pos[0] < topLeft[0]:
                 topLeft = pos
@@ -3852,14 +3981,14 @@ class Window:
         firstIconOfSelection = None
         startsOnStmtBoundary = True
         spansStmtBoundaries = False
-        for ic in expredit.lexicalTraverse(firstSelectedStmt):
+        for ic, partId in expredit.lexicalTraverse(firstSelectedStmt):
             if isinstance(ic, tuple):  # Empty site indicator (NOT tuple icon)
                 # Empty site: What we do depends upon whether the parent is selected or
                 # not.  If the parent is selected, we consider the empty site part of the
                 # selection, and part of the contiguous run.  If not, then we consider it
                 # to be unselected and therefore, the end of the contiguous selection.
                 parent, parentSite = ic
-                if parent in self.selectedSet:
+                if parent in selectedSet:
                     if not foundSelection:
                         # Found the start of the selection
                         foundSelection = True
@@ -3867,7 +3996,7 @@ class Window:
                     continue
                 return firstSelectedStmt, firstIconOfSelection, None, \
                     spansStmtBoundaries, startsOnStmtBoundary, False
-            elif ic in self.selectedSet:
+            elif ic in selectedSet:
                 if not foundSelection:
                     # Found the start of the selection
                     foundSelection = True
@@ -3884,22 +4013,32 @@ class Window:
             return None, None, None, False, False, False
         # The first contiguous selection reaches the right edge of the statement.  Scan
         # (in lexical order) subsequent statements for the first un-selected icon.
+        unselBlockEnd = None
         for stmt in icon.traverseSeq(firstSelectedStmt, includeStartingIcon=False):
             # If we haven't yet determined if the selection spans the first statement
             # boundary, explicitly check that the selection crosses the first icon
-            for i, ic in enumerate(expredit.lexicalTraverse(stmt)):
-                if ic not in self.selectedSet:
+            if isinstance(stmt, icon.BlockEnd):
+                # It's normal to have unselected block-ends within the selected range, as
+                # they reflect the selection status of the block owner, but if the
+                # selection ends immediately after one, the block end is appropriate as
+                # the first unselec
+                unselBlockEnd = stmt
+                continue
+            for i, (ic, partId) in enumerate(expredit.lexicalTraverse(stmt)):
+                if ic not in selectedSet:
                     if i == 0:
                         # The selection ends at the start of this statement
-                        return firstSelectedStmt, firstIconOfSelection, \
-                            ic, spansStmtBoundaries, startsOnStmtBoundary, True
+                        icAfterSel = stmt if unselBlockEnd is None else unselBlockEnd
+                        return firstSelectedStmt, firstIconOfSelection, icAfterSel, \
+                            spansStmtBoundaries, startsOnStmtBoundary, True
                     else:
                         # The selection ends in the middle of the statement
                         spansStmtBoundaries = True
                         return firstSelectedStmt, firstIconOfSelection, ic, \
                             spansStmtBoundaries, startsOnStmtBoundary, False
+            unselBlockEnd = None
         # We reached the end of the sequence (therefore selection ends on stmt boundary)
-        return firstSelectedStmt, firstIconOfSelection, None, \
+        return firstSelectedStmt, firstIconOfSelection, unselBlockEnd, \
             spansStmtBoundaries, startsOnStmtBoundary, True
 
     def saveFile(self, filename):
@@ -5155,7 +5294,7 @@ def restoreFromCanonicalInterchangeIcon(ic, siteType):
     (see listicons.subsCanonicalInterchangeIcon for what this means).  If so, returns
     A LIST of icons to substitute and a list of linked icons (blockEnd and possibly pass)
     that also need to be removed.  If not, returns None, None."""
-    if siteType not in ('cprhIn', 'insertCprh'):
+    if siteType != 'cprhIn':
         return None, None
     if isinstance(ic, blockicons.ForIcon):
         subsIcon = listicons.CprhForIcon(isAsync=ic.stmt == "async for",

@@ -564,16 +564,11 @@ class ListTypeIcon(icon.Icon):
             icon.Icon.replaceChild(self, newChild, siteId, leavePlace, childSite)
 
     def snapLists(self, forCursor=False):
-        # Add snap sites for insertion to those representing actual attachment sites
+        # Add snap sites for series insertion.  Note that while comprehension clauses are
+        # technically a 'series', they don't need dedicated series insertion sites since
+        # clause insertion is clearly distinguishable from the inserted content.
         siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
-        if self.isComprehension():
-            if forCursor:
-                return siteSnapLists
-            x = self.rect[0] + icon.INSERT_SITE_X_OFFSET
-            y = self.rect[1] + self.sites.cprhIcons[0].yOffset + icon.INSERT_SITE_Y_OFFSET
-            siteSnapLists['insertCprh'] = [(self, (x + site.xOffset, y), site.name)
-             for site in self.sites.cprhIcons[:-1]]
-        else:
+        if not self.isComprehension():
             siteSnapLists['insertInput'] = self.argList.makeInsertSnapList()
             if not self.acceptsComprehension():
                 del siteSnapLists['cprhIn']
@@ -2049,7 +2044,7 @@ class CprhForIcon(icon.Icon):
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
 
     def snapLists(self, forCursor=False):
-        # Add snap sites for insertion
+        # Add snap sites for series insertion
         siteSnapLists = icon.Icon.snapLists(self, forCursor=forCursor)
         siteSnapLists['insertInput'] = self.tgtList.makeInsertSnapList()
         return siteSnapLists
@@ -2329,23 +2324,19 @@ class CprhForIcon(icon.Icon):
 
 class DictElemIcon(infixicon.InfixIcon):
     """Individual entry in a dictionary constant"""
+    # Defining 'allowableParents' triggers two important and non-obvious external
+    # features related to snapping: 1) It tells the super-class (InfixIcon) snapList
+    # method to make snapping conditional on the parent site being directly on an icon
+    # of the given class and a site with the given name.  2) It enables dragged icons of
+    # this class to also snap to replacement sites of icons that are coincident with (but
+    # not directly attached to) the listed icons and sites.  The mechanism for #2 is
+    # handled in expredit.extendDefaultReplaceSite, which notices snapped icons with an
+    # allowableParents attribute and expands the replace target to reach the allowable
+    # parent site, provided that the icon being replaced is coincident with that site.
+    allowableParents = {'DictIcon':'argIcons'}
+
     def __init__(self, window=None, location=None):
         infixicon.InfixIcon.__init__(self, ":", colonImage, False, window, location)
-
-    def snapLists(self, forCursor=False):
-        # Make snapping conditional on parent being a dictionary constant
-        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
-        if forCursor:
-            return snapLists
-        def snapFn(ic, siteId):
-            siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
-            return isinstance(ic, DictIcon) and siteName == "argIcons"
-        if 'output' in snapLists:
-            outSites = snapLists['output']
-            snapLists['output'] = []
-            snapLists['conditional'] = \
-                    [(*snapData, 'output', snapFn) for snapData in outSites]
-        return snapLists
 
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
@@ -2378,24 +2369,20 @@ class DictElemIcon(infixicon.InfixIcon):
 
 class ArgAssignIcon(infixicon.InfixIcon):
     """Special assignment statement for use only in function argument lists"""
+    # Defining 'allowableParents' triggers two important and non-obvious external
+    # features related to snapping: 1) It tells the super-class (InfixIcon) snapList
+    # method to make snapping conditional on the parent site being directly on an icon
+    # of the given class and a site with the given name.  2) It enables dragged icons of
+    # this class to also snap to replacement sites of icons that are coincident with (but
+    # not directly attached to) the listed icons and sites.  The mechanism for #2 is
+    # handled in expredit.extendDefaultReplaceSite, which notices snapped icons with an
+    # allowableParents attribute and expands the replace target to reach the allowable
+    # parent site, provided that the icon being replaced is coincident with that site.
+    allowableParents = {'CallIcon':'argIcons', 'DefIcon':'argIcons',
+        'LambdaIcon':'argIcons', 'ClassDefIcon':'argIcons'}
+
     def __init__(self, window=None, location=None):
         infixicon.InfixIcon.__init__(self, "=", argAssignImage, False, window, location)
-
-    def snapLists(self, forCursor=False):
-        # Make snapping conditional on being part of an argument or parameter list
-        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
-        if forCursor:
-            return snapLists
-        def snapFn(ic, siteId):
-            siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
-            return ic.__class__ in (CallIcon, blockicons.DefIcon, blockicons.LambdaIcon,
-                blockicons.ClassDefIcon) and siteName == "argIcons"
-        if 'output' in snapLists:  # ArgAssigns can end up in a sequence (via deletion)
-            outSites = snapLists['output']
-            snapLists['output'] = []
-            snapLists['conditional'] = \
-                [(*snapData, 'output', snapFn) for snapData in outSites]
-        return snapLists
 
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
@@ -2441,9 +2428,11 @@ class ArgAssignIcon(infixicon.InfixIcon):
         if parent is None:
             return forHighlight and self.sites.seqIn.att is None and \
                    self.sites.seqOut.att is None
+        allowableSite = self.allowableParents.get(parent.__class__.__name__)
+        if allowableSite is None:
+            return False
         siteName, _ = iconsites.splitSeriesSiteId(parent.siteOf(self))
-        return isinstance(parent, (CallIcon, blockicons.DefIcon, blockicons.LambdaIcon,
-            blockicons.ClassDefIcon)) and siteName == 'argIcons'
+        return allowableSite == siteName
 
     def execute(self):
         if self.sites.leftArg.att is None:

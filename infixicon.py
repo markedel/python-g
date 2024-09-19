@@ -70,8 +70,6 @@ class InfixIcon(icon.Icon):
             self.drawList.append(((leftArgX + self.leftArgWidth - 1, 0), self.opImg))
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
-        if temporaryOutputSite or suppressSeqSites:
-            self.drawList = None  # Don't keep after drawing (see above)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         self.leftArgWidth = layout.lArgWidth
@@ -140,6 +138,61 @@ class InfixIcon(icon.Icon):
     def rightArg(self):
         return self.sites.rightArg.att if self.sites.rightArg is not None else None
 
+    def leftAssoc(self):
+        return True
+
+    def rightAssoc(self):
+        return False
+
+    def snapLists(self, forCursor=False):
+        # Add replace site in the center of the icon (default snap site generation does
+        # not automatically create these for icons with sites coincident with their
+        # outputs, since it does not know where the icon body is.
+        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
+        x, y = self.rect[:2]
+        centerX = self.sites.rightArg.xOffset - self.opImg.width // 2
+        bottomY = self.sites.output.yOffset + icon.REPLACE_SITE_Y_OFFSET
+        snapLists['replaceExprIc'] = [(self, (x+centerX, y+bottomY), 'replaceExprIc')]
+        if forCursor or not hasattr(self, 'allowableParents'):
+            return snapLists
+        # For subclass icon types that define an 'allowableParents' attribute, make
+        # snapping  conditional on being snapped directly to the listed site of the named
+        # icon class(es), or to the replace sites of icons coincident with those listed
+        # in allowableParents (see below)
+        def snapFn(ic, siteId):
+            if isinstance(ic, self.__class__) and siteId == 'replaceExprIc':
+                return True
+            if siteId == 'replaceExprIc':
+                # Also allow snapping to replace sites on leftmost icon in allowable
+                # parent sites.  Note that the mechanics of processing this modified use
+                # of a replace site are handled in expredit.extendDefaultReplaceSite,
+                # which notices snapped icons with allowableParents attributes and
+                # expands the replace target to reach the allowable parent site, provided
+                # that the icon being replaced is coincident with that site.
+                highestIcon = iconsites.highestCoincidentIcon(ic)
+                parent = highestIcon.parent()
+                if parent is not None:
+                    allowable = self.allowableParents.get(parent.__class__.__name__)
+                    if allowable is not None :
+                        parentSite = parent.siteOf(highestIcon)
+                        if iconsites.isSeriesSiteId(parentSite):
+                            parentSite, _ = iconsites.splitSeriesSiteId(parentSite)
+                        if allowable == parentSite:
+                            return True
+            if iconsites.isSeriesSiteId(siteId):
+                siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
+            else:
+                siteName = siteId
+            allowable = self.allowableParents.get(ic.__class__.__name__)
+            if allowable is not None and allowable == siteName:
+                return True
+        if 'output' in snapLists:  # Infix icons can end up in a sequence (via deletion)
+            outSites = snapLists['output']
+            snapLists['output'] = []
+            snapLists['conditional'] = \
+                [(*snapData, 'output', snapFn) for snapData in outSites]
+        return snapLists
+
     def backspace(self, siteId, evt):
         if siteId == 'leftArg':
             # We shouldn't be called in this case, because we have no content to the
@@ -148,8 +201,10 @@ class InfixIcon(icon.Icon):
         entryIcon = self._becomeEntryIcon()
         self.window.cursor.setToText(entryIcon, drawNew=False)
 
-    def offsetOfPart(self, partId):
-        return self.sites.rightArg.xOffset - self.opImg.width, 0
+    def drawListIdxToPartId(self, idx):
+        if self.parent() is None:
+            return idx + 1
+        return idx + 2
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
         if clickPos is not None:
@@ -205,30 +260,20 @@ class InfixIcon(icon.Icon):
         return entryIcon
 
 class AsIcon(InfixIcon):
+    # Defining 'allowableParents' triggers two important and non-obvious external
+    # features related to snapping: 1) It tells the super-class (InfixIcon) snapList
+    # method to make snapping conditional on the parent site being directly on an icon
+    # of the given class and a site with the given name.  2) It enables dragged icons of
+    # this class to also snap to replacement sites of icons that are coincident with (but
+    # not directly attached to) the listed icons and sites.  The mechanism for #2 is
+    # handled in expredit.extendDefaultReplaceSite, which notices snapped icons with an
+    # allowableParents attribute and expands the replace target to reach the allowable
+    # parent site, provided that the icon being replaced is coincident with that site.
     allowableParents = {"WithIcon": "values", "ImportIcon": "values",
         "ImportFromIcon": "importsIcons", "ExceptIcon": "typeIcon"}
 
     def __init__(self, window=None, location=None):
         InfixIcon.__init__(self, "as", None, True, window, location)
-
-    def snapLists(self, forCursor=False):
-        # Make snapping conditional on parent being a "with" or "import" statement
-        snapLists = icon.Icon.snapLists(self, forCursor=forCursor)
-        if forCursor:
-            return snapLists
-        def snapFn(ic, siteId):
-            if iconsites.isSeriesSiteId(siteId):
-                siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
-            else:
-                siteName = siteId
-            allowable = self.allowableParents.get(ic.__class__.__name__)
-            return allowable is not None and allowable == siteName
-        if 'output' in snapLists:
-            outSites = snapLists['output']
-            snapLists['output'] = []
-            snapLists['conditional'] = \
-                [(*snapData, 'output', snapFn) for snapData in outSites]
-        return snapLists
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         parent = self.parent()
