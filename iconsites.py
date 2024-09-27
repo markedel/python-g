@@ -458,17 +458,11 @@ class IconSiteList:
             hasPrev = ic.prevInSeq() is not None
             if hasPrev and site.type in ('output', 'seqInsert') and not forCursor:
                 continue
-            # If the icon is in a sequence, convert the output site to a seqInsert
-            hasNext = ic.nextInSeq()
-            if site.type == 'output' and (hasPrev or hasNext) and not forCursor:
-                siteType = 'seqInsert'
-            else:
-                siteType = site.type
             # Add the snap site to the list
-            if siteType not in snapSites:
-                snapSites[siteType] = []
-            snapSites[siteType].append((ic, (x + site.xOffset, y + site.yOffset),
-             site.name))
+            if site.type not in snapSites:
+                snapSites[site.type] = []
+            snapSites[site.type].append((ic, (x + site.xOffset, y + site.yOffset),
+                site.name))
         # Add a replace site to the right of and slightly below the output site, unless
         # that puts it too close to the right edge of the icon, in which case back it off
         # by half of the exceeded distance.

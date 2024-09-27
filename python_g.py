@@ -2076,6 +2076,10 @@ class Window:
         btnDownIcPartPos = icon.addPoints(self.buttonDownIcon.rect[:2],
             self.buttonDownIcon.offsetOfPart(self.buttonDownIcPart))
         self.cancelAllTypeovers(draw=False)
+        # Add a (probably redundant) undo boundary, because _cancelDrag uses undo to
+        # restore the pre-drag state, and we need to guarantee that cancelling a drag
+        # will not overstep and affect an operation unrelated to the drag.
+        self.undo.addBoundary()
         # Remove the icons from the window image and handle the resulting detachments
         # re-layouts, and redrawing.  removeIcons (with assembleDeleted=True) also does
         # the important job of re-building deleted icons into a set of dragable sequences
@@ -2110,6 +2114,11 @@ class Window:
                 draggingSequences = [[self.buttonDownIcon]]
             else:
                 btnDownIcPartPos = None
+        # Sort the sequence list by relative start position, because ordering of loose
+        # icons matters to the insert and replace operations that coalesce them into
+        # lists or sequences.  Note that this places the tree on which the user started
+        # the drag, ahead of other icons, even if it is not the top/left statement.
+        sortSeqsForDrag(draggingSequences, self.buttonDownIcon)
         # Note that the icons we'll actually drag may not be identical to the function
         # parameter (icons) because removeIcons may have added placeholders or naked
         # tuples to reassemble the icons based on the expressions and sequences to which
@@ -2180,6 +2189,7 @@ class Window:
             draggingConditionals.append(((x, y), ic, name, test))
         stationaryInputs = []
         draggingComment = isinstance(dragIcon, commenticon.CommentIcon)
+        compatibleWithExpr = canCvtSeqsToList(draggingSequences)
         # The code has gone back and forth between supporting dedicated sites for list-
         # style insert ('insertInput' type) and having a single insert site with modifier
         # keys to disambiguate list insert from append/prepend.  Having just one type of
@@ -2230,8 +2240,11 @@ class Window:
             (sx, sy), sh, sIcon, sSiteType, sName, sTest = si
             matingSites = []
             for siteData in draggingOutputs:
-                if sSiteType in ('input', 'insertInput', 'seqIn', 'seqOut',
-                        'replaceExprIc', 'replaceStmtIc', 'replaceStmt'):
+                if sSiteType in ('input', 'insertInput', 'replaceExprIc') and \
+                        compatibleWithExpr:
+                    if sTest is None or sTest(siteData[1], siteData[2]):
+                        matingSites.append(siteData)
+                if sSiteType in ('seqIn', 'seqOut', 'replaceStmtIc', 'replaceStmt'):
                     if sTest is None or sTest(siteData[1], siteData[2]):
                         matingSites.append(siteData)
             for siteData in draggingAttrOuts:
@@ -2445,18 +2458,23 @@ class Window:
         # Not properly cancelling drag, yet, just dropping the icons being dragged
         if self.dragging is None:
             return
-        self.refresh(self.lastDragImageRegion, redraw=True)
         self.dragging = None
         self.snapped = None
         self.snapList = None
         self.buttonDownTime = None
         self.dragTagetModePtrOffset = None
+        redrawRegion = comn.AccumRects(self.lastDragImageRegion)
         if len(self.highlightedForReplace) > 0:
-            redrawRegion = comn.AccumRects()
             for ic in self.highlightedForReplace:
                 redrawRegion.add(ic.rect)
-            self.refresh(redrawRegion.get(), redraw=True, showOutlines=True)
             self.highlightedForReplace = set()
+        self.refresh(redrawRegion.get(), redraw=True)
+        # Restore code removed by drag (if any).  This is a somewhat dangerous use of
+        # undo, as it will break if any code executed during the drag should an undo
+        # boundary.  We do at least add an extra boundary in _startDrag to make sure it
+        # doesn't go beyond (it would be nice to have marked undo boundaries, but not
+        # worth it as long as this is the only case).
+        self.undo.undo()
 
     def _startRectSelect(self, evt):
         self.rectSelectCursor = self.cursor.saveState()
@@ -3651,7 +3669,10 @@ class Window:
         # Analyze the inserted sequences to determine what we will be able do with them
         insertingStmtOnlyIcons = insertingNonExprIcons = False
         numExprsInserted = numStmtsInserted = 0
+        prevIc = None
         for ic in (i for seq in insertedSequences for i in seq):
+            if canCoalesceLooseAttr(prevIc, ic):
+                continue
             if expredit.isStmtLevelOnly(ic) and \
                     not isinstance(ic, commenticon.VerticalBlankIcon):
                 insertingStmtOnlyIcons = True
@@ -3660,9 +3681,11 @@ class Window:
                     numExprsInserted += 2  # Anything > 1 is all the same
                 else:
                     numExprsInserted += 1
-            elif not isinstance(ic, commenticon.VerticalBlankIcon):
+            elif not isinstance(ic, (commenticon.VerticalBlankIcon,
+                    commenticon.CommentIcon)):
                 insertingNonExprIcons = True
             numStmtsInserted += 1
+            prevIc = ic
         # Handle the case of "inserting" to the window background (not integrating with
         # other icons).  Unlike insertions into existing code, we will not aggregate them
         # (unless alwaysConsolidate is True), but instead add them as individual new
@@ -3913,7 +3936,7 @@ class Window:
                     if rightStmt is not None:
                         expredit.joinWithPrev(rightStmt)
         elif insertAsIndividual:
-            insertedTopIcon = insertedSequences[0][0]
+            insertedTopIcon = coalesceLooseAttrs(insertedSequences)[0][0]
             insertedStmtComment = insertedTopIcon.hasStmtComment()
             if insertedStmtComment is not None:
                 insertedStmtComment.detachStmtComment()
@@ -5424,6 +5447,19 @@ def concatenateSequences(sequences):
         lastSeqStartIc = seqStartIc
     return insertSeqStart, list(icon.traverseSeq(insertSeqStart))
 
+def canCvtSeqsToList(sequences):
+    prevIc = None
+    foundOutput = False
+    for ic in (i for seq in sequences for i in seq):
+        if canCoalesceLooseAttr(prevIc, ic) or isinstance(ic,
+                (commenticon.VerticalBlankIcon, commenticon.CommentIcon)):
+            continue
+        if not ic.hasSite('output'):
+            return False
+        foundOutput = True
+        prevIc = ic
+    return foundOutput
+
 def cvtSeqsToList(sequences):
     listElems = []
     strippedComments = []
@@ -5431,12 +5467,19 @@ def cvtSeqsToList(sequences):
         for ic in seq:
             if isinstance(ic, commenticon.VerticalBlankIcon):
                 continue
+            if isinstance(ic, commenticon.CommentIcon):
+                strippedComments.append(ic)
+                continue
             if ic.childAt('seqOut'):
                 ic.replaceChild(None, 'seqOut')
             if isinstance(ic, listicons.TupleIcon) and ic.noParens:
                 listElems += ic.argIcons()
                 for _ in range(len(ic.sites.argIcons)):
                     ic.replaceChild(None, 'argIcons_0')
+            elif not ic.hasSite('output') and ic.hasSite('attrOut') and \
+                    len(listElems) > 0 and \
+                    icon.rightmostSite(listElems[-1])[1] == 'attrIcon':
+                icon.rightmostSite(listElems[-1])[0].replaceChild(ic, 'attrIcon')
             else:
                 listElems.append(ic)
             if hasattr(ic, 'stmtComment'):
@@ -5444,6 +5487,42 @@ def cvtSeqsToList(sequences):
                 stmtComment.detachStmtComment()
                 strippedComments.append(stmtComment)
     return listElems, strippedComments
+
+def canCoalesceLooseAttr(prevIc, looseAttr):
+    if prevIc is None or looseAttr is None or not looseAttr.hasSite('attrOut'):
+        return False
+    rightmostIc, rightmostSite = icon.rightmostSite(prevIc)
+    return rightmostSite == 'attrIcon' and not rightmostIc.isCursorOnlySite('attrIcon')
+
+def coalesceLooseAttrs(sequences):
+    newSeqs = []
+    prevStmt = None
+    for seq in sequences:
+        if len(seq) == 1 and canCoalesceLooseAttr(prevStmt, seq[0]):
+            stmtComment = prevStmt.hasStmtComment()
+            appendedComment = seq[0].hasStmtComment()
+            if appendedComment is not None:
+                appendedComment.detachStmtComment()
+            rightmostIc, rightmostSite = icon.rightmostSite(prevStmt)
+            rightmostIc.replaceChild(seq[0], rightmostSite)
+            if appendedComment is not None:
+                if stmtComment is None:
+                    appendedComment.attachStmtComment(prevStmt)
+                else:
+                    stmtComment.mergeTextFromComment(appendedComment)
+        else:
+            newSeqs.append(seq)
+            prevStmt = seq[-1]
+    return newSeqs
+
+def sortSeqsForDrag(sequences, buttonDownIcon):
+    buttonDownSeqStart = icon.findSeqStart(buttonDownIcon.topLevelParent())
+    def sortKey(seq):
+        if seq[0] is buttonDownSeqStart:
+            return -9999999, -9999999
+        x, y = seq[0].pos()
+        return y, x
+    sequences.sort(key=sortKey)
 
 class StreamToTextWidget:
     """Imitate an output text stream and append any text written to it to a specified

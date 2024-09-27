@@ -607,7 +607,9 @@ class ForIcon(icon.Icon):
         if seqInsertSites is None:
             return siteSnapLists
         def snapFn(ic, siteId):
-            return ic.typeOf(siteId) == 'cprhIn'
+            if not isinstance(ic, listicons.ListTypeIcon):
+                return False
+            return siteId == 'replaceCprhIc' or siteId[:9] == 'cprhIcons'
         siteSnapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', snapFn)]
         return siteSnapLists
 
@@ -996,7 +998,9 @@ class IfIcon(icon.Icon):
         if seqInsertSites is None:
             return snapLists
         def snapFn(ic, siteId):
-            return ic.typeOf(siteId) == 'cprhIn'
+            if not isinstance(ic, listicons.ListTypeIcon):
+                return False
+            return siteId == 'replaceCprhIc' or siteId[:9] == 'cprhIcons'
         snapLists['conditional'] = [(*seqInsertSites[0], 'seqInsert', snapFn)]
         return snapLists
 
