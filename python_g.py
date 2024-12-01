@@ -158,6 +158,19 @@ moduleAnchorSeqOutOffset = anchorImage.width//2, anchorImage.height-2
 MODULE_ANCHOR_X = 9
 MODULE_ANCHOR_Y = 1
 
+# Indicator to add near a snap site to indicate pending series (list comma) insert.
+# Offsets are from the snapped site position to the top left corner of the image.
+seriesInsertIndImg = comn.asciiToImage((
+ ".5%8",
+ "5%%%",
+ "5%%%",
+ ".5%5",
+ ".5%.",
+ "5%..",
+ "%5.."))
+SERIES_INSERT_IND_X_OFF = 0
+SERIES_INSERT_IND_Y_OFF = 0
+
 startUpTime = time.monotonic()
 
 # Icons which automatically redirect to seqOut site if user attempts to type right-of
@@ -2374,6 +2387,16 @@ class Window:
             dragImage.paste(self.transparentDragimage, mask=self.transparentDragimage)
         else:
             dragImage.paste(self.dragImage, mask=self.dragImage)
+            # If we're snapped to a list-insertion site, add a visual indicator to cue
+            # the user that dropping will result in a *series* insertion
+            if self.snapped is not None:
+                sIcon, movIcon, siteType, siteName = self.snapped
+                if siteType == 'insertInput':
+                    x = movIcon.rect[0] + movIcon.sites.output.xOffset + \
+                        SERIES_INSERT_IND_X_OFF
+                    y = movIcon.rect[1] + movIcon.sites.output.yOffset + \
+                        SERIES_INSERT_IND_Y_OFF
+                    dragImage.paste(seriesInsertIndImg, (x, y), mask=seriesInsertIndImg)
         self.drawImage(dragImage, self.contentToImageCoord(snappedX, snappedY))
         self.lastDragImageRegion = dragImageRegion
 

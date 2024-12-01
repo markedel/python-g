@@ -1012,7 +1012,7 @@ class Icon:
                 # It is legal to insert at a series site that does not exist yet, and we
                 # may (occasionally) need to know the type
                 seriesName, idx = iconsites.splitSeriesSiteId(siteId)
-                series = getattr(self.sites, seriesName)
+                series = getattr(self.sites, seriesName, None)
                 if series is not None:
                     return series.type
             return None
