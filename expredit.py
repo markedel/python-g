@@ -51,6 +51,9 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
             # via our calls to replaceTop, but must be done explicitly, here).
             stmtComment = atIcon.hasStmtComment()
             atIcon.window.replaceTop(atIcon, topInsertedIcon, transferStmtComment=False)
+            #... there was a case where rightmostSite somehow incorrectly returned an
+            #    attribute site of an inserted naked tuple, here, but I can't reproduce
+            #    (and that doesn't even seem possible).
             rightIcOfIns, rightSiteOfIns = icon.rightmostSite(topInsertedIcon)
             cursorIc, cursorSite = insertAtSite(rightIcOfIns, rightSiteOfIns, atIcon,
                 cursorLeft=True)
@@ -178,11 +181,16 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
     if relocatedTree is None:
         cursorIcon, cursorSite = insRightIc, insRightSite
     elif icon.validateCompatibleChild(relocatedTree, insRightIc, insRightSite):
-        insRightIc.replaceChild(relocatedTree, insRightSite)
-        if isinstance(relocatedTree, entryicon.EntryIcon) and \
-                len(relocatedTree.text) == 0:
-            # If we just inserted a placeholder icon, see if it can be stripped out
-            relocatedTree.remove()
+        if isinstance(insRightIc, entryicon.EntryIcon):
+            # The inserted tree has an entry icon on the right.  We can attach anything,
+            # but it must be as a pending argument.
+            insRightIc.appendPendingArgs((relocatedTree,))
+        else:
+            insRightIc.replaceChild(relocatedTree, insRightSite)
+            if isinstance(relocatedTree, entryicon.EntryIcon) and \
+                    len(relocatedTree.text) == 0:
+                # If we just inserted before a placeholder icon, try to strip it out
+                relocatedTree.remove()
         if insRightIc.typeOf(insRightSite) == 'input':
             checkReorder(insRightIc, needReorder)
         cursorIcon, cursorSite = insRightIc, insRightSite
@@ -294,7 +302,8 @@ def insertListAtSite(atIcon, atSite, seriesIcons, mergeAdjacent=True, cursorLeft
             (atIcon.childAt(atSite) is None or rightSiteIsEmptyInput(seriesIcons[0])) or
             atSite == 'output' and rightSiteIsEmptyInput(seriesIcons[0]) or
             leftSiteIsEmpty(seriesIcons[0]) and atIcon.typeOf(atSite) == 'attrIn' or
-            enclosingIcon is not None and not iconsites.isSeriesSiteId(enclosingSite)):
+            enclosingIcon is not None and not iconsites.isSeriesSiteId(enclosingSite) or
+            isinstance(atIcon.childAt(atSite), entryicon.EntryIcon) and mergeAdjacent):
         return insertAtSite(atIcon, atSite, seriesIcons[0], cursorLeft=cursorLeft)
     # output sites at the top level are legal cursor sites, but will wreak havoc with
     # the later code.  Since we know we're inserting a list, it's safe to add a tuple
@@ -409,8 +418,7 @@ def insertListAtSite(atIcon, atSite, seriesIcons, mergeAdjacent=True, cursorLeft
     mergeLeft = left is not None and firstElem is not None and \
         (atIcon.typeOf(atSite) =='input' or leftSiteIsEmpty(firstElem))
     mergeRight = right is not None and lastElem is not None and \
-        (rightIcOfLastElem.typeOf(rightSiteOfLastElem) == 'input' or
-         leftSiteIsEmpty(right))
+        icon.validateCompatibleChild(right, lastElem, rightSiteOfLastElem)
     enclosingIcon.replaceChild(left, enclosingSite)
     if mergeLeft:
         # We merge at the highest coincident site to guarantee that it's in the left
@@ -683,8 +691,8 @@ def splitStmtAtSite(atIcon, atSite):
         atIcon.window.addTop(newTuple)
         return topParent, newTuple
 
-def lexicalTraverse(topNode, includeStmtComment=True, parentIc=None, parentSite=None,
-        yieldNakedTuples=False):
+def lexicalTraverse(topNode, includeStmtComment=True, yieldNakedTuples=False,
+        yieldEmptySites=True, yieldAllSites=False, fromSite=None, toSite=None):
     """Both cursors.py and reorderexpr.py have lexical traversal code.  This version
     focuses on the visible parts of the icon structure, as  opposed to the cursors
     version that traverses cursor sites and the reorderexpr version that produces tokens
@@ -694,105 +702,218 @@ def lexicalTraverse(topNode, includeStmtComment=True, parentIc=None, parentSite=
     To distinguish the the icon parts, it yields both and an icon and a partId.  partId
     matches the numbering scheme used in icon.touchesPosition and offsetOfPart.  This
     correspondence is important because click/drag selection and drag target selection
-    all use this call to translate mouse position into a lexical icon range.  For empty
-    sites, rather than yielding None for the icon, it yields a tuple of the parent icon
-    and parent site.  Also note that this will not emit naked tuple icons unless
+    all use this call to translate mouse position into a lexical icon range.  Empty sites
+    are skipped, except for the (internal series) sites supported in the selection format
+    for which it will yield a tuple of the parent icon and parent site (provided that
+    yieldEmptySites is True).  Also note that this will not emit naked tuple icons unless
     yieldNakedTuples is set to True (as they have no lexical presence outside of the
     commas that we ignore in all other cases).  With yieldNakedTuples set to True, it
     will yield the tuple AFTER its entries, and only if all of its (non-empty) arguments
-    are included in the traversal.  Recursive calls are made with topNode set to None and
-    parentIc and parentSite, instead, indicating where to start traversal."""
-    if topNode is None:
-        node = parentIc.childAt(parentSite)
-    else:
-        node = topNode
-    if node is None:
-        if parentSite == 'output':
-            yield (parentIc, parentSite), 0
+    are included in the traversal.  If yieldAllSites is set to True, the function will
+    also yield site+icon pairs interspersed with the icons and possible (series) empty
+    sites.  To distinguish these from the series empty sites, these pairs are inverted
+    (site first, rather than icon first).  toSite and fromSite can be specified as tuples
+    of icon+siteName to begin and end the traversal at a particular site within the tree
+    under topNode.  If both fromSite and toSite are provided, the function will yield all
+    of the icons between them, regardless of which appears first in the lexical order."""
+    travData = LexTrav(topNode, yieldEmptySites, yieldAllSites, fromSite, toSite)
+    if travData.stopped:
         return
-    elif isinstance(node, (opicons.BinOpIcon, infixicon.InfixIcon)):
-        if hasattr(node, 'hasParens') and node.hasParens:
-            yield node, 1
-        yield from lexicalTraverse(None, False, node, 'leftArg')
-        yield node, 2
-        yield from lexicalTraverse(None, False, node, 'rightArg')
-        if hasattr(node, 'hasParens') and node.hasParens:
-            yield node, 3
-            yield from lexicalTraverse(None, False, node, 'attrIcon')
-    elif isinstance(node, opicons.DivideIcon):
-        yield from lexicalTraverse(None, False, node, 'topArg')
-        yield node, 1
-        yield from lexicalTraverse(None, False, node, 'bottomArg')
-    elif isinstance(node, opicons.IfExpIcon):
-        if node.hasParens:
-            yield node, 1
-        yield from lexicalTraverse(None, False, node, 'trueExpr')
-        yield node, 2
-        yield from lexicalTraverse(None, False, node, 'testExpr')
-        yield node, 3
-        yield from lexicalTraverse(None, False, node, 'falseExpr')
-        if node.hasParens:
-            yield node, 4
-            yield from lexicalTraverse(None, False, node, 'attrIcon')
-    elif isinstance(node, listicons.TupleIcon) and node.noParens:
-        for site in node.sites.argIcons:
-            yield from lexicalTraverse(None, False, node, site.name)
-        if yieldNakedTuples:
-            yield node, 0
-    elif isinstance(node, (listicons.ListTypeIcon, listicons.CallIcon)):
-        yield node, 1
-        for site in node.sites.argIcons:
-            yield from lexicalTraverse(None, False, node, site.name)
-        if hasattr(node.sites, 'cprhIcons'):
-            for site in node.sites.cprhIcons:
-                if site.att is not None:
-                    yield from lexicalTraverse(None, False, node, site.name)
-        yield node, 2
-        yield from lexicalTraverse(None, False, node, 'attrIcon')
-    elif isinstance(node, parenicon.CursorParenIcon):
-        yield node, 1
-        yield from lexicalTraverse(None, False, node, 'argIcon')
-        yield node, 2
-        yield from lexicalTraverse(None, False, node, 'attrIcon')
-    elif isinstance(node, assignicons.AssignIcon):
-        for i, tgtList in enumerate(node.tgtLists):
-            for site in getattr(node.sites, tgtList.siteSeriesName):
-                yield from lexicalTraverse(None, False, node, site.name)
-            yield node, (i + 1) * 3
-        for site in node.sites.values:
-            yield from lexicalTraverse(None, False, node, site.name)
-    elif isinstance(node, assignicons.AugmentedAssignIcon):
-        yield from lexicalTraverse(None, False, node, 'targetIcon')
-        yield node, 2
-        for site in node.sites.values:
-            yield from lexicalTraverse(None, False, node, site.name)
-    elif isinstance(node, blockicons.ForIcon):
-        yield node, 1
-        for site in node.sites.targets:
-            yield from lexicalTraverse(None, False, node, site.name)
-        yield node, 2
-        for site in node.sites.iterIcons:
-            yield from lexicalTraverse(None, False, node, site.name)
-    elif isinstance(node, blockicons.DefOrClassIcon):
-        yield node, 1
-        yield from lexicalTraverse(None, False, node, 'nameIcon')
-        if node.hasArgs:
-            yield node, 2
+    yield from travData.traverse(includeStmtComment=includeStmtComment,
+        yieldNakedTuples=yieldNakedTuples)
+
+class LexTrav:
+    """The lexicalTraverse function is implemented as a class, because it has enough data
+    that needs to be shared across recursive calls, that passing it in parameter was
+    unwieldy.  This is exacerbated by the fact that 'started' and 'stopped' states need
+    to be propagated both downwards and upwards in the call tree.  Also, having a lower-
+    level version of the call helps hide some of the calling complexity, particularly
+    since the recursive calls operate on a site, but the initial call starts operates on
+    a single icon."""
+    def __init__(self, topNode, yieldEmptySites, yieldAllSites, fromSite, toSite):
+        self.topNode = topNode
+        self.yieldEmptySites = yieldEmptySites
+        self.yieldAllSites = yieldAllSites
+        if fromSite is None:
+            self.fromIc = None
+            self.fromSite = None
+        else:
+            self.fromIc = fromSite[0]
+            self.fromSite = fromSite[1]
+        if toSite is None:
+            self.toIc = None
+            self.toSite = None
+        else:
+            self.toIc = toSite[0]
+            self.toSite = toSite[1]
+        # fromSite and toSite can be any legal cursor position, which can be a seqIn/Out
+        # site or an output site when that is all that's available, which traverse won't
+        # encounter.  So, here we pre-start and in one case, pre-stop, the traversal when
+        # fromSite or toSite will be one of these unexplored sites, and also handle the
+        # fromSite/toSite reversal if toSite is the starting site.  The weirdest of these
+        # is when toIc is the output site of topNode or fromSite and toSite are the seqIn
+        # and output sites of topNode, which needs to result in no-icons being traversed
+        # (for which we set stopped = True).
+        if fromSite is None:
+            self.started = True
+        elif self.fromIc is topNode and self.fromSite in ('output', 'attrOut', 'seqIn'):
+            self.started = True
+        elif toSite is not None and self.toIc is topNode and self.toSite in \
+                ('output', 'attrOut', 'seqIn'):
+            # toSite is one of the non-traversed initial sites.  traverse() normally
+            # handles ordering of from/to but can't see the site, so reorder, here.
+            self.started = True
+            self.toIc = self.fromIc
+            self.toSite = self.fromSite
+            self.fromIc = None
+        else:
+            self.started = False
+        self.stopped = self.fromIc is None and self.toIc is topNode and \
+                self.toSite  in ('output', 'attrOut', 'seqIn') or \
+            self.fromIc is self.toIc is topNode and (self.fromSite == self.toSite or
+                self.fromSite == 'seqIn' and self.toSite == 'output' or
+                self.toSite == 'seqIn' and self.fromSite == 'output')
+
+    def traverse(self, parentIc=None, parentSite=None, includeStmtComment=None,
+            yieldNakedTuples=False):
+        if parentIc is None:
+            node = self.topNode
+        else:
+            node = parentIc.childAt(parentSite)
+            if not self.started:
+                if parentIc is self.fromIc and parentSite == self.fromSite:
+                    self.started = True
+                if parentIc is self.toIc and parentSite == self.toSite:
+                    # fromSite and toSite are in reverse order
+                    self.started = True
+                    self.toIc = self.fromIc
+                    self.toSite = self.fromSite
+            if self.yieldAllSites and self.started and not self.stopped:
+                if parentSite is None:
+                    yield (cursors.topSite(node), node), 0
+                else:
+                    yield (parentSite, parentIc), 0
+            if not self.stopped and self.toIc is not None and \
+                    parentIc is self.toIc and parentSite == self.toSite:
+                self.stopped = True
+        if node is None:
+            if self.started and not self.stopped and iconsites.isSeriesSiteId(parentSite)\
+                    and self.yieldEmptySites and parentIc.typeOf(parentSite)=='input':
+                seriesName, idx = iconsites.splitSeriesSiteId(parentSite)
+                if idx < len(getattr(parentIc.sites, seriesName)) - 1:
+                    yield (parentIc, parentSite), 0
+            return
+        elif isinstance(node, (opicons.BinOpIcon, infixicon.InfixIcon)):
+            if hasattr(node, 'hasParens') and node.hasParens:
+                if self.started and not self.stopped:
+                    yield node, 1
+            yield from self.traverse(node, 'leftArg')
+            if self.started and not self.stopped:
+                yield node, 2
+            yield from self.traverse(node, 'rightArg')
+            if hasattr(node, 'hasParens') and node.hasParens:
+                if self.started and not self.stopped:
+                    yield node, 3
+                yield from self.traverse(node, 'attrIcon')
+        elif isinstance(node, opicons.DivideIcon):
+            yield from self.traverse(node, 'topArg')
+            if self.started and not self.stopped:
+                yield node, 1
+            yield from self.traverse(node, 'bottomArg')
+            yield from self.traverse(node, 'attrIcon')
+        elif isinstance(node, opicons.IfExpIcon):
+            if node.hasParens and self.started and not self.stopped:
+                yield node, 1
+            yield from self.traverse(node, 'trueExpr')
+            if self.started and not self.stopped:
+                yield node, 2
+            yield from self.traverse(node, 'testExpr')
+            if self.started and not self.stopped:
+                yield node, 3
+            yield from self.traverse(node, 'falseExpr')
+            if node.hasParens:
+                if self.started and not self.stopped:
+                    yield node, 4
+                yield from self.traverse(node, 'attrIcon')
+        elif isinstance(node, listicons.TupleIcon) and node.noParens:
             for site in node.sites.argIcons:
-                yield from lexicalTraverse(None, False, node, site.name)
-            yield node, 3
-    else:
-        yield node, 1
-        for siteOrSeries in node.sites.traverseLexical():
-            if isinstance(siteOrSeries, iconsites.IconSiteSeries):
-                for site in siteOrSeries:
-                    yield from lexicalTraverse(None, False, node, site.name)
-            else:
-                yield from lexicalTraverse(None, False, node, siteOrSeries.name)
-    if includeStmtComment:
-        stmtComment = node.hasStmtComment()
-        if stmtComment:
-            yield stmtComment, 1
+                yield from self.traverse(node, site.name)
+            if yieldNakedTuples and self.started and not self.stopped:
+                yield node, 0
+        elif isinstance(node, (listicons.ListTypeIcon, listicons.CallIcon)):
+            if self.started and not self.stopped:
+                yield node, 1
+            for site in node.sites.argIcons:
+                yield from self.traverse(node, site.name)
+            if hasattr(node.sites, 'cprhIcons'):
+                for site in node.sites.cprhIcons:
+                    if site.att is not None:
+                        yield from self.traverse(node, site.name)
+            if self.started and not self.stopped:
+                yield node, 2
+            yield from self.traverse(node, 'attrIcon')
+        elif isinstance(node, parenicon.CursorParenIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            yield from self.traverse(node, 'argIcon')
+            if self.started and not self.stopped:
+                yield node, 2
+            yield from self.traverse(node, 'attrIcon')
+        elif isinstance(node, assignicons.AssignIcon):
+            for i, tgtList in enumerate(node.tgtLists):
+                for site in getattr(node.sites, tgtList.siteSeriesName):
+                    yield from self.traverse(node, site.name)
+                if self.started and not self.stopped:
+                    yield node, (i + 1) * 3
+            for site in node.sites.values:
+                yield from self.traverse(node, site.name)
+        elif isinstance(node, assignicons.AugmentedAssignIcon):
+            yield from self.traverse(node, 'targetIcon')
+            if self.started and not self.stopped:
+                yield node, 2
+            for site in node.sites.values:
+                yield from self.traverse(node, site.name)
+        elif isinstance(node, blockicons.ForIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            for site in node.sites.targets:
+                yield from self.traverse(node, site.name)
+            if self.started and not self.stopped:
+                yield node, 2
+            for site in node.sites.iterIcons:
+                yield from self.traverse(node, site.name)
+        elif isinstance(node, listicons.CprhForIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            for site in node.sites.targets:
+                yield from self.traverse(node, site.name)
+            if self.started and not self.stopped:
+                yield node, 2
+            yield from self.traverse(node, 'iterIcon')
+        elif isinstance(node, blockicons.DefOrClassIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            yield from self.traverse(node, 'nameIcon')
+            if node.hasArgs:
+                if self.started and not self.stopped:
+                    yield node, 2
+                for site in node.sites.argIcons:
+                    yield from self.traverse(node, site.name)
+                if self.started and not self.stopped:
+                    yield node, 3
+        else:
+            if self.started and not self.stopped:
+                yield node, 1
+            for siteOrSeries in node.sites.traverseLexical():
+                if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+                    for site in siteOrSeries:
+                        yield from self.traverse(node, site.name)
+                else:
+                    yield from self.traverse(node, siteOrSeries.name)
+        if includeStmtComment:
+            stmtComment = node.hasStmtComment()
+            if stmtComment and self.started and not self.stopped:
+                yield stmtComment, 1
 
 def extendDragTargetLexical(startIcon, pointerX, pointerY):
     """Return a set of the icons to highlight for replacement as a drag target based on
@@ -835,38 +956,57 @@ def extendDragTargetLexical(startIcon, pointerX, pointerY):
     minDistToLeftIc = minDistToRightIc = None
     icOnLeft = icOnRight = None
     leftIcPart = rightIcPart = None
-    for ic, partId in lexicalTraverse(endIconStmt):
+    for icOrSite, partId in lexicalTraverse(endIconStmt):
         if pointerBeyondSeq:
-            lastIc = ic
+            lastIc = icOrSite
             lastIcPart = partId
             continue
         if not foundStart:
-            if ic is startIcon:
+            if isSameIcOrSite(icOrSite, startIcon):
                 foundStart = True
             continue
-        distToLeftIc = ic.partIsLeftOfPoint(partId, pointerX, pointerY)
-        if distToLeftIc is None:
-            distToRightIc = ic.partIsRightOfPoint(partId, pointerX, pointerY)
-            if distToRightIc is None:
-                continue
-            if minDistToRightIc is None or minDistToRightIc > distToRightIc:
-                minDistToRightIc = distToRightIc
-                icOnRight = ic
-                rightIcPart = partId
+        if isinstance(icOrSite, icon.Icon):
+            ic = icOrSite
+            distToLeftIc = ic.partIsLeftOfPoint(partId, pointerX, pointerY)
+            if distToLeftIc is None:
+                distToRightIc = ic.partIsRightOfPoint(partId, pointerX, pointerY)
+                if distToRightIc is None:
+                    continue
+                if minDistToRightIc is None or minDistToRightIc > distToRightIc:
+                    minDistToRightIc = distToRightIc
+                    icOnRight = ic
+                    rightIcPart = partId
+            else:
+                if minDistToLeftIc is None or \
+                        distToLeftIc < minDistToLeftIc:
+                    minDistToLeftIc = distToLeftIc
+                    icOnLeft = ic
+                    leftIcPart = partId
         else:
-            if minDistToLeftIc is None or \
-                    distToLeftIc < minDistToLeftIc:
-                minDistToLeftIc = distToLeftIc
-                icOnLeft = ic
-                leftIcPart = partId
+            ic, site = icOrSite
+            distToLeftIc = emptySiteIsLeftOfPoint(ic, site, pointerX, pointerY)
+            if distToLeftIc is None:
+                distToRightIc = emptySiteIsRightOfPoint(ic, site, pointerX, pointerY)
+                if distToRightIc is None:
+                    continue
+                if minDistToRightIc is None or minDistToRightIc > distToRightIc:
+                    minDistToRightIc = distToRightIc
+                    icOnRight = icOrSite
+                    rightIcPart = None
+            else:
+                if minDistToLeftIc is None or \
+                        distToLeftIc < minDistToLeftIc:
+                    minDistToLeftIc = distToLeftIc
+                    icOnLeft = icOrSite
+                    leftIcPart = None
     if pointerBeyondSeq:
-        rVal = iconsInLexicalRange(startIcon, lastIc, lastIcPart)
+        rVal = iconsInLexicalRangeByPart(startIcon, lastIc, lastIcPart)
         return rVal if rVal is not None else {startIcon}
     elif icOnLeft:
-        rVal = iconsInLexicalRange(startIcon, icOnLeft, leftIcPart)
+        rVal = iconsInLexicalRangeByPart(startIcon, icOnLeft, leftIcPart)
         return rVal if rVal is not None else {startIcon}
     elif icOnRight:
-        rVal = iconsInLexicalRange(startIcon, icOnRight, rightIcPart,
+        rVal = iconsInLexicalRangeByPart(startIcon, icOnRight, rightIcPart,
             stopBeforeLast=True)
         return rVal if rVal is not None else {startIcon}
     else:
@@ -1044,22 +1184,31 @@ def extendDefaultReplaceSite(movIcon, sIcon):
         return highestIcon
     return sIcon
 
-def iconsInLexicalRange(fromIcon, toIcon, toPartId=None, stopBeforeLast=False):
+def iconsInLexicalRangeByPart(fromIcon, toIcon, toPartId=None, stopBeforeLast=False,
+        precheckOrderAndSeq=True):
     """Return a set containing all of the icons lexically between fromIcon and toIcon.
-    Returns None if fromIcon does not precede toIcon in traversal."""
-    # This wastes resources by scanning all the way to the end of the sequence to reject
-    # invalid toIcon.  To make it waste less, scan just the top icons of the sequence
-    # starting at fromIcon's top parent, looking for toIcon's top parent.
-    toIconTopIcon = toIcon.topLevelParent()
-    fromIconTopIcon = fromIcon.topLevelParent()
-    for topIc in icon.traverseSeq(fromIconTopIcon, includeStartingIcon=True):
-        if topIc is toIconTopIcon:
-            break
-    else:
-        return None
+    Returns None if fromIcon does not precede toIcon in traversal.  precheckOrderAndSeq
+    can be set to False to make the code faster when fromIcon is already known to precede
+    toIcon in the sequence."""
+    # If we don't yet know if fromIcon are in the same sequence and correct order, pre-
+    # scanning from fromIcon's top parent to toIcon's top parent will allow us to reject
+    # the pair faster than lexically scanning each statement.
+    toIconTopIcon = topLevelParentOfSelEntry(toIcon)
+    fromIconTopIcon = topLevelParentOfSelEntry(fromIcon)
+    if precheckOrderAndSeq:
+        for topIc in icon.traverseSeq(fromIconTopIcon, includeStartingIcon=True):
+            if topIc is toIconTopIcon:
+                break
+        else:
+            return None
     iconsInRange = set()
     foundStart = False
+    foundToIcon = False
     for topIc in icon.traverseSeq(fromIconTopIcon, includeStartingIcon=True):
+        if foundToIcon:
+            return None
+        if topIc is toIconTopIcon:
+            foundToIcon = True
         if isinstance(topIc, icon.BlockEnd):
             # Include traversed block-end icons if their corresponding owner is selected,
             # but otherwise ignore unless they are specifically the stopping icon
@@ -1069,9 +1218,9 @@ def iconsInLexicalRange(fromIcon, toIcon, toPartId=None, stopBeforeLast=False):
                 return iconsInRange
             continue
         for ic, partId in lexicalTraverse(topIc, yieldNakedTuples=True):
-            if not foundStart and ic is fromIcon:
+            if not foundStart and isSameIcOrSite(ic, fromIcon):
                 foundStart = True
-            if stopBeforeLast and ic is toIcon and (toPartId is None or
+            if stopBeforeLast and isSameIcOrSite(ic, toIcon) and (toPartId is None or
                     toPartId == partId):
                 return iconsInRange
             if foundStart:
@@ -1095,8 +1244,361 @@ def iconsInLexicalRange(fromIcon, toIcon, toPartId=None, stopBeforeLast=False):
                         iconsInRange.add(ic)
                 else:
                     iconsInRange.add(ic)
-                if ic is toIcon and (toPartId is None or partId == toPartId):
+                if isSameIcOrSite(ic, toIcon) and (toPartId is None or partId == toPartId):
                     return iconsInRange
+    return None
+
+def iconsInLexicalRangeBySite(fromIcon, fromSite, toIcon, toSite, preOrdered=False):
+    """Return a set containing all of the icons lexically between fromSite and toSite in
+    the form of a set.  If fromIcon are not part of the same sequence, or refer to the
+    same (or coincident) site, returns an empty set.  Unlike iconsInLexicalRangeByPart,
+    fromIcon/fromSite and toIcon/toSite do not need to be in the correct (lexical) order.
+    However, if you know that if the sites are ordered, you can speed up the function by
+    setting preOrdered to True."""
+    # Note that this has a lot in common with iconsInLexicalRangeByPart, but when I tried
+    # to make a unified version, it was a big mess, so we'll just have to live with the
+    # duplication.
+    # If we don't yet know if fromSite and toSite are in the same sequence and correct
+    # order, call stmtOrder to pre-scan the top-level icons. Note that order-independence
+    # within a range that is confined to a single statement is not handled, here, but in
+    # the lexicalTraverse call.
+    toIconTopIcon = topLevelParentOfSelEntry(toIcon)
+    fromIconTopIcon = topLevelParentOfSelEntry(fromIcon)
+    if not preOrdered:
+        order = stmtOrder(fromIconTopIcon, toIconTopIcon)
+        if order is None:
+            # fromIcon and toIcon are not part of the same sequence
+            return set()
+        if order == 2:
+            # toIcon comes first in sequence
+            toIcon, fromIcon = fromIcon, toIcon
+            toSite, fromSite = fromSite, toSite
+            toIconTopIcon, fromIconTopIcon = fromIconTopIcon, toIconTopIcon
+    # Loop over top icons in the sequence between fromIconTopIcon and toIconTopIcon,
+    # descending into lexical scanning only for the start and end stmts of the range.
+    iconsInRange = set()
+    for topIc in icon.traverseSeq(fromIconTopIcon, includeStartingIcon=True):
+        if isinstance(topIc, icon.BlockEnd):
+            # Include traversed block-end icons if their corresponding owner is selected,
+            # but otherwise ignore unless they are specifically the stopping icon
+            if topIc.primary in iconsInRange:
+                iconsInRange.add(topIc)
+            if topIc is toIcon:
+                return iconsInRange
+            continue
+        if topIc is not fromIconTopIcon and topIc is not toIconTopIcon:
+            # The entire statement is within the range, so save some computation by
+            # skipping the lexical traversal and just adding everything under topIc.
+            addHierToSel(iconsInRange, topIc)
+        else:
+            # Only part of the statement is in the range: traverse it in lexical order
+            for ic, partId in lexicalTraverse(topIc, yieldNakedTuples=True,
+                    fromSite=(fromIcon, fromSite) if topIc is fromIconTopIcon else None,
+                    toSite=(toIcon, toSite) if topIc is toIconTopIcon else None):
+                if isinstance(ic, listicons.TupleIcon) and ic.noParens:
+                    # Include naked tuples in the returned set only if all of their
+                    # arguments are included in the range
+                    for elem in ic.argIcons():
+                        if elem not in iconsInRange:
+                            break
+                    else:
+                        iconsInRange.add(ic)
+                if isinstance(ic, assignicons.AssignIcon):
+                    # Include assignment icons in the returned set only if their
+                    # rightmost '=' is within the range.  This (somewhat) mitigates the
+                    # problem of users seeing '=' as a character rather than as part of
+                    # a larger assignment statement icon, and trying to replace multiple
+                    # target groups together.  They still won't get what they want, but
+                    # at least we won't delete the whole assignment, as we would if we
+                    # treated them like other icons.
+                    if partId == len(ic.tgtLists) * 3:
+                        iconsInRange.add(ic)
+                else:
+                    iconsInRange.add(ic)
+        if topIc is toIconTopIcon:
+            return iconsInRange
+    # If we escape the loop without finding toIcon (which I think will only happen if
+    # the function is incorrectly called with preOrdered=True), throw out iconsInRange
+    # and return an empty set.
+    return set()
+
+def nearestSelectedIcon(ic, site=None, partId=None):
+    """Searches lexically forward and backward from ic for selected icons.  Returns
+    two values: 1) the nearest selected icon if found or None if not found, 2) the signed
+    distance (number of intervening unselected icons) to the icon (backward distances are
+    negative, positive are forward)."""
+    # Iterate per-statement simultaneously in forward and reverse directions,  Note
+    # that these iterators never stop (they *infinitely* return their terminal value).
+    # The reason behind searching simultaneously in both directions is to be more
+    # efficient in the most common case of short selections in large files
+    if site is None:
+        rightSite = ic.siteRightOfPart(partId)
+        leftIc, leftSite = siteLeftOfPart(ic, partId)
+    else:
+        rightSite = site
+        leftSite = site
+        leftIc = ic
+    for (fwdResult, fwdDist), (revResult, revDist) in zip(
+            searchFwdForSelected(ic, rightSite), searchRevForSelected(leftIc, leftSite)):
+        if fwdResult is not None and revResult is not None:
+            if fwdResult == "end" and revResult == "end":
+                return None, 0
+            if fwdResult == 'end' or revDist < fwdDist:
+                return revResult, -1 * revDist
+            if revResult == 'end' or fwdDist < revDist:
+                return fwdResult, fwdDist
+            # Found selected icons in both directions at equal distance.  Discount icons
+            # with other parts that may have indirectly caused selection.
+            if isinstance(fwdResult, (listicons.ListTypeIcon, blockicons.DefOrClassIcon,
+                    blockicons.ForIcon, blockicons.LambdaIcon, listicons.CallIcon,
+                    listicons.CprhForIcon)):
+                return revResult, revDist
+            return fwdResult, fwdDist
+        elif fwdResult is not None and fwdDist <= revDist:
+            return fwdResult, fwdDist
+        elif revResult is not None and revDist < fwdDist:
+            return revResult, -1 * revDist
+    return None, 0  # Unreachable code as both iterators are infinite
+
+def searchFwdForSelected(fromIc, fromSite):
+    """Search lexically forward from (ic, site) by statement, yielding two values: 1) the
+    result of the search: (None if nothing found, an icon if a selection was found, or
+    "end" if the end of the sequence was found), and 2) the lexical distance (number of
+    icons) traversed.  This is an *infinite* iterator, with the intent that it be zipped
+    with searchRevForSelection and that the calling function will stop the iteration only
+    when the nearest icon is found or *both* iterators are exhausted."""
+    selectedSet = fromIc.window.selectedSet
+    topIconOfFromIc = fromIc.topLevelParent()
+    dist = 0
+    for seqIc in icon.traverseSeq(topIconOfFromIc):
+        fromSite=(fromIc, fromSite) if seqIc == topIconOfFromIc else None
+        for ic, part in lexicalTraverse(seqIc, fromSite=fromSite):
+            if ic in selectedSet and not isinstance(ic, icon.BlockEnd):
+                while True:  # Found nearest selection, yield it forever
+                    yield ic, dist
+            dist += 1
+        yield None, dist
+    while True:  # Found end of sequence, yield terminal value forever
+        yield 'end', dist
+
+def searchRevForSelected(fromIc, fromSite):
+    """Search lexically backward from (ic, site) by statement, yielding two values: 1) the
+    result of the search: (None if nothing found, an icon if a selection was found, or
+    "end" if the end of the sequence was found), and 2) the lexical distance (number of
+    icons) traversed.  This is an *infinite* iterator, with the intent that it be zipped
+    with searchFwdForSelection and that the calling function will stop the iteration only
+    when the nearest icon is found or *both* iterators are exhausted."""
+    selectedSet = fromIc.window.selectedSet
+    topIconOfFromIc = fromIc.topLevelParent()
+    dist = 0
+    for seqIc in icon.traverseSeq(topIconOfFromIc, reverse=True):
+        toSite=(fromIc, fromSite) if seqIc == topIconOfFromIc else None
+        foundIc = None
+        yieldDist = 0
+        for ic, part in lexicalTraverse(seqIc, toSite=toSite):
+            if ic in selectedSet and not isinstance(ic, icon.BlockEnd):
+                foundIc = ic
+                yieldDist = 0
+            else:
+                yieldDist += 1
+        if foundIc:
+            while True:  # Found nearest selection, yield it forever
+                yield foundIc, dist + yieldDist
+        dist += yieldDist
+        yield None, dist
+    while True:  # Found start of sequence, yield terminal value forever
+        yield 'end', dist
+
+def searchFwdForUnselected(fromIc, fromSite=None):
+    """Find the end of the selection starting from either fromIc, or (if fromSite is
+    specified) from fromSite of fromIc.  Returns icon, site, and number of intervening
+    selected icons and (selected empty series sites if any)."""
+    # The function operates somewhat differently if we have a starting site than if we
+    # have only a starting icon.  For a site, lexicalTraverse on the statement containing
+    # fromIc is told to start from the site.  For just an icon, lexical traverse starts
+    # at the beginning of the statement, and 'started' is only set to true once fromIc
+    # is seen in the traversal.
+    topIconOfFromIc = fromIc.topLevelParent()
+    selectedSet = fromIc.window.selectedSet
+    dist = 0
+    lastSiteMarker = (fromSite, fromIc)
+    for seqIc in icon.traverseSeq(topIconOfFromIc):
+        if seqIc is topIconOfFromIc and fromSite is not None:
+            startSite = (fromIc, fromSite)
+            started = True
+        else:
+            startSite = None
+            started = seqIc is not topIconOfFromIc
+        if isinstance(seqIc, icon.BlockEnd):
+            continue
+        for ic, part in lexicalTraverse(seqIc, fromSite=startSite, yieldAllSites=True):
+            if isinstance(ic, tuple) and isinstance(ic[0], str):
+                lastSiteMarker = ic
+                continue
+            if started:
+                if ic not in selectedSet:
+                    return lastSiteMarker[1], lastSiteMarker[0], dist
+                dist += 1
+            else:
+                started = ic == fromIc
+    # Reached end of sequence
+    return lastSiteMarker[1], lastSiteMarker[0], dist
+
+def searchRevForUnselected(fromIc, fromSite=None):
+    """Find the start of the selection ending at either fromIc, or (if fromSite is
+    specified) from fromSite of fromIc.  Returns icon, site, and number of intervening
+    selected icons and (selected empty series sites if any)."""
+    selectedSet = fromIc.window.selectedSet
+    topIconOfFromIc = fromIc.topLevelParent()
+    cnt = 0
+    inUnSel = False
+    for seqIc in icon.traverseSeq(topIconOfFromIc, reverse=True):
+        nearestStartCnt = None
+        perStmtCnt = 0
+        nearestStartMarker = None
+        toSite=(fromIc, fromSite) if seqIc == topIconOfFromIc else None
+        for ic, part in lexicalTraverse(seqIc, toSite=toSite, yieldAllSites=True):
+            if isinstance(ic, tuple) and isinstance(ic[0], str):
+                lastSiteMarker = ic
+                continue
+            if ic in selectedSet:
+                if inUnSel:
+                    # Found the start of a selection range, but don't return yet, since
+                    # this may not be the start of *the* selection range
+                    nearestStartCnt = perStmtCnt
+                    nearestStartMarker = lastSiteMarker
+                    inUnSel = False
+            else:
+                inUnSel = not (isinstance(seqIc, icon.BlockEnd) or isinstance(ic,
+                    assignicons.AssignIcon) and part < (len(ic.tgtLists) * 3 - 1))
+            perStmtCnt += 1
+            if ic is fromIc and fromSite is None:
+                # If we're searching from an icon, stop the (forward) lexical iteration
+                # when we reach it.  If we're searching for a site, continue past it and
+                # let the toSite parameter to lexicalTraverse stop the loop.
+                break
+        if inUnSel:
+            # Found unselected icon at the right edge (or preceding fromSite)
+            if toSite is not None:
+                return fromIc, fromSite, 0
+            return seqIc.nextInSeq(), 'seqIn', cnt
+        if nearestStartCnt is not None:
+            # Found unselected icon.  If there were multiple selection boundaries,
+            # nearestStartMarker and nearestStartCnt will reflect the rightmost.
+            return nearestStartMarker[1], nearestStartMarker[0],\
+                cnt + perStmtCnt - nearestStartCnt
+        cnt += perStmtCnt
+    # Reached start of sequence: return first site
+    leftIc, leftSite = lowestLeftSite(seqIc)
+    if leftIc is None:
+        return seqIc, 'seqIn', cnt
+    return leftIc, leftSite, cnt
+
+def topLevelParentOfSelEntry(icOrSite):
+    """Version of Icon.topLevelParent that works both for icons *and* for the icon+site
+    pairs used to represent empty series sites within selections."""
+    if isinstance(icOrSite, icon.Icon):
+        return icOrSite.topLevelParent()
+    return icOrSite[0].topLevelParent()
+
+def posOfSelEntry(icOrSite):
+    """Returns the position of the parent site of an icon (Icon.pos()) if ic is an icon,
+    or the site position if icOrSite is an icon+site pair (as used to represent empty
+    series sites within selections)."""
+    if isinstance(icOrSite, icon.Icon):
+        return icOrSite.pos()
+    ic, siteId = icOrSite
+    return ic.posOfSite(siteId)
+
+def addHierToSel(selectionSet, topIcon, inclStmtComment=True):
+    """Add all of the icons under topIcon to a set (selectionSet) representing a
+    selection.  This is more than just a traversal, since selection rules require entries
+    for empty series sites even if their parent is selected (their *absence* implies that
+    they are not selected)."""
+    for ic in topIcon.traverse(inclStmtComment=inclStmtComment):
+        selectionSet.add(ic)
+        for siteOrSeries in ic.sites.allSites(expandSeries=False):
+            if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+                for site in siteOrSeries:
+                    if site.att is None:
+                        selectionSet.add((ic, site.name))
+
+def siteLeftOfPart(ic, partId):
+    """Returns icon and site for the cursor site to the left of part, partId, of icon,
+    ic.  Unlike the Icon.siteRightOfPart method, where the site will always belong to
+    the queried icon and probably (always?) be physically attached to the part, here, the
+    preceding site will likely be on another icon and may be physically separated.  In
+    the case of an icon that is both lexically at the start of a statement and at the top
+    of the statement hierarchy, the returned site will be either the output/attrOut site,
+    if the icon has one, or the seqIn site if it does not."""
+    if isinstance(ic, commenticon.CommentIcon) and ic.attachedToStmt is not None:
+        return icon.rightmostSite(ic.attachedToStmt)
+    leftSiteOfIc = ic.sites.prevCursorSite(ic.siteRightOfPart(partId))
+    if leftSiteOfIc is None:
+        parent = ic.parent()
+        if parent is None:
+            parentSites = ic.parentSites()
+            if len(parentSites) == 0:
+                return ic, 'seqIn'
+            return ic, parentSites[0]
+        return parent, parent.siteOf(ic)
+    icOnLeftSite = ic.childAt(leftSiteOfIc)
+    if icOnLeftSite is None:
+        return ic, leftSiteOfIc
+    return icon.rightmostSite(icOnLeftSite)
+
+def partIsRightOfSite(ic1, site1, ic2, partId2):
+    """Returns True if icon part (ic, partId2) is lexically right of site (ic1, site1),
+    False if site1 is right of partId1, and None if they are not part of the same
+    sequence."""
+    topParent1 = ic1.topLevelParent()
+    topParent2 = ic2.topLevelParent()
+    order = stmtOrder(topParent1, topParent2)
+    if order == 0:
+        # They are part of the same statement
+        for ic, partId in lexicalTraverse(topParent1, fromSite=(ic1, site1)):
+            if ic is ic2 and partId == partId2:
+                return True
+        return False
+    if order == 1:
+        # ic1's statement precedes that of ic2
+        return True
+    if order == 2:
+        # ic2's statement precedes that of ic1
+        return False
+    # They are in different sequences
+    return None
+
+def stmtOrder(stmt1, stmt2):
+    """Given two top-level icons determine if they are part of the same sequence, and
+    if so, which one comes first.  Returns: 0 if they are the same statement, 1 if
+    stmt1 comes first, 2 if stmt2 comes first, and None if they are not part of the
+    same sequence."""
+    if stmt1 is stmt2:
+        return 0
+    # Since we are handling the general case, and the statements are allowed to be in
+    # separate sequences, we may need to traverse the sequence between them.  To be as
+    # efficient as possible we can make a very good guess at the ordering by looking at
+    # the icon rectangles.  This will be wrong for different sequences, for pre-layout
+    # conditions, and (I think) for pending page offsets.  It will be right, however for
+    # most common repetitive operation, where performance is most important, and skip
+    # potentially vast amounts of unnecessary traversal when we guess correctly.
+    stmt1Bottom = stmt1.rect[3]
+    stmt2Top = stmt2.rect[1]
+    if stmt1Bottom <= stmt2Top:
+        for topIc in icon.traverseSeq(stmt1, includeStartingIcon=False):
+            if topIc is stmt2:
+                return 1
+        for topIc in icon.traverseSeq(stmt2, includeStartingIcon=False):
+            if topIc is stmt1:
+                return 2
+    else:
+        for topIc in icon.traverseSeq(stmt2, includeStartingIcon=False):
+            if topIc is stmt1:
+                return 2
+        for topIc in icon.traverseSeq(stmt1, includeStartingIcon=False):
+            if topIc is stmt2:
+                return 1
     return None
 
 def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None,
@@ -1113,21 +1615,30 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None
     (if requested via assembleDeleted), a single tree or list out of the deleted icons.
     If necessary, it inserts placeholder icons to retain icons that cannot otherwise be
     attached to incompatible sites.  In addition to the two trees, splitDeletedIcons
-    returns a boolean value indicating whether it *also* moved ic.  While the premise of
-    the function is that it rearranges only the trees *under* ic, unfortunately there are
-    cases where ic has to move down the hierarchy (as a consequence of owning a list that
-    needs to move up).  If the function moves ic, and ic is a top-level icon, it will
-    also call removeTop() on it (which needs to be done first for undo to work properly),
-    and main purpose of the returned boolean value is to inform the calling function that
-    this has been done so it won't repeat the operation.  While the function will do the
-    single-level reordering necessary to propagate lists upward in the hierarchy, it
-    leaves  arithmetic reordering (which may involve multiple levels) to the caller.  The
-    caller should provide a list in needReorder to receive a list of operators that
-    should be checked for precedence inversions.  watchSubs can be set to None, or to a
-    dictionary whose keys are icons for which the caller wants to be notified of
-    substitutions (see removeIcons description for details).  preserveSite can be set to
-    a tuple icon (destined for re-insertion in a replace operation) to keep it from being
-    removed when it gets down to a single entry."""
+    returns a boolean value indicating whether it *also* moved ic.
+
+    While the premise of the function is that it rearranges only the trees *under* ic,
+    unfortunately there are cases where ic has to move down the hierarchy (as a
+    consequence of owning a list that needs to move up).  If the function moves ic, and
+    ic is a top-level icon, it will also call removeTop() on it (which needs to be done
+    first for undo to work properly), and main purpose of the returned boolean value is
+    to inform the calling function that this has been done so it won't repeat the
+    operation.
+
+    While the function will do the single-level reordering necessary to propagate lists
+    upward in the hierarchy, it leaves  arithmetic reordering (which may involve multiple
+    levels) to the caller.  The caller should provide a list in needReorder to receive a
+    list of operators that should be checked for precedence inversions.  watchSubs can be
+    set to None, or to a dictionary whose keys are icons for which the caller wants to be
+    notified of substitutions (see removeIcons description for details).  preserveSite
+    can be set to a tuple icon (destined for re-insertion in a replace operation) to keep
+    it from being removed when it gets down to a single entry.
+
+    The toDelete set is compatible with the window's selection format, meaning that
+    interspersed with the icons, there can be tuples represented a selected empty *site*.
+    Note that the absence of such a site means that the empty hole will be specifically
+    preserved in the remaining icons (should it end up in a place that will accept a
+    series)."""
     # Note that this code can be confusing to read, because rather than keep the deleted
     # and non-deleted trees separate, it immediately categorizes them into the tree that
     # will remain attached to ic (withIc) and the tree that will be detached from it
@@ -1145,10 +1656,19 @@ def splitDeletedIcons(ic, toDelete, assembleDeleted, needReorder, watchSubs=None
             # Site series
             isCprhSeries = siteOrSeries.type == 'cprhIn'
             splitSeriesList = []
-            for site in list(siteOrSeries):
+            for site, origSiteName in [(s, s.name) for s in siteOrSeries]:
                 if site.att is None:
-                    # Empty sites are considered an attribute of the icon (as we can't
-                    # delete the absence of something), so stay with it, deleted or not.
+                    # Selection format specifies inclusion of empty series sites with a
+                    # tuple instead of an icon.  If the empty site stays with the ic,
+                    # doing nothing, here, will preserve it.  Otherwise, make an empty
+                    # list to splice into splitList.
+                    _, idx = iconsites.splitSeriesSiteId(site.name)
+                    if idx < len(siteOrSeries) - 1:
+                        emptySiteDeleted = (ic, origSiteName) in toDelete
+                        if icDeleted and  not emptySiteDeleted or \
+                                not icDeleted and emptySiteDeleted:
+                            ic.removeEmptySeriesSite(site.name)
+                            splitSeriesList.append([None])
                     continue
                 if icDeleted:
                     splitFromIc, withIc, _ = splitDeletedIcons(site.att, toDelete,
@@ -1850,3 +2370,54 @@ def cursorLeftOfIcon(ic):
     if isinstance(coincIcon.parent(), entryicon.EntryIcon):
         return coincIcon.parent(), None
     return parent, site
+
+def emptySiteIsLeftOfPoint(ic, siteId, x, y):
+    """Similar to Icon.partIsLeftOfPoint, for empty sites of the type that can appear
+    in selections (only series sites with a comma to the right of them).  Returns the
+    distance to the closest highlighted pixel if the highlighted area of the site is
+    horizontally left of point (x,y).  Returns None if the highlighted area has no
+    associated pixels left of x,y at the given y value.  Note that this will return
+    incorrect results for sites that are not highlighted or not series sites."""
+    site = ic.sites.lookup(siteId)
+    icX, icY = ic.rect[:2]
+    minX = icX + site.xOffset + icon.inSiteImage.width
+    height = icon.minTxtIconHgt - 2
+    minY = icY + site.yOffset - height // 2
+    maxX = minX + icon.LIST_EMPTY_ARG_WIDTH
+    maxY = minY + height
+    if y < minY or y >= maxY or x < minX:
+        return None
+    return x - maxX
+
+def emptySiteIsRightOfPoint(ic, siteId, x, y):
+    """Similar to Icon.partIsRightOfPoint, for empty sites of the type that can appear
+    in selections (only series sites with a comma to the right of them).  Returns the
+    distance to the closest highlighted pixel if the highlighted area of the site is
+    horizontally right of point (x,y).  Returns None if the highlighted area has no
+    associated pixels right of x,y at the given y value.  Note that this will return
+    incorrect results for sites that are not highlighted or not series sites."""
+    site = ic.sites.lookup(siteId)
+    icX, icY = ic.rect[:2]
+    minX = icX + site.xOffset + icon.inSiteImage.width
+    height = icon.minTxtIconHgt - 2
+    minY = icY + site.yOffset - height // 2
+    maxX = minX + icon.LIST_EMPTY_ARG_WIDTH
+    maxY = minY + height
+    if y < minY or y > maxY or x > maxX:
+        return None
+    return minX - x
+
+def isSameIcOrSite(icOrSite1, icOrSite2):
+    """Compare selection entries, which can either be icons or icon/site pairs"""
+    if isinstance(icOrSite1, icon.Icon):
+        return icOrSite1 is icOrSite2
+    elif isinstance(icOrSite2, icon.Icon):
+        return False
+    return icOrSite1[0] is icOrSite2[0] and icOrSite1[1] == icOrSite2[1]
+
+def iconOfSelEntry(selEntry):
+    """Selections contain both icons and empty sites.  For a given selection entry,
+    return the entry itself if it is an icon, or the icon owning the empty site."""
+    if isinstance(selEntry, icon.Icon):
+        return selEntry
+    return selEntry[0]

@@ -241,6 +241,22 @@ class CursorParenIcon(icon.Icon):
             return None
         return None
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            # Left paren
+            return 'trueExpr'
+        if partId == 2:
+            # 'if' part
+            return 'testExpr'
+        if partId == 3:
+            # ' else' part
+            return 'falseExpr'
+        if partId == 4:
+            # Right paren
+            return 'attrIcon'
+        # Error
+        return self.sites.lastCursorSite()
+
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
             icon.Icon.highlightErrors(self, errHighlight)

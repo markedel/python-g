@@ -377,6 +377,9 @@ class WithIcon(icon.Icon):
         bodyAsts = createBlockAsts(self)
         return ast.With(withItems, **bodyAsts, lineno=self.id, col_offset=0)
 
+    def siteRightOfPart(self, partId):
+        return 'values_0'
+
 class WhileIcon(icon.Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
         icon.Icon.__init__(self, window)
@@ -511,6 +514,9 @@ class WhileIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'values_0':
             return self.window.replaceIconWithEntry(self, 'while', 'condIcon')
         return None
+
+    def siteRightOfPart(self, partId):
+        return 'values_0'
 
 class ForIcon(icon.Icon):
     hasTypeover = True
@@ -892,6 +898,11 @@ class ForIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'targets_0':
             return self._becomeEntryIcon()
         return None
+
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            return 'targets_0'
+        return 'iterIcons_0'
 
 class IfIcon(icon.Icon):
     def __init__(self, createBlockEnd=True, window=None, location=None):
@@ -2215,6 +2226,15 @@ class DefOrClassIcon(icon.Icon):
                 entryIcon.appendPendingArgs([nameIcon, argIcons])
         return entryIcon
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            return 'nameIcon'
+        if partId == 2:
+            return 'argIcons_0'
+        if not self.hasArgs:
+            return 'nameIcon'
+        return 'attrIcon'
+
 class ClassDefIcon(DefOrClassIcon):
     def __init__(self, hasArgs=False, createBlockEnd=True, window=None, typeover=False,
             location=None):
@@ -2800,6 +2820,11 @@ class LambdaIcon(icon.Icon):
 
     def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
         return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
+
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            return 'argIcons_0'
+        return 'exprIcon'
 
 def _createFnDefArgsAst(argSiteList):
     posOnlyArgAsts = []

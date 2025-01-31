@@ -899,6 +899,16 @@ class ListTypeIcon(icon.Icon):
     def dumpName(self):
         return self.leftText + (self.rightText if self.closed else "")
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            # Left paren
+            return 'argIcons_0'
+        if partId == 2:
+            # Right paren
+            return 'attrIcon'
+        # Error
+        return self.sites.lastCursorSite()
+
     def compareData(self, data, compareContent=False):
         if self.object is None or data is not self.object:
             return False
@@ -1843,6 +1853,16 @@ class CallIcon(icon.Icon):
             return False
         return True
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            # Left paren
+            return 'argIcons_0'
+        if partId == 2:
+            # Right paren
+            return 'attrIcon'
+        # Error
+        return self.sites.lastCursorSite()
+
     def isComprehension(self):
         # Python allows calls to contain a comprehension instead of an argument list.
         # This is a weird case that we will eventually need to support, but which we
@@ -2283,6 +2303,11 @@ class CprhForIcon(icon.Icon):
 
     def dumpName(self):
         return "for (cprh)"
+
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            return 'targets_0'
+        return 'iterIcon'
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, isAsync=self.isAsync)

@@ -671,6 +671,11 @@ class EntryIcon(icon.Icon):
         self.markLayoutDirty()
         return None
 
+    def clearText(self):
+        """(Quietly) remove all of the current text content, leaving the icon in place."""
+        self.text = ''
+        self.cursorPos = 0
+
     def backspaceInText(self, evt=None):
         if self.text != "" and self.cursorPos != 0:
             # Erase the character before the text cursor
@@ -2607,6 +2612,9 @@ class EntryIcon(icon.Icon):
         else:
             entryText = self.text[:15] + '...'
         return 'EntryIcon "' + entryText + '"'
+
+    def siteRightOfPart(self, partId):
+        return self.sites.firstCursorSite()
 
     def _canPlacePendingArgs(self, onIcon, onSite, overwriteStart=False,
             useAllArgs=False):

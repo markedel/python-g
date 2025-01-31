@@ -355,7 +355,7 @@ class IconSiteList:
         return None
 
     def prevCursorSite(self, siteId):
-        """Return the siteId of the site to the left in the text sequence, None if
+        """Return the siteId of the site to the left in the lexical sequence, None if
         siteId is already the leftmost site in the site list.  Note that sites marked
         with 'cursorSkip' (in the traversal sequence) are included."""
         if self.isSeries(siteId):

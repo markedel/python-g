@@ -19,6 +19,7 @@ import subscripticon
 import parenicon
 import python_g
 import entryicon
+import expredit
 
 # How far to move the cursor per arrow keystroke on the window background
 WINDOW_CURSOR_INCREMENT = 20
@@ -120,11 +121,7 @@ class Cursor:
         self.siteType = None if site is None else ic.typeOf(site)
         self.lastDrawRect = None
         self.blinkState = False
-        self.anchorIc = None
-        self.anchorSite = None
-        self.anchorLine = None
-        self.lastSelIc = None
-        self.lastSelSite = None
+        self.anchorHint = None
 
     def setTo(self, cursorType, ic=None, site=None, pos=None, eraseOld=True,
             drawNew=False, placeEntryText=True):
@@ -163,6 +160,7 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        self.clearAnchorHint()
 
     def setToIconSite(self, ic, siteIdOrSeriesName, seriesIndex=None, eraseOld=True,
             drawNew=False, placeEntryText=True):
@@ -193,6 +191,7 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        self.clearAnchorHint()
 
     def setToText(self, ic, pos=None, eraseOld=True, drawNew=False, placeEntryText=True):
         """Place the cursor within a text-edit-capable icon (ic), such as an entry
@@ -222,6 +221,7 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        self.clearAnchorHint()
 
     def setToTypeover(self, ic, eraseOld=True, drawNew=False):
         """Place the cursor into a typeover-icon.  Note that you must also call the
@@ -238,6 +238,7 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        self.clearAnchorHint()
 
     def setToBestCoincidentSite(self, ic, site):
         if site == "output":
@@ -250,6 +251,15 @@ class Cursor:
             cursorIc, cursorSite = iconsites.lowestCoincidentSite(ic, site)
         self.setToIconSite(cursorIc, cursorSite)
 
+    def clearAnchorHint(self):
+        if self.anchorHint is not None and self.type == 'icon':
+            cursorIc, cursorSite, anchorIc, anchorSite = self.anchorHint
+            if cursorIc is self.icon and cursorSite == self.site:
+                if len(self.window.selectedSet) > 0:
+                    # The cursor didn't move and selection wasn't cleared, so preserve it
+                    return
+        self.anchorHint = None
+
     def moveToIconSite(self, cursorType, ic, site, pos, evt):
         """Place the cursor at an icon site, paying attention to keyboard modifiers"""
         shiftPressed = evt.state & python_g.SHIFT_MASK
@@ -257,7 +267,7 @@ class Cursor:
             if cursorType != 'icon':
                 print('moveToIconSite tried to select to a non-site destination')
                 return
-            self.selectToCursor(ic, site, evt.keysym)
+            self.selectToSiteOrPart(ic, site)
         else:
             self.setTo(cursorType, ic, site, pos)
 
@@ -275,104 +285,141 @@ class Cursor:
         self.setTo(state.cursorType, state.ic, state.site, state.pos, eraseOld=True,
             drawNew=False, placeEntryText=True)
 
-    def selectToCursor(self, ic, site, direction):
-        """Modify selection based on cursor movement (presumably with Shift key held)"""
+    def selectToSiteOrPart(self, ic, site=None, partId=None):
+        """Extend or reduce the existing selection (or select from the existing cursor
+        location) to site: (ic, site) if site is specified, or icon part (ic, partId) if
+        partId is specified.  Also places the cursor at the requested site if site was
+        specified, or on the appropriate side of ic if partId was specified."""
+        # Earlier versions were written with the idea of the cursor being independent of
+        # the primary selection to enable operations between them.  That strayed too far
+        # from the conventional editor model, since we're all accustomed to the cursor
+        # and primary selection behaving as a unified entity.  Instead, we've settled on
+        # the common convention that when there's a selection, the cursor may accompany
+        # it to indicate the 'active' end of the selection (and in the case of a disjoint
+        # selection, the active segment). We go one step further in also using selections
+        # with no cursor to indicate that a selection is 'unanchored' (has no active
+        # end).  These allow our single-click selections to be used to start a lexical
+        # range-selections in either direction.
         selectedIcons = set(self.window.selectedIcons())
         redrawRect = comn.AccumRects()
-        if len(selectedIcons) == 0 and self.type == "icon":
+        if len(selectedIcons) == 0:
+            if self.type != "icon":
+                # There's no selection or cursor to extend from
+                self.setToIconSite(ic, site)
+                return
             # This is a new cursor-based selection
-            self.anchorIc = self.icon
-            self.anchorSite = self.site
-        elif self.anchorIc is not None or self.anchorLine is not None:
-            # There is a current recorded selection, but verify that it is valid by
-            # matching it with the current actual selection
-            lastSelIcons = set(self._iconsBetween(self.lastSelIc, self.lastSelSite))
-            diffIcons = selectedIcons.difference(lastSelIcons)
-            if len({i for i in diffIcons if not isinstance(i, icon.BlockEnd)}):
-                self.anchorIc = None
-                self.anchorLine = None
-        if self.anchorIc is None and self.anchorLine is None:
-            # The current selection is not valid, assume it was made via mouse.  Choose
-            # an anchor line as the farthest side of the selection rectangle from the
-            # cursor using the direction of arrow motion to choose horiz/vert
-            selectedRect = comn.AccumRects()
-            for i in selectedIcons:
-                selectedRect.add(i.selectionRect())
-            left, top, right, bottom = selectedRect.get()
-            left += 3    # Inset rectangle to avoid overlaps and protruding sites
-            right -= 3
-            top += 1
-            bottom -= 1
-            siteX, siteY = ic.posOfSite(site)
-            if direction in ("Left", "Right"):
-                anchorX = right if abs(siteX - left) <= abs(siteX - right) else left
-                self.anchorLine = (anchorX, top, anchorX, bottom)
+            anchorIc = self.icon
+            anchorSite = self.site
+            origSel = set()
+            if site is None:
+                # The caller specified an icon part rather than a site, and we need to
+                # figure out which site (left or right) of the icon part to use.
+                partOnRight = expredit.partIsRightOfSite(anchorIc, anchorSite, ic, partId)
+                if partOnRight is None:
+                    # There is an icon cursor, but it's in different sequence from ic
+                    return
+                if partOnRight:
+                    site = ic.siteRightOfPart(partId)
+                else:
+                    ic, site = expredit.siteLeftOfPart(ic, partId)
+        else:
+            # There is a selection.  If the starting cursor position is within the
+            # a selection, use the contiguous range it touches.  If not, use the nearest
+            # selection to the new position.  Anchor the expansion at the (lexically)
+            # opposite end from the original cursor, or if there is no original cursor,
+            # from the new cursor position.
+            if self.type == "icon":
+                refIc = self.icon
+                refSite = self.site
+                refPartId = None
+            elif site is not None:
+                refIc = ic
+                refSite = site
+                refPartId = None
+            elif partId is not None:
+                refIc = ic
+                refSite = None
+                refPartId = partId
             else:
-                anchorY = bottom if abs(siteY - top) <= abs(siteY - bottom) else top
-                self.anchorLine = (left, anchorY, right, anchorY)
-        select = set(self._iconsBetween(ic, site))
-        erase = selectedIcons.difference(select)
-        select = select.difference(selectedIcons)
+                print('selectToSiteOrPart requires site or partId')
+                return
+            nearestIc, nearestIcDist = expredit.nearestSelectedIcon(refIc, refSite, refPartId)
+            if nearestIc is None:
+                # There may be a selection, but it's not in this sequence, so there's
+                # nothing to extend
+                if site is not None:
+                    self.setToIconSite(ic, site)
+                return
+            if nearestIcDist == 0:
+                # The cursor site, clicked site, or clicked icon is within the selection
+                if refSite is None:
+                    rightSite = ic.siteRightOfPart(partId)
+                    leftIc, leftSite = expredit.siteLeftOfPart(ic, partId)
+                    fwdIc, fwdSite, fwdDist = expredit.searchFwdForUnselected(ic,
+                        rightSite)
+                    revIc, revSite, revDist = expredit.searchRevForUnselected(leftIc,
+                        leftSite)
+                else:
+                    fwdIc, fwdSite, fwdDist = expredit.searchFwdForUnselected(refIc, refSite)
+                    revIc, revSite, revDist = expredit.searchRevForUnselected(refIc, refSite)
+                if revDist > fwdDist:
+                    anchorIc, anchorSite = revIc, revSite
+                elif fwdDist > revDist:
+                    anchorIc, anchorSite = fwdIc, fwdSite
+                else:
+                    # Anchor is ambiguous (fwdDist == revDist).  If we have an anchor
+                    # hint and it matches one of our choices, use it.  Otherwise, use
+                    # the random choice, below.
+                    anchorIc, anchorSite = fwdIc, fwdSite
+                    if self.anchorHint is not None and self.type == 'icon':
+                        hintCursorIc, hintCursorSite, hintAnchorIc, hintAnchorSite = \
+                            self.anchorHint
+                        if self.icon is hintCursorIc and self.site == hintCursorSite:
+                            if fwdIc is hintAnchorIc and fwdSite == hintAnchorSite:
+                                anchorIc, anchorSite = fwdIc, fwdSite
+                            elif revIc is hintAnchorIc and revSite == hintAnchorSite:
+                                anchorIc, anchorSite = revIc, revSite
+            else:
+                # The reference site is outside of the selection.  This is probably an
+                # unanchored selection (as we set refIc to the requested site for
+                # unanchored selections).  However, it's also remotely possible that
+                # we've somehow got a separated cursor and selection.
+                fwdIc, fwdSite, fwdDist = expredit.searchFwdForUnselected(nearestIc)
+                revIc, revSite, revDist = expredit.searchRevForUnselected(nearestIc)
+                if nearestIcDist > 0:
+                    # The selection is lexically right-of the reference site
+                    anchorIc, anchorSite = fwdIc, fwdSite
+                else:
+                    # The selection is lexically left-of the reference site
+                    anchorIc, anchorSite = revIc, revSite
+            origSel = expredit.iconsInLexicalRangeBySite(revIc, revSite, fwdIc, fwdSite,
+                preOrdered=True)
+            if site is None:
+                # Caller specified a partId rather than a site, but now we need a site to
+                # make the selection and place the cursor.  Choose the left or right side
+                # of the icon part based upon being opposite from that of the anchor.
+                if anchorIc is fwdIc and anchorSite == fwdSite:
+                    ic, site = expredit.siteLeftOfPart(ic, partId)
+                else:
+                    site = ic.siteRightOfPart(partId)
+        # Record an anchor-hint for use only in the very specific case of an ambiguous
+        # selection+cursor combination (such as when you select an empty list or tuple
+        # by moving the cursor with Shift+Arrow to middle of two selected icon parts)
+        self.anchorHint = ic, site, anchorIc, anchorSite
+        # Update the selection
+        newSel = expredit.iconsInLexicalRangeBySite(anchorIc, anchorSite, ic, site)
+        erase = origSel.difference(newSel)
+        select = newSel.difference(selectedIcons)
         for i in erase:
-            redrawRect.add(i.hierRect())
-            i.select(False)
+            redrawRect.add(expredit.iconOfSelEntry(i).hierRect())
+            self.window.select(i, False)
         for i in select:
-            redrawRect.add(i.hierRect())
-            i.select()
+            redrawRect.add(expredit.iconOfSelEntry(i).hierRect())
+            self.window.select(i, True)
         if redrawRect.get() is not None:
-            self.window.refresh(redrawRect.get(), redraw=True, clear=False)
+            self.window.refresh(redrawRect.get(), redraw=True)
+        # Place the cursor at the requested location
         self.setToIconSite(ic, site)
-        self.lastSelIc = ic
-        self.lastSelSite = site
-
-    def _iconsBetween(self, ic, site):
-        """Find the icons that should be selected by shift-select between the current
-        anchor (self.anchorIc and Pos, or self.anchorLine) and cursor at ic, site."""
-        siteX, siteY = ic.posOfSite(site)
-        siteType = ic.typeOf(site)
-        if siteType in ("attrIn", "attrOut"):
-            siteY -= icon.ATTR_SITE_OFFSET
-        elif siteType in ("seqIn", "seqOut"):
-            seqInX, seqInY = ic.posOfSite("seqIn")
-            seqOutX, seqOutY = ic.posOfSite("seqOut")
-            siteY = (seqInY + seqOutY) // 2
-        if self.anchorIc is not None:
-            anchorX, anchorY = self.anchorIc.posOfSite(self.anchorSite)
-            anchorSiteType = self.anchorIc.typeOf(self.anchorSite)
-            if anchorSiteType in ("attrIn", "attrOut"):
-                anchorY -= icon.ATTR_SITE_OFFSET
-            elif anchorSiteType in ("seqIn", "seqOut"):
-                seqInX, seqInY = self.anchorIc.posOfSite("seqIn")
-                seqOutX, seqOutY = self.anchorIc.posOfSite("seqOut")
-                anchorY = (seqInY + seqOutY) // 2
-            if anchorX < siteX:
-                anchorX += 4  # Avoid overlapped icons and sites
-                siteX -= 3
-            elif siteX < anchorX:
-                siteX += 4
-                anchorX -= 3
-            selectRect = comn.AccumRects((anchorX, anchorY - 3, anchorX, anchorY + 3))
-            selectRect.add((siteX, siteY - 3, siteX, siteY + 3))
-        else:
-            if self.anchorLine[0] == self.anchorLine[2]:
-                anchorX = self.anchorLine[0]
-                if anchorX < siteX:
-                    self.anchorLine = comn.offsetRect(self.anchorLine, 4, 0)
-                    siteX -= 3
-                elif siteX < anchorX:
-                    siteX += 4
-                    icon.moveRect(self.anchorLine, (-3, 0))
-            selectRect = comn.AccumRects(self.anchorLine)
-            selectRect.add((siteX, siteY, siteX, siteY))
-        # Get the icons that would be covered by a rectangular selection of the box
-        iconsToSelect = self.window.findIconsInRegion(selectRect.get())
-        iconsToSelect = [ic for ic in iconsToSelect if ic.inRectSelect(selectRect.get())]
-        # If the selection spans multiple statements, change to statement-level selection
-        topIcons = {ic.topLevelParent() for ic in iconsToSelect}
-        if len(topIcons) <= 1:
-            return iconsToSelect
-        else:
-            return self._seqIconsBetween(topIcons)
 
     def _seqIconsBetween(self, topIcons):
         """Return all of the icons in the sequence including topIcons (filling in gaps,
@@ -407,6 +454,7 @@ class Cursor:
         if self.type is not None and eraseOld:
             self.erase()
         self.type = None
+        self.clearAnchorHint()
 
     def blink(self):
         self.blinkState = not self.blinkState
@@ -514,61 +562,6 @@ class Cursor:
             self.setTo(cursorType, ic, site, pos)
         elif self.type == "icon":
             self._processIconArrowKey(evt)
-
-    def arrowKeyWithSelection(self, evt, selectedIcons):
-        """Process arrow key pressed with no cursor but selected icons."""
-        direction = evt.keysym
-        shiftPressed = evt.state & python_g.SHIFT_MASK
-        if not shiftPressed:
-            self.window.unselectAll()
-        selectedRects = comn.AccumRects()
-        for ic in selectedIcons:
-            selectedRects.add(ic.selectionRect())
-        selectedRect = selectedRects.get()
-        l, t, r, b = selectedRect
-        l -= 10
-        t -= 10
-        r += 10
-        b += 10
-        searchRect = l, t, r, b
-        cursorSites = []
-        for ic in self.window.findIconsInRegion(searchRect):
-            snapLists = ic.snapLists(forCursor=True)
-            for ic, (x, y), name in snapLists.get("input", []):
-                cursorSites.append((x, y, ic, name))
-            for ic, (x, y), name in snapLists.get("attrIn", []):
-                cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, ic, name))
-            outSites = snapLists.get("output", [])
-            if len(outSites) > 0:
-                cursorSites.append((*outSites[0][1], ic, "output"))
-            if ic.__class__.__name__ in ("CommentIcon", "VerticalBlankIcon"):
-                # Icons with only sequence sites
-                cursorSites.append((ic.rect[0], ic.rect[1], ic, 'seqIn'))
-                cursorSites.append((ic.rect[2], ic.rect[3], ic, 'seqOut'))
-        if len(cursorSites) == 0:
-            return  # It is possible to have icons with no viable cursor sites
-        selLeft, selTop, selRight, selBottom = selectedRect
-        bestDist = None
-        for siteData in cursorSites:
-            x, y = siteData[:2]
-            if direction == "Left":  # distance from left edge
-                dist = abs(x - selLeft) + max(0, selBottom-y) + max(0, y-selTop)
-            elif direction == "Right":  # distance from right edge
-                dist = abs(x - selRight) + max(0, selBottom-y) + max(0, y-selTop)
-            elif direction == "Up":  # distance from top edge
-                dist = abs(y - selTop) + max(0, selLeft-x) + max(0, x-selRight)
-            elif direction == "Down":  # distance from bottom edge
-                dist = abs(y - selBottom) + max(0, selLeft-x) + max(0, x-selRight)
-            if bestDist is None or dist < bestDist:
-                bestSiteData = siteData
-                bestDist = dist
-        x, y, ic, site = bestSiteData
-        if site == "output":
-            parent = ic.parent()
-            if parent is not None:
-                self.setToIconSite(parent, parent.siteOf(ic))
-                return
-        self.moveToIconSite('icon', ic, site, None, evt)
 
     def processBreakingArrowKey(self, evt):
         """Alt+arrow action (since we don't have configurable bindings, yet, I can say
@@ -693,12 +686,12 @@ def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
     fromSiteType = fromIcon.typeOf(fromSite)
     if direction == 'Left':
         if fromSiteType in iconsites.parentSiteTypes:
-            # Cursor is on an output site.  There's probably nowhere to go (return
-            # the same cursor position).  In the unlikely case that it is attached to
-            # something, make a recursive call with the proper cursor site (input)
+            # Cursor is on an output site.  In the unlikely case that it is attached to
+            # something, make a recursive call with the proper cursor site (input), but
+            # otherwise, traverse to the seqIn site.
             attachedIc = fromIcon.childAt(fromSite)
             if attachedIc is None:
-                return fromIcon, fromSite
+                return fromIcon, 'seqIn'
             attachedSite = attachedIc.siteOf(fromIcon)
             return _lexicalTraverse(attachedIc, attachedSite, direction, travStmtComment)
         elif fromSite == 'seqOut':
@@ -723,8 +716,11 @@ def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
             parent = highestIc.parent()
             if parent is None:
                 if highestIc.hasCoincidentSite():
-                    return iconsites.lowestCoincidentSite(highestIc,
+                    toIc, toSite = iconsites.lowestCoincidentSite(highestIc,
                         highestIc.hasCoincidentSite())
+                    if toIc == fromIcon and toSite == fromSite:
+                        return highestIc, 'seqIn'
+                    return toIc, toSite
                 return highestIc, topSite(highestIc, seqDown=False)
             parentSite = parent.siteOf(highestIc)
             if fromIcon.hasCoincidentSite():

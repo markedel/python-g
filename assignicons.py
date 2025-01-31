@@ -447,6 +447,21 @@ class AssignIcon(icon.Icon):
                 partId += 1  # Spine
         return partId
 
+    def siteRightOfPart(self, partId):
+        clause = (partId - 1) // 3
+        numTgtLists = len(self.tgtLists)
+        partType = (partId - 1) % 3
+        if clause < numTgtLists:
+            # Target clause or = following target clause
+            if partType == 0:
+                # left spine of a target list
+                return 'targets%d_0' % clause
+            if clause < numTgtLists - 1:
+                # Right spine or = preceding another target clause
+                return 'targets%d_0' % (clause + 1)
+        # Values clause or right spine or = following last target clause
+        return 'values_0'
+
 class AugmentedAssignIcon(icon.Icon):
     def __init__(self, op, window, location=None):
         icon.Icon.__init__(self, window)
@@ -698,6 +713,11 @@ class AugmentedAssignIcon(icon.Icon):
                     newTuple.insertChild(arg, "argIcons", i)
             win.replaceTop(self, newTuple)
         return entryIcon
+
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            return 'targetIcon'
+        return 'values_0'
 
 def insertAssignIcon(atIcon, atSite, insertedAssign):
     if isinstance(atIcon, AssignIcon):

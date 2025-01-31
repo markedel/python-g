@@ -648,6 +648,19 @@ class BinOpIcon(icon.Icon):
             return _becomeEntryIcon(self)
         return None
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            # Left paren
+            return 'leftArg'
+        if partId == 2:
+            # Body
+            return 'rightArg'
+        if partId == 3:
+            # Right paren
+            return 'attrIcon'
+        # Error
+        return self.sites.lastCursorSite()
+
     def updateParens(self):
         needs = needsParens(self)
         if needs and not self.hasParens:
@@ -880,6 +893,9 @@ class DivideIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         backspaceBinOpIcon(self, siteId, evt)
+
+    def siteRightOfPart(self, partId):
+        return 'attrIcon'
 
 class IfExpIcon(icon.Icon):
     """Ternary if-else expression"""
@@ -1440,6 +1456,16 @@ class IfExpIcon(icon.Icon):
         elif self.hasParens and not needs:
             self.hasParens = False
             self.sites.attrIcon.order = None
+
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            # Left paren
+            return 'argIcon'
+        if partId == 2:
+            # Right paren
+            return 'attrIcon'
+        # Error
+        return self.sites.lastCursorSite()
 
 def needsParens(ic, parent=None, forText=False, parentSite=None):
     """Returns True if the BinOpIcon or IfExpr icon, ic, should have parenthesis.

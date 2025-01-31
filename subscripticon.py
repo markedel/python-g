@@ -295,6 +295,16 @@ class SubscriptIcon(icon.Icon):
     def dumpName(self):
         return "." + "[" + ("]" if self.closed else "")
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            # Left bracket
+            return 'indexIcon'
+        if partId == 2:
+            # Right paren
+            return 'attrIcon'
+        # Error
+        return self.sites.lastCursorSite()
+
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + (2 if self.parent() is None else 1)
         text = filefmt.SegmentedText('[' if self.closed or export else '$:o$[')

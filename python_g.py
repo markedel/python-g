@@ -478,11 +478,21 @@ class Window:
     def close(self):
         self.top.destroy()
 
-    def selectedIcons(self):
+    def selectedIcons(self, excludeEmptySites=False):
         """Return a list of the icons in the window that are currently selected.  Due to
         the odd method by which this is implemented (see below), performance will be
         enhanced somewhat if code that deletes all the icons from the selection, calls
-        self.clearSelection() once it no longer needs to poll the selection."""
+        self.clearSelection() once it no longer needs to poll the selection.  By default,
+        the list will also contain icon+site tuples for selected empty sites.  We allow
+        these in selections to support the text-editor idiom of selecting ranges code to
+        replace/delete.  Here, only empty *series* sites are supported, as they are the
+        only type of site where removing the content usually implies removing the site
+        itself (the comma clause).  Specifying excludeEmptySites will filter out these
+        tuples and return a pure icon list.  Note that the absence of a corresponding
+        tuple implies that a given empty site is specifically not selected, so while code
+        that only cares about physical icons can ignore these entries, code that alters
+        selections must include these whenever an empty series site should be included.
+        """
         # Selection was initially a property of icons, but that caused performance issues
         # because finding the current selection required traversing all icons.  Now the
         # selection is held in a set, but to support existing code which does not expect
@@ -490,32 +500,40 @@ class Window:
         # make performance significantly WORSE when more than half of the icons in the
         # window are selected).  It is intended that there will be a formal mechanism for
         # removing icons, after which this code can be removed.
+        #
+        # Eventually might be nice to support extracting '=' clauses with the same editor
+        # idiom and similar mechanism used to handle empty series sites.
         self._pruneSelectedIcons()
+        if excludeEmptySites:
+            return [ic for ic in self.selectedSet if isinstance(ic, icon.Icon)]
         return list(self.selectedSet)
 
     def _pruneSelectedIcons(self):
         removeSet = set()
-        for ic in self.selectedSet:
+        for icOrSite in self.selectedSet:
+            ic = icOrSite if isinstance(icOrSite, icon.Icon) else icOrSite[0]
             if isStmtComment(ic):
                 topParent = ic.attachedToStmt
             else:
                 topParent = ic.topLevelParent()
             if topParent is None or topParent not in self.topIcons:
                 print("Removing deleted icon from selection")
-                removeSet.add(ic)
+                removeSet.add(icOrSite)
         self.selectedSet -= removeSet
 
     def isSelected(self, ic):
-        """Return True if an icon is in the current selection, False if not."""
+        """Return True if an icon is in the current selection, False if not.  Empty
+        series sites can also be tested by passing ic as a tuple (icon, siteName)."""
         return ic in self.selectedSet
 
     def select(self, ic, select=True):
         """Add (select=True) or remove (select=False) an icon from the current selection.
         Does not redraw or mark the icon as dirty.  Use .isSelected() to read the
-        selection state of an icon."""
+        selection state of an icon.  ic can also specify an empty series site to select
+        or unselect in the form of a tuple: (icon, siteName)."""
         if select:
             self.selectedSet.add(ic)
-        else:
+        elif ic in self.selectedSet:
             self.selectedSet.remove(ic)
 
     def clearSelection(self):
@@ -836,38 +854,31 @@ class Window:
             return
         else:
             # If there's an appropriate selection, use that
-            # ... This is extremely incomplete and wrong, as we can do much better than
-            #     single-icon substitution that deletes all substructure.
-            selectedIcons = findTopIcons(self.selectedIcons())
-            if len(selectedIcons) == 1:
-                # A single icon was selected.  Replace it and its children
-                replaceIcon = selectedIcons[0]
-                self.requestRedraw(replaceIcon.topLevelParent().hierRect())
-                iconParent = replaceIcon.parent()
-                pendingAttr = replaceIcon.childAt('attrIcon')
-                if iconParent is None:
-                    # Icon is at top, but may be part of a sequence
-                    entryIcon = entryicon.EntryIcon(window=self)
-                    self.replaceTop(replaceIcon, entryIcon)
-                else:
-                    entryIcon = entryicon.EntryIcon(window=self)
-                    replaceSite = iconParent.siteOf(replaceIcon)
-                    if iconParent.typeOf(replaceSite) == "cprhIn":
-                        ic, site = listicons.proxyForCprhSite(iconParent, replaceSite)
-                        ic.replaceChild(entryIcon, site)
-                        iconParent.replaceChild(None, replaceSite)
-                    else:
-                        iconParent.replaceChild(entryIcon, replaceSite)
-                entryIcon.appendPendingArgs([pendingAttr])
+            self._pruneSelectedIcons()
+            if len(self.selectedSet) == 0:
+                rejectReason = "No cursor or selection"
+            else:
+                # Replace the selection (or first contiguous range of it) with an entry
+                # icon, and pass the character on to that entry icon to process.
+                # Unfortunately, to fully understand the context in which we will be
+                # inserting the character, we need to go through with the removal of the
+                # selected icons.  If we then fail to insert the character, use undo to
+                # unwind the removal and replacement with the entry icon.  Before we do
+                # any of that, add a (probably redundant) undo boundary, to guarantee
+                # that undo  will not overstep and revert an operation prior to the
+                # keystroke.  To keep the entry icon from being deleted during the
+                # replacement process, we start it with the illegal string '&&&', but
+                # remove it before properly adding the character with addText().
+                self.undo.addBoundary()
+                entryIcon = entryicon.EntryIcon(window=self, initialString='&&&')
+                self.replaceSelectedIcons(self.selectedSet, [[entryIcon]])
+                entryIcon.clearText()
                 self.cursor.setToText(entryIcon, drawNew=False)
                 rejectReason = entryIcon.addText(char)
-                self.clearSelection()
-            elif len(selectedIcons) == 0:
-                rejectReason = "No cursor"
-            else:
-                # Either no icons were selected, or multiple icons were selected (so
-                # we don't know what to replace).
-                rejectReason = "Multiple selections (ambiguous replace)"
+                if rejectReason is None:
+                    self.clearSelection()
+                else:
+                    self.undo.undo()
         if rejectReason is not None:
             # Text was rejected, beep and flash the error reason
             self.displayTypingError(rejectReason)
@@ -1049,7 +1060,8 @@ class Window:
             else:
                 self._startRectSelect(evt)
         elif evt.state & SHIFT_MASK:
-            self._startRectSelect(evt)
+            print('lexical drag is not implemented, yet.  Doing click action, instead')
+            self._delayedBtnUpActions(evt)
         elif ic.isSelected():
             # If a selected icon was clicked, drag all of the selected icons
             self._startDrag(evt, self.selectedIcons())
@@ -1264,29 +1276,32 @@ class Window:
         if self.doubleClickFlag:
             return  # Second click occurred, don't do the delayed action
         self.buttonDownTime = None
-        x, y = self.imageToContentCoord(evt.x, evt.y)
-        clickedIcon = self.findIconAt(x, y)
-        if clickedIcon is None:
+        if self.buttonDownIcon is None:
             # Clicked on window background, move cursor
+            x, y = self.imageToContentCoord(evt.x, evt.y)
             ic = self._leftOfSeq(x, y)
             if ic is not None and ic.posOfSite('seqOut')[1] >= y:
                 self._select(ic, op="hier")
                 return
             siteIcon, site = self.siteSelected(evt)
             if siteIcon:
-                self.cursor.setToIconSite(siteIcon, site)
+                if self.buttonDownState & SHIFT_MASK:
+                    self.cursor.selectToSiteOrPart(siteIcon, site)
+                else:
+                    self.cursor.setToIconSite(siteIcon, site)
             else:
                 self.unselectAll()
                 self.cursor.setToWindowPos((x, y))
             self.refreshDirty()
             return
         if self.buttonDownState & SHIFT_MASK:
-            self._select(clickedIcon, 'add')
+            self.cursor.selectToSiteOrPart(self.buttonDownIcon,
+                partId=self.buttonDownIcPart)
             return
         elif self.buttonDownState & CTRL_MASK:
-            self._select(clickedIcon, 'toggle')
+            self._select(self.buttonDownIcon, 'toggle')
             return
-        action = self._nextProgressiveClickAction(clickedIcon, evt)
+        action = self._nextProgressiveClickAction(self.buttonDownIcon, evt)
         if action == "moveCursor":
             self.unselectAll()
             siteIcon, site = self.siteSelected(evt)
@@ -1294,7 +1309,7 @@ class Window:
                 self.cursor.setToIconSite(siteIcon, site)
                 self.refreshDirty()
             return
-        self._select(clickedIcon, action)
+        self._select(self.buttonDownIcon, action)
 
     def _nextProgressiveClickAction(self, clickedIcon, evt):
         """If an icon was clicked, determine the action to be taken: one of either
@@ -1307,25 +1322,32 @@ class Window:
         siteSelected = self.cursor.type == "icon" and self.cursor.icon is siteIcon
         currentSel = set(self.selectedIcons())
         singleSel = {clickedIcon}
-        hierSel = set(clickedIcon.traverse())
-        hasHierSel = singleSel != hierSel
-        leftIc = findLeftOuterIcon(self.assocGrouping(clickedIcon), self.buttonDownLoc)
-        leftSel = set(leftIc.traverse())
-        hasLeftSel = leftSel != hierSel
-        if hasattr(leftIc, 'stmtComment'):
-            commentSel = {*leftSel, leftIc.stmtComment}
-            hasCommentSel = True
+        if isinstance(clickedIcon, tuple):
+            # The user has clicked on an empty series site, which we do allow to be
+            # selected, but only toggled between selection and cursor (not extended).
+            hierSel = leftSel = None
+            hasHierSel = hasLeftSel = hasCommentSel = hasBlockSel = False
         else:
-            commentSel = leftSel
-            hasCommentSel = False
-        if hasattr(clickedIcon, 'blockEnd'):
-            hasBlockSel = True
-            singleSel.add(clickedIcon.blockEnd)
-            hierSel.add(clickedIcon.blockEnd)
-            leftSel.add(clickedIcon.blockEnd)
-            commentSel.add(clickedIcon.blockEnd)
-        else:
-            hasBlockSel = False
+            hierSel = set(clickedIcon.traverse())
+            hasHierSel = singleSel != hierSel
+            leftIc = findLeftOuterIcon(self.assocGrouping(clickedIcon),
+                self.buttonDownLoc)
+            leftSel = set(leftIc.traverse())
+            hasLeftSel = leftSel != hierSel
+            if hasattr(leftIc, 'stmtComment'):
+                commentSel = {*leftSel, leftIc.stmtComment}
+                hasCommentSel = True
+            else:
+                commentSel = leftSel
+                hasCommentSel = False
+            if hasattr(clickedIcon, 'blockEnd'):
+                hasBlockSel = True
+                singleSel.add(clickedIcon.blockEnd)
+                hierSel.add(clickedIcon.blockEnd)
+                leftSel.add(clickedIcon.blockEnd)
+                commentSel.add(clickedIcon.blockEnd)
+            else:
+                hasBlockSel = False
         if not currentSel:
             if siteIcon is not None and (not siteSelected or site != self.cursor.site):
                 return "moveCursor"
@@ -1372,14 +1394,15 @@ class Window:
 
     def _cutCb(self, _evt=None):
         self._copyCb()
-        self.removeIcons(self.selectedIcons())
+        # Note the unfortunate dependency here: passing self.selectedSet to removeIcons
+        # without calling _pruneSelectedIcons because we know that _copyCb did.
+        self.removeIcons(self.selectedSet)
         self.clearSelection()
         self.refreshDirty(addUndoBoundary=True)
 
     def _copyCb(self, evt=None):
-        selectedIcons = self.selectedIcons()
-        selectedRect = icon.containingRect(selectedIcons)
-        if selectedRect is None:
+        self._pruneSelectedIcons()
+        if len(self.selectedSet) == 0:
             return
         with io.StringIO() as outStream:
             self.writeSaveFileText(outStream, selectedOnly=True, exportPython=False)
@@ -1942,10 +1965,28 @@ class Window:
 
     def _arrowCb(self, evt):
         if self.cursor.type is None:
-            selected = self.selectedIcons()
-            if selected:
-                self.cursor.arrowKeyWithSelection(evt, selected)
-            return
+            # If there is a selection but no cursor, put a cursor at the appropriate
+            # end of the selection.  This will indicate the active end of the selection
+            # for future selection adjustments.
+            _, firstIcOfSel, partIdOfFirstIcOfSel, icAfterSel, partIdOfIcAfterSel, \
+                _, _, _ = self.findFirstContiguousSelection(self.selectedSet)
+            if firstIcOfSel is None:
+                self.displayTypingError('No cursor or selection')
+                return
+            direction = evt.keysym
+            if direction in ("Up", "Left"):
+                cursorIc, cursorSite = expredit.siteLeftOfPart(firstIcOfSel,
+                    partIdOfFirstIcOfSel)
+            else:
+                if partIdOfIcAfterSel is None:
+                    # findFirstContiguousSelection gives us 'None' as the partId when the
+                    # selection ends on a statement boundary
+                    cursorIc = icAfterSel
+                    cursorSite = 'seqIn'
+                else:
+                    cursorIc, cursorSite = expredit.siteLeftOfPart(icAfterSel,
+                        partIdOfIcAfterSel)
+            self.cursor.setToIconSite(cursorIc, cursorSite)
         if not evt.state & SHIFT_MASK:
             self.unselectAll()
         if evt.state & ALT_MASK and evt.keysym in ("Left", "Right") and \
@@ -2374,7 +2415,8 @@ class Window:
                 highlightedIcons = set()
         if self.highlightedForReplace != highlightedIcons:
             redrawRegion = comn.AccumRects()
-            for ic in self.highlightedForReplace | highlightedIcons:
+            for icOrSite in self.highlightedForReplace | highlightedIcons:
+                ic = icOrSite[0] if isinstance(icOrSite, tuple) else icOrSite
                 redrawRegion.add(ic.rect)
             self.highlightedForReplace = highlightedIcons
             self.refresh(redrawRegion.get(), redraw=True, showOutlines=True)
@@ -2524,6 +2566,17 @@ class Window:
                 newSelect = ic in self.rectSelectInitialState
             if ic.isSelected() != newSelect:
                 ic.select(newSelect)
+                redrawRegion.add(ic.rect)
+            affectedEmptySites = emptySitesInRect(ic, combinedRegion)
+            selectedEmptySites = emptySitesInRect(ic, newRect)
+            if affectedEmptySites is not None:
+                selectedEmptySites = set() if selectedEmptySites is None else \
+                    set(selectedEmptySites)
+                for siteIcPair in affectedEmptySites:
+                    wasSelected = siteIcPair in self.selectedSet
+                    selected = siteIcPair in selectedEmptySites
+                    if wasSelected and not selected or not wasSelected and selected:
+                        self.select(siteIcPair, selected)
                 redrawRegion.add(ic.rect)
         self.refresh(redrawRegion.get(), redraw=True)
         l, t, r, b = self.contentToImageRect(newRect)
@@ -2926,11 +2979,16 @@ class Window:
         else:
             changedIcons = [ic]
         for ic in changedIcons:
-            self.requestRedraw(ic.rect)
-            if op == 'toggle':
-                ic.select(not ic.isSelected())
+            if isinstance(ic, tuple):
+                # ic is actually an empty site (ic, siteName) pair
+                self.requestRedraw(ic[0].rect)
+                self.select(ic, (ic not in self.selectedSet) if op == 'toggle' else True)
             else:
-                ic.select()
+                self.requestRedraw(ic.rect)
+                if op == 'toggle':
+                    ic.select(not ic.isSelected())
+                else:
+                    ic.select()
         self.cursor.removeCursor()
         self.refreshDirty()
 
@@ -2939,8 +2997,11 @@ class Window:
         selectedIcons = self.selectedIcons()
         if len(selectedIcons) == 0:
             return
-        for ic in selectedIcons:
-            refreshRegion.add(ic.rect)
+        for icOrSite in selectedIcons:
+            if isinstance(icOrSite, icon.Icon):
+                refreshRegion.add(icOrSite.rect)
+            else:
+                refreshRegion.add(icOrSite[0].rect)
         self.clearSelection()
         if refreshRegion.get() is not None:
             self.refresh(refreshRegion.get(), redraw=True)
@@ -3016,7 +3077,7 @@ class Window:
                 print(f"String {ic.dumpName()}, {ic.cursorPos}")
 
     def _debugLayoutCb(self, evt):
-        topIcons = findTopIcons(self.selectedIcons())
+        topIcons = findTopIcons(self.selectedIcons(excludeEmptySites=True))
         for ic in topIcons:
             if hasattr(ic, 'debugLayoutFilterIdx'):
                 ic.debugLayoutFilterIdx += 1
@@ -3026,7 +3087,7 @@ class Window:
         self.refreshDirty(addUndoBoundary=True)
 
     def _undebugLayoutCb(self, evt):
-        for ic in self.selectedIcons():
+        for ic in self.selectedIcons(excludeEmptySites=True):
             if hasattr(ic, 'debugLayoutFilterIdx'):
                 delattr(ic, 'debugLayoutFilterIdx')
                 ic.markLayoutDirty()
@@ -3169,7 +3230,7 @@ class Window:
                     break
         return iconsInRegion
 
-    def findIconAt(self, x, y):
+    def findIconAt(self, x, y, includeEmptySites=False):
         for seqStartPage in reversed(self.sequences):
             for page in seqStartPage.traversePages():
                 if page.bottomY >= y >= page.topY:
@@ -3178,6 +3239,10 @@ class Window:
                             inclStmtComments=True):
                         if ic.touchesPosition(x, y):
                             return ic
+                        if includeEmptySites:
+                            touchesSite = ic.touchesEmptySeriesSite(x, y)
+                            if touchesSite:
+                                return (ic, touchesSite)
         return None
 
     def _leftOfSeq(self, x, y):
@@ -3219,7 +3284,11 @@ class Window:
         icon that replaced them.  preserveSite can be set to a tuple to save it from
         conversion to paren or removal (in the case of a naked tuple) when down to a
         single argument (used in replacement, which is implemented as removal followed by
-        insert)."""
+        insert).  The list of icons to remove can be passed as a list or tuple, but is
+        immediately converted the form of a set, so passing "icons" directly as a set
+        will save that overhead.  More importantly, the icon list (set or list form) is
+        compatible with the window's selection data format and will preserve and remove
+        empty series sites based upon the additional site information."""
         if len(icons) == 0:
             return []
         # If parameter 'icons' is not already a set, turn it into one to more efficiently
@@ -3228,8 +3297,10 @@ class Window:
             deletedSet = icons
         else:
             deletedSet = set(icons)
-        # Cursors and selections can coexist, and it is possible for the cursor to be on
-        # an icon that is being deleted.  If so, move it to an icon that will remain.
+        # If there's a cursor set, check if it's on an icon being deleted.  If so, move
+        # it to an icon that will remain.
+        # ... This is failing to preserve the cursor in the case of removed series sites
+        #     (this gets even more complicated when assembleDeleted is True)
         if self.cursor.type in ("icon", "text") and self.cursor.icon in deletedSet \
                 and not assembleDeleted:
             cursorPos = self.cursor.icon.pos()
@@ -3261,7 +3332,7 @@ class Window:
             if isStmtComment(ic):
                 topIcons.add(ic.attachedToStmt)
             else:
-                topIcons.add(ic.topLevelParent())
+                topIcons.add(expredit.topLevelParentOfSelEntry(ic))
         # Find region needing erase, including following sequence connectors
         self.requestRedraw(None, filterRedundantParens=True)
         for ic in topIcons:
@@ -3452,7 +3523,7 @@ class Window:
         selectedSet parameter, as it can contain icons that have been deleted.  To remove
         those icons and make it usable, call _pruneSelectedIcons() before passing it to
         this function."""
-        firstStmtOfSelection, firstIconOfSelection, iconAfterFirstSelection, \
+        firstStmtOfSelection, firstIconOfSelection, _, iconAfterFirstSelection, _, \
             spansStmtBoundaries, startsOnStmtBoundary, endsOnStmtBoundary = \
             self.findFirstContiguousSelection(selectedSet)
         # Figure out insert site based on the first contiguous selection.  Set
@@ -3489,7 +3560,24 @@ class Window:
                     insertSiteIcon = firstStmtOfSelection.childAt('seqIn')
                     insertSite = 'seqOut'
             else:
+                # The selection starts on a stmt boundary but does not end on one.  Here,
+                # the only thing we can attach to is the output of first icon after the
+                # selection.  ...That is, unless it is a direct element of a naked tuple,
+                # in which case we can make insertSite the first argument site of the
+                # tuple, which preserveSite will then preserve across remove icons.  This
+                # will keep the replacement code as separate list element(s) if possible,
+                # as opposed to merging on to the left of iconAfterFirstSelection.
                 recalcInsertSite = iconAfterFirstSelection
+                if isinstance(iconAfterFirstSelection, icon.Icon):
+                    topTuple = iconAfterFirstSelection.topLevelParent()
+                    if isinstance(topTuple, listicons.TupleIcon) and topTuple.noParens:
+                        tupleSite = topTuple.siteOf(iconAfterFirstSelection,
+                            recursive=True)
+                        if iconsites.isSeriesSiteId(tupleSite) and \
+                                firstStmtOfSelection.childAt(tupleSite) is \
+                                iconsites.highestCoincidentIcon(iconAfterFirstSelection):
+                            insertSiteIcon = topTuple
+                            insertSite = 'argIcons_0'
         else:
             # Selection starts in the middle of the statement
             if isinstance(firstIconOfSelection, tuple):
@@ -3586,8 +3674,10 @@ class Window:
         # Remove the selected icons
         self.requestRedraw(firstStmtOfSelection.hierRect())
         stmtBeforeSelection = firstStmtOfSelection.prevInSeq()
-        if iconAfterFirstSelection is not None:
+        if isinstance(iconAfterFirstSelection, icon.Icon):
             self.requestRedraw(iconAfterFirstSelection.topLevelParent().hierRect())
+        elif isinstance(iconAfterFirstSelection, tuple):
+            self.requestRedraw(iconAfterFirstSelection[0].topLevelParent().hierRect())
         if recalcInsertSite:
             watchedIcon = recalcInsertSite
         elif insertSiteIcon is not None:
@@ -3629,15 +3719,25 @@ class Window:
                     insertSite = coincSite
         # Insert (all) the new icons where the first selection section was removed
         asSeries = insertSiteIcon is not None and iconsites.isSeriesSiteId(insertSite)
+        if asSeries and insertSiteIcon.childAt(insertSite) is None:
+            # If we're doing a replacement at an empty series site, insertListAtSite
+            # will use the empty site and not add back the one that must have been
+            # removed in order to leave the insertion on an empty site.  Add one
+            # back to receive the insertion (except at the rightmost series site, which
+            # is always empty).
+            seriesName, idx = iconsites.splitSeriesSiteId(insertSite)
+            series = getattr(insertSiteIcon.sites, seriesName)
+            if idx < len(series) - 1:
+                insertSiteIcon.insertChild(None, insertSite, preserveNoneAtZero=True)
         cursorIc, cursorSite = self.insertIconsFromSequences(insertSiteIcon, insertSite,
             insertedSequences, insertPos, asSeries=asSeries, alwaysConsolidate=True)
         # removeIcons operates entirely per-statement (does not join statements across
         # removed selections), but for a paste, this is what users will expect (I think),
-        # so if the selection ended in the middle of a statement, join it to the last
-        # inserted statement.
+        # so if the selection involved multiple statements and ended in the middle of
+        # one, join it to the last inserted statement.
         # ... (and I think it's what they well expect on a delete command, but we're
         #     not doing yet)
-        if not endsOnStmtBoundary:
+        if spansStmtBoundaries and not endsOnStmtBoundary:
             lastInsertedStmt = cursorIc.topLevelParent()
             if not (lastInsertedStmt is None or isinstance(lastInsertedStmt,
                     (commenticon.CommentIcon, commenticon.VerticalBlankIcon))):
@@ -3998,65 +4098,76 @@ class Window:
         2) The (lexically) leftmost icon of the selection (start of selection).  If the
            selection starts with an empty site (which it can because this is lexical
            traversal) returns a tuple of the parent and parent site name.
-        3) The (lexically) first un-selected icon after the selection
-        4) (True/False) Whether the selection spans statement boundaries
-        5) (True/False) Whether the selection starts on a statement boundary
-        6) (True/False) Whether the selection ends on a statement boundary"""
+        3) The part ID of the leftmost icon at the start of the selection
+        4) The (lexically) first un-selected icon after the selection.  This can be an
+           empty site, in which case it will be returned as tuple (parent, siteName).
+        5) The partId of the first un-selected icon after the selection.  This can be
+           None if the selection ends on a statement boundary.
+        6) (True/False) Whether the selection spans statement boundaries
+        7) (True/False) Whether the selection starts on a statement boundary
+        8) (True/False) Whether the selection ends on a statement boundary"""
         # Find the top left selected icon
         topLeft = 99999999, 99999999
         topLeftIc = None
-        for ic in selectedSet:
-            pos = ic.pos()
+        for icOrSite in selectedSet:
+            pos = expredit.posOfSelEntry(icOrSite)
             if pos[1] < topLeft[1] or pos[1] == topLeft[1] and pos[0] < topLeft[0]:
                 topLeft = pos
-                topLeftIc = ic
+                topLeftIc = icOrSite
         if topLeftIc is None:
-            return None, None, None, False, False, False
-        firstSelectedStmt = topLeftIc.topLevelParent()
+            return None, None, None, None, None, False, False, False
+        firstSelectedStmt = expredit.topLevelParentOfSelEntry(topLeftIc)
         if isinstance(topLeftIc, commenticon.CommentIcon) and \
                 topLeftIc.attachedToStmt is not None:
-            # The selection starts with a statement-comment.  While we might the next
+            # The selection starts with a statement-comment.  While we could treat the
             # next statement as being contiguous with the comment, this would not lead
             # to processing it differently in most circumstances
             stmt = topLeftIc.attachedToStmt
-            return stmt, topLeftIc, stmt.nextInSeq(), False, False, True
+            return stmt, topLeftIc, 1, stmt.nextInSeq(), None, False, False, True
         # Iterate in lexical order over the icons in the statement to find the find the
         # start of the selection and whether it continues to the end of the statement.
         # If it does not, we're done and can return the result.
         foundSelection = None
         firstIconOfSelection = None
+        firstPartIdOfSelection = None
         startsOnStmtBoundary = True
         spansStmtBoundaries = False
         for ic, partId in expredit.lexicalTraverse(firstSelectedStmt):
             if isinstance(ic, tuple):  # Empty site indicator (NOT tuple icon)
-                # Empty site: What we do depends upon whether the parent is selected or
-                # not.  If the parent is selected, we consider the empty site part of the
-                # selection, and part of the contiguous run.  If not, then we consider it
-                # to be unselected and therefore, the end of the contiguous selection.
+                # Empty series site: these must be explicitly listed in the selection to
+                # be considered selected and can start or end the selected range.
                 parent, parentSite = ic
-                if parent in selectedSet:
+                if ic in selectedSet:  # Note that ic, here, is site tuple
                     if not foundSelection:
-                        # Found the start of the selection
+                        # The empty site is the start of the selection
                         foundSelection = True
                         firstIconOfSelection = parent, parentSite
-                    continue
-                return firstSelectedStmt, firstIconOfSelection, None, \
-                    spansStmtBoundaries, startsOnStmtBoundary, False
+                        firstPartIdOfSelection = None
+                else:
+                    startsOnStmtBoundary = False
+                    if foundSelection:
+                        # The empty site is the end of the contiguous range
+                        return firstSelectedStmt, firstIconOfSelection, \
+                            firstPartIdOfSelection, ic, partId, spansStmtBoundaries, \
+                            startsOnStmtBoundary, False
+                continue
             elif ic in selectedSet:
                 if not foundSelection:
                     # Found the start of the selection
                     foundSelection = True
                     firstIconOfSelection = ic
+                    firstPartIdOfSelection = partId
             else:
                 if not foundSelection:
                     startsOnStmtBoundary = False
                 else:
                     # Found the end of the selection within the first statement
-                    return firstSelectedStmt, firstIconOfSelection, ic, \
-                        spansStmtBoundaries, startsOnStmtBoundary, False
+                    return firstSelectedStmt, firstIconOfSelection, \
+                        firstPartIdOfSelection, ic, partId, spansStmtBoundaries,\
+                        startsOnStmtBoundary, False
         if not foundSelection:
             print('findFirstContiguousSelection internal consistency error')
-            return None, None, None, False, False, False
+            return None, None, None, None, None, False, False, False
         # The first contiguous selection reaches the right edge of the statement.  Scan
         # (in lexical order) subsequent statements for the first un-selected icon.
         unselBlockEnd = None
@@ -4075,17 +4186,19 @@ class Window:
                     if i == 0:
                         # The selection ends at the start of this statement
                         icAfterSel = stmt if unselBlockEnd is None else unselBlockEnd
-                        return firstSelectedStmt, firstIconOfSelection, icAfterSel, \
+                        return firstSelectedStmt, firstIconOfSelection,\
+                            firstPartIdOfSelection, icAfterSel, None, \
                             spansStmtBoundaries, startsOnStmtBoundary, True
                     else:
                         # The selection ends in the middle of the statement
                         spansStmtBoundaries = True
-                        return firstSelectedStmt, firstIconOfSelection, ic, \
-                            spansStmtBoundaries, startsOnStmtBoundary, False
+                        return firstSelectedStmt, firstIconOfSelection, \
+                            firstPartIdOfSelection, ic, partId, spansStmtBoundaries, \
+                            startsOnStmtBoundary, False
             unselBlockEnd = None
         # We reached the end of the sequence (therefore selection ends on stmt boundary)
-        return firstSelectedStmt, firstIconOfSelection, unselBlockEnd, \
-            spansStmtBoundaries, startsOnStmtBoundary, True
+        return firstSelectedStmt, firstIconOfSelection, firstPartIdOfSelection, \
+            unselBlockEnd, None, spansStmtBoundaries, startsOnStmtBoundary, True
 
     def saveFile(self, filename):
         _base, ext = os.path.splitext(filename)
@@ -4279,7 +4392,8 @@ class Window:
             # Traverse just the sequences containing selected icons and just the top
             # icons that contain selections
             selectedTopIcons = set()
-            for ic in self.selectedSet:
+            for icOrSite in self.selectedSet:
+                ic = icOrSite if isinstance(icOrSite, icon.Icon) else icOrSite[0]
                 if isStmtComment(ic):
                     selectedTopIcons.add(ic.attachedToStmt)
                 else:
@@ -5223,11 +5337,24 @@ def isStmtComment(ic):
 def findTopIcons(icons, stmtLvlOnly=False):
     """ Find the top icon(s) within a list of icons.  If stmtLvlOnly is True, the only
     criteria is that the icons have no parent.  If stmtLvlOnly is False, icons that have
-    a parent but that parent is not in the list, are also returned."""
+    a parent but that parent is not in the list, are also returned.  To enable this to
+    work with selections, the icon list (icons) can also include icon+site tuples
+    representing a selected empty site.  In the case of stmtLvlOnly, these are ignored.
+    In the default case, the function will return empty-site pairs if their parent is
+    not included in the list."""
     if stmtLvlOnly:
-        return [ic for ic in icons if ic.parent() is None and not isStmtComment(ic)]
-    iconSet = set(icons)
-    return [ic for ic in icons if ic.parent() not in iconSet and not isStmtComment(ic)]
+        return [ic for ic in icons if isinstance(ic, icon.Icon) and ic.parent() is None
+            and not isStmtComment(ic)]
+    if isinstance(icons, set):
+        iconSet = icons
+    else:
+        iconSet = set(icons)
+    outputList = []
+    for icOrSite in icons:
+        ic = icOrSite if isinstance(icOrSite, icon.Icon) else icOrSite[0]
+        if ic.parent() not in iconSet and not isStmtComment(ic):
+            outputList.append(icOrSite)
+    return outputList
 
 def clipboardRepr(icons, offset):
     """Top level function for converting icons into their serialized string representation
@@ -5397,7 +5524,7 @@ def restoreFromCanonicalInterchangeIcon(ic, siteType):
 
 def _makePrunedCopy(topIcon, keepSet, forSeq):
     """Return a temporary-icon copy of topIcon with icons not in keepSet removed.  Stitch
-    the tree back together in the same manner as removeIcons.Note the SEVERE
+    the tree back together in the same manner as removeIcons.  Note the SEVERE
     restrictions on the use of temporary icons (see icon.temporaryDuplicate)."""
     # Create a full copy of the tree out of temporary icons.  The linkToOriginal option
     # adds a property (.copiedFrom) pointing back to the original.
@@ -5546,6 +5673,29 @@ def sortSeqsForDrag(sequences, buttonDownIcon):
         x, y = seq[0].pos()
         return y, x
     sequences.sort(key=sortKey)
+
+def emptySitesInRect(ic, rect):
+    """Return any empty series sites that ic has in rect as ic+site pairs (the form
+    used to represent them in selections)."""
+    if not comn.rectsTouch(rect, ic.rect):
+        return None
+    rVal = None
+    for siteOrSeries in ic.sites.allSites(expandSeries=False):
+        if isinstance(siteOrSeries, iconsites.IconSiteSeries) and \
+                siteOrSeries.type == 'input':
+            for site in siteOrSeries:
+                if site.att is None:
+                    icX, icY = ic.rect[:2]
+                    left = icX + site.xOffset + icon.inSiteImage.width
+                    height = icon.minTxtIconHgt - 2
+                    top = icY + site.yOffset - height // 2
+                    right = left + icon.LIST_EMPTY_ARG_WIDTH
+                    bottom = top + height
+                    if comn.rectsTouch(rect, (left, top, right, bottom)):
+                        if rVal is None:
+                            rVal = []
+                        rVal.append((ic, site.name))
+    return rVal
 
 class StreamToTextWidget:
     """Imitate an output text stream and append any text written to it to a specified

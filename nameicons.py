@@ -595,6 +595,9 @@ class SeriesStmtIcon(icon.Icon):
             return seriesStmtToEntryIcon(self, self.stmt)
         return None
 
+    def siteRightOfPart(self, partId):
+        return 'values_0'
+
 class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "return", window, allowTrailingComma=True,
@@ -1457,6 +1460,11 @@ class ImportFromIcon(icon.Icon):
             return self._becomeEntryIcon()
         return None
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            return 'moduleIcon'
+        return 'importsIcons_0'
+
 class RelativeImportIcon(opicons.UnaryOpIcon):
     def __init__(self, level, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '. ' * level, window, location)
@@ -1677,6 +1685,9 @@ class YieldIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'values_0':
             return seriesStmtToEntryIcon(self, 'yield')
         return None
+
+    def siteRightOfPart(self, partId):
+        return 'values_0'
 
 class YieldFromIcon(opicons.UnaryOpIcon):
     def __init__(self, window=None, location=None):
@@ -2012,6 +2023,9 @@ class RaiseIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'exceptIcon':
             return self._becomeEntryIcon()
         return None
+
+    def siteRightOfPart(self, partId):
+        return 'exceptIcon'
 
 class DecoratorIcon(icon.Icon):
     # The decorator iccon is just "@" sign part of the decorator, with an input site for

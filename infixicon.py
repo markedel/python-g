@@ -206,6 +206,15 @@ class InfixIcon(icon.Icon):
             return idx + 1
         return idx + 2
 
+    def siteRightOfPart(self, partId):
+        if partId == 1:
+            # Left-site sequence connector, which is not included in lexical traversal,
+            # but (maybe?) can be clicked on. ...I don't think it's good to have a
+            # part that can't be found in traversal.  It might be advisable to renumber
+            # the parts of this icon and return 0 for this part.
+            return 'leftArg'
+        return 'rightArg'
+
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
         if clickPos is not None:
             textOriginX = self.rect[0] + self.sites.output.xOffset + \

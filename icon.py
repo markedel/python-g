@@ -619,6 +619,34 @@ class Icon:
                 return self.drawListIdxToPartId(i) if pixel[3] > 128 else 0
         return None
 
+    def siteRightOfPart(self, partId):
+        """Returns the name of the site on the right side of the icon part given by
+        partId.  This base class method is only useful for single-part icons for which
+        the lastCursorSite() method of the site list will reliably produce the desired
+        site.  All other icons need to override this method to provide this function.
+        Currently these methods don't check for bad partIds, and instead, just return
+        the rightmost site of the icon."""
+        return self.sites.lastCursorSite()
+
+    def touchesEmptySeriesSite(self, x, y):
+        """Determine if the point (x, y) touches the highlighted rectangle of an empty
+        series site of this icon.  If so, return the site name."""
+        for siteOrSeries in self.sites.allSites(expandSeries=False):
+            if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+                for idx, site in enumerate(siteOrSeries):
+                    if idx < len(siteOrSeries) - 1:
+                        if site.att is None and site.type == 'input':
+                            iconX, iconY, _, _ = self.rect
+                            height = minTxtIconHgt - 2
+                            width = LIST_EMPTY_ARG_WIDTH - 2
+                            l = iconX + site.xOffset + inSiteImage.width
+                            t = iconY + site.yOffset - height // 2
+                            r = l + width
+                            b = t + height
+                            if pointInRect((x, y), (l, t, r, b)):
+                                return site.name
+        return None
+
     def offsetOfPart(self, partId):
         """Returns the position of a sub-part of the icon (identified by partId) relative
         to the icon rectangle.  partId is the value returned by the touchesPosition
@@ -1145,7 +1173,9 @@ class Icon:
         fields, most icons can just call this method to find and highlight the sites
         that need highlighting.  An icon that has sites that are allowed to be empty, or
         that needs to do something different with a particular site, can specify a list
-        of sites (IconSite or IconSiteSeries objects) to skip in parameter "skip"."""
+        of sites (IconSite or IconSiteSeries objects) to skip in parameter "skip".
+        Since we allow empty series sites to be selected, this will color the site in the
+        selection color (rather than the empty site color) it is selected."""
         # Note that empty sites are drawn as transparent via alpha-blending, which
         # required a change to the basic drawing model.  Prior versions of the code
         # allowed redraw without clearing, which was used for operations that didn't
@@ -1184,6 +1214,16 @@ class Icon:
             draw = ImageDraw.Draw(outImg)
         height = minTxtIconHgt - 2
         for site, isSeriesSite in sitesToDraw:
+            color = EMPTY_ARG_COLOR
+            # Per selection rules, we color non-series sites to match the *icon*, but for
+            # series sites, the selection/highlight must be explicitly list the *site*.
+            icOrSite = (self, site.name) if isSeriesSite else self
+            if self.window.highlightedForReplace is not None and \
+                    icOrSite in self.window.highlightedForReplace:
+                color = PENDING_REMOVE_TINT
+            elif icOrSite in self.window.selectedSet:
+                color = SELECT_TINT
+            alpha = color[3] / 255.0
             width = (LIST_EMPTY_ARG_WIDTH if isSeriesSite else EMPTY_ARG_WIDTH) - 2
             x = iconX + site.xOffset + inSiteImage.width
             y = iconY + site.yOffset - height // 2
@@ -1193,9 +1233,9 @@ class Icon:
             b = min(y + height, clipBottom)
             if r - l > 0 and b - t > 0:
                 if toDragImage:
-                    draw.rectangle((l, t, r-1, b-1), fill=EMPTY_ARG_COLOR)
+                    draw.rectangle((l, t, r-1, b-1), fill=color)
                 else:
-                    tintImg = Image.new('RGB', (r-l, b-t), EMPTY_ARG_COLOR)
+                    tintImg = Image.new('RGB', (r-l, b-t), color)
                     contentImg = outImg.crop((l, t, r, b))
                     compositeImg = Image.blend(contentImg, tintImg, alpha)
                     outImg.paste(compositeImg, (l, t))
