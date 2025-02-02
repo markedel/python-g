@@ -1308,6 +1308,9 @@ class Window:
             if siteIcon is not None:
                 self.cursor.setToIconSite(siteIcon, site)
                 self.refreshDirty()
+            else:
+                self.cursor.setToIconSite(*expredit.siteLeftOfPart(self.buttonDownIcon,
+                    self.buttonDownIcPart))
             return
         self._select(self.buttonDownIcon, action)
 
@@ -1328,7 +1331,7 @@ class Window:
             hierSel = leftSel = None
             hasHierSel = hasLeftSel = hasCommentSel = hasBlockSel = False
         else:
-            hierSel = set(clickedIcon.traverse())
+            hierSel = expredit.createHierSel(clickedIcon)
             hasHierSel = singleSel != hierSel
             leftIc = findLeftOuterIcon(self.assocGrouping(clickedIcon),
                 self.buttonDownLoc)
@@ -2959,7 +2962,7 @@ class Window:
         # if ic is None or self.cursor.type == "text" and ic is self.cursor.icon:
         #    return
         if op == 'hier':
-            changedIcons = list(ic.traverse())
+            changedIcons = list(expredit.createHierSel(ic))
         elif op == 'block':
             topParent = ic.topLevelParent()
             changedIcons = []

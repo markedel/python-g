@@ -305,7 +305,11 @@ class Cursor:
         if len(selectedIcons) == 0:
             if self.type != "icon":
                 # There's no selection or cursor to extend from
-                self.setToIconSite(ic, site)
+                if site is None:
+                    self.window.select(ic)
+                    self.window.refresh(ic.rect)
+                else:
+                    self.setToIconSite(ic, site)
                 return
             # This is a new cursor-based selection
             anchorIc = self.icon
@@ -317,6 +321,8 @@ class Cursor:
                 partOnRight = expredit.partIsRightOfSite(anchorIc, anchorSite, ic, partId)
                 if partOnRight is None:
                     # There is an icon cursor, but it's in different sequence from ic
+                    self.window.select(ic)
+                    self.window.refresh(ic.rect)
                     return
                 if partOnRight:
                     site = ic.siteRightOfPart(partId)
@@ -328,26 +334,33 @@ class Cursor:
             # selection to the new position.  Anchor the expansion at the (lexically)
             # opposite end from the original cursor, or if there is no original cursor,
             # from the new cursor position.
+            nearestIc = None
             if self.type == "icon":
-                refIc = self.icon
-                refSite = self.site
-                refPartId = None
-            elif site is not None:
+                # There is also a cursor, which can tell us where to anchor the selection
+                # and in some cases which fragment of a disjoint selection to use.
+                # But, before using it, ensure that it's in the same sequence as ic.
+                order = expredit.stmtOrder(self.icon.topLevelParent(),
+                    ic.topLevelParent())
+                if order is not None:
+                    refIc = self.icon
+                    refSite = self.site
+                    nearestIc, nearestIcDist = expredit.nearestSelectedIcon(refIc, refSite)
+                    if nearestIcDist > 2:
+                        # If cursor isn't near a selection (it can be at least one icon
+                        # part away due to unselected assignIcon '=' part), disregard it
+                        # and find the selection nearest the requested icon/site, instead.
+                        nearestIc = None
+            if nearestIc is None:
                 refIc = ic
                 refSite = site
-                refPartId = None
-            elif partId is not None:
-                refIc = ic
-                refSite = None
-                refPartId = partId
-            else:
-                print('selectToSiteOrPart requires site or partId')
-                return
-            nearestIc, nearestIcDist = expredit.nearestSelectedIcon(refIc, refSite, refPartId)
+                nearestIc, nearestIcDist = expredit.nearestSelectedIcon(ic, site, partId)
             if nearestIc is None:
                 # There may be a selection, but it's not in this sequence, so there's
                 # nothing to extend
-                if site is not None:
+                if site is None:
+                    self.window.select(ic)
+                    self.window.refresh(ic.rect)
+                else:
                     self.setToIconSite(ic, site)
                 return
             if nearestIcDist == 0:
@@ -360,8 +373,10 @@ class Cursor:
                     revIc, revSite, revDist = expredit.searchRevForUnselected(leftIc,
                         leftSite)
                 else:
-                    fwdIc, fwdSite, fwdDist = expredit.searchFwdForUnselected(refIc, refSite)
-                    revIc, revSite, revDist = expredit.searchRevForUnselected(refIc, refSite)
+                    fwdIc, fwdSite, fwdDist = expredit.searchFwdForUnselected(refIc,
+                        refSite)
+                    revIc, revSite, revDist = expredit.searchRevForUnselected(refIc,
+                        refSite)
                 if revDist > fwdDist:
                     anchorIc, anchorSite = revIc, revSite
                 elif fwdDist > revDist:

@@ -1379,7 +1379,7 @@ def searchFwdForSelected(fromIc, fromSite):
             dist += 1
         yield None, dist
     while True:  # Found end of sequence, yield terminal value forever
-        yield 'end', dist
+        yield 'end', 999999999
 
 def searchRevForSelected(fromIc, fromSite):
     """Search lexically backward from (ic, site) by statement, yielding two values: 1) the
@@ -1407,7 +1407,7 @@ def searchRevForSelected(fromIc, fromSite):
         dist += yieldDist
         yield None, dist
     while True:  # Found start of sequence, yield terminal value forever
-        yield 'end', dist
+        yield 'end', 999999999
 
 def searchFwdForUnselected(fromIc, fromSite=None):
     """Find the end of the selection starting from either fromIc, or (if fromSite is
@@ -1468,10 +1468,11 @@ def searchRevForUnselected(fromIc, fromSite=None):
                     nearestStartCnt = perStmtCnt
                     nearestStartMarker = lastSiteMarker
                     inUnSel = False
-            else:
-                inUnSel = not (isinstance(seqIc, icon.BlockEnd) or isinstance(ic,
-                    assignicons.AssignIcon) and part < (len(ic.tgtLists) * 3 - 1))
-            perStmtCnt += 1
+            if not (isinstance(seqIc, icon.BlockEnd) or isinstance(ic,
+                    assignicons.AssignIcon) and part < (len(ic.tgtLists) * 3 - 1)):
+                if ic not in selectedSet:
+                    inUnSel = True
+                perStmtCnt += 1
             if ic is fromIc and fromSite is None:
                 # If we're searching from an icon, stop the (forward) lexical iteration
                 # when we reach it.  If we're searching for a site, continue past it and
@@ -1510,6 +1511,11 @@ def posOfSelEntry(icOrSite):
     ic, siteId = icOrSite
     return ic.posOfSite(siteId)
 
+def createHierSel(topIcon, inclStmtComment=True):
+    hierSel = set()
+    addHierToSel(hierSel, topIcon, inclStmtComment=inclStmtComment)
+    return hierSel
+
 def addHierToSel(selectionSet, topIcon, inclStmtComment=True):
     """Add all of the icons under topIcon to a set (selectionSet) representing a
     selection.  This is more than just a traversal, since selection rules require entries
@@ -1523,7 +1529,7 @@ def addHierToSel(selectionSet, topIcon, inclStmtComment=True):
                     if site.att is None:
                         selectionSet.add((ic, site.name))
 
-def siteLeftOfPart(ic, partId):
+def siteLeftOfPart(ic, partId=None):
     """Returns icon and site for the cursor site to the left of part, partId, of icon,
     ic.  Unlike the Icon.siteRightOfPart method, where the site will always belong to
     the queried icon and probably (always?) be physically attached to the part, here, the
@@ -1533,6 +1539,8 @@ def siteLeftOfPart(ic, partId):
     if the icon has one, or the seqIn site if it does not."""
     if isinstance(ic, commenticon.CommentIcon) and ic.attachedToStmt is not None:
         return icon.rightmostSite(ic.attachedToStmt)
+    if partId is None:
+        partId = 1
     leftSiteOfIc = ic.sites.prevCursorSite(ic.siteRightOfPart(partId))
     if leftSiteOfIc is None:
         parent = ic.parent()
