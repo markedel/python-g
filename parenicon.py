@@ -244,14 +244,8 @@ class CursorParenIcon(icon.Icon):
     def siteRightOfPart(self, partId):
         if partId == 1:
             # Left paren
-            return 'trueExpr'
+            return 'argIcon'
         if partId == 2:
-            # 'if' part
-            return 'testExpr'
-        if partId == 3:
-            # ' else' part
-            return 'falseExpr'
-        if partId == 4:
             # Right paren
             return 'attrIcon'
         # Error
