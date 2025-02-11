@@ -621,7 +621,11 @@ class Icon:
 
     def siteRightOfPart(self, partId):
         """Returns the name of the site on the right side of the icon part given by
-        partId.  This base class method is only useful for single-part icons for which
+        partId.  Be aware that this method will return None for the singular case of
+        a statement-comment icon.  There is a function in expredit.py of the same name,
+        that returns both an icon and a site, that will do the None-check ahd return an
+        appropriate icon when the icon can be a statement comment.
+        Note that this base class method is only useful for single-part icons for which
         the lastCursorSite() method of the site list will reliably produce the desired
         site.  All other icons need to override this method to provide this function.
         Currently these methods don't check for bad partIds, and instead, just return
@@ -736,7 +740,7 @@ class Icon:
         while imgX < partImg.width:
             pixel = partImg.getpixel((imgX, imgY))
             if pixel[3] > 0:
-                # ... The criterion for opaque in touchesPosition is 128, but we
+                # ... The criterion for opaque alpha in touchesPosition is 128, but we
                 # definitely don't want to miss icon borders, so be sure to test this
                 break
             xDist += 1
@@ -1576,6 +1580,9 @@ class BlockEnd(Icon):
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, primary=None)
+
+    def siteRightOfPart(self, partId):
+        return 'seqOut'
 
 class ImageIcon(Icon):
     def __init__(self, image, window, location=None):

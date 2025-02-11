@@ -463,6 +463,17 @@ class CommentIcon(icon.Icon):
             'prefixInsert', 'seqIn', snapFn)]
         return siteSnapLists
 
+    def siteRightOfPart(self, partId):
+        # This is the only icon that can return None from this method (having no possible
+        # site to return).  Rather than complicating the method by having all the other
+        # icons add a second return value, or making callers add special-case code just
+        # for this icon; we encourage callers instead to use expredit.siteRightOfPart
+        # which returns an icon and site, where the returned icon can be different just
+        # for this case.
+        if self.attachedToStmt is not None:
+            return None
+        return 'seqOut'
+
     def _enumerateStringLayouts(self):
         """Return a list of possible layouts for the string.  Layout includes a special
         field called wrappedString, which breaks self.string into individual lines."""
@@ -673,6 +684,9 @@ class VerticalBlankIcon(icon.Icon):
     def dumpName(self):
         return '--'
 
+    def siteRightOfPart(self, partId):
+        return 'seqOut'
+
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         return filefmt.SegmentedText(None)
 
@@ -687,6 +701,11 @@ class VerticalBlankIcon(icon.Icon):
                 self.window.cursor.setToIconSite(nextIcon, 'seqIn')
             else:
                 self.window.cursor.setToWindowPos(self.pos())
+
+def topParentInclComment(ic):
+    if isinstance(ic, CommentIcon) and ic.attachedToStmt:
+        ic = ic.attachedToStmt
+    return ic.topLevelParent()
 
 def isRightmostSiteOfStmt(ic, siteId):
     if ic.childAt(siteId): # Just for efficiency, as this cheaply eliminates most sites

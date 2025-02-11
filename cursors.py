@@ -325,7 +325,7 @@ class Cursor:
                     self.window.refresh(ic.rect)
                     return
                 if partOnRight:
-                    site = ic.siteRightOfPart(partId)
+                    ic, site = expredit.siteRightOfPart(ic, partId)
                 else:
                     ic, site = expredit.siteLeftOfPart(ic, partId)
         else:
@@ -366,9 +366,9 @@ class Cursor:
             if nearestIcDist == 0:
                 # The cursor site, clicked site, or clicked icon is within the selection
                 if refSite is None:
-                    rightSite = ic.siteRightOfPart(partId)
+                    rightIc, rightSite = expredit.siteRightOfPart(ic, partId)
                     leftIc, leftSite = expredit.siteLeftOfPart(ic, partId)
-                    fwdIc, fwdSite, fwdDist = expredit.searchFwdForUnselected(ic,
+                    fwdIc, fwdSite, fwdDist = expredit.searchFwdForUnselected(rightIc,
                         rightSite)
                     revIc, revSite, revDist = expredit.searchRevForUnselected(leftIc,
                         leftSite)
@@ -413,10 +413,10 @@ class Cursor:
                 # Caller specified a partId rather than a site, but now we need a site to
                 # make the selection and place the cursor.  Choose the left or right side
                 # of the icon part based upon being opposite from that of the anchor.
-                if anchorIc is fwdIc and anchorSite == fwdSite:
-                    ic, site = expredit.siteLeftOfPart(ic, partId)
+                if expredit.partIsRightOfSite(anchorIc, anchorSite, ic, partId):
+                    ic, site = expredit.siteRightOfPart(ic, partId)
                 else:
-                    site = ic.siteRightOfPart(partId)
+                    ic, site = expredit.siteLeftOfPart(ic, partId)
         # Record an anchor-hint for use only in the very specific case of an ambiguous
         # selection+cursor combination (such as when you select an empty list or tuple
         # by moving the cursor with Shift+Arrow to middle of two selected icon parts)

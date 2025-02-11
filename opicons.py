@@ -1460,8 +1460,14 @@ class IfExpIcon(icon.Icon):
     def siteRightOfPart(self, partId):
         if partId == 1:
             # Left paren
-            return 'argIcon'
+            return 'trueExpr'
         if partId == 2:
+            # 'if'
+            return 'testExpr'
+        if partId == 3:
+            # 'else'
+            return 'falseExpr'
+        if partId == 4:
             # Right paren
             return 'attrIcon'
         # Error

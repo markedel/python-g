@@ -390,8 +390,12 @@ class Window:
         self.inRectSelect = False
         self.lastRectSelect = None  # Note, in image coords (not content)
         self.inStmtSelect = False
+        self.inLexSelDrag = False
         self.lastStmtHighlightRects = None
         self.rectSelectInitialStates = {}
+        self.lexDragAnchorIc = None
+        self.lexDragAnchorSite = None
+        self.lexDragAnchorPartId = None
         self.popupIcon = None
         self.typingErrCancelId = None
 
@@ -1046,13 +1050,17 @@ class Window:
         if self.inStmtSelect:
             self._updateStmtSelect(evt)
             return
+        if self.inLexSelDrag:
+            self._updateLexSelDrag(evt)
+            return
         # Not currently dragging, but button is down
         btnX, btnY = self.buttonDownLoc
         if abs(evt.x - btnX) + abs(evt.y - btnY) <= DRAG_THRESHOLD:
             return  # Mouse has not moved sufficiently to start a drag
         # Start a drag
         ic = self.findIconAt(btnX, btnY)
-        if ic is None:
+        siteIcon, site = self.siteAt(*self.buttonDownLoc)
+        if ic is None and not (siteIcon is not None and evt.state & SHIFT_MASK):
             # If nothing was clicked, start a rectangular selection
             seqSiteIc = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
             if seqSiteIc is not None:
@@ -1060,8 +1068,11 @@ class Window:
             else:
                 self._startRectSelect(evt)
         elif evt.state & SHIFT_MASK:
-            print('lexical drag is not implemented, yet.  Doing click action, instead')
-            self._delayedBtnUpActions(evt)
+            if siteIcon is not None:
+                self._startLexSelDrag(evt, siteIcon, anchorSite=site)
+            else:
+                self._startLexSelDrag(evt, self.buttonDownIcon,
+                    anchorPartId=self.buttonDownIcPart)
         elif ic.isSelected():
             # If a selected icon was clicked, drag all of the selected icons
             self._startDrag(evt, self.selectedIcons())
@@ -1230,6 +1241,9 @@ class Window:
             self.buttonDownTime = None
         elif self.inStmtSelect:
             self._endStmtSelect()
+            self.buttonDownTime = None
+        elif self.inLexSelDrag:
+            self._endLexSelDrag()
             self.buttonDownTime = None
         elif self.doubleClickFlag:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
@@ -2692,6 +2706,46 @@ class Window:
                 redrawRegion.add(eraseRect)
         self.refresh(redrawRegion.get(), redraw=True)
         self.lastStmtHighlightRects = None
+
+    def _startLexSelDrag(self, evt, anchorIc, anchorSite=None, anchorPartId=None):
+        """Begin a lexical drag selection anchored at either a site (anchorIc,
+        anchorSite), or an icon part (anchorIc, anchorPartId)."""
+        # Note that the anchor for a lexical drag can be *either* a site or a partId
+        self.unselectAll()
+        self.lexDragAnchorIc = anchorIc
+        self.lexDragAnchorSite = anchorSite
+        self.lexDragAnchorPartId = anchorPartId
+        self.inLexSelDrag = True
+        self._updateLexSelDrag(evt)
+
+    def _updateLexSelDrag(self, evt):
+        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+        newSel, curIc, curSite = expredit.extendSelectToPointer(self.lexDragAnchorIc,
+            self.lexDragAnchorSite, self.lexDragAnchorPartId, btnX, btnY)
+        # Update the selection, redrawing just the changed icons
+        erase = self.selectedSet.difference(newSel)
+        draw = newSel.difference(self.selectedSet)
+        redrawRect = comn.AccumRects()
+        for i in erase:
+            redrawRect.add(expredit.iconOfSelEntry(i).rect)
+            self.select(i, False)
+        for i in draw:
+            redrawRect.add(expredit.iconOfSelEntry(i).rect)
+            self.select(i, True)
+        if redrawRect.get() is not None:
+            self.refresh(redrawRect.get(), redraw=True)
+        # Place the cursor at the active end of the selection
+        # ... do we want to defer this to _endLexSelDrag?
+        if curIc is None:
+            self.cursor.removeCursor()
+        else:
+            self.cursor.setToIconSite(curIc, curSite)
+
+    def _endLexSelDrag(self):
+        self.lexDragAnchorIc = None
+        self.lexDragAnchorSite = None
+        self.lexDragAnchorPartId = None
+        self.inLexSelDrag = False
 
     def recordCursorPositionInData(self, topIcon):
         if self.cursor.type != "icon":
@@ -4940,8 +4994,14 @@ class Window:
         return redrawRegion.get(), y, x
 
     def siteSelected(self, evt):
-        """Look for icon sites near button press, if found return icon and site"""
+        """Look for icon sites near button press, if found return icon and site.
+        Otherwise, returns (None, None)"""
         btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+        return self.siteAt(btnX, btnY)
+
+    def siteAt(self, btnX, btnY):
+        """Return icon and site if content coordinates btnX, btnY are near a cursor
+        site.  Otherwise, returns (None, None)."""
         left = btnX - SITE_SELECT_DIST - EMPTY_SITE_EXT_DIST
         right = btnX + SITE_SELECT_DIST
         top = btnY - SITE_SELECT_DIST

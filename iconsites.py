@@ -372,6 +372,9 @@ class IconSiteList:
             if site is None:
                 print("prevCursorSite called with non-existent site")
                 return None
+            if not hasattr(site, 'order') or site.order is None:
+                print("prevCursorSite called with out-of-traversal site")
+                return None
             order = site.order
         for i in range(order-1, -1, -1):
             prevSite = self.nthCursorSite(i)
