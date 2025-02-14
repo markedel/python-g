@@ -49,7 +49,7 @@ SHIFT_MASK = 0x001
 CTRL_MASK = 0x004
 ALT_MASK = 0x20000
 LEFT_MOUSE_MASK = 0x100
-RIGHT_MOUSE_MASK = 0x300
+RIGHT_MOUSE_MASK = 0x400
 
 DOUBLE_CLICK_TIME = 300
 
@@ -613,10 +613,39 @@ class Window:
         return id
 
     def _btn3Cb(self, evt):
+        if self.dragging:
+            self._endDrag(evt)
+            return
+        if self.buttonDownTime is not None:
+            if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
+                self.doubleClickFlag = True
+                return
         x, y = self.imageToContentCoord(evt.x, evt.y)
-        self.popupIcon = self.findIconAt(x, y)
+        self.popupIcon = ic = self.findIconAt(x, y)
+        self.buttonDownTime = msTime()
+        self.buttonDownLoc = x, y
+        self.buttonDownIcon = ic
+        self.buttonDownIcPart = None if ic is None else ic.touchesPosition(x, y)
+        self.buttonDownState = evt.state
+        self.doubleClickFlag = False
 
     def _btn3ReleaseCb(self, evt):
+        if self.dragging:
+            self._endDrag(evt)
+            self.buttonDownTime = None
+        elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
+            # In order to handle double-click, button release actions are not done
+            # until we know that a double-click can't still happen (_delayedBtnUpActions).
+            delay = DOUBLE_CLICK_TIME - (msTime() - self.buttonDownTime)
+            self.top.after(delay, self._delayedBtn3UpActions, evt)
+        else:
+            self._delayedBtn3UpActions(evt)
+
+    def _delayedBtn3UpActions(self, evt):
+        if self.doubleClickFlag:
+            return  # Second click occurred, don't do the delayed action
+        self.buttonDownTime = None
+        # Create context-sensitive pop-up menu
         popup = tk.Menu(self.imgFrame, tearoff=0)
         popup.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
         popup.add_command(label="Redo", command=self._redoCb, accelerator="Ctrl+Y")
@@ -627,8 +656,7 @@ class Window:
         popup.add_command(label="Delete", command=self._deleteCb, accelerator="Delete")
         popup.add_command(label="Split", command=self._splitCb, accelerator="Ctrl+T")
         popup.add_command(label="Join", command=self._joinCb, accelerator="Ctrl+J")
-
-        # Add context-sensitive items to pop-up menu
+        # Add context-sensitive items
         if self.popupIcon is not None:
             if isinstance(self.popupIcon, listicons.ListTypeIcon):
                 self.listPopupVal.set('(' if isinstance(self.popupIcon,
@@ -1039,8 +1067,11 @@ class Window:
             self.activeTypeovers.remove(ic)
 
     def _motionCb(self, evt):
-        if self.buttonDownTime is None or not (evt.state & LEFT_MOUSE_MASK):
+        leftMouse = evt.state & LEFT_MOUSE_MASK
+        rightMouse = evt.state & RIGHT_MOUSE_MASK
+        if self.buttonDownTime is None or not (leftMouse or rightMouse):
             return
+        shiftPressed = evt.state & SHIFT_MASK
         if self.dragging is not None:
             self._updateDrag(evt)
             return
@@ -1060,14 +1091,14 @@ class Window:
         # Start a drag
         ic = self.findIconAt(btnX, btnY)
         siteIcon, site = self.siteAt(*self.buttonDownLoc)
-        if ic is None and not (siteIcon is not None and evt.state & SHIFT_MASK):
+        if leftMouse and ic is None and not (siteIcon is not None and shiftPressed):
             # If nothing was clicked, start a rectangular selection
             seqSiteIc = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
             if seqSiteIc is not None:
                 self._startStmtSelect(seqSiteIc, evt)
             else:
                 self._startRectSelect(evt)
-        elif evt.state & SHIFT_MASK:
+        elif leftMouse and shiftPressed:
             if siteIcon is not None:
                 self._startLexSelDrag(evt, siteIcon, anchorSite=site)
             else:
@@ -1075,7 +1106,7 @@ class Window:
                     anchorPartId=self.buttonDownIcPart)
         elif ic.isSelected():
             # If a selected icon was clicked, drag all of the selected icons
-            self._startDrag(evt, self.selectedIcons())
+            self._startDrag(evt, self.selectedIcons(), dragACopy=rightMouse)
         else:
             # Otherwise, drag the icon that was clicked
             if self.doubleClickFlag:
@@ -1084,12 +1115,13 @@ class Window:
                     # children (without the code block)
                     if isinstance(ic, icon.BlockEnd):
                         ic = ic.primary
-                    icons = list(ic.traverse(inclStmtComment=True))
-                    icons.append(ic.blockEnd)
-                    self._startDrag(evt, icons)
+                    icons = set(expredit.createHierSel(ic, inclStmtComment=True))
+                    icons.add(ic.blockEnd)
+                    self._startDrag(evt, icons, dragACopy=rightMouse)
                 else:
                     # double-click drag, ignores associativity and outer icon
-                    self._startDrag(evt, list(ic.traverse(inclStmtComment=True)))
+                    icons = set(expredit.createHierSel(ic, inclStmtComment=True))
+                    self._startDrag(evt, icons, dragACopy=rightMouse)
             # It would seem natural to drag an entire sequence by the top icon, but that
             # can also be done by double-clicking to the right of the icon then dragging.
             # Prefer to reserve that gesture for dragging the icon and its block.
@@ -1097,17 +1129,19 @@ class Window:
             #  ic.childAt('seqOut') is not None and ic.childAt('seqIn') is None:
             #     self._startDrag(evt, list(icon.traverseSeq(ic, hier=True)))
             elif hasattr(ic, 'blockEnd'):
-                self._startDrag(evt, list(ic.traverseBlock(hier=True,
-                    inclStmtComment=True)))
+                self._startDrag(evt, expredit.createBlockSel(ic, inclStmtComment=True),
+                    dragACopy=rightMouse)
             elif isinstance(ic, icon.BlockEnd):
-                self._startDrag(evt, list(ic.primary.traverseBlock(hier=True,
-                    inclStmtComment=True)))
+                self._startDrag(evt, expredit.createBlockSel(ic.primary,
+                    inclStmtComment=True), dragACopy=rightMouse)
             elif ic.__class__ in (blockicons.ElseIcon, blockicons.ElifIcon,
                     blockicons.ExceptIcon, blockicons.FinallyIcon):
-                self._startDrag(evt, blockicons.clauseBlockIcons(ic))
+                self._startDrag(evt, blockicons.clauseBlockIcons(ic),
+                    dragACopy=rightMouse)
             else:
-                self._startDrag(evt, list(findLeftOuterIcon(self.assocGrouping(ic),
-                        self.buttonDownLoc).traverse(inclStmtComment=True)))
+                self._startDrag(evt, expredit.createHierSel(
+                    findLeftOuterIcon(self.assocGrouping(ic),  self.buttonDownLoc),
+                    inclStmtComment=True), dragACopy=rightMouse)
 
     def _mouseWheelCb(self, evt):
         delta = -int(evt.delta * MOUSE_WHEEL_SCALE)
@@ -1422,10 +1456,10 @@ class Window:
         if len(self.selectedSet) == 0:
             return
         with io.StringIO() as outStream:
-            self.writeSaveFileText(outStream, selectedOnly=True, exportPython=False)
+            self.writeSaveFileText(outStream, self.selectedSet, exportPython=False)
             pygText = outStream.getvalue()
         with io.StringIO() as outStream:
-            self.writeSaveFileText(outStream, selectedOnly=True, exportPython=True)
+            self.writeSaveFileText(outStream, self.selectedSet, exportPython=True)
             pyText = outStream.getvalue()
         self.top.clipboard_clear()
         self.top.clipboard_append(pygText, type='PYG')
@@ -1654,7 +1688,7 @@ class Window:
         else:
             cursors.beep()
 
-    def _splitCb(self, evt):
+    def _splitCb(self, evt=None):
         # This is inconsistent in its treatment of comments and entry icons (whose text
         # we actually split) and strings (which we treat as a unit and don't split), but
         # I'm not sure yet what splitting strings should actually do, because if it
@@ -1782,7 +1816,7 @@ class Window:
             leftIc = leftIc.childAt(coincSite)
         self.refreshDirty(addUndoBoundary=True)
 
-    def _joinCb(self, evt):
+    def _joinCb(self, evt=None):
         #... this should probably do something with selections
         failMsg = "Place the cursor between the statements you want to join"
         if self.cursor.type == 'text':
@@ -2143,7 +2177,7 @@ class Window:
             return self.cursor.icon.focusOut()
         return True
 
-    def _startDrag(self, evt, icons):
+    def _startDrag(self, evt, icons, dragACopy=False):
         btnDownIcPartPos = icon.addPoints(self.buttonDownIcon.rect[:2],
             self.buttonDownIcon.offsetOfPart(self.buttonDownIcPart))
         self.cancelAllTypeovers(draw=False)
@@ -2151,13 +2185,21 @@ class Window:
         # restore the pre-drag state, and we need to guarantee that cancelling a drag
         # will not overstep and affect an operation unrelated to the drag.
         self.undo.addBoundary()
-        # Remove the icons from the window image and handle the resulting detachments
-        # re-layouts, and redrawing.  removeIcons (with assembleDeleted=True) also does
-        # the important job of re-building deleted icons into a set of dragable sequences
-        # and hierarchies.
+        # Remove or duplicate the requested icons as indicated by dragACopy
         subsIcs = {self.buttonDownIcon:None}
-        draggingSequences = self.removeIcons(icons, assembleDeleted=True,
-            watchSubs=subsIcs)
+        if dragACopy:
+            draggingSequences = self.duplicateSelectedIcons(icons, watchSubs=subsIcs)
+            btnDownDupIc = subsIcs[self.buttonDownIcon]
+            if btnDownDupIc is not None:
+                filefmt.moveIconToPos(btnDownDupIc, self.buttonDownIcon.pos())
+        else:
+            # Remove the icons from the window image and handle the resulting detachments
+            # re-layouts, and redrawing.  removeIcons (with assembleDeleted=True) also
+            # does the important job of re-building deleted icons into a set of dragable
+            # sequences and hierarchies.
+            draggingSequences = self.removeIcons(icons, assembleDeleted=True,
+                watchSubs=subsIcs)
+        self.clearSelection()
         if subsIcs[self.buttonDownIcon] is not None:
             self.buttonDownIcon = subsIcs[self.buttonDownIcon]
         # For icons that depend on context to distinguish identical text syntax,
@@ -4264,10 +4306,10 @@ class Window:
             self.writeSaveFileText(f, exportPython=ext != ".pyg")
         print('Finished save')
 
-    def writeSaveFileText(self, outStream, selectedOnly=False, exportPython=False):
+    def writeSaveFileText(self, outStream, selectedOnly=None, exportPython=False):
         """Write save-file-format text to outStream.  By default, will save all icons in
-        the window.  If selectedOnly is specified, only the selected icons in the window
-        will be written."""
+        the window.  Pass selectedOnly as a selection set to write only the specified
+        icons."""
         # Iterate over sequences determined by _findtSequencesForOutput.  While it would
         # seem obvious to write the position macro in the outer (per sequence) loop, it's
         # actually written in the inner (per stmt) loop because there are some cases
@@ -4311,11 +4353,11 @@ class Window:
                 # block-end pointers, just that we don't indent for pruned block-owners
                 # or dedent for their corresponding block-ends.
                 stmtComment = ic.stmtComment if hasattr(ic, 'stmtComment') else None
-                if selectedOnly and (
-                        any((c not in self.selectedSet for c in ic.traverse())) or
-                        stmtComment is not None and stmtComment not in self.selectedSet):
-                    prunedIc = _makePrunedCopy(ic, self.selectedSet, not isSingleStmt)
-                    if hasattr(ic, 'blockEnd') and ic not in self.selectedSet:
+                if selectedOnly is not None and (
+                        any((c not in selectedOnly for c in ic.traverse())) or
+                        stmtComment is not None and stmtComment not in selectedOnly):
+                    prunedIc = _makePrunedCopy(ic, selectedOnly, not isSingleStmt)
+                    if hasattr(ic, 'blockEnd') and ic not in selectedOnly:
                         pruneBlockEnds.add(ic.blockEnd)
                 else:
                     prunedIc = ic
@@ -4374,7 +4416,7 @@ class Window:
                     needsSeparator = not haveWrittenSeqPos and not isFirstSeq
                 elif haveWrittenSeqPos:
                     needPosMacro = False
-                elif selectedOnly:
+                elif selectedOnly is not None:
                     needPosMacro = not isFirstSeq or saveText.isFragmentMacro()
                 else:
                     needPosMacro = not isModSeqIcon
@@ -4416,7 +4458,87 @@ class Window:
             if isStartOfOwnedBlock:
                 self._writePassStmt(outStream, tabSize * branchDepth, not exportPython)
 
-    def _findtSequencesForOutput(self, forClipboard):
+    def duplicateSelectedIcons(self, selectedSet, watchSubs=None):
+        """Create and link a full copy of all of the icons in the window, referred to in
+        selectedSet.  Selected should be in selection-set format (a set of icons and
+        tuples representing selectable empty sites).  Returns a sequence list in the same
+        form as the assembledIcons list from removeIcons.  To associate a duplicate
+        icon(s) with their originals, pass a dictionary in watchSubs with the original
+        icons as keys, and the function will populate the values with the icons'
+        replacements.  Note that the duplicate icons are not positioned, in general, but
+        the first statement of each copied sequence is given the position of the one from
+        which it was copied."""
+        # Iterate over sequences determined by _findtSequencesForOutput.
+        pruneBlockEnds = set()
+        seqLists = []
+        watchSubsStmts = set() if watchSubs is None else \
+            set((i.topLevelParent() for i in watchSubs.keys()))
+        for pos, isModSeqIcon, seqIter in self._findtSequencesForOutput(selectedSet):
+            if isModSeqIcon:
+                continue
+            prevDupIc = None
+            seqList = []
+            seqLists.append(seqList)
+            blockOwnerStack = []
+            for isSingleStmt, ic in flagIndividual(seqIter):
+                if ic is None:
+                    # AFAIK _findSequencesForOutput iterator can't produce an empty
+                    # statement, but PyCharm's automated checking thinks it can.
+                    print('duplicateSelectedIcons: _findSequencesForOutput empty stmt')
+                    continue
+                elif isinstance(ic, icon.BlockEnd):
+                    if ic in pruneBlockEnds:
+                        continue
+                    # If user makes a selection that would go negative indent, we just
+                    # flatten at 0, since the only alternative would be to invent non-
+                    # existent block owning statements to preserve their indentation.
+                    if len(blockOwnerStack) == 0:
+                        continue
+                    blockOwner = blockOwnerStack.pop()
+                    dupIc = icon.BlockEnd(blockOwner, window=self)
+                    blockOwner.blockEnd = dupIc
+                else:
+                    # If some of the icons in the current statement are not selected,
+                    # make a  temporary copy and use splitDeletedIcons to reassemble the
+                    # remaining ones.
+                    stmtComment = ic.stmtComment if hasattr(ic, 'stmtComment') else None
+                    if any((c not in selectedSet for c in ic.traverse())) or \
+                            stmtComment is not None and stmtComment not in selectedSet:
+                        prunedIc = _makePrunedCopy(ic, selectedSet, not isSingleStmt)
+                        if hasattr(ic, 'blockEnd') and ic not in self.selectedSet:
+                            pruneBlockEnds.add(ic.blockEnd)
+                    else:
+                        prunedIc = None
+                    # Duplicate the statement and note its replacement in watchSubs if
+                    # the caller wants to know what it's been changed to.
+                    if ic in watchSubsStmts:
+                        if prunedIc is None:
+                            dupIc = ic.duplicate(linkToOriginal=True)
+                            for i in dupIc.traverse():
+                                if i.copiedFrom in watchSubs:
+                                    watchSubs[i.copiedFrom] = i
+                        else:
+                            dupIc = prunedIc.duplicate(linkToOriginal=True)
+                            for i in dupIc.traverse():
+                                if i.copiedFrom.copiedFrom in watchSubs:
+                                    watchSubs[i.copiedFrom.copiedFrom] = i
+                    elif prunedIc is None:
+                        dupIc = ic.duplicate()
+                    else:
+                        dupIc = prunedIc.duplicate()
+                if hasattr(dupIc, 'blockEnd'):
+                    blockOwnerStack.append(dupIc)
+                # Link the new statement into the sequence and add it to the top-level
+                # statement list
+                if prevDupIc is None:
+                    filefmt.moveIconToPos(dupIc, ic.pos())
+                else:
+                    prevDupIc.replaceChild(dupIc, 'seqOut')
+                seqList.append(dupIc)
+                prevDupIc = dupIc
+        return seqLists
+
+    def _findtSequencesForOutput(self, selectedSet=None):
         """Figure out what icons to iterate over for generating save-file and clipboard
         content.  This is an iterator over sequences, that also returns an iterator over
         icons within each sequence.  It is structured this way to handle both sorting of
@@ -4445,11 +4567,11 @@ class Window:
         # a structural issue, requiring change to the basic mechanisms for organizing
         # icons, sequences, and selections (probably starting with sequences).
         seqStartIcons = []
-        if forClipboard:
+        if selectedSet is not None:
             # Traverse just the sequences containing selected icons and just the top
             # icons that contain selections
             selectedTopIcons = set()
-            for icOrSite in self.selectedSet:
+            for icOrSite in selectedSet:
                 ic = icOrSite if isinstance(icOrSite, icon.Icon) else icOrSite[0]
                 if isStmtComment(ic):
                     selectedTopIcons.add(ic.attachedToStmt)
@@ -4459,7 +4581,7 @@ class Window:
                 for ic in icon.traverseSeq(startPage.startIcon):
                     if ic in selectedTopIcons:
                         for i in ic.traverse(includeSelf=True, inclStmtComment=True):
-                            if i in self.selectedSet:
+                            if i in selectedSet:
                                 firstSelectedIcon = i
                                 break
                         break

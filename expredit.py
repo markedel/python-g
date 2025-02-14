@@ -1728,6 +1728,18 @@ def posOfSelEntry(icOrSite):
     ic, siteId = icOrSite
     return ic.posOfSite(siteId)
 
+def createBlockSel(blockIcon, inclStmtComment=True):
+    blockSel = set()
+    addHierToSel(blockSel, blockIcon, inclStmtComment=inclStmtComment)
+    if not hasattr(blockIcon, 'blockEnd'):
+        return
+    for ic in icon.traverseSeq(blockIcon, includeStartingIcon=False):
+        if ic is blockIcon.blockEnd:
+            break
+        addHierToSel(blockSel, ic, inclStmtComment=inclStmtComment)
+    addHierToSel(blockSel, blockIcon.blockEnd)
+    return blockSel
+
 def createHierSel(topIcon, inclStmtComment=True):
     hierSel = set()
     addHierToSel(hierSel, topIcon, inclStmtComment=inclStmtComment)

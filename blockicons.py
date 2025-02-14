@@ -12,6 +12,7 @@ import parenicon
 import infixicon
 import entryicon
 import commenticon
+import expredit
 
 INCOMPLETE_TRY_IDENT = '___pyg_incomplete_try_stmt'
 UNUSED_DECORATOR_IDENT = '___pyg_unused_decorator'
@@ -3104,9 +3105,9 @@ def _consolidateHandlerBlocks(paramDict, handlerIcs):
     paramDict['handlers'] = handlers
 
 def clauseBlockIcons(ic, inclStmtComment=True):
-    """Returns a list of all icons (hierarchy) in an else or elif clause, including
-    the else or elif icon itself."""
-    seqIcons = list(ic.traverse(inclStmtComment=inclStmtComment))
+    """Returns a selection set containing all icons (hierarchy) in an else or elif
+    clause, including the else or elif icon itself."""
+    seqIcons = expredit.createHierSel(ic, inclStmtComment=inclStmtComment)
     nestLevel = 0
     for seqIcon in icon.traverseSeq(ic, includeStartingIcon=False):
         if isinstance(seqIcon, icon.BlockEnd):
@@ -3118,7 +3119,7 @@ def clauseBlockIcons(ic, inclStmtComment=True):
         elif seqIcon.__class__ in (ElifIcon, ElseIcon, ExceptIcon, FinallyIcon) and \
                 nestLevel == 0:
             break
-        seqIcons += list(seqIcon.traverse(inclStmtComment=inclStmtComment))
+        seqIcons |= expredit.createHierSel(seqIcon, inclStmtComment=inclStmtComment)
     return seqIcons
 
 def createWhileIconFromAst(astNode, window):
