@@ -41,8 +41,11 @@ DEFAULT_WINDOW_SIZE = (800, 800)
 
 # Number of pixels mouse can move with button down before we consider it a drag.
 # Experience shows that 2 pixels is too small and results in misinterpretation of around
-# 1 out of 15 clicks.
-DRAG_THRESHOLD = 4
+# 1 out of 15 clicks.  4 pixels successfully quashed most of the accidental drags, but it
+# turns out that setting it lower than the snap distance is kind of pointless, since
+# dragged icons usually can't move until they unsnap, so might as well take advantage
+# and be extra-resilient against accidental dragging.
+DRAG_THRESHOLD = 8
 
 # Tkinter event modifiers
 SHIFT_MASK = 0x001
@@ -86,9 +89,9 @@ SCROLL_RIGHT_PAD = SCROLL_BOTTOM_PAD = 9
 # per step.  A scale factor of .42 yields 50 pixels per step, which is a similar distance.
 MOUSE_WHEEL_SCALE = 0.42
 
-# Number of pixels of mouse movement to advance a structural drag target selection up one
-# level in the icon hierarchy
-TARGET_SELECT_STEP_DIST = 10
+# Number of pixels of mouse movement needed to advance a structural drag target selection
+# or immediate selection up one level in the icon hierarchy.
+HIER_SELECT_STEP_DIST = 15
 
 # Max. number of statements allowed in a single page.  Splitting sequences in to pages
 # makes edits, scrolling, and finding icons within a region, more efficient.  It does
@@ -388,11 +391,16 @@ class Window:
         self.lastDragImageRegion = None
         self.highlightedForReplace = set()
         self.inRectSelect = False
+        self.inImmediateRectSelect = False
         self.lastRectSelect = None  # Note, in image coords (not content)
         self.inStmtSelect = False
         self.inLexSelDrag = False
+        self.immediateDragAnchorIc = None
+        self.immediateDragAnchorPartId = None
+        self.immediateDragHighlight = set()
+        self.inImmediateDrag = False
         self.lastStmtHighlightRects = None
-        self.rectSelectInitialStates = {}
+        self.rectSelectInitialState = set()
         self.lexDragAnchorIc = None
         self.lexDragAnchorSite = None
         self.lexDragAnchorPartId = None
@@ -630,9 +638,20 @@ class Window:
         self.doubleClickFlag = False
 
     def _btn3ReleaseCb(self, evt):
+        if self.buttonDownTime is None:
+            return
         if self.dragging:
             self._endDrag(evt)
             self.buttonDownTime = None
+            return
+        elif self.inRectSelect:
+            self._endRectSelect()
+            self.buttonDownTime = None
+            return
+        elif self.inImmediateDrag:
+            self._endImmediateSelDrag()
+            self.buttonDownTime = None
+            return
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
             # In order to handle double-click, button release actions are not done
             # until we know that a double-click can't still happen (_delayedBtnUpActions).
@@ -644,6 +663,21 @@ class Window:
     def _delayedBtn3UpActions(self, evt):
         if self.doubleClickFlag:
             return  # Second click occurred, don't do the delayed action
+        ic = self.buttonDownIcon
+        if self.buttonDownState & CTRL_MASK and ic is not None and not ic.isSelected():
+            if hasattr(ic, 'blockEnd'):
+                sel = expredit.createBlockSel(ic, inclStmtComment=True)
+            elif isinstance(ic, icon.BlockEnd):
+                sel = expredit.createBlockSel(ic.primary, inclStmtComment=True)
+            elif ic.__class__ in (blockicons.ElseIcon, blockicons.ElifIcon,
+                    blockicons.ExceptIcon, blockicons.FinallyIcon):
+                sel = blockicons.clauseBlockIcons(ic)
+            else:
+                sel = expredit.createHierSel(findLeftOuterIcon(self.assocGrouping(ic),
+                    self.buttonDownLoc), inclStmtComment=True)
+            self.immediateCopy(sel)
+            self.buttonDownTime = None
+            return
         self.buttonDownTime = None
         # Create context-sensitive pop-up menu
         popup = tk.Menu(self.imgFrame, tearoff=0)
@@ -1072,6 +1106,7 @@ class Window:
         if self.buttonDownTime is None or not (leftMouse or rightMouse):
             return
         shiftPressed = evt.state & SHIFT_MASK
+        ctrlPressed = evt.state & CTRL_MASK
         if self.dragging is not None:
             self._updateDrag(evt)
             return
@@ -1083,6 +1118,9 @@ class Window:
             return
         if self.inLexSelDrag:
             self._updateLexSelDrag(evt)
+            return
+        if self.inImmediateDrag:
+            self._updateImmediateSelDrag(evt)
             return
         # Not currently dragging, but button is down
         btnX, btnY = self.buttonDownLoc
@@ -1097,18 +1135,36 @@ class Window:
             if seqSiteIc is not None:
                 self._startStmtSelect(seqSiteIc, evt)
             else:
-                self._startRectSelect(evt)
-        elif leftMouse and shiftPressed:
+                self._startRectSelect(evt, immediate=False)
+        elif leftMouse and shiftPressed and not ctrlPressed:
             if siteIcon is not None:
                 self._startLexSelDrag(evt, siteIcon, anchorSite=site)
             else:
                 self._startLexSelDrag(evt, self.buttonDownIcon,
                     anchorPartId=self.buttonDownIcPart)
+        elif rightMouse and ctrlPressed:
+            if self.cursor.type is None and len(self.selectedSet) == 0:
+                # Preempt immediate-copy dragging if there's no destination.  This is
+                # somewhat unnecessary, as the eventual goal is to not have a window with
+                # no cursor/selection, and there are already checks on insert/replace.
+                self.displayTypingError("No cursor or selection for immediate-copy"
+                    "destination")
+                self.buttonDownTime = None
+                return
+            if ic is None:
+                self._startRectSelect(evt, immediate=True)
+            else:
+                self._startImmediateSelDrag(evt, ic, self.buttonDownIcPart)
+        elif rightMouse and ic is None and not shiftPressed and not ctrlPressed:
+            self.displayTypingError("Copy-drag must start on icon")
+            self.buttonDownTime = None
+            return
         elif ic.isSelected():
-            # If a selected icon was clicked, drag all of the selected icons
+            # If a selected icon was clicked, drag all of the selected icons (both left
+            # and right buttons)
             self._startDrag(evt, self.selectedIcons(), dragACopy=rightMouse)
-        else:
-            # Otherwise, drag the icon that was clicked
+        elif not shiftPressed or ctrlPressed:
+            # Drag with no modifiers starts icon drag (left) or drag copy (right)
             if self.doubleClickFlag:
                 if hasattr(ic, 'blockEnd') or isinstance(ic, icon.BlockEnd):
                     # Double-click drag of branch icons takes just the icon and its
@@ -2052,9 +2108,10 @@ class Window:
                 isinstance(self.cursor.icon, entryicon.EntryIcon):
             self.requestRedraw(self.cursor.icon.hierRect())
             self.cursor.icon.remove(forceDelete=True)
-        else:
-            self.cursor.removeCursor()
         self._cancelDrag()
+        self._cancelImmediateDrag()
+        self._cancelRectSelect()
+        self.buttonDownTime = None
         self.refreshDirty(addUndoBoundary=True)
 
     def _enterCb(self, evt):
@@ -2453,7 +2510,7 @@ class Window:
                     pointerY)
             elif pointerX <= snapSiteX and pointerY <= snapSiteY:
                 step = int(math.sqrt((snapSiteX - pointerX)**2 + \
-                    (snapSiteY - pointerY)**2) / TARGET_SELECT_STEP_DIST)
+                    (snapSiteY - pointerY)**2) / HIER_SELECT_STEP_DIST)
                 topReplaceIc = expredit.extendDefaultReplaceSite(movIcon, sIcon)
                 highlightedIcons = expredit.extendDragTargetStructural(topReplaceIc, step)
                 useTransparentDragImage = True
@@ -2600,17 +2657,20 @@ class Window:
         # worth it as long as this is the only case).
         self.undo.undo()
 
-    def _startRectSelect(self, evt):
+    def _startRectSelect(self, evt, immediate=False):
         self.rectSelectCursor = self.cursor.saveState()
         self.cursor.removeCursor()
         self.inRectSelect = True
+        self.inImmediateRectSelect = immediate
+        if immediate:
+            self.immediateDragHighlight = set()
         self.lastRectSelect = None
         self.rectSelectInitialState = self.selectedSet.copy()
         self._updateRectSelect(evt)
         self.refreshDirty()
 
     def _updateRectSelect(self, evt):
-        toggle = evt.state & CTRL_MASK
+        toggle = evt.state & CTRL_MASK and not self.inImmediateRectSelect
         newRect = makeRect(self.buttonDownLoc, self.imageToContentCoord(evt.x, evt.y))
         if self.lastRectSelect is None:
             combinedRegion = newRect
@@ -2618,13 +2678,20 @@ class Window:
             combinedRegion = comn.combineRects(newRect, self.lastRectSelect)
             self._eraseRectSelect()
         redrawRegion = comn.AccumRects()
+        curSel = self.immediateDragHighlight if self.inImmediateRectSelect else \
+            self.selectedSet
+        selectSet = set()
+        eraseSet = set()
         for ic in self.findIconsInRegion(combinedRegion):
             if ic.inRectSelect(newRect):
                 newSelect = (ic not in self.rectSelectInitialState) if toggle else True
             else:
                 newSelect = ic in self.rectSelectInitialState
-            if ic.isSelected() != newSelect:
-                ic.select(newSelect)
+            if newSelect and ic not in curSel:
+                selectSet.add(ic)
+                redrawRegion.add(ic.rect)
+            elif not newSelect and ic in curSel:
+                eraseSet.add(ic)
                 redrawRegion.add(ic.rect)
             affectedEmptySites = emptySitesInRect(ic, combinedRegion)
             selectedEmptySites = emptySitesInRect(ic, newRect)
@@ -2632,11 +2699,23 @@ class Window:
                 selectedEmptySites = set() if selectedEmptySites is None else \
                     set(selectedEmptySites)
                 for siteIcPair in affectedEmptySites:
-                    wasSelected = siteIcPair in self.selectedSet
-                    selected = siteIcPair in selectedEmptySites
-                    if wasSelected and not selected or not wasSelected and selected:
-                        self.select(siteIcPair, selected)
+                    wasSelected = siteIcPair in curSel
+                    if siteIcPair in selectedEmptySites:
+                        newSelect = (siteIcPair not in self.rectSelectInitialState) if \
+                            toggle else True
+                    else:
+                        newSelect = siteIcPair in self.rectSelectInitialState
+                    if wasSelected and not newSelect:
+                        eraseSet.add(siteIcPair)
+                    if not wasSelected and newSelect:
+                        selectSet.add(siteIcPair)
                 redrawRegion.add(ic.rect)
+        if self.inImmediateRectSelect:
+            self.immediateDragHighlight -= eraseSet
+            self.immediateDragHighlight |= selectSet
+        else:
+            self.selectedSet -= eraseSet
+            self.selectedSet |= selectSet
         self.refresh(redrawRegion.get(), redraw=True)
         l, t, r, b = self.contentToImageRect(newRect)
         hLineImg = Image.new('RGB', (r - l, 1), color=RECT_SELECT_COLOR)
@@ -2657,6 +2736,20 @@ class Window:
     def _endRectSelect(self):
         self._eraseRectSelect()
         self.inRectSelect = False
+        if self.inImmediateRectSelect:
+            # Clear highlights
+            redrawRect = comn.AccumRects()
+            select = self.immediateDragHighlight
+            self.immediateDragHighlight = set()
+            for i in select:
+                redrawRect.add(expredit.iconOfSelEntry(i).rect)
+            self.refresh(redrawRect.get(), redraw=True)
+            # Do immediate copy of (formerly) highlighted selection.  This can still fail
+            # if the destination is inappropriate, but we do the same thing either way.
+            self.cursor.restoreState(self.rectSelectCursor)
+            self.immediateCopy(select)
+            self.inImmediateRectSelect = False
+            return  # Cursor needs to remain at immediate-copy destination
         # It's unclear whether we actually want to remove the cursor after a rectangular
         # selection, but we definitely don't want to if no selection was made.  Using
         # selectedSet rather than selectedIcons() might be a questionable choice as it
@@ -2664,6 +2757,26 @@ class Window:
         if len(self.selectedSet) == 0:
             self.cursor.restoreState(self.rectSelectCursor)
             self.cursor.draw()
+
+    def _cancelRectSelect(self):
+        if not self.inRectSelect:
+            return
+        self._eraseRectSelect()
+        self.inRectSelect = False
+        self.buttonDownTime = None
+        redrawRect = comn.AccumRects()
+        if self.inImmediateRectSelect:
+            affectedEntries = self.immediateDragHighlight
+            self.immediateDragHighlight = set()
+            self.inImmediateRectSelect = False
+        else:
+            affectedEntries = self.selectedSet | self.rectSelectInitialState
+            self.selectedSet = self.rectSelectInitialState
+        for i in affectedEntries:
+            redrawRect.add(expredit.iconOfSelEntry(i).rect)
+        self.refresh(redrawRect.get(), redraw=True)
+        self.cursor.restoreState(self.rectSelectCursor)
+        self.cursor.draw()
 
     def _startStmtSelect(self, seqSiteIc, evt):
         self.unselectAll()
@@ -2788,6 +2901,62 @@ class Window:
         self.lexDragAnchorSite = None
         self.lexDragAnchorPartId = None
         self.inLexSelDrag = False
+
+    def _startImmediateSelDrag(self, evt, anchorIc, anchorPartId):
+        self.immediateDragAnchorIc = anchorIc
+        self.immediateDragAnchorPartId = anchorPartId
+        self.immediateDragHighlight = set()
+        self.inImmediateDrag = True
+        self._updateImmediateSelDrag(evt)
+
+    def _updateImmediateSelDrag(self, evt):
+        if not self.inImmediateDrag:
+            return
+        pointerX, pointerY = self.imageToContentCoord(evt.x, evt.y)
+        startX, startY = self.buttonDownLoc
+        if pointerX <= startX and pointerY <= startY:
+            step = int(math.sqrt((startX - pointerX)**2 + \
+                (startY - pointerY)**2) / HIER_SELECT_STEP_DIST)
+            newSel = expredit.extendDragTargetStructural(self.immediateDragAnchorIc, step)
+        else:
+            newSel, _, _ = expredit.extendSelectToPointer(self.immediateDragAnchorIc,
+                None, self.immediateDragAnchorPartId, pointerX, pointerY)
+        oldSel = self.immediateDragHighlight
+        self.immediateDragHighlight = newSel
+        redrawRect = comn.AccumRects()
+        for i in oldSel:
+            redrawRect.add(expredit.iconOfSelEntry(i).rect)
+        for i in newSel:
+            redrawRect.add(expredit.iconOfSelEntry(i).rect)
+        if redrawRect.get() is not None:
+            self.refresh(redrawRect.get(), redraw=True)
+
+    def _endImmediateSelDrag(self):
+        self.immediateDragAnchorIc = None
+        self.immediateDragAnchorPartId = None
+        self.inImmediateDrag = False
+        selection = self.immediateDragHighlight
+        self.immediateDragHighlight = set()
+        redrawRect = comn.AccumRects()
+        for i in selection:
+            redrawRect.add(expredit.iconOfSelEntry(i).rect)
+        self.immediateCopy(selection)
+        if redrawRect.get() is not None:
+            self.refresh(redrawRect.get(), redraw=True)
+
+    def _cancelImmediateDrag(self):
+        if not self.inImmediateDrag:
+            return
+        self.inImmediateDrag = False
+        self.immediateDragAnchorIc = None
+        self.immediateDragAnchorPartId = None
+        self.buttonDownTime = None
+        redrawRect = comn.AccumRects()
+        for i in self.immediateDragHighlight:
+            redrawRect.add(expredit.iconOfSelEntry(i).rect)
+        self.immediateDragHighlight = set()
+        if redrawRect.get() is not None:
+            self.refresh(redrawRect.get(), redraw=True)
 
     def recordCursorPositionInData(self, topIcon):
         if self.cursor.type != "icon":
@@ -4458,19 +4627,23 @@ class Window:
             if isStartOfOwnedBlock:
                 self._writePassStmt(outStream, tabSize * branchDepth, not exportPython)
 
-    def duplicateSelectedIcons(self, selectedSet, watchSubs=None):
+    def duplicateSelectedIcons(self, selectedSet, watchSubs=None, relativeOffsets=False):
         """Create and link a full copy of all of the icons in the window, referred to in
         selectedSet.  Selected should be in selection-set format (a set of icons and
         tuples representing selectable empty sites).  Returns a sequence list in the same
         form as the assembledIcons list from removeIcons.  To associate a duplicate
         icon(s) with their originals, pass a dictionary in watchSubs with the original
         icons as keys, and the function will populate the values with the icons'
-        replacements.  Note that the duplicate icons are not positioned, in general, but
-        the first statement of each copied sequence is given the position of the one from
-        which it was copied."""
+        replacements.  Positions for the new icons are not set, except for the first
+        statement icon of each sequence which is given the position of the icon from
+        which it was copied.  If relativeOffsets is set to True, rather than giving the
+        first icon of each sequence the same position as the one from which it is copied,
+        it is given its position relative to the first icon of the first sequence
+        (thus the first icon of the first sequence, itself, will be at (0, 0))."""
         # Iterate over sequences determined by _findtSequencesForOutput.
         pruneBlockEnds = set()
         seqLists = []
+        firstSeqPos = None
         watchSubsStmts = set() if watchSubs is None else \
             set((i.topLevelParent() for i in watchSubs.keys()))
         for pos, isModSeqIcon, seqIter in self._findtSequencesForOutput(selectedSet):
@@ -4520,8 +4693,13 @@ class Window:
                         else:
                             dupIc = prunedIc.duplicate(linkToOriginal=True)
                             for i in dupIc.traverse():
-                                if i.copiedFrom.copiedFrom in watchSubs:
-                                    watchSubs[i.copiedFrom.copiedFrom] = i
+                                if hasattr(i.copiedFrom, 'copiedFrom'):
+                                    # Pruning can create tuples that did not exist in the
+                                    # original.  ... I am worried, though, that it can
+                                    # also transform and thus lose track of watched,
+                                    # icons, causing problems downstream from here.
+                                    if i.copiedFrom.copiedFrom in watchSubs:
+                                        watchSubs[i.copiedFrom.copiedFrom] = i
                     elif prunedIc is None:
                         dupIc = ic.duplicate()
                     else:
@@ -4529,14 +4707,78 @@ class Window:
                 if hasattr(dupIc, 'blockEnd'):
                     blockOwnerStack.append(dupIc)
                 # Link the new statement into the sequence and add it to the top-level
-                # statement list
+                # statement list.  For the first icon of each sequence, also set its
+                # position per the absolute/relative position implied by relativeOffsets.
                 if prevDupIc is None:
-                    filefmt.moveIconToPos(dupIc, ic.pos())
+                    if relativeOffsets:
+                        if firstSeqPos is None:
+                            firstSeqPos = ic.pos()
+                            pos = 0, 0
+                        else:
+                            pos = icon.subtractPoints(ic.pos(), firstSeqPos)
+                    else:
+                        pos = ic.pos()
+                    filefmt.moveIconToPos(dupIc, pos)
                 else:
                     prevDupIc.replaceChild(dupIc, 'seqOut')
                 seqList.append(dupIc)
                 prevDupIc = dupIc
+            # If there are any un-terminated blocks left due to an unbalanced selection,
+            # add them.  (Note that the code below remains untested, because AFAIK all
+            # selection methods give block ends the same status as their owners.)
+            while len(blockOwnerStack) > 0:
+                blockOwner = blockOwnerStack.pop()
+                dupIc = icon.BlockEnd(blockOwner, window=self)
+                blockOwner.blockEnd = dupIc
+                prevDupIc.replaceChild(dupIc, 'seqOut')
+                seqList.append(dupIc)
+                prevDupIc = dupIc
         return seqLists
+
+    def immediateCopy(self, sel):
+        """Make a copy of the icons in selection set, sel, and paste them either at the
+        cursor or to replace the (first fragment of) the primary selection."""
+        self._pruneSelectedIcons()
+        pastedSeqs = self.duplicateSelectedIcons(sel, relativeOffsets=True)
+        if len(self.selectedSet) > 0:
+            cursorIcon, cursorSite = self.replaceSelectedIcons(self.selectedSet,
+                pastedSeqs)
+            if cursorIcon is None and cursorSite is None:
+                self.displayTypingError("Can't copy code containing top-level "
+                    "statements into this context")
+                return
+        elif self.cursor.type is None:
+            self.displayTypingError("No cursor or selection for immediate copy")
+            return
+        elif self.cursor.type == "window":
+            # Copy to window cursor.  duplicateSelectedIcons is also used for drag copy,
+            # and provides absolute icon offsets.  We need relative ones
+            cursorIcon, cursorSite = self.insertIconsFromSequences(None, None,
+                pastedSeqs, self.cursor.pos)
+        elif self.cursor.type == "text":
+            # ... don't know what to do here, yet
+            self.displayTypingError("Can't immediate-copy icons into text")
+            return
+        elif self.cursor.type == "icon":
+            cursorIcon, cursorSite = self.insertIconsFromSequences(self.cursor.icon,
+                self.cursor.site, pastedSeqs)
+            if cursorIcon is None and cursorSite is None:
+                self.displayTypingError("Can't copy code containing top-level "
+                    "statements into this context")
+                return
+        print('start layout', time.monotonic())
+        self.requestRedraw(self.layoutDirtyIcons(filterRedundantParens=False))
+        print('finish layout', time.monotonic())
+        if self.refreshRequests.get() is not None:
+            print('start redraw/refresh', time.monotonic())
+            self.refresh(self.refreshRequests.get(), redraw=True)
+            print('end redraw/refresh', time.monotonic())
+            self.refreshRequests.clear()
+        self.undo.addBoundary()
+        if cursorSite is None:
+            self.cursor.setToText(cursorIcon)
+        else:
+            self.cursor.setToIconSite(cursorIcon, cursorSite)
 
     def _findtSequencesForOutput(self, selectedSet=None):
         """Figure out what icons to iterate over for generating save-file and clipboard
@@ -5716,8 +5958,15 @@ def _makePrunedCopy(topIcon, keepSet, forSeq):
     copiedTopIcon = topIcon.temporaryDuplicate(inclStmtComment=True, linkToOriginal=True)
     # Translate keepSet from a set of original icons to preserve, into a set of copied
     # icons to remove.
-    deletedSet = {c for c in copiedTopIcon.traverse(inclStmtComment=True)
-        if c.copiedFrom not in keepSet}
+    deletedSet = set()
+    for copiedIcOrSite in expredit.createHierSel(copiedTopIcon, inclStmtComment=True):
+        if isinstance(copiedIcOrSite, icon.Icon):
+            if copiedIcOrSite.copiedFrom not in keepSet:
+                deletedSet.add(copiedIcOrSite)
+        else:
+            siteIc, siteName = copiedIcOrSite
+            if (siteIc.copiedFrom, siteName) not in keepSet:
+                deletedSet.add(copiedIcOrSite)
     # Use splitDeletedIcons to remove the unwanted icons and assemble the remaining ones
     # into a single coherent tree.
     stmtComment = copiedTopIcon.stmtComment if hasattr(copiedTopIcon, 'stmtComment') \

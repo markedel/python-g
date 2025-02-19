@@ -1180,19 +1180,16 @@ def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y):
                 pointerIc, pointerSite = siteRightOfPart(icOrSite, pointerPartId)
             if anchorSite is None:
                 # Anchor is an icon, pointer is to a site
-                # We're pointing to an icon, and the anchor is a site
                 if partIsRightOfSite(pointerIc, pointerSite, anchorIc, anchorPartId):
                     pointerDirection = -1
                 else:
                     pointerDirection = 1
             else:
-                # We have two sites, and can therefore let iconsInLexicalRange figure
-                # out what is selected and use the pointed-to site as the cursor site.
-                # ... This is probably not finished, as we may not have a good cursor
-                # position in the reversed selection case
-                newSel = iconsInLexicalRangeBySite(anchorIc, anchorSite, pointerIc,
-                    pointerSite)
-                return newSel, pointerIc, pointerSite
+                # Both anchor and pointer are sites
+                if siteIsRightOfSite(anchorIc, anchorSite, pointerIc, pointerSite):
+                    pointerDirection = 1
+                else:
+                    pointerDirection = -1
     # Now that we know the selection direction, we can resolve the unresolved selection
     # borders (where we're anchored or pointing-to an icon rather than a site) and find
     # the icons to select.
@@ -1846,6 +1843,31 @@ def partIsRightOfPart(ic1, partId1, ic2, partId2):
                 foundPartId1 = True
             if ic is ic2 and partId == partId2:
                 return foundPartId1
+        return False
+    if order == 1:
+        # ic1's statement precedes that of ic2
+        return True
+    if order == 2:
+        # ic2's statement precedes that of ic1
+        return False
+    # They are in different sequences
+    return None
+
+def siteIsRightOfSite(ic1, site1, ic2, site2):
+    """Returns True if icon site (ic2, site2) is lexically right of site (ic1, site1),
+    False if site1 is right of partId1, and None if they are not part of the same
+    sequence."""
+    topParent1 = commenticon.topParentInclComment(ic1)
+    topParent2 = commenticon.topParentInclComment(ic2)
+    order = stmtOrder(topParent1, topParent2)
+    if order == 0:
+        # They are part of the same statement
+        for icOrSite, partId in lexicalTraverse(topParent1, fromSite=(ic1, site1),
+                includeStmtComment=False, yieldAllSites=True):
+            if isinstance(icOrSite, tuple):
+                ic, siteName = icOrSite
+                if ic2 is ic and siteName == site2:
+                    return True
         return False
     if order == 1:
         # ic1's statement precedes that of ic2

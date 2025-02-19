@@ -61,6 +61,7 @@ SELECT_TINT = (0, 0, 255, 40)
 EXEC_ERR_TINT = (255, 0, 0, 100)
 SYNTAX_ERR_TINT = (255, 64, 64, 40)
 PENDING_REMOVE_TINT = (255, 10, 10, 100)
+IMMEDIATE_COPY_TINT = (0, 180, 255, 40)
 BLACK = (0, 0, 0, 255)
 SEQ_RULE_COLOR = (165, 180, 165, 255)
 SEQ_CONNECT_COLOR = (70, 100, 70, 255)
@@ -76,6 +77,7 @@ STYLE_SELECTED = 2
 STYLE_SYNTAX_ERR = 4
 STYLE_EXEC_ERR = 8
 STYLE_PENDING_REMOVE = 16
+STYLE_IMMEDIATE_COPY = 32
 
 # Pixel offset from input/output site to series insertion site
 SERIES_INSERT_SITE_X_OFFSET = 0
@@ -1166,6 +1168,9 @@ class Icon:
         if self.window.highlightedForReplace is not None and \
                 self in self.window.highlightedForReplace:
             style |= STYLE_PENDING_REMOVE
+        if self.window.immediateDragHighlight is not None and \
+                self in self.window.immediateDragHighlight:
+            style |= STYLE_IMMEDIATE_COPY
         for (imgOffsetX, imgOffsetY), img in self.drawList:
             pasteImageWithClip(outImg, tintSelectedImage(img, style),
                 (x + imgOffsetX, y + imgOffsetY), clip)
@@ -1225,6 +1230,9 @@ class Icon:
             if self.window.highlightedForReplace is not None and \
                     icOrSite in self.window.highlightedForReplace:
                 color = PENDING_REMOVE_TINT
+            elif self.window.immediateDragHighlight is not None and \
+                    icOrSite in self.window.immediateDragHighlight:
+                color = IMMEDIATE_COPY_TINT
             elif icOrSite in self.window.selectedSet:
                 color = SELECT_TINT
             alpha = color[3] / 255.0
@@ -1668,6 +1676,8 @@ def tintSelectedImage(image, style):
         color = EXEC_ERR_TINT
     elif style & STYLE_PENDING_REMOVE:
         color = PENDING_REMOVE_TINT
+    elif style & STYLE_IMMEDIATE_COPY:
+        color = IMMEDIATE_COPY_TINT
     elif style & STYLE_SELECTED:
         color = SELECT_TINT
     elif style & STYLE_SYNTAX_ERR:
