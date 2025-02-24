@@ -56,6 +56,12 @@ stringPattern = re.compile("^(f|fr|rf|b|br|rb|u|r)?['\"]$", re.IGNORECASE)
 textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
+# The EntryCreationTracker is a context manager that allows the caller to find all of the
+# entry icons that were created within its scope, that are still alive in a given window.
+# This is used to find placeholder entry icons created deep in the editing code, to
+# override cursor placement.
+entryRegistries = []
+
 penImage = comn.asciiToImage((
     "....oooo....",
     "...o%%%%oo..",
@@ -114,6 +120,7 @@ class EntryIcon(icon.Icon):
         # If the entry icon will own a code block, create a BlockEnd icon and link it in
         if willOwnBlock:
             self.addCodeBlock()
+        registerEntryIconCreation(self)
 
     def addCodeBlock(self):
         """Change the entry icon to its block-owning form (used for temporarily holding
@@ -134,7 +141,6 @@ class EntryIcon(icon.Icon):
             print('Removing non-empty code block from entry icon!')
         if nextIc is not None:
             self.replaceChild(None, 'seqOut')
-        del self.blockEnd
         self.window.undo.registerCallback(self.addCodeBlock)
 
     def restoreForUndo(self, text):
@@ -3355,6 +3361,48 @@ def splitExprAtSite(splitAtIc, splitAtSite, splitTo):
         else:
             return splitExprAtIcon(splitAtIc, splitTo, splitAtIc, None)
     return splitExprAtIcon(child, splitTo, None, child)
+
+class EntryCreationTracker:
+    def __init__(self, window):
+        self.createdIcs = []
+        self.window = window
+
+    def __enter__(self):
+        entryRegistries.append(self)
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        entryRegistries.remove(self)
+        return False
+
+    def add(self, createdEntryIc):
+        if createdEntryIc.window is self.window:
+            self.createdIcs.append(createdEntryIc)
+
+    def get(self):
+        """Returns all of the entry icons that were created in the given window while the
+        context was active."""
+        inWindow = []
+        for ic in self.createdIcs:
+            topParent = ic.topLevelParent()
+            if topParent is not None and topParent in self.window.topIcons:
+                inWindow.append(ic)
+        return inWindow
+
+    def getLast(self):
+        """Returns the las entry icon that was created in the given window while the
+        context was active."""
+        for ic in reversed(self.createdIcs):
+            topParent = ic.topLevelParent()
+            if topParent is not None and topParent in self.window.topIcons:
+                return ic
+        return None
+
+def registerEntryIconCreation(entryIc):
+    """Register a newly created entry icon so it can be found by listeners using an
+    EntryCreationTracker context manager."""
+    for entryRegistry in entryRegistries:
+        entryRegistry.add(entryIc)
 
 def _canCloseParen(entryIc):
     """Determine if it is safe to close a newly-entered open-paren/bracket/brace.  Also

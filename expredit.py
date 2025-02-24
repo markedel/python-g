@@ -580,7 +580,7 @@ def joinStmts(firstStmt):
         if firstStmtComment is not None:
             firstStmtComment.detatchStmtComment()
             firstStmtComment.attachStmtComment(mergedStmt)
-    # Merge the statement comments of the two statement
+    # Merge the statement comments of the two statements
     if firstStmtComment is not None:
         firstStmtComment.mergeTextFromComment(nextStmtComment)
     elif nextStmtComment is not None:
@@ -625,6 +625,10 @@ def splitStmtAtSite(atIcon, atSite):
         if left is not topParent:
             atIcon.window.replaceTop(topParent, left)
         if right is not None:
+            if not right.hasSiteType('seqIn'):
+                entryIc = entryicon.EntryIcon(window=right.window)
+                entryIc.appendPendingArgs([right])
+                right = entryIc
             icon.insertSeq(right, left)
             atIcon.window.addTop(right)
         return left, right
@@ -677,6 +681,12 @@ def splitStmtAtSite(atIcon, atSite):
                 typeover=False)
             topParent = newParen.topLevelParent()
     if right is not None:
+        if not right.hasSiteType('output'):
+            # Right was split off of an expression, so should be either an output or an
+            # attribute.  Attribute will need a placeholder either for series or sequence
+            entryIc = entryicon.EntryIcon(window=right.window)
+            entryIc.appendPendingArgs([right])
+            right = entryIc
         iconsToMove.insert(0, right)
     if len(iconsToMove) == 0:
         return topParent, None  # Shouldn't happen if verified with canSplitStmtAtSite
@@ -2662,6 +2672,27 @@ def lowestLeftSite(ic):
     if leftSite is not None:
         return iconsites.lowestCoincidentSite(ic, leftSite)
     return None, None
+
+def leftmostCursorSite(ic):
+    """Find the appropriate cursor site to place the cursor directly left of the given
+    icon (ic).  If ic has a site on the left, return the lowest coincident site.  If not,
+    returns either the parent icon and site, or if the icon is at the top of the
+    hierarchy, the icons own parent site (usually output  or attrOut), or 'seqIn' if it
+    has no output site.  This is most useful on statement icons, when the 'middle" (not
+    'seqIn' or 'seqOut) site is preferred."""
+    leftIc, leftSite = lowestLeftSite(ic)
+    if leftIc is not None:
+        return leftIc, leftSite
+    parent = ic.parent()
+    if parent is None:
+        parentSites = ic.parentSites()
+        if len(parentSites) != 0:
+            return ic, parentSites[0]
+    else:
+        return parent, parent.siteOf(ic)
+    if ic.hasSite('seqIn'):
+        return ic, 'seqIn'
+    return None
 
 def cursorLeftOfIcon(ic):
     """Returns a cursor icon and site to the left of ic (which may be an output site,

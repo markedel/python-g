@@ -1503,7 +1503,7 @@ class Window:
         self._copyCb()
         # Note the unfortunate dependency here: passing self.selectedSet to removeIcons
         # without calling _pruneSelectedIcons because we know that _copyCb did.
-        self.removeIcons(self.selectedSet)
+        self.removeIcons(self.selectedSet, setCursor=True)
         self.clearSelection()
         self.refreshDirty(addUndoBoundary=True)
 
@@ -1712,7 +1712,7 @@ class Window:
     def _deleteCb(self, evt=None):
         selected = self.selectedIcons()
         if selected:
-            self.removeIcons(selected)
+            self.removeIcons(selected, setCursor=True)
             self.clearSelection()
             self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == "icon":
@@ -1728,8 +1728,10 @@ class Window:
                 cursors.beep()
                 return
             if evt.state & CTRL_MASK:
-                # Delete the icon to the right of the cursor
-                self.removeIcons([rightIcon])
+                # Delete the icon to the right of the cursor (setCursor is used rather
+                # than just letting the cursor position ride, because substitutions by
+                # removeIcons could disturb the parent icon).
+                self.removeIcons([rightIcon], setCursor=True)
             else:
                 # Edit the icon to the right of the cursor
                 rightIcon.backspace(rightSite, evt)
@@ -1801,26 +1803,34 @@ class Window:
                     # Split the statement at the site where the entry icon is, making it
                     # the start of stmt2, move its text into a new entry icon, and insert
                     # that at the site of the split, then try to place both entry icons.
-                    newEntryIc = entryicon.EntryIcon(initialString=entryIc.text,
-                        window = entryIc.window)
-                    entryIc.text = ''
-                    atIcon, atSite = entryIc.attachedIcon(), entryIc.attachedSite()
-                    if atIcon is None:
-                        icon.insertSeq(newEntryIc, entryIc, before=True)
-                        self.addTop(newEntryIc)
-                        stmt1 = entryIc
-                    else:
-                        stmt1, stmt2 = expredit.splitStmtAtSite(atIcon, atSite)
-                        atIcon, atSite = icon.rightmostSite(stmt1)
-                        cursorIc, _ = expredit.insertAtSite(atIcon, atSite, newEntryIc)
-                        stmt1 = cursorIc.topLevelParent()
-                    if newEntryIc.topLevelParent() in self.topIcons:
-                        newEntryIc.focusOut(removeIfNotFocused=True)
-                        stmt1 = self.cursor.icon.topLevelParent()
-                    if entryIc.topLevelParent() in self.topIcons:
-                        entryIc.focusOut(removeIfNotFocused=True)
-                    self.cursor.setToIconSite(stmt1, 'seqOut')
-                    self.refreshDirty(addUndoBoundary=True)
+                    with entryicon.EntryCreationTracker(self) as entryTracker:
+                        newEntryIc = entryicon.EntryIcon(initialString=entryIc.text,
+                            window = entryIc.window)
+                        entryIc.text = ''
+                        atIcon, atSite = entryIc.attachedIcon(), entryIc.attachedSite()
+                        if atIcon is None:
+                            icon.insertSeq(newEntryIc, entryIc, before=True)
+                            self.addTop(newEntryIc)
+                            stmt1 = entryIc
+                        else:
+                            stmt1, stmt2 = expredit.splitStmtAtSite(atIcon, atSite)
+                            atIcon, atSite = icon.rightmostSite(stmt1)
+                            cursorIc, _ = expredit.insertAtSite(atIcon, atSite,
+                                newEntryIc)
+                            stmt1 = cursorIc.topLevelParent()
+                        if newEntryIc.topLevelParent() in self.topIcons:
+                            newEntryIc.focusOut(removeIfNotFocused=True)
+                            stmt1 = self.cursor.icon.topLevelParent()
+                        if entryIc.topLevelParent() in self.topIcons:
+                            entryIc.focusOut(removeIfNotFocused=True)
+                        lastCreatedEntryIc = entryTracker.getLast()
+                        if lastCreatedEntryIc is not None:
+                            self.cursor.setToText(lastCreatedEntryIc)
+                        elif entryIc.topLevelParent() in self.topIcons:
+                            self.cursor.setToText(entryIc)
+                        else:
+                            self.cursor.setToIconSite(stmt1, 'seqOut')
+                        self.refreshDirty(addUndoBoundary=True)
                     return
                 else:
                     self.displayTypingError("Can't split entry text with split command")
@@ -1850,27 +1860,32 @@ class Window:
             self.displayTypingError(failMsg)
             return
         # Split the statement
-        self.requestRedraw(stmtIcon.hierRect())
-        stmt1, stmt2 = expredit.splitStmtAtSite(splitAtIcon, splitAtSite)
-        # Place the cursor on the seqOut site of the first stmt, handling the dumb case
-        # where stmt1 would get substituted when it's the entry icon holding the cursor.
-        if self.cursor.type == 'text' and self.cursor.icon is stmt1:
-            self.cursor.icon.focusOut()
-            stmt1 = self.cursor.icon.topLevelParent()
-        self.cursor.setToIconSite(stmt1, 'seqOut')
-        # If the new statement (stmt2) has an entry icon on the left, it may now be
-        # possible to remove it.
-        leftIc = stmt2
-        while leftIc is not None:
-            if isinstance(leftIc, entryicon.EntryIcon) and \
-                    leftIc.topLevelParent() in self.topIcons:
-                leftIc.focusOut(removeIfNotFocused=True)
-                break
-            coincSite = leftIc.hasCoincidentSite()
-            if coincSite is None:
-                break
-            leftIc = leftIc.childAt(coincSite)
-        self.refreshDirty(addUndoBoundary=True)
+        with entryicon.EntryCreationTracker(self) as entryTracker:
+            self.requestRedraw(stmtIcon.hierRect())
+            stmt1, stmt2 = expredit.splitStmtAtSite(splitAtIcon, splitAtSite)
+            # Handle the dumb case where stmt1 would get substituted when it's the entry
+            # icon holding the cursor.
+            if self.cursor.type == 'text' and self.cursor.icon is stmt1:
+                self.cursor.icon.focusOut()
+                stmt1 = self.cursor.icon.topLevelParent()
+            # If the new statement (stmt2) has an entry icon on the left, it may now be
+            # possible to remove it.
+            leftIc = stmt2
+            while leftIc is not None:
+                if isinstance(leftIc, entryicon.EntryIcon) and \
+                        leftIc.topLevelParent() in self.topIcons:
+                    leftIc.focusOut(removeIfNotFocused=True)
+                    break
+                coincSite = leftIc.hasCoincidentSite()
+                if coincSite is None:
+                    break
+                leftIc = leftIc.childAt(coincSite)
+            lastCreatedEntryIc = entryTracker.getLast()
+            if lastCreatedEntryIc is not None:
+                self.cursor.setToText(lastCreatedEntryIc)
+            else:
+                self.cursor.setToIconSite(stmt1, 'seqOut')
+            self.refreshDirty(addUndoBoundary=True)
 
     def _joinCb(self, evt=None):
         #... this should probably do something with selections
@@ -1947,16 +1962,20 @@ class Window:
             return
         self.requestRedraw(topStmtIcon.hierRect(), filterRedundantParens=True)
         self.requestRedraw(joinedStmtTopIcon.hierRect())
-        cursorIcon, cursorSite = expredit.joinStmts(topStmtIcon)
-        if cursorIcon is None and cursorSite is None:
-            self.displayTypingError("Statement being joined on the right is a top-"
-                "level statement that can't be embedded in other code.")
-            return
-        elif cursorSite is None:
-            self.cursor.setToText(cursorIcon)
-        else:
-            self.cursor.setToIconSite(cursorIcon, cursorSite)
-        self.refreshDirty(addUndoBoundary=True)
+        with entryicon.EntryCreationTracker(self) as entryTracker:
+            cursorIcon, cursorSite = expredit.joinStmts(topStmtIcon)
+            if cursorIcon is None and cursorSite is None:
+                self.displayTypingError("Statement being joined on the right is a top-"
+                    "level statement that can't be embedded in other code.")
+                return
+            lastCreatedEntryIc = entryTracker.getLast()
+            if lastCreatedEntryIc is not None:
+                self.cursor.setToText(lastCreatedEntryIc)
+            if cursorSite is None:
+                self.cursor.setToText(cursorIcon)
+            else:
+                self.cursor.setToIconSite(cursorIcon, cursorSite)
+            self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceCb(self, evt=None):
         if self.cursor.type == "text":
@@ -1965,7 +1984,7 @@ class Window:
         else:
             selectedIcons = self.selectedIcons()
             if len(selectedIcons) > 0:
-                self.removeIcons(selectedIcons)
+                self.removeIcons(selectedIcons, setCursor=True)
                 self.clearSelection()
             elif self.cursor.type == "icon":
                 if self.cursor.siteType in ('seqIn', 'seqOut'):
@@ -2013,7 +2032,7 @@ class Window:
             ic = parent
         if evt.state & CTRL_MASK:
             # Delete the icon to the left of the cursor
-            self.removeIcons([ic])
+            self.removeIcons([ic], setCursor=True)
         else:
             # Edit the icon to the left of the cursor.  For different types of icon, the
             # method for re-editing and action per-site is different, so this is done
@@ -3539,7 +3558,7 @@ class Window:
         return None
 
     def removeIcons(self, icons, assembleDeleted=False, watchSubs=None,
-            preserveSite=None):
+            preserveSite=None, setCursor=False):
         """Remove icons from window icon list, request redraw of affected areas of the
         display (does not perform redraw, call refreshDirty() to draw marked changes).
         If assembleDeleted is True, applies the same reassembly techniques to the removed
@@ -3559,48 +3578,52 @@ class Window:
         empty series sites based upon the additional site information."""
         if len(icons) == 0:
             return []
+        if setCursor:
+            with entryicon.EntryCreationTracker(self) as entryTracker:
+                cursorIc, cursorSite, cursorPos, deletedSeqs = self._removeIcons(icons,
+                    assembleDeleted, watchSubs, preserveSite, True)
+                lastCreatedEntryIc = entryTracker.getLast()
+                if lastCreatedEntryIc is not None:
+                    self.cursor.setToText(lastCreatedEntryIc)
+                elif cursorIc is None:
+                    self.cursor.setToWindowPos(cursorPos)
+                elif cursorSite is None:
+                    self.cursor.setToText(cursorIc)
+                else:
+                    self.cursor.setToIconSite(cursorIc, cursorSite)
+        else:
+            _, _, _, deletedSeqs = self._removeIcons(icons, assembleDeleted, watchSubs,
+                preserveSite, False)
+        return deletedSeqs
+
+    def _removeIcons(self, icons, assembleDeleted, watchSubs, preserveSite,
+            computeCursor):
+        """Internals of remove icons, returning a cursor position, rather than setting
+        it, and not attempting to move the cursor into created placeholder(s)."""
         # If parameter 'icons' is not already a set, turn it into one to more efficiently
         # determines if an icon is on the deleted list.
         if isinstance(icons, set):
             deletedSet = icons
         else:
             deletedSet = set(icons)
-        # If there's a cursor set, check if it's on an icon being deleted.  If so, move
-        # it to an icon that will remain.
-        # ... This is failing to preserve the cursor in the case of removed series sites
-        #     (this gets even more complicated when assembleDeleted is True)
-        if self.cursor.type in ("icon", "text") and self.cursor.icon in deletedSet \
-                and not assembleDeleted:
-            cursorPos = self.cursor.icon.pos()
-            cursorIc, cursorSite = None, None
-            for ic in self.cursor.icon.parentage(includeSelf=False):
-                if ic not in deletedSet:
-                    cursorIc, cursorSite = ic, ic.siteOf(self.cursor.icon, recursive=True)
-                    break
-                cursorPos = ic.pos()
-            else:
-                for ic in icon.traverseSeq(self.cursor.icon):
-                    if ic not in deletedSet:
-                        cursorIc, cursorSite = ic, 'seqIn'
-                        break
-                else:
-                    for ic in icon.traverseSeq(self.cursor.icon, reverse=True):
-                        if ic not in deletedSet:
-                            cursorIc, cursorSite = ic, 'seqOut'
-                            break
-            if cursorIc is None:
-                self.cursor.setToWindowPos(cursorPos, eraseOld=False, drawNew=False,
-                        placeEntryText=False)
-            else:
-                self.cursor.setToIconSite(cursorIc, cursorSite, eraseOld=False,
-                    drawNew=False, placeEntryText=False)
-        # Find the top icons of the statement hierarchy for the icons being deleted
+        # Find the top icons of the statement hierarchy for the icons being deleted, and
+        # also ensure that block-ends mirror their owners in the deleted set (normally
+        # block ends do match their owners, but they can apparently get out of sync).
         topIcons = set()
         for ic in icons:
             if isStmtComment(ic):
-                topIcons.add(ic.attachedToStmt)
+                ic = ic.attachedToStmt
             else:
-                topIcons.add(expredit.topLevelParentOfSelEntry(ic))
+                ic = expredit.topLevelParentOfSelEntry(ic)
+            if ic not in topIcons:
+                topIcons.add(ic)
+                if blockicons.isBlockOwnerIc(ic):
+                    if ic in deletedSet and ic.blockEnd not in deletedSet:
+                        deletedSet.add(ic.blockEnd)
+                        topIcons.add(ic.blockEnd)
+                    elif ic not in deletedSet and ic.blockEnd in deletedSet:
+                        deletedSet.remove(ic.blockEnd)
+                        topIcons.remove(ic.blockEnd)
         # Find region needing erase, including following sequence connectors
         self.requestRedraw(None, filterRedundantParens=True)
         for ic in topIcons:
@@ -3623,7 +3646,9 @@ class Window:
         # ordering of the sequence, we use the fact that topIcons controls the order of
         # deletion, and simply replace the set (topIcons) that was used to find the top
         # affected icons, with an ordered list, and collect them as they are processed.
-        if assembleDeleted:
+        # This is also used to help find the (lexical) start of the first selection, if
+        # the caller has requested that we determine the cursor position.
+        if assembleDeleted or computeCursor:
             sequences = orderTopIcons(topIcons)
             iconToSeqId = {}
             orderedTopIcons = []
@@ -3635,6 +3660,58 @@ class Window:
             topIcons = orderedTopIcons
         else:
             deletedSeqList = None
+        cursorIc = cursorSite = cursorPos = None
+        if computeCursor:
+            # Caller wants to place cursor.  Find the site at the 'start' of the
+            # selection, which for a single lexical range, means the site at the
+            # leftmost boundary.  For a disjoint selection that can span sequences
+            # we just make the best choice we can.
+            firstStmt = orderedTopIcons[0]
+            isFirstIc = True
+            startsAtStmtBoundary = False
+            for ic, part in expredit.lexicalTraverse(firstStmt, yieldAllSites=True):
+                if isinstance(ic, tuple) and isinstance(ic[0], str):
+                    if ic[1] not in deletedSet:
+                        cursorSite, cursorIc = ic
+                    continue
+                if ic in deletedSet:
+                    if cursorIc is not None:
+                        break
+                    if isFirstIc:
+                        startsAtStmtBoundary = True
+                else:
+                    if startsAtStmtBoundary:
+                        cursorIc = ic
+                        cursorSite = 'cursorAtLeft'
+                        break
+                isFirstIc = False
+            if cursorIc is None:
+                # No usable sites were found in the statement.
+                if firstStmt.hasSite('seqIn'):
+                    prevIc = firstStmt.prevInSeq()
+                    if prevIc is not None:
+                        cursorIc = prevIc
+                        cursorSite = 'seqOut'
+            if cursorIc is None:
+                # The start of the sequence is being deleted.  Need to look forward to
+                # subsequent statements for an unselected icon.
+                for seqIc in icon.traverseSeq(firstStmt, includeStartingIcon=False):
+                    if isinstance(seqIc, icon.BlockEnd):
+                        continue
+                    for ic in seqIc.traverse(inclStmtComment=True):
+                        if ic not in deletedSet:
+                            cursorIc = ic
+                            cursorSite = 'cursorAtLeft'
+                            break
+                    if cursorIc is not None:
+                        break
+                else:
+                    # The entire sequence is being deleted
+                    cursorPos = firstStmt.pos()
+            if cursorIc is not None:
+                if watchSubs is None:
+                    watchSubs={}
+                watchSubs[cursorIc] = None
         # Before doing the deletion, waste some cycles to scan blocks under removed
         # block-owning and pseudo-block-owning icons for icons whose error highlighting
         # might change as a result of their removal.  Mark them dirty so error
@@ -3742,6 +3819,57 @@ class Window:
             ic.replaceChild(None, ic.siteOf(child))
         for outIcon, inIcon in reconnectList:
             outIcon.replaceChild(inIcon, 'seqOut')
+        if computeCursor:
+            if cursorIc is not None:
+                cursorTopIcon = cursorIc.topLevelParent()
+                if cursorTopIcon not in self.topIcons:
+                    # The cursor icon has been removed.  Check if it's been substituted
+                    newCursorIc = watchSubs[cursorIc]
+                    if newCursorIc is None:
+                        print('removeIcons: Icon designating cursor has disappeared')
+                        cursorIc = None
+                        cursorPos = 100, 100
+                    # The cursor icon has been substituted
+                    elif cursorSite != 'cursorAtLeft':
+                        # All site substitution in removeIcons is exchange between paren
+                        # icons and either tuple icons or operators, or between cprh
+                        # if and for and if and for icons.
+                        if isinstance(newCursorIc, parenicon.CursorParenIcon):
+                            cursorSite = 'argIcon'
+                        elif isinstance(newCursorIc, listicons.TupleIcon):
+                            cursorSite = 'argIcons_0'
+                        elif isinstance(newCursorIc, (opicons.BinOpIcon,
+                                opicons.IfExpIcon)):
+                            cursorSite = newCursorIc.leftArg()
+                        elif isinstance(newCursorIc, (listicons.CprhIfIcon,
+                                blockicons.IfIcon)):
+                            pass  # Sites are same
+                        elif isinstance(newCursorIc, listicons.CprhForIcon):
+                            if cursorSite == 'iterIcons_0':
+                                cursorSite = 'iterIcon'
+                        elif isinstance(newCursorIc, blockicons.ForIcon):
+                            if cursorSite == 'iterIcon':
+                                cursorSite = 'iterIcons_0'
+                        else:
+                            print("removeIcons: Could not convert site for icon "
+                                "substitution")
+                        cursorIc = newCursorIc
+                if cursorSite == 'cursorAtLeft':
+                    cursorIc, cursorSite = expredit.leftmostCursorSite(cursorIc)
+            if cursorIc is not None and cursorSite is not None and \
+                    not cursorIc.hasSite(cursorSite):
+                # We now have now done our best to recover the cursor site, but it does
+                # not exist.  This can happen when deletion removes a series site
+                if iconsites.isSeriesSiteId(cursorSite):
+                    name, idx = iconsites.splitSeriesSiteId(cursorSite)
+                    series = getattr(cursorIc.sites, name)
+                    if isinstance(series, iconsites.IconSiteSeries):
+                        lastSite = iconsites.makeSeriesSiteId(name, len(series) - 1)
+                        cursorIc, cursorSite = icon.rightmostFromSite(cursorIc, lastSite)
+                    else:
+                        print('removeIcons: cursorIc missing requested series site')
+                else:
+                    print('removeIcons: selected cursor icon missing selected site')
         if assembleDeleted:
             # Link the deleted sequences from deletedSeqList (which holds deleted top
             # level icons already ordered and categorized by sequence), leaving alone
@@ -3774,8 +3902,8 @@ class Window:
                     for ic in topIc.traverse(inclStmtComment=True):
                         if ic.layoutDirty:
                             topIc.layoutDirty = True
-            return deletedSeqs
-        return None
+            return cursorIc, cursorSite, cursorPos, deletedSeqs
+        return cursorIc, cursorSite, cursorPos, None
 
     def replaceSelectedIcons(self, selectedSet, insertedSequences):
         """Remove the icons listed in selectDict from the window and replace them with
@@ -4057,6 +4185,18 @@ class Window:
         alwaysConsolidate to True, tells the function to combine the sequences as normal,
         and also to treat atPos as overriding the position for the icon or sequence, as
         opposed to an offset to its existing position."""
+        with entryicon.EntryCreationTracker(self) as entryTracker:
+            cursorIc, cursorSite = self._insertIconsFromSequences(atIcon, atSite,
+                insertedSequences, atPos, asSeries, alwaysConsolidate)
+            lastCreatedEntryIc = entryTracker.getLast()
+            if lastCreatedEntryIc is not None:
+                return lastCreatedEntryIc, None
+            return cursorIc, cursorSite
+
+    def _insertIconsFromSequences(self, atIcon, atSite, insertedSequences, atPos,
+            asSeries, alwaysConsolidate):
+        """Internals of insertIconsFromSequences, freed of having to track entry icons
+        for cursor placement into the complex depths of icon manipulation."""
         # Analyze the inserted sequences to determine what we will be able do with them
         insertingStmtOnlyIcons = insertingNonExprIcons = False
         numExprsInserted = numStmtsInserted = 0
@@ -4777,6 +4917,7 @@ class Window:
         self.undo.addBoundary()
         if cursorSite is None:
             self.cursor.setToText(cursorIcon)
+            self.refresh(cursorIcon.rect, redraw=True)
         else:
             self.cursor.setToIconSite(cursorIcon, cursorSite)
 
@@ -5800,8 +5941,13 @@ def clipboardRepr(icons, offset):
     return repr(seqLists)
 
 def orderTopIcons(topIcons):
-    """Given a list of top icons, returns a list of groups of those icons that appear on
-    the same sequence, in the order in which they appear in that sequence."""
+    """Given a set of top icons, returns a list of groups of those icons that appear on
+    the same sequence, in the order in which they appear in that sequence.  Also orders
+    the sequence lists such that the module sequence (if topIcons contains icons from
+    that) is first, otherwise the sequence containing the icon from topIcons with the
+    lowest y value.  Note that this is not currently a full ordering of the sequences as
+    in _findtSequencesForOutput, since the only caller so far is just using it to decide
+    where to put the cursor after deletion."""
     # Since this can be expensive, short-cut the process for a single icon.  The single
     # icon case is common on its own, and but more importantly, code such as that in
     # replaceIcons that feed removeIcons per-statement, would multiply this expense by
@@ -5809,9 +5955,11 @@ def orderTopIcons(topIcons):
     if len(topIcons) == 0:
         return []
     if len(topIcons) == 1:
-        return [[next(iter(topIcons))]]
+        return [[next(iter(topIcons))]]  # Equivalent of topIcons[0] for a set
     unsequenced = set(topIcons)
     sequences = []
+    firstSeqIdx = None
+    minX = minY = 999999999
     for topIc in topIcons:
         if topIc not in unsequenced:
             continue
@@ -5826,6 +5974,18 @@ def orderTopIcons(topIcons):
                 sequence.append(ic)
                 unsequenced.remove(ic)
         sequences.append(sequence)
+        # Decide the sequence to put first per the function documentation
+        modAnchor = seqStart.prevInSeq()
+        isModSeq = modAnchor is not None and modAnchor is seqStart.window.modSeqIcon
+        firstIcX, firstIcY, _, _ = sequence[0].rect
+        if firstSeqIdx is None or isModSeq or firstIcY < minY or \
+                firstIcY == minY and firstIcX < minX:
+            minX = firstIcX
+            minY = firstIcY
+            firstSeqIdx = len(sequences) - 1
+    # Move sequence we want first to the start of the list
+    firstSeq = sequences.pop(firstSeqIdx)
+    sequences.insert(0, firstSeq)
     return sequences
 
 def findSeries(icons):
