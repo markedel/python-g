@@ -2328,6 +2328,8 @@ def validateCompatibleChild(child, parent, siteOrSeriesName):
         return True  # Anything can have an empty site
     if isEntryIcon(child):
         return True  # Anything can host an entry icon
+    if parent.hasSite(siteOrSeriesName) and parent.isCursorOnlySite(siteOrSeriesName):
+        return False  # Can't put anything but an entry icon on a cursor-only site
     if iconsites.isSeriesSiteId(siteOrSeriesName):
         # Caller can pass either the series name or a site name in the series
         siteOrSeriesName, _ = iconsites.splitSeriesSiteId(siteOrSeriesName)

@@ -2584,31 +2584,42 @@ class Window:
             statIcon, movIcon, siteType, siteName = self.snapped
             if siteName == "stmtComment":
                 rightmostIc, rightmostSite = icon.rightmostSite(statIcon)
-                self.insertIconsFromSequences(rightmostIc, rightmostSite, self.dragging)
+                cursorIc, cursorSite = self.insertIconsFromSequences(rightmostIc,
+                    rightmostSite, self.dragging)
             elif siteType == "input":
                 if evt.state & SHIFT_MASK:
-                    self.insertIconsFromSequences(statIcon, siteName, self.dragging,
-                        asSeries=True)
+                    cursorIc, cursorSite = self.insertIconsFromSequences(statIcon,
+                        siteName, self.dragging, asSeries=True)
                 else:
-                    self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+                    cursorIc, cursorSite = self.insertIconsFromSequences(statIcon,
+                        siteName, self.dragging)
             elif siteType == "attrIn":
-                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+                cursorIc, cursorSite = self.insertIconsFromSequences(statIcon, siteName,
+                    self.dragging)
             elif siteType == "insertInput":
-                self.insertIconsFromSequences(statIcon, siteName, self.dragging,
-                    asSeries=True)
+                cursorIc, cursorSite = self.insertIconsFromSequences(statIcon, siteName,
+                    self.dragging, asSeries=True)
             elif siteType == "cprhIn":
-                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+                cursorIc, cursorSite = self.insertIconsFromSequences(statIcon, siteName,
+                    self.dragging)
             elif siteName in ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
                     'replaceStmtIc', 'replaceStmt', 'replaceComment'):
-                self.replaceSelectedIcons(self.highlightedForReplace, self.dragging)
+                cursorIc, cursorSite = self.replaceSelectedIcons(
+                    self.highlightedForReplace, self.dragging)
             elif siteType == 'seqOut':
-                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+                cursorIc, cursorSite = self.insertIconsFromSequences(statIcon, siteName,
+                    self.dragging)
             elif siteType == 'seqIn' and siteName == 'prefixInsert':
                 # This is the insert site of a line comment, used to convert it to a
                 # statement comment
-                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+                cursorIc, cursorSite = self.insertIconsFromSequences(statIcon, siteName,
+                    self.dragging)
             elif siteType == 'seqIn':
-                self.insertIconsFromSequences(statIcon, siteName, self.dragging)
+                cursorIc, cursorSite = self.insertIconsFromSequences(statIcon, siteName,
+                    self.dragging)
+            else:
+                print('Icons dropped on unrecognized snap site')
+                cursorIc, cursorSite = statIcon, siteName
         else:
             # Not snapped.  Place on window background.  Dropping an entry icon on the
             # top level outside of a sequence may allow it to be removed, since
@@ -2639,9 +2650,12 @@ class Window:
                         arg = subsIc
                     else:
                         topDraggingIcons.append(arg)
-                    if self.cursor.type in ('icon', 'text') and self.cursor.icon is ic:
-                        self.cursor.setToIconSite(arg, cursors.topSite(arg))
             self.addTop(topDraggingIcons)
+            cursorIc, cursorSite = expredit.leftmostCursorSite(topDraggingIcons[0])
+        if cursorSite is None:
+            self.cursor.setToText(cursorIc)
+        else:
+            self.cursor.setToIconSite(cursorIc, cursorSite)
         self.dragging = None
         self.highlightedForReplace = set()
         self.dragTagetModePtrOffset = None
@@ -3906,7 +3920,7 @@ class Window:
         return cursorIc, cursorSite, cursorPos, None
 
     def replaceSelectedIcons(self, selectedSet, insertedSequences):
-        """Remove the icons listed in selectDict from the window and replace them with
+        """Remove the icons listed in selectedSet from the window and replace them with
         those listed in insertedSequences.  Both the removed and inserted icons can be
         disjoint, in which case, replace the topmost (and leftmost if there's a tie)
         contiguous group of icons with icons in insertedSequences, and delete the
@@ -4081,8 +4095,10 @@ class Window:
         else:
             watchedIcon = None
         watchSubs = {watchedIcon:None} if watchedIcon is not None else None
-        self.removeIcons(selectedSet, watchSubs=watchSubs, preserveSite=
-            insertSiteIcon if isinstance(insertSiteIcon, listicons.TupleIcon) else None)
+        with entryicon.EntryCreationTracker(self) as trackRemoveEntries:
+            preserveSite = insertSiteIcon if isinstance(insertSiteIcon,
+                listicons.TupleIcon) else None
+            self.removeIcons(selectedSet, watchSubs=watchSubs, preserveSite=preserveSite)
         if watchedIcon is not None and watchSubs[watchedIcon] is not None:
             # removeIcons did a substitution on the intended insert site
             if recalcInsertSite is not None:
@@ -4165,6 +4181,12 @@ class Window:
                 for comment in removedComments:
                     icon.insertSeq(comment, cursorStmt, before=True)
                     cursorStmt.window.addTop(comment)
+        if not isinstance(cursorIc, entryicon.EntryIcon):
+            placeholderFromRemove = trackRemoveEntries.getLast()
+            if placeholderFromRemove is not None:
+                # If removeIcons generated a placeholder entry icon (and the insertion
+                # didn't) return that as the suggested cursor site
+                return placeholderFromRemove, None
         return cursorIc, cursorSite
 
     def insertIconsFromSequences(self, atIcon, atSite, insertedSequences, atPos=None,

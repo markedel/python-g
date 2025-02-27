@@ -2827,6 +2827,9 @@ def parseExprText(text, window, forSeriesSite=False):
         return "reject:Not a valid delimiter"
     # All but the last character is ok and the last character is a valid delimiter
     if text in ('False', 'None', 'True'):
+        #... Not sure these should be identifiers, but leaving as is, because they're not
+        #    numeric icons, either, as they can have attributes: None.__class__ is legal!
+        #    Probably need a new class for them.
         return nameicons.IdentifierIcon(text, window), delim
     if text in keywords:
         return "reject:%s is a keyword that should not be used in this context" % text
