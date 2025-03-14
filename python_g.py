@@ -174,6 +174,35 @@ seriesInsertIndImg = comn.asciiToImage((
 SERIES_INSERT_IND_X_OFF = 0
 SERIES_INSERT_IND_Y_OFF = 0
 
+# Indicator to add near a snap site to indicate pending prefix insert.  Offsets are from
+# the snapped site position to the top left corner of the image.
+caretInsertIndImg = comn.asciiToImage((
+ "..%..",
+ ".6%6.",
+ ".%5%.",
+ "5%6%5",
+ "32.23",
+ "%5.5%"))
+CARET_INSERT_IND_X_OFF = 0
+CARET_INSERT_IND_Y_OFF = 3
+
+# Indicator to add near a snap site to indicate pending sequence insertion. Offsets are
+# from the snapped site position to the top left corner of the image.
+seqInsertIndImg = comn.asciiToImage((
+ "...   ...",
+ ".. %% ...",
+ ". %%%    ",
+ " %%%%%%% ",
+ "%%%%%%%% ",
+ " %%%%%%% ",
+ ". %%%    ",
+ ".. %% ...",
+ "...   ..."))
+SEQ_INSERT_IND_X_OFF = 0
+SEQ_INSERT_IND_Y_OFF = -4
+
+
+
 startUpTime = time.monotonic()
 
 # Icons which automatically redirect to seqOut site if user attempts to type right-of
@@ -875,6 +904,16 @@ class Window:
         char = cursors.tkCharFromEvt(evt)
         if char is None:
             return
+        if (evt.state & LEFT_MOUSE_MASK or evt.state & RIGHT_MOUSE_MASK):
+            # Eventually we may have key actions during mouse drag, but for now we just
+            # want to ensure that keystroke operations don't interleave unexpectedly.
+            return
+        # A fast user can follow a mouse-button press with a keystroke while we are
+        # still in our double-click wait.  If so, handle the mouse-up actions early, so
+        # that the key operation will happen in the expected order.
+        if self.buttonDownTime is not None and \
+                msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
+            self._delayedBtnUpActions()
         # If there's a cursor displayed somewhere, use it, otherwise, use selection.
         # Except in the case of typeovers, text is either fed directly to an accepting
         # widget using its addText method, or an entry icon is created at the requested
@@ -1128,7 +1167,7 @@ class Window:
             return  # Mouse has not moved sufficiently to start a drag
         # Start a drag
         ic = self.findIconAt(btnX, btnY)
-        siteIcon, site = self.siteAt(*self.buttonDownLoc)
+        siteIcon, site = self.siteAt(self.buttonDownLoc)
         if leftMouse and ic is None and not (siteIcon is not None and shiftPressed):
             # If nothing was clicked, start a rectangular selection
             seqSiteIc = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
@@ -1342,7 +1381,7 @@ class Window:
                     ic = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
                     if ic is None:
                         self.doubleClickFlag = False
-                        self._delayedBtnUpActions(evt)
+                        self._delayedBtnUpActions()
                         return
                     self._select(ic, op="block")
                 else:
@@ -1350,7 +1389,7 @@ class Window:
                             self.buttonDownLoc)
                     if iconToExecute not in self.topIcons:
                         self.doubleClickFlag = False
-                        self._delayedBtnUpActions(evt)
+                        self._delayedBtnUpActions()
                         return
                     self._execute(iconToExecute)
                 self.refreshDirty(addUndoBoundary=True)
@@ -1359,10 +1398,10 @@ class Window:
             # In order to handle double-click, button release actions are run not done
             # until we know that a double-click can't still happen (_delayedBtnUpActions).
             delay = DOUBLE_CLICK_TIME - (msTime() - self.buttonDownTime)
-            self.top.after(delay, self._delayedBtnUpActions, evt)
+            self.top.after(delay, self._delayedBtnUpActions)
         else:
             # Do the button-release actions immediately, double-click wait has passed.
-            self._delayedBtnUpActions(evt)
+            self._delayedBtnUpActions()
 
     def _outputSelectCb(self, evt):
         selection = self.outputPane.tag_ranges(tk.SEL)
@@ -1375,19 +1414,21 @@ class Window:
         self.top.clipboard_append(text, type='STRING')
         self.outputPane.tag_remove(tk.SEL, "0.0", tk.END)
 
-    def _delayedBtnUpActions(self, evt):
+    def _delayedBtnUpActions(self):
         """Button-up actions (which may be delayed to wait for possible double-click)."""
         if self.doubleClickFlag:
             return  # Second click occurred, don't do the delayed action
+        if self.buttonDownTime is None:
+            return
         self.buttonDownTime = None
         if self.buttonDownIcon is None:
             # Clicked on window background, move cursor
-            x, y = self.imageToContentCoord(evt.x, evt.y)
+            x, y = self.buttonDownLoc
             ic = self._leftOfSeq(x, y)
             if ic is not None and ic.posOfSite('seqOut')[1] >= y:
                 self._select(ic, op="hier")
                 return
-            siteIcon, site = self.siteSelected(evt)
+            siteIcon, site = self.siteAt(self.buttonDownLoc)
             if siteIcon:
                 if self.buttonDownState & SHIFT_MASK:
                     self.cursor.selectToSiteOrPart(siteIcon, site)
@@ -1405,10 +1446,10 @@ class Window:
         elif self.buttonDownState & CTRL_MASK:
             self._select(self.buttonDownIcon, 'toggle')
             return
-        action = self._nextProgressiveClickAction(self.buttonDownIcon, evt)
+        action = self._nextProgressiveClickAction(self.buttonDownIcon, self.buttonDownLoc)
         if action == "moveCursor":
             self.unselectAll()
-            siteIcon, site = self.siteSelected(evt)
+            siteIcon, site = self.siteAt(self.buttonDownLoc)
             if siteIcon is not None:
                 self.cursor.setToIconSite(siteIcon, site)
                 self.refreshDirty()
@@ -1418,14 +1459,14 @@ class Window:
             return
         self._select(self.buttonDownIcon, action)
 
-    def _nextProgressiveClickAction(self, clickedIcon, evt):
+    def _nextProgressiveClickAction(self, clickedIcon, btnDownLoc):
         """If an icon was clicked, determine the action to be taken: one of either
         'moveCursor', which implies unselect and (if possible) move the cursor to the
         nearest cursor site; or a selection operation.  Selection operations are
         compatible with the self._select function: 'select': select just the icon,
         'hier': select the icon and its arguments, and 'left': select the expression of
         which the icon is the leftmost argument."""
-        siteIcon, site = self.siteSelected(evt)
+        siteIcon, site = self.siteAt(btnDownLoc)
         siteSelected = self.cursor.type == "icon" and self.cursor.icon is siteIcon
         currentSel = set(self.selectedIcons())
         singleSel = {clickedIcon}
@@ -2335,6 +2376,7 @@ class Window:
                 ic.draw(self.dragImage, style=icon.STYLE_OUTLINE)
         for ic in topDraggingIcons:
             icon.drawSeqRule(ic, image=self.dragImage)
+            icon.drawSeqSiteConnection(ic, image=self.dragImage)
         # Make an additional transparent copy of the drag image to use when snapped to a
         # replacement site
         alphaImage = self.dragImage.getchannel('A')
@@ -2574,6 +2616,39 @@ class Window:
                     y = movIcon.rect[1] + movIcon.sites.output.yOffset + \
                         SERIES_INSERT_IND_Y_OFF
                     dragImage.paste(seriesInsertIndImg, (x, y), mask=seriesInsertIndImg)
+                elif siteType in ('input', 'attrIn', 'cprhIn') and \
+                        sIcon.childAt(siteName) is not None:
+                    if movIcon.hasSite('output'):
+                        indX = movIcon.sites.output.xOffset
+                        indY = movIcon.sites.output.yOffset
+                    elif movIcon.hasSite('attrOut'):
+                        indX = movIcon.sites.attrOut.xOffset
+                        indY = movIcon.sites.attrOut.yOffset - icon.ATTR_SITE_OFFSET
+                    elif movIcon.hasSite('cprhOut'):
+                        indX = movIcon.sites.cprhOut.xOffset
+                        indY = movIcon.sites.cprhOut.yOffset
+                    elif movIcon.hasSite('seqInsert'):  # Can drag for or if to cprh site
+                        indX = movIcon.sites.seqInsert.xOffset
+                        indY = movIcon.sites.seqInsert.yOffset
+                    else:
+                        indX = indY = 0  # Shouldn't happen, but will prevent crash
+                    x = movIcon.rect[0] + indX + CARET_INSERT_IND_X_OFF
+                    y = movIcon.rect[1] + indY + CARET_INSERT_IND_Y_OFF
+                    dragImage.paste(caretInsertIndImg, (x, y), mask=caretInsertIndImg)
+                elif siteType in ('seqIn', 'seqOut'):
+                    if movIcon.hasSite('output'):
+                        indX = movIcon.sites.output.xOffset
+                        indY = movIcon.sites.output.yOffset
+                    elif movIcon.hasSite('seqInsert'):
+                        indX = movIcon.sites.seqInsert.xOffset
+                        indY = movIcon.sites.seqInsert.yOffset
+                        if blockicons.isPseudoBlockIc(movIcon):
+                            indX -= comn.BLOCK_INDENT
+                    else:
+                        indX = indY = 0
+                    x = movIcon.rect[0] + indX + SEQ_INSERT_IND_X_OFF
+                    y = movIcon.rect[1] + indY + SEQ_INSERT_IND_Y_OFF
+                    dragImage.paste(seqInsertIndImg, (x, y), mask=seqInsertIndImg)
         self.drawImage(dragImage, self.contentToImageCoord(snappedX, snappedY))
         self.lastDragImageRegion = dragImageRegion
 
@@ -3348,9 +3423,12 @@ class Window:
         drawStyle = icon.STYLE_OUTLINE if showOutlines else 0
         for ic in self.findIconsInRegion(region, inclSeqRules=True, inclModSeqIcon=True):
             ic.draw(clip=region, style=drawStyle)
-            # Looks better without connectors, but not willing to remove permanently, yet:
-            # if region is None or icon.seqConnectorTouches(topIcon, region):
-            #     icon.drawSeqSiteConnection(topIcon, clip=region)
+            # Since sequenced icons are usually close together, drawing lines along the
+            # innermost scope probably adds more "chart junk" than it contributes to
+            # clarity, so we limit it to outline-mode, where it guides the user to where
+            # snapping will occur.
+            if showOutlines and ic.parent() is None:
+                icon.drawSeqSiteConnection(ic, clip=region)
             if icon.seqRuleTouches(ic, region):
                 icon.drawSeqRule(ic, clip=region)
 
@@ -3483,7 +3561,8 @@ class Window:
         rect is not specified, assume the visible region of the window.  This function
         uses an efficient searching technique, so it is also used to cull candidate icons
         by location, to avoid scanning all icons in the window when location is known. If
-        inclSeqRule is True, includes icons at the start of sequence rules in rect."""
+        inclSeqRule is True, includes icons at the start of sequence rules and sequence
+        connectors in rect."""
         if rect is None:
             left, top = self.scrollOrigin
             width, height = self.image.size
@@ -3529,6 +3608,17 @@ class Window:
                     page.applyOffset()
                 if ic.rect[1] > bottom:
                     break
+            # Sequence site connectors are similar to sequence rules, but don't start
+            # from block owning icons.  Most of the starting icons will already be in the
+            # region's collected icons.  All we ever need to add is first statement icon
+            # above the rectangle, which we can get from seqRuleSeed, which will be a
+            # top-level (statement) icon either within or below the vertical range of the
+            # rectangle.  It's the statement *above* seqRuleSeed, therefore that we test
+            # to for a connector that is visible within the requested rectangle.
+            prevIcon = seqRuleSeed.prevInSeq()
+            if prevIcon is not None and prevIcon not in alreadyCollected and \
+                    icon.seqConnectorTouches(prevIcon, rect):
+                iconsInRegion.append(prevIcon)
         return iconsInRegion
 
     def findIconAt(self, x, y, includeEmptySites=False):
@@ -5520,15 +5610,10 @@ class Window:
             x = seqIc.posOfSite('seqOut')[0]
         return redrawRegion.get(), y, x
 
-    def siteSelected(self, evt):
-        """Look for icon sites near button press, if found return icon and site.
-        Otherwise, returns (None, None)"""
-        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
-        return self.siteAt(btnX, btnY)
-
-    def siteAt(self, btnX, btnY):
-        """Return icon and site if content coordinates btnX, btnY are near a cursor
-        site.  Otherwise, returns (None, None)."""
+    def siteAt(self, buttonLoc):
+        """Return icon and site if content coordinate, buttonLoc, is near a cursor site.
+        Otherwise, returns (None, None)."""
+        btnX, btnY = buttonLoc
         left = btnX - SITE_SELECT_DIST - EMPTY_SITE_EXT_DIST
         right = btnX + SITE_SELECT_DIST
         top = btnY - SITE_SELECT_DIST

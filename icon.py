@@ -42,9 +42,16 @@ stmtAstClasses = {ast.Assign, ast.AugAssign, ast.While, ast.For, ast.AsyncFor, a
  ast.AsyncWith, ast.Delete, ast.Pass, ast.Continue, ast.Break, ast.Global, ast.Nonlocal,
  ast.Import, ast.ImportFrom, ast.Raise}
 
+# Site depths are offsets from the icon (left or right) border.  Sequence sites were
+# originally positioned 1 pixel in from the left and bottom border, which led to the
+# confusing and now deprecated use of SEQ_SITE_DEPTH as a negative number.  Sequence
+# sites are now positioned directly on the bottom icon border and 3 pixels from the left
+# border of most icons, with a few having more 'overhang' for additional graphics (we
+# align the always-drawn parts and allow the more ephemeral border parts to float)
 ATTR_SITE_DEPTH = 1
 OUTPUT_SITE_DEPTH = 2
-SEQ_SITE_DEPTH = -1  # Icons extend 1 pixel to the left of the sequence site
+SEQ_SITE_OFFSET = 3
+SEQ_SITE_DEPTH = -SEQ_SITE_OFFSET
 
 siteDepths = {'input':OUTPUT_SITE_DEPTH, 'output':OUTPUT_SITE_DEPTH,
         'attrOut':ATTR_SITE_DEPTH, 'attrIn':ATTR_SITE_DEPTH,
@@ -64,7 +71,7 @@ PENDING_REMOVE_TINT = (255, 10, 10, 100)
 IMMEDIATE_COPY_TINT = (0, 180, 255, 40)
 BLACK = (0, 0, 0, 255)
 SEQ_RULE_COLOR = (165, 180, 165, 255)
-SEQ_CONNECT_COLOR = (70, 100, 70, 255)
+SEQ_CONNECT_COLOR = (220, 220, 220, 255)
 EMPTY_ARG_COLOR = (255, 0, 0, 30)
 
 EMPTY_ARG_WIDTH = 11
@@ -79,14 +86,19 @@ STYLE_EXEC_ERR = 8
 STYLE_PENDING_REMOVE = 16
 STYLE_IMMEDIATE_COPY = 32
 
-# Pixel offset from input/output site to series insertion site
-SERIES_INSERT_SITE_X_OFFSET = 0
-SERIES_INSERT_SITE_Y_OFFSET = 7
+# Pixel offset from input/output site to series insertion site.  Corresponds to the dot
+# of the comma symbol.  (Note that this is dynamically repositioned at the left and right
+# edges of most series icons)
+SERIES_INSERT_SITE_X_OFFSET = -4
+SERIES_INSERT_SITE_Y_OFFSET = 5
 
 # X distance in pixels from left edge of icon for the icon replacement site.
 REPLACE_SITE_X_OFFSET = 8
 # Y distance in pixels from (center-adjusted) parent site to icon replacement site.
-REPLACE_SITE_Y_OFFSET = 3
+# Replace sites were originally lower, to give better visibility of the replacement vs
+# the dragged icons, but for better site separation for snapping, they are now directly
+# right of the prefix-insert site.
+REPLACE_SITE_Y_OFFSET = 0
 
 # X distance in pixels from left edge of icon for the additional icon replacement site
 # (automatically added by iconsites.makeSnapLists for statement-level icons)
@@ -99,6 +111,12 @@ ATTR_SITE_OFFSET = 4
 # How far (pixels in addition to dragSeqImage.width) to the right of a statement to place
 # the statement comment
 STMT_COMMENT_OFFSET = 4
+
+# Number of pixels of vertical space left below a block-owning icon and the first icon of
+# the block.  This is usually filled by the sequence 'bump' or connector below the icon,
+# but may be empty when the statement arguments take up more vertical space, and elevate
+# the seqOut site above the bottom of the space allocated for the statement.
+BLOCK_SEQ_MARGIN = 2
 
 outSiteImage = comn.asciiToImage((
  "..o",
@@ -236,15 +254,15 @@ dragSeqImage = comn.asciiToImage((
  ".o%%o",
  "..ooo"))
 
-seqSiteImage = comn.asciiToImage((
- "ooo",
- "ooo",
- "ooo"))
-
 branchFootImage = comn.asciiToImage((
  "ooooooooooooooooooooooooooo",
  "ooo                     ooo",
  "ooooooooooooooooooooooooooo"))
+
+seqOutBumpImage = comn.asciiToImage((
+ "o  o  o",
+ "o ooo o",
+ "ooooooo"))
 
 emptyImage = Image.new('RGBA', (0, 0))
 
@@ -1550,8 +1568,8 @@ class BlockEnd(Icon):
     def __init__(self, primary, window=None, location=None):
         Icon.__init__(self, window)
         self.primary = primary
-        self.sites.add('seqIn', 'seqIn', 1 + comn.BLOCK_INDENT, 1)
-        self.sites.add('seqOut', 'seqOut', 1, 1)
+        self.sites.add('seqIn', 'seqIn', 1 + comn.BLOCK_INDENT, 0)
+        self.sites.add('seqOut', 'seqOut', 1, 2)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + branchFootImage.width, y + branchFootImage.height)
 
@@ -1723,75 +1741,123 @@ def incorporateStmtCommentLayouts(layouts, commentLayouts, margin):
         layout.stmtCommentLayout = bestCommentLayout
     return layouts
 
-def drawSeqSites(img, boxLeft, boxTop, boxHeight, indent=None, extendWidth=None):
-    """Draw sequence (in and out) sites on a rectangular boxed icon.  If extendWidth
-    is specified and the icon specifies an indent, build up the icon outline to include
-    the indented sequence site.  The value for extendWidth should be the width of the
-    icon box (how far in x beyond boxLeft to start the extension."""
-    topIndent = 0
-    bottomIndent = 0
-    if indent == "right":
-        bottomIndent = comn.BLOCK_INDENT
-    elif indent == "left":
-        topIndent = comn.BLOCK_INDENT
-    img.putpixel((topIndent + boxLeft + 1, boxTop+1),  comn.OUTLINE_COLOR)
-    img.putpixel((topIndent + boxLeft + 2, boxTop+1), comn.OUTLINE_COLOR)
-    img.putpixel((topIndent + boxLeft + 2, boxTop+2), comn.OUTLINE_COLOR)
-    img.putpixel((topIndent + boxLeft + 1, boxTop+2), comn.OUTLINE_COLOR)
-    bottomSiteY = boxTop + boxHeight - 2
-    img.putpixel((bottomIndent + boxLeft + 1, bottomSiteY), comn.OUTLINE_COLOR)
-    img.putpixel((bottomIndent + boxLeft + 2, bottomSiteY), comn.OUTLINE_COLOR)
-    img.putpixel((bottomIndent + boxLeft + 2, bottomSiteY-1), comn.OUTLINE_COLOR)
-    img.putpixel((bottomIndent + boxLeft + 1, bottomSiteY-1), comn.OUTLINE_COLOR)
-    if indent == "right":
-        extendRight = bottomIndent + boxLeft + 2
-        if extendWidth is not None and extendWidth < extendRight:
-            boxRight = boxLeft + extendWidth - 1
-            boxBottom = boxTop + boxHeight
+def drawSeqSites(ic, img, imgX, imgY, blockIndent=False, boxRightEdge=None):
+    """Draw sequence (in and out) sites on a rectangular boxed icon.  If blockIndent is
+    set to true, also add an extension to the icon body downward by BLOCK_SEQ_MARGIN, and
+    rightward (if necessary) from boxRightEdge to the seqOut site.  Note that
+    boxRightEdge is in the coordinates of img (as opposed to being relative to the icon
+    rectangle), and therefore not offset by imgX."""
+    # Draw seqIn site (will always be on icon body)
+    siteX = ic.sites.seqIn.xOffset - imgX
+    siteY = ic.sites.seqIn.yOffset - imgY
+    img.putpixel((siteX - 1, siteY + 1),  comn.OUTLINE_COLOR)
+    img.putpixel((siteX, siteY + 1 ), comn.OUTLINE_COLOR)
+    img.putpixel((siteX + 1, siteY + 1), comn.OUTLINE_COLOR)
+    img.putpixel((siteX, siteY + 2), comn.OUTLINE_COLOR)
+    # Draw seqOut site.  Block-owners have either a bump or a connector holding the site.
+    siteX = ic.sites.seqOut.xOffset - imgX
+    siteY = ic.sites.seqOut.yOffset - imgY
+    if blockIndent:
+        extRight = siteX + 1
+        if boxRightEdge is not None and boxRightEdge <= extRight:
+            # Add connector rectangle extending to the seqOut site
+            extLeft = boxRightEdge - 4
+            extTop = siteY - BLOCK_SEQ_MARGIN
             draw = ImageDraw.Draw(img)
-            draw.rectangle((boxRight, boxBottom-3, extendRight-2, boxBottom-1),
-             fill=comn.ICON_BG_COLOR,  outline=comn.OUTLINE_COLOR)
-            img.putpixel((boxRight, boxBottom-2), comn.ICON_BG_COLOR)
-        img.putpixel((bottomIndent + boxLeft, bottomSiteY), comn.OUTLINE_COLOR)
-        img.putpixel((bottomIndent + boxLeft, bottomSiteY - 1), comn.OUTLINE_COLOR)
+            draw.rectangle((extLeft, extTop, extRight, siteY),
+                fill=comn.ICON_BG_COLOR,  outline=comn.OUTLINE_COLOR)
+            img.putpixel((extLeft+1, extTop), comn.ICON_BG_COLOR)
+            img.putpixel((extLeft+2, extTop), comn.ICON_BG_COLOR)
+            img.putpixel((extLeft+3, extTop), comn.ICON_BG_COLOR)
+            img.putpixel((extRight - 1, extTop + 1), comn.OUTLINE_COLOR)
+            img.putpixel((extRight - 2, extTop + 1), comn.OUTLINE_COLOR)
+        else:
+            # Add just a bump
+            img.paste(seqOutBumpImage, (siteX - 3, siteY - seqOutBumpImage.height + 1))
+    else:
+        # Just draw the seqOut site with no extra doodads
+        img.putpixel((siteX - 1, siteY - 1), comn.OUTLINE_COLOR)
+        img.putpixel((siteX,     siteY - 1), comn.OUTLINE_COLOR)
+        img.putpixel((siteX + 1, siteY - 1), comn.OUTLINE_COLOR)
+        img.putpixel((siteX,     siteY - 2), comn.OUTLINE_COLOR)
 
-def drawSeqSiteConnection(toIcon, image=None, clip=None):
-    """Draw connection line between ic's seqIn site and whatever it connects."""
-    # Note that this is not currently used.  Since sequenced icons are usually close
-    # together, drawing lines along the innermost scope probably adds more "chart junk"
-    # than it contributes to clarity.  However there may be a critical distance where
-    # this actually helps, so, at least for now, the code remains.
-    fromIcon = toIcon.prevInSeq(includeModuleAnchor=True)
-    if fromIcon is None:
+def drawSeqSiteConnection(fromIcon, image=None, clip=None):
+    """Draw connection line between fromIcon's seqIn site and whatever it connects to.
+    Draws to either the window (from toIcon) or to the specified image.  If clip is
+    specified, clips drawing to the given rectangle."""
+    # Find the top and bottom of the connector at toIcon's seqIn site
+    toIcon = fromIcon.nextInSeq()
+    if toIcon is None:
         return
-    fromX, fromY = fromIcon.posOfSite('seqOut')
-    toX, toY = toIcon.posOfSite('seqIn')
-    if clip is not None:
-        # Clip the line to within the clip rectangle.  This is simplified by the fact
-        # that connections are always vertical and drawn downward from seqOut to seqIn,
-        # and that rectangles are defined ordered left, top, right, bottom.
-        l, t, r, b = clip
-        if fromX < l or fromX > r:
-            return
-        if fromY < t:
-            if toY < t:
-                return
-            fromY = t
-        if toY > b:
-            if fromY > b:
-                return
-            toY = b
+    x, fromY = fromIcon.posOfSite('seqOut')
+    _, toY = toIcon.posOfSite('seqIn')
+    # If drawing to window, translate endpoints and clip rectangle to image coords
     if image is None:
-        draw = fromIcon.window.draw
+        draw = toIcon.window.draw
+        img = toIcon.window.image
+        x, fromY = toIcon.window.contentToImageCoord(x, fromY)
+        _, toY = toIcon.window.contentToImageCoord(x, toY)
+        if clip is not None:
+            l, t = toIcon.window.contentToImageCoord(clip[0], clip[1])
+            r, b = toIcon.window.contentToImageCoord(clip[2], clip[3])
+            clip = l, t, r, b
     else:
         draw = ImageDraw.Draw(image)
-    draw.line((fromX, fromY, toX, toY), SEQ_CONNECT_COLOR)
+        img = image
+    # Combine the specified clip rectangle with the image rectangle to determine the
+    # final clip rectangle
+    if clip is None:
+        clip = 0, 0, img.width, img.height
+    else:
+        l, t, r, b = clip
+        clip = max(0, l), max(0, t), min(img.width, r), min(img.height, b)
+    # Determine which parts to draw, and where to draw them, based solely upon the
+    # distance we're filling (ignoring clipping)
+    if fromY == toY:
+        return
+    topDot = fromY + 1
+    bottomDot = None if toY - fromY < 2 else toY - 1
+    lineTop = fromY + 1
+    lineBottom = toY - 1
+    dotLeft = x - 1
+    dotRight = x + 1
+    # Apply additional clipping based upon the specified clip rectangle
+    if clip is not None:
+        l, t, r, b = clip
+        if dotRight < l or dotLeft > r or lineBottom < t or lineTop > b:
+            return
+        if dotLeft < l:
+            dotLeft = None
+        if dotRight > r:
+            dotRight = None
+        if x < l or x > r:
+            lineTop = None
+        else:
+            lineTop = max(t, lineTop)
+            lineBottom = min(b, lineBottom)
+        if topDot < t or topDot >= b:
+            topDot = None
+        if bottomDot is not None and (bottomDot < t or bottomDot >= b):
+            bottomDot = None
+    # Draw whatever was not clipped out
+    if topDot is not None:
+        if  dotLeft is not None:
+            img.putpixel((dotLeft, topDot), SEQ_CONNECT_COLOR)
+        if dotRight is not None:
+            img.putpixel((dotRight, topDot), SEQ_CONNECT_COLOR)
+    if bottomDot is not None:
+        if  dotLeft is not None:
+            img.putpixel((dotLeft, bottomDot), SEQ_CONNECT_COLOR)
+        if dotRight is not None:
+            img.putpixel((dotRight, bottomDot), SEQ_CONNECT_COLOR)
+    if lineTop is not None:
+        draw.line((x, lineTop, x, lineBottom), SEQ_CONNECT_COLOR)
 
-def seqConnectorTouches(toIcon, rect):
-    """Return True if the icon is connected via its seqIn site and the sequence site
-    connector line intersects rectangle, rect."""
-    fromIcon = toIcon.prevInSeq(includeModuleAnchor=True)
-    if fromIcon is None:
+def seqConnectorTouches(fromIcon, rect):
+    """Return True if the icon is connected via its seqOut site and the sequence site
+    connector line (to the icon below) intersects rectangle, rect."""
+    toIcon = fromIcon.nextInSeq()
+    if toIcon is None:
         return False
     fromX, fromY = fromIcon.posOfSite('seqOut')
     toX, toY = toIcon.posOfSite('seqIn')
@@ -1824,7 +1890,8 @@ def drawSeqRule(ic, clip=None, image=None):
     if not hasattr(ic, 'blockEnd'):
         return
     x, toY = ic.blockEnd.posOfSite('seqOut')
-    fromY = ic.posOfSite('seqOut')[1] + 2
+    toY -= BLOCK_SEQ_MARGIN
+    fromY = ic.posOfSite('seqOut')[1] - 1
     if clip is not None:
         # Clip the line to within the clip rectangle (rules are always vertical and
         # drawn downward and rectangles are ordered left, top, right, bottom).
@@ -2340,6 +2407,28 @@ def validateCompatibleChild(child, parent, siteOrSeriesName):
     else:
         return False
     return True
+
+def chooseOutSeqSites(ic, forDrag):
+    """Takes an icon that has an output site as argument, and decides whether the icon
+    should display its output site, its sequence sites, or both.  Returns two boolean
+    values: 1) whether to display sequence sites and 2) whether to draw its output site.
+    This will also command the icon to draw 'referred' sequence sites, even when its own
+    sequence sites are technically disabled, so that they will show up for icons with
+    input sites coincident with the left margin (such as assignments, naked tuples, and
+    binary operators)."""
+    parent = ic.parent()
+    if parent is None:
+        needSeqSites = True
+    else:
+        highestIc = iconsites.highestCoincidentIcon(ic)
+        if highestIc.parent() is None:
+            needSeqSites = ic.posOfSite('seqIn') == highestIc.posOfSite('seqIn') and \
+                ic.posOfSite('seqOut') == highestIc.posOfSite('seqOut')
+        else:
+            needSeqSites = False
+    needOutSite = ic.parent() is not None or ic.sites.seqIn.att is None and (
+            ic.sites.seqOut.att is None or forDrag)
+    return needSeqSites, needOutSite
 
 def cursorInText(textOriginPos, clickPos, font, text, padLeft=0, padRight=0):
     """Determine if a given window x,y position, clickPos is within a displayed text

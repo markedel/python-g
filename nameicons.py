@@ -33,8 +33,8 @@ class TextIcon(icon.Icon):
         self.sites.add('attrIcon', 'attrIn', bodyWidth,
          bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=cursorOnlyAttrSite)
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         if location is None:
             x, y = 0, 0
         else:
@@ -42,16 +42,14 @@ class TextIcon(icon.Icon):
         self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width, y + bodyHeight)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or toDragImage is not None)
+        needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
         if self.drawList is None:
             img = Image.new('RGBA', (comn.rectWidth(self.rect),
                 comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = icon.iconBoxedText(self.text)
             img.paste(txtImg, (icon.outSiteImage.width - 1, 0))
             if needSeqSites:
-                icon.drawSeqSites(img, icon.outSiteImage.width-1, 0, txtImg.height)
+                icon.drawSeqSites(self, img, 0, 0)
             if needOutSite:
                 outX = self.sites.output.xOffset
                 outY = self.sites.output.yOffset - icon.outSiteImage.height // 2
@@ -353,9 +351,9 @@ class NoArgStmtIcon(icon.Icon):
         bodyHeight = icon.minTxtIconHgt
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
-        seqX = icon.dragSeqImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqX = icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         self.sites.add('attrIcon', 'attrIn', bodyWidth,
             bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=True)
@@ -378,7 +376,7 @@ class NoArgStmtIcon(icon.Icon):
             bodyOffset = icon.dragSeqImage.width - 1
             txtImg = icon.iconBoxedText(self.stmt, icon.boldFont, icon.KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
-            icon.drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            icon.drawSeqSites(self, img, 0, 0)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, bodyHeight//2 -
                         icon.dragSeqImage.height//2))
@@ -460,21 +458,19 @@ class BreakIcon(NoArgStmtIcon):
         icon.Icon.highlightErrors(self, errHighlight)
 
 class SeriesStmtIcon(icon.Icon):
-    def __init__(self, stmt, window, seqIndent=False, requireArg=False,
-            allowTrailingComma=False, location=None):
+    def __init__(self, stmt, window, requireArg=False, allowTrailingComma=False,
+                 location=None):
         icon.Icon.__init__(self, window)
         self.stmt = stmt
-        self.drawIndent = seqIndent
         self.requireArg = requireArg
         self.allowTrailingComma = allowTrailingComma
         bodyWidth = icon.getTextSize(stmt, icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
         bodyHeight = icon.minTxtIconHgt
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
-        seqX = icon.dragSeqImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        seqOutIndent = comn.BLOCK_INDENT if seqIndent else 0
-        self.sites.add('seqOut', 'seqOut', seqX + seqOutIndent, bodyHeight-2)
+        seqX = icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         totalWidth = icon.dragSeqImage.width + bodyWidth
         if self.requireArg:
@@ -496,21 +492,17 @@ class SeriesStmtIcon(icon.Icon):
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = icon.dragSeqImage.width - 1
             img = Image.new('RGBA', (bodyOffset + max(bodyWidth, comn.BLOCK_INDENT+2),
-             bodyHeight), color=(0, 0, 0, 0))
+                bodyHeight), color=(0, 0, 0, 0))
             txtImg = icon.iconBoxedText(self.stmt, icon.boldFont, icon.KEYWORD_COLOR)
             img.paste(txtImg, (bodyOffset, 0))
             inImgX = bodyOffset + bodyWidth - icon.inSiteImage.width
             inImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inImgX, inImageY))
-            if self.drawIndent:
-                icon.drawSeqSites(img, bodyOffset, 0, txtImg.height, indent="right",
-                 extendWidth=txtImg.width)
-            else:
-                icon.drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            bodyTopY = self.sites.seqIn.yOffset
+            icon.drawSeqSites(self, img, 0, bodyTopY)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, bodyHeight // 2 -
                         icon.dragSeqImage.height // 2))
-            bodyTopY = self.sites.seqIn.yOffset - 1
             self.drawList = [((0, bodyTopY), img)]
             # Minimal spines (if list has multi-row layout)
             argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
@@ -543,9 +535,10 @@ class SeriesStmtIcon(icon.Icon):
             heightBelow = max(heightBelow, self.valueList.spineHeight -
                     self.valueList.spineTop)
         self.sites.seqInsert.yOffset = heightAbove
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2 + 1
-        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 2
+        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
+        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1
         height = heightAbove + heightBelow
+        left -= icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
         self.rect = left, top, left + width, top + height
         layout.updateSiteOffsets(self.sites.seqInsert)
         layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
@@ -1001,9 +994,9 @@ class ImportFromIcon(icon.Icon):
         siteYOffset = bodyHeight // 2
         moduleOffset = bodyWidth + icon.dragSeqImage.width-1 - icon.OUTPUT_SITE_DEPTH
         self.sites.add('moduleIcon', 'input', moduleOffset, siteYOffset)
-        seqX = icon.dragSeqImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqX = icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         importsX = icon.dragSeqImage.width + bodyWidth-1 + icon.EMPTY_ARG_WIDTH-1 + \
                    impWidth-1
@@ -1028,10 +1021,10 @@ class ImportFromIcon(icon.Icon):
             fromImgX = bodyOffset + bodyWidth - 1 - icon.inSiteImage.width
             fromImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (fromImgX, fromImageY))
-            icon.drawSeqSites(img, bodyOffset, 0, fromImg.height)
+            icon.drawSeqSites(self, img, 0, self.sites.seqIn.yOffset)
             if needDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
-            self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
+            self.drawList = [((0, self.sites.seqIn.yOffset), img)]
             # "import"
             importImg = icon.iconBoxedText("import", icon.boldFont, icon.KEYWORD_COLOR,
                 typeover=self.typeoverIdx)
@@ -1040,7 +1033,7 @@ class ImportFromIcon(icon.Icon):
             importImgX = importImg.width - icon.inSiteImage.width
             img.paste(icon.inSiteImage, (importImgX, fromImageY))
             importOffset = bodyOffset + bodyWidth - 1 + self.moduleNameWidth - 1
-            self.drawList.append(((importOffset, self.sites.seqIn.yOffset - 1), img))
+            self.drawList.append(((importOffset, self.sites.seqIn.yOffset), img))
             # Commas and possible list simple-spines
             listOffset = importOffset + importWidth - 1 - icon.OUTPUT_SITE_DEPTH
             self.drawList += self.importsList.drawListCommas(listOffset, cntrSiteY)
@@ -1065,8 +1058,8 @@ class ImportFromIcon(icon.Icon):
         heightBelow = max(bodyHeight - bodyHeight // 2,
             self.importsList.spineHeight - self.importsList.spineTop)
         height = heightAbove + heightBelow
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2 + 1
-        self.sites.seqOut.yOffset = heightAbove + bodyHeight // 2 - 1
+        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
+        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1
         self.sites.seqInsert.yOffset = heightAbove
         self.rect = (left, top, left + width, top + height)
         layout.updateSiteOffsets(self.sites.seqInsert)
@@ -1542,9 +1535,9 @@ class YieldIcon(icon.Icon):
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
         self.sites.add('output', 'output', 0, siteYOffset)
-        seqX = icon.outSiteImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqX = icon.outSiteImage.width + icon.SEQ_SITE_OFFSET - 1
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         totalWidth = icon.outSiteImage.width - 1 + bodyWidth
         self.valueList = iconlayout.ListLayoutMgr(self, 'values', bodyWidth-1,
@@ -1553,9 +1546,7 @@ class YieldIcon(icon.Icon):
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or toDragImage is not None)
+        needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
         if self.drawList is None:
             bodyWidth, bodyHeight = self.bodySize
             bodyOffset = icon.outSiteImage.width - 1
@@ -1566,12 +1557,12 @@ class YieldIcon(icon.Icon):
             inImgX = bodyOffset + bodyWidth - icon.inSiteImage.width
             inImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inImgX, inImageY))
+            bodyTopY = self.sites.seqIn.yOffset
             if needSeqSites:
-                icon.drawSeqSites(img, bodyOffset, 0, txtImg.height)
+                icon.drawSeqSites(self, img, 0, bodyTopY)
             if needOutSite:
                 outImageY = bodyHeight // 2 - icon.outSiteImage.height // 2
                 img.paste(icon.outSiteImage, (0, outImageY), mask=icon.outSiteImage)
-            bodyTopY = self.sites.seqIn.yOffset - 1
             self.drawList = [((0, bodyTopY), img)]
             # Minimal spines (if list has multi-row layout)
             argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
@@ -1600,8 +1591,8 @@ class YieldIcon(icon.Icon):
                     self.valueList.spineTop)
         self.sites.output.yOffset = heightAbove
         self.sites.seqInsert.yOffset = heightAbove
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2 + 1
-        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 2
+        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
+        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1
         left = outSiteX - self.sites.output.xOffset
         top = outSiteY - self.sites.output.yOffset
         self.rect = (left, top, left + width, top + heightAbove + heightBelow)
@@ -1732,9 +1723,9 @@ class RaiseIcon(icon.Icon):
         siteYOffset = bodyHeight // 2
         exceptOffset = bodyWidth + icon.dragSeqImage.width-1 - icon.OUTPUT_SITE_DEPTH
         self.sites.add('exceptIcon', 'input', exceptOffset, siteYOffset)
-        seqX = icon.dragSeqImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqX = icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight - 1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         if typeover:
             self.typeoverIdx = 0
@@ -1766,10 +1757,10 @@ class RaiseIcon(icon.Icon):
             inImgX = bodyOffset + bodyWidth - icon.inSiteImage.width
             inImgY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inImgX, inImgY))
-            icon.drawSeqSites(img, bodyOffset, 0, raiseImg.height)
+            icon.drawSeqSites(self, img, 0, self.sites.seqIn.yOffset)
             if needDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY-icon.dragSeqImage.height // 2))
-            self.drawList = [((0, self.sites.seqIn.yOffset - 1), img)]
+            self.drawList = [((0, self.sites.seqIn.yOffset), img)]
             # "from"
             if self.hasFrom:
                 fromImg = icon.iconBoxedText("from", icon.boldFont, icon.KEYWORD_COLOR,
@@ -1779,7 +1770,7 @@ class RaiseIcon(icon.Icon):
                 inImgX = fromImg.width - icon.inSiteImage.width
                 img.paste(icon.inSiteImage, (inImgX, inImgY))
                 importOffset = bodyOffset + bodyWidth - 1 + self.exceptWidth - 1
-                self.drawList.append(((importOffset, self.sites.seqIn.yOffset - 1), img))
+                self.drawList.append(((importOffset, self.sites.seqIn.yOffset), img))
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
         self.dragSiteDrawn = needDragSite
@@ -2045,9 +2036,9 @@ class DecoratorIcon(icon.Icon):
         bodyHeight = icon.minTxtIconHgt
         self.bodySize = (bodyWidth, bodyHeight)
         siteYOffset = bodyHeight // 2
-        seqX = icon.dragSeqImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqX = icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         self.sites.add('argIcon', 'input', bodyWidth - 1, siteYOffset)
         totalWidth = icon.dragSeqImage.width + bodyWidth
@@ -2071,7 +2062,7 @@ class DecoratorIcon(icon.Icon):
             img.paste(txtImg, (bodyOffset, 0))
             inImageY = self.sites.argIcon.yOffset - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (self.sites.argIcon.xOffset, inImageY))
-            icon.drawSeqSites(img, bodyOffset, 0, txtImg.height)
+            icon.drawSeqSites(self, img, 0, 0)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, bodyHeight//2 -
                         icon.dragSeqImage.height//2))

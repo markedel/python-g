@@ -32,24 +32,20 @@ poundImage = comn.asciiToImage((
  " %  %   "), tint=COMMENT_POUND_COLOR)
 
 verticalBlankImage = comn.asciiToImage((
- "..ooooooooooo",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o 9999999 o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..o         o",
- "..ooooooooooo"))
+ "ooooooooooooo",
+ "o o9o       o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o  9        o",
+ "o o9o       o",
+ "ooooooooooooo"))
 
 textCursorHeight = sum(icon.textFont.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
@@ -79,10 +75,10 @@ class CommentIcon(icon.Icon):
         width = int(stringWidth * charWidth) + poundImage.width + 2*icon.TEXT_MARGIN + 1
         height = max(icon.minTxtHgt, (len(self.wrappedString)) * lineSpacing) + 2 * \
             icon.TEXT_MARGIN + 1
-        seqX = icon.dragSeqImage.width
+        seqX = icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
         if not attachedToStmt:
-            self.sites.add('seqIn', 'seqIn', seqX, 1)
-            self.sites.add('seqOut', 'seqOut', seqX, height-2)
+            self.sites.add('seqIn', 'seqIn', seqX, 0)
+            self.sites.add('seqOut', 'seqOut', seqX, height-1)
             self.sites.add('prefixInsert', 'output', seqX-4, height//2, cursorOnly=True)
         self.sites.add('seqInsert', 'seqInsert', 0, icon.minTxtIconHgt // 2)
         if location is None:
@@ -131,7 +127,7 @@ class CommentIcon(icon.Icon):
                 draw.line((line2X, spineTop, line2X, spineBottom), COMMENT_SPINE_COLOR)
             # Sequence sites
             if needSeqSites:
-                icon.drawSeqSites(img, icon.dragSeqImage.width-1, 0, boxHeight)
+                icon.drawSeqSites(self, img, 0, 0)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, icon.minTxtIconHgt // 2 -
                     icon.dragSeqImage.height // 2))
@@ -280,7 +276,7 @@ class CommentIcon(icon.Icon):
         self.rect = (left, top, left + layout.width + icon.dragSeqImage.width - 1,
             top + layout.height)
         if not self.attachedToStmt:
-            self.sites.seqOut.yOffset = layout.height - 2
+            self.sites.seqOut.yOffset = layout.height - 1
             self.sites.prefixInsert.yOffset = lineSpacing // 2
         self.sites.seqInsert.yOffset = icon.minTxtIconHgt // 2
         self.wrappedString = layout.wrappedString
@@ -635,11 +631,10 @@ class VerticalBlankIcon(icon.Icon):
     def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth, bodyHeight = verticalBlankImage.size
-        bodyHeight = icon.minTxtIconHgt
         siteYOffset = bodyHeight // 2
-        seqX = icon.dragSeqImage.width
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqX = icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         totalWidth = icon.dragSeqImage.width + bodyWidth
         x, y = (0, 0) if location is None else location
@@ -658,7 +653,8 @@ class VerticalBlankIcon(icon.Icon):
                     comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             bodyOffset = icon.dragSeqImage.width - 1
             img.paste(verticalBlankImage, (bodyOffset, 0))
-            icon.drawSeqSites(img, bodyOffset, 0, verticalBlankImage.height)
+            # verticalBlankImage already has seq sites embedded (in an overly clever way
+            # so as to allow the visible rule to fully extend from top to bottom)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, verticalBlankImage.height // 2 -
                         icon.dragSeqImage.height // 2))

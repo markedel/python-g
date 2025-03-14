@@ -29,16 +29,14 @@ class CursorParenIcon(icon.Icon):
         self.sites.add('output', 'output', 0, bodyHeight // 2)
         self.sites.add('argIcon', 'input', bodyWidth - 1, self.sites.output.yOffset)
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.canProcessCtx = True
         if closed:
             self.close()
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or toDragImage is not None)
+        needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
         if self.drawList is None:
             bodyWidth, bodyHeight = self.bodySize
             img = Image.new('RGBA', (bodyWidth + icon.outSiteImage.width, bodyHeight),
@@ -50,7 +48,7 @@ class CursorParenIcon(icon.Icon):
             draw.rectangle((bodyLeft, 0, bodyLeft + bodyWidth-1, bodyHeight-1),
              fill=comn.ICON_BG_COLOR, outline=comn.OUTLINE_COLOR)
             if needSeqSites:
-                icon.drawSeqSites(img, bodyLeft, 0, bodyHeight)
+                icon.drawSeqSites(self, img, 0, 0)
             outSiteX = self.sites.output.xOffset
             outSiteY = self.sites.output.yOffset
             outImgY = outSiteY - icon.outSiteImage.height // 2

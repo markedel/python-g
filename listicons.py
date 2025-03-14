@@ -461,23 +461,24 @@ class ListTypeIcon(icon.Icon):
             cursorSkip=True)
         width = self.sites.cprhIcons[-1].xOffset + rightImgFn(0).width
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, height-2)
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, height-1)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
         if closed:
             self.close(typeover)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or toDragImage is not None)
+        needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
+        if isinstance(self, TupleIcon) and self.noParens:
+            # Use 'referred' sequence sites drawn by icon in first argument slot
+            needSeqSites = False
         if self.drawList is None:
             # Left paren/bracket/brace
             leftImg = self.leftImgFn(self.argList.spineHeight)
             leftImgX = min(icon.outSiteImage.width - 1, leftImg.width - 3)
             if needSeqSites:
-                icon.drawSeqSites(leftImg, leftImgX, 0, leftImg.height)
+                icon.drawSeqSites(self, leftImg, 0, 0)
             # Output site
             if needOutSite:
                 outSiteX = self.sites.output.xOffset
@@ -591,7 +592,7 @@ class ListTypeIcon(icon.Icon):
             self.mutableModified = not self.compareData(self.object, compareContent=True)
         self.argList.doLayout(layout)
         self.sites.output.yOffset = self.argList.spineTop
-        self.sites.seqOut.yOffset = self.argList.spineHeight - 2
+        self.sites.seqOut.yOffset = self.argList.spineHeight - 1
         layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         if self.closed:
@@ -1215,6 +1216,19 @@ class TupleIcon(ListTypeIcon):
                 slice=ast.Index(value=ast.Constant(value=0, kind=None, lineno=self.id,
                     col_offset=0)),
                 ctx=ast.Load(), lineno=self.id, col_offset=0))
+
+    def snapLists(self, forCursor=False):
+        # Tweak naked tuple snapList to move site away from (left of) sequence site
+        siteSnapLists = ListTypeIcon.snapLists(self, forCursor)
+        if not self.noParens or self.argList.simpleSpineWillDraw() or 'insertInput' \
+                not in siteSnapLists or len(siteSnapLists) == 0:
+            return siteSnapLists
+        firstInsertSnapSite = list(siteSnapLists['insertInput'][0])
+        insertSiteX, insertSiteY = firstInsertSnapSite[1]
+        insertSiteX -= 6
+        firstInsertSnapSite[1] = (insertSiteX, insertSiteY)
+        siteSnapLists['insertInput'][0] = tuple(firstInsertSnapSite)
+        return siteSnapLists
 
     def clipboardRepr(self, offset, iconsToCopy):
         return self._serialize(offset, iconsToCopy, noParens=self.noParens,

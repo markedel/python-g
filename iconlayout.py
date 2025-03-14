@@ -166,13 +166,15 @@ class ListLayoutMgr:
         inputSites = self.icon.sites.getSeries(self.siteSeriesName)
         if len(inputSites) > 1 or len(inputSites) == 1 and inputSites[0].att is not None:
             x, y = self.icon.rect[:2]
-            x += icon.SERIES_INSERT_SITE_X_OFFSET
             y += icon.SERIES_INSERT_SITE_Y_OFFSET
             minXOffset = inputSites[0].xOffset
             bodySiteXOffset = inputSites[0].xOffset - self.bodySitePositions[0][0]
             bodySiteYOffset = inputSites[0].yOffset - self.bodySitePositions[0][1]
-            for site in inputSites:
-                insertSites.append((self.icon, (x + site.xOffset, y + site.yOffset), site.name))
+            for i, site in enumerate(inputSites):
+                xOff = x + site.xOffset
+                if site.xOffset != minXOffset:
+                    xOff += icon.SERIES_INSERT_SITE_X_OFFSET
+                insertSites.append((self.icon, (xOff, y + site.yOffset), site.name))
             numInputSites = len(inputSites)
             bodySiteIdxs = [idx
                     for idx, site in enumerate(inputSites) if site.xOffset == minXOffset]

@@ -34,8 +34,8 @@ assignDragImage = comn.asciiToImage((
 
 inpSeqImage = comn.asciiToImage((
  "ooo",
- "ooo",
- "ooo",
+ "o o",
+ "o o",
  "o o",
  "o o",
  "o o",
@@ -48,8 +48,8 @@ inpSeqImage = comn.asciiToImage((
  "o o",
  "o o",
  "o o",
- "ooo",
- "ooo",
+ "o o",
+ "o o",
  "ooo"))
 
 equalImage = comn.asciiToImage( (
@@ -79,9 +79,9 @@ class AssignIcon(icon.Icon):
         siteY = inpSeqImage.height // 2
         self.opSize = (opWidth, opHeight)
         tgtSitesX = assignDragImage.width - 3
-        seqSiteX = tgtSitesX + 1
-        self.sites.add('seqIn', 'seqIn', seqSiteX, siteY - inpSeqImage.height // 2 + 1)
-        self.sites.add('seqOut', 'seqOut', seqSiteX, siteY + inpSeqImage.height//2 - 2)
+        seqSiteX = tgtSitesX + 6
+        self.sites.add('seqIn', 'seqIn', seqSiteX, siteY - inpSeqImage.height // 2)
+        self.sites.add('seqOut', 'seqOut', seqSiteX, siteY + inpSeqImage.height // 2 - 1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteY)
         self.tgtLists = [iconlayout.ListLayoutMgr(self, 'targets0', tgtSitesX, siteY,
                 simpleSpine=True, allowsTrailingComma=True)]
@@ -121,11 +121,11 @@ class AssignIcon(icon.Icon):
             for i, tgtList in enumerate(self.tgtLists):
                 self.drawList += tgtList.drawListCommas(tgtSiteX, siteY)
                 spines = tgtList.drawSimpleSpine(tgtSiteX, siteY, drawOutputSite=False)
-                if i == 0 and leftTgtHasSpine:
-                    # If the leftmost target list has a spine, drawing of inpSeqImage
-                    # was skipped, above, and we draw the sequence sites on the spine
-                    leftSpineImg = spines[0][1]
-                    icon.drawSeqSites(leftSpineImg, 0, 0, leftSpineImg.height)
+                # We can no longer draw sequence sites on a simple spine, as they are now
+                # just beyond the spine edge.  Code below if this becomes possible again.
+                # if i == 0 and leftTgtHasSpine:
+                #     (leftSpineX, leftSpineY), leftSpineImg = spines[0]
+                #     icon.drawSeqSites(self, leftSpineImg, leftSpineX, leftSpineY)
                 self.drawList += spines
                 tgtSiteX += tgtList.width - 1
                 self.drawList.append(((tgtSiteX + icon.OUTPUT_SITE_DEPTH,
@@ -180,11 +180,14 @@ class AssignIcon(icon.Icon):
         for tgtList in self.tgtLists:
             insertSites += tgtList.makeInsertSnapList()
         insertSites += self.valueList.makeInsertSnapList()
+        # Adjust the leftmost list-insert site of targets0 further to the left to
+        # deconflict it with the sequence site
+        if len(insertSites) > 0 and insertSites[0][2] == 'targets0_0' and \
+                not self.tgtLists[0].simpleSpineWillDraw():
+            adjX, adjY = insertSites[0][1]
+            adjX -= 6
+            insertSites[0] = (insertSites[0][0], (adjX, adjY), insertSites[0][2])
         siteSnapLists['insertInput'] = insertSites
-        # Snap site for seqOut is too close to snap site for inserting the first target.
-        # Nudge the seqOut site down and to the left to make it easier to snap to
-        ic, (x, y), siteType = siteSnapLists['seqOut'][0]
-        siteSnapLists['seqOut'][0] = (ic, (x-1, y+1), siteType)
         return siteSnapLists
 
     def execute(self):
@@ -314,7 +317,7 @@ class AssignIcon(icon.Icon):
         heightAbove = max(heightAbove, self.valueList.spineTop)
         heightBelow = max(heightBelow, self.valueList.spineHeight-self.valueList.spineTop)
         leftSpineTop = heightAbove - self.tgtLists[0].spineTop
-        self.sites.seqIn.yOffset = leftSpineTop + 1
+        self.sites.seqIn.yOffset = leftSpineTop
         self.sites.seqOut.yOffset = leftSpineTop + self.tgtLists[0].spineHeight - 1
         self.sites.seqInsert.yOffset = heightAbove
         layout.updateSiteOffsets(self.sites.seqInsert)
@@ -472,9 +475,9 @@ class AugmentedAssignIcon(icon.Icon):
         siteYOffset = bodyHeight // 2
         targetXOffset = icon.dragSeqImage.width-1 - icon.OUTPUT_SITE_DEPTH
         self.sites.add('targetIcon', 'input', targetXOffset, siteYOffset)
-        seqX = icon.dragSeqImage.width - 1
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        seqX = icon.dragSeqImage.width - 1 + icon.SEQ_SITE_OFFSET
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         self.sites.add('seqInsert', 'seqInsert', 0, siteYOffset)
         self.targetWidth = icon.EMPTY_ARG_WIDTH
         argX = icon.dragSeqImage.width + self.targetWidth + bodyWidth
@@ -513,7 +516,7 @@ class AugmentedAssignIcon(icon.Icon):
             inImageX = bodyWidth - icon.inSiteImage.width
             inImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inImageX, inImageY))
-            bodyTopY = self.sites.seqIn.yOffset - 1
+            bodyTopY = self.sites.seqIn.yOffset
             self.drawList.append(((bodyOffset, bodyTopY), img))
             # Minimal spines (if list has multi-row layout)
             argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
@@ -544,8 +547,8 @@ class AugmentedAssignIcon(icon.Icon):
             heightBelow = max(heightBelow, self.valuesList.spineHeight -
                     self.valuesList.spineTop)
         self.sites.seqInsert.yOffset = heightAbove
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2 + 1
-        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 2
+        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
+        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1
         height = heightAbove + heightBelow
         self.rect = (left, top, left + width, top + height)
         layout.updateSiteOffsets(self.sites.seqInsert)

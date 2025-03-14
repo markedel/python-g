@@ -418,8 +418,8 @@ def insertListAtSite(atIcon, atSite, seriesIcons, mergeAdjacent=True, cursorLeft
         cursorIcon, cursorSite = rightIcOfLastElem, rightSiteOfLastElem
     mergeLeft = left is not None and firstElem is not None and \
         (atIcon.typeOf(atSite) =='input' or leftSiteIsEmpty(firstElem))
-    mergeRight = right is not None and lastElem is not None and \
-        icon.validateCompatibleChild(right, lastElem, rightSiteOfLastElem)
+    mergeRight = right is not None and rightIcOfLastElem is not None and \
+        icon.validateCompatibleChild(right, rightIcOfLastElem, rightSiteOfLastElem)
     enclosingIcon.replaceChild(left, enclosingSite)
     if mergeLeft:
         # We merge at the highest coincident site to guarantee that it's in the left
@@ -1033,15 +1033,18 @@ def iconPartBeforePointer(stmt, x, y):
     pointer."""
     # Note that because the current representation has icons packed top to bottom, there
     # should be no (non-error) cases where there is no vertically adjacent icon to a
-    # y value within the statement rectangle (.hierRect()) y range.  As such, there is no
-    # code here to handle this (we just return None, as if the point were left of the
-    # first statement), and additional code will be needed to support a representation
-    # that does allow blank vertical space within a statement.
+    # y value within the statement rectangle (.hierRect()) y range, except at either the
+    # top or bottom of the range.  As such, there is no code here to handle this (if we
+    # don't encounter an icon at the given y value, we use the proximity of the point to
+    # top or bottom of the rectangle to choose either the left or right end of the
+    # statement).  If the representation is ever changed to allow blank vertical space
+    # within a statement, additional code will be needed to support it.
     minDistToLeftIc = minDistToRightIc = None
     icOnLeft = icBeforeRight = None
     leftIcPart = icBeforeRightPart = None
     prevIcOrSite = None
     prevIconPart = None
+    icOrSite = partId = None
     for icOrSite, partId in lexicalTraverse(stmt, includeStmtComment=True):
         if isinstance(icOrSite, icon.Icon):
             ic = icOrSite
@@ -1084,6 +1087,12 @@ def iconPartBeforePointer(stmt, x, y):
         return icOnLeft, leftIcPart, onIcon
     elif icBeforeRight:
         return icBeforeRight, icBeforeRightPart, False
+    # We found no parts left or right of the point.  If it's nearer the top of the icon
+    # rectangle, return None.  If it's nearer the bottom, return the last icon and part.
+    if icOrSite is not None:
+        l, t, r, b = stmt.hierRect()
+        if y - t > b - y:
+            return icOrSite,  partId, False
     return None, None, False
 
 def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y):

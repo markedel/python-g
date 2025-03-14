@@ -63,8 +63,9 @@ binOutImage = comn.asciiToImage((
 
 binInSeqImage = comn.asciiToImage((
  "ooo",
- "ooo",
- "ooo",
+ "o o",
+ "o o",
+ "o o",
  "o o",
  "o o",
  "o o",
@@ -75,8 +76,9 @@ binInSeqImage = comn.asciiToImage((
  "oo.",
  "o o",
  "o o",
- "ooo",
- "ooo",
+ "o o",
+ "o o",
+ "o o",
  "ooo"))
 
 floatInImage = comn.asciiToImage((
@@ -147,8 +149,8 @@ class UnaryOpIcon(icon.Icon):
         self.sites.add('output', 'output', 0, siteYOffset)
         self.sites.add('argIcon', 'input', bodyWidth - 1, siteYOffset)
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         if location is None:
             x, y = 0, 0
         else:
@@ -157,9 +159,7 @@ class UnaryOpIcon(icon.Icon):
             y + bodyHeight)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or toDragImage is not None)
+        needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
         if self.drawList is None:
             img = Image.new('RGBA', (comn.rectWidth(self.rect) - icon.EMPTY_ARG_WIDTH,
                 comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
@@ -174,7 +174,7 @@ class UnaryOpIcon(icon.Icon):
             inImageY = self.sites.argIcon.yOffset - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (self.sites.argIcon.xOffset, inImageY))
             if needSeqSites:
-                icon.drawSeqSites(img, bodyLeft, 0, bodyHeight+1)
+                icon.drawSeqSites(self, img, 0, 0)
             if self.operator in ('+', '-', '~'):
                 # Raise unary operators up and move then to the left.  Not sure if this
                 # is safe for all fonts, but the Ariel font we're using pads on top.
@@ -315,8 +315,9 @@ class BinOpIcon(icon.Icon):
         # Note that the attrIcon site is only usable when parens are displayed
         self.sites.add("attrIcon", "attrIn",
          self.leftArgWidth + opWidth - icon.ATTR_SITE_DEPTH, siteYOffset)
-        self.sites.add('seqIn', 'seqIn', - icon.SEQ_SITE_DEPTH, 1)
-        self.sites.add('seqOut', 'seqOut', - icon.SEQ_SITE_DEPTH, height-2)
+        seqX = icon.outSiteImage.width - 1 + icon.SEQ_SITE_OFFSET
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, height-1)
         # Indicates that input site falls directly on top of output site
         self.coincidentSite = 'leftArg'
 
@@ -686,8 +687,8 @@ class DivideIcon(icon.Icon):
         self.sites.add('bottomArg', 'input', 2, outSiteY + emptyArgHeight // 2 + 2)
         self.sites.add('attrIcon', 'attrIn', width - 1, outSiteY + icon.ATTR_SITE_OFFSET)
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
-        self.sites.add('seqIn', 'seqIn', seqX, emptyArgHeight - 2)
-        self.sites.add('seqOut', 'seqOut', seqX, emptyArgHeight + 5)
+        self.sites.add('seqIn', 'seqIn', seqX, emptyArgHeight - 1)
+        self.sites.add('seqOut', 'seqOut', seqX, emptyArgHeight + 6)
         if location is None:
             x, y = 0, 0
         else:
@@ -702,9 +703,7 @@ class DivideIcon(icon.Icon):
         return width, height
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-         self.sites.seqOut.att is None or toDragImage is not None)
+        needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
         if self.drawList is None:
             self.drawList = []
             # Input sites
@@ -724,15 +723,15 @@ class DivideIcon(icon.Icon):
             draw = ImageDraw.Draw(img)
             draw.rectangle((bodyLeft, 0, bodyRight, bodyHeight-1),
              outline=comn.OUTLINE_COLOR, fill=comn.ICON_BG_COLOR)
+            bodyTop = self.sites.output.yOffset - 5
             if needSeqSites:
-                icon.drawSeqSites(img, bodyLeft, 0, bodyHeight)
+                icon.drawSeqSites(self, img, 0, bodyTop)
             if self.floorDiv:
                 cntrX = (bodyLeft + bodyRight) // 2
                 draw.line((bodyLeft + 2, cntrY, cntrX - 1, cntrY), fill=icon.BLACK)
                 draw.line((cntrX + 2, cntrY, bodyRight - 2, cntrY), fill=icon.BLACK)
             else:
                 draw.line((bodyLeft + 2, cntrY, bodyRight - 2, cntrY), fill=icon.BLACK)
-            bodyTop = self.sites.output.yOffset - 5
             if needOutSite:
                 img.paste(icon.outSiteImage, (0, cntrY - icon.outSiteImage.height//2))
             self.drawList.append(((0, bodyTop), img))
@@ -744,8 +743,8 @@ class DivideIcon(icon.Icon):
         self.bottomArgSize = layout.bottomArgSize
         self.sites.output.yOffset = layout.parentSiteOffset
         layout.updateSiteOffsets(self.sites.output)
-        self.sites.seqIn.yOffset = layout.parentSiteOffset - 4
-        self.sites.seqOut.yOffset = layout.parentSiteOffset + 4
+        self.sites.seqIn.yOffset = layout.parentSiteOffset - 5
+        self.sites.seqOut.yOffset = layout.parentSiteOffset + 5
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         width, height = self._size()
         x = outSiteX - self.sites.output.xOffset

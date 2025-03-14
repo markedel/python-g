@@ -88,8 +88,8 @@ class StringIcon(icon.Icon):
         self.sites.add('attrIcon', 'attrIn', bodyWidth,
             bodyHeight // 2 + icon.ATTR_SITE_OFFSET)
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
-        self.sites.add('seqIn', 'seqIn', seqX, 1)
-        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-2)
+        self.sites.add('seqIn', 'seqIn', seqX, 0)
+        self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
         if location is None:
             x, y = 0, 0
         else:
@@ -97,9 +97,7 @@ class StringIcon(icon.Icon):
         self.rect = (x, y, x + bodyWidth + icon.outSiteImage.width, y + bodyHeight)
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
-        needSeqSites = self.parent() is None and toDragImage is None
-        needOutSite = self.parent() is not None or self.sites.seqIn.att is None and (
-            self.sites.seqOut.att is None or toDragImage is not None)
+        needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
         if self.drawList is None:
             boxLeft = icon.outSiteImage.width - 1
             boxWidth = comn.rectWidth(self.rect) - boxLeft
@@ -158,7 +156,7 @@ class StringIcon(icon.Icon):
                     STRING_SPINE_COLOR)
             # Sites
             if needSeqSites:
-                icon.drawSeqSites(img, icon.outSiteImage.width-1, 0, boxHeight)
+                icon.drawSeqSites(self, img, 0, 0)
             if needOutSite:
                 outX = self.sites.output.xOffset
                 outY = self.sites.output.yOffset - icon.outSiteImage.height // 2
@@ -461,7 +459,7 @@ class StringIcon(icon.Icon):
         self.sites.attrIcon.xOffset = rectWidth - 1 - icon.ATTR_SITE_DEPTH
         self.sites.attrIcon.yOffset = bodyHeight // 2 + icon.ATTR_SITE_OFFSET
         self.sites.output.yOffset =  bodyHeight // 2
-        self.sites.seqOut.yOffset = bodyHeight - 2
+        self.sites.seqOut.yOffset = bodyHeight - 1
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         self.wrappedString = layout.wrappedString
         self.drawList = None  # Draw or undraw sequence sites ... refine when sites added
