@@ -58,7 +58,12 @@ DOUBLE_CLICK_TIME = 300
 
 CURSOR_BLINK_RATE = 500
 
+# Nominal range in pixels for snapping to a site
 SNAP_DIST = 8
+
+# We allow snapping to non-mating sites, but apply a multiplier as a 'penalty factor' to
+# the distance between the snapping sites
+NON_MATING_SNAP_PENALTY = 1.8
 
 # Distance to search around icons to find appropriate cursor sites
 SITE_SELECT_DIST = 8
@@ -2466,22 +2471,49 @@ class Window:
                     y -= icon.ATTR_SITE_OFFSET
                 stationaryInputs.append(((x, y), 0, winIcon, 'seqIn', 'stmtComment',
                     lambda snapIc, _: isinstance(snapIc, commenticon.CommentIcon)))
+            if winIcon.parent() is None and winIcon.hasSite('output') and not (
+                    isinstance(winIcon, listicons.TupleIcon) and winIcon.noParens):
+                # Add prefix-insert and list-insert sites to all top-level icons with
+                # output sites (list-insert sites allow users to create naked tuples)
+                x, y = winIcon.posOfSite('output')
+                stationaryInputs.append(((x, y), 0, winIcon, 'input', 'output', None))
+                x += icon.SERIES_INSERT_SITE_X_OFFSET
+                y += icon.SERIES_INSERT_SITE_Y_OFFSET
+                stationaryInputs.append(((x, y), 0, winIcon, 'insertInput',
+                    'output', None))
+                ic, name = icon.rightmostSite(winIcon)
+                x, y = ic.posOfSite(name)
+                y += icon.SERIES_INSERT_SITE_Y_OFFSET
+                if ic.typeOf(name) == 'attrIn':
+                    y -= icon.ATTR_SITE_OFFSET
+                stationaryInputs.append(((x, y), 0, ic, 'insertInput', name, None))
+            if winIcon.parent() is None and winIcon.hasSite('attrOut'):
+                # Add prefix-insert sites to top-level icons with attrOut sites (only for
+                # icons on the window background, as attrs can't be part of sequence)
+                x, y = winIcon.posOfSite('attrOut')
+                x += icon.ATTR_SITE_DEPTH - icon.OUTPUT_SITE_DEPTH
+                y -= icon.ATTR_SITE_OFFSET
+                stationaryInputs.append(((x, y), 0, winIcon, 'input', 'attrOut', None))
         self.snapList = []
         for si in stationaryInputs:
             (sx, sy), sh, sIcon, sSiteType, sName, sTest = si
             matingSites = []
+            nonMatingSites = []
             for siteData in draggingOutputs:
-                if sSiteType in ('input', 'insertInput', 'replaceExprIc') and \
-                        compatibleWithExpr:
-                    if sTest is None or sTest(siteData[1], siteData[2]):
+                if sTest is None or sTest(siteData[1], siteData[2]):
+                    if sSiteType in ('input', 'insertInput', 'replaceExprIc') and \
+                            compatibleWithExpr:
                         matingSites.append(siteData)
-                if sSiteType in ('seqIn', 'seqOut', 'replaceStmtIc', 'replaceStmt'):
-                    if sTest is None or sTest(siteData[1], siteData[2]):
+                    if sSiteType in ('seqIn', 'seqOut', 'replaceStmtIc', 'replaceStmt'):
                         matingSites.append(siteData)
+                    if sSiteType in ('attrIn', 'replaceAttrIc'):
+                        nonMatingSites.append(siteData)
             for siteData in draggingAttrOuts:
-                if sSiteType in ('attrIn', 'replaceAttrIc'):
-                    if sTest is None or sTest(siteData[1], siteData[2]):
+                if sTest is None or sTest(siteData[1], siteData[2]):
+                    if sSiteType in ('attrIn', 'replaceAttrIc'):
                         matingSites.append(siteData)
+                    if sSiteType in ('input', 'replaceExprIc'):
+                        nonMatingSites.append(siteData)
             for siteData in draggingCprhOuts:
                 if sSiteType in ('cprhIn', 'replaceCprhIc'):
                     if sTest is None or sTest(siteData[1], siteData[2]):
@@ -2496,7 +2528,17 @@ class Window:
                     if sTest is None or sTest(ic, name):
                         matingSites.append((pos, ic, name))
             for (dx, dy), dIcon, dName in matingSites:
-                self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sName))
+                self.snapList.append((sx-dx, sy-dy, sh, sIcon, dIcon, sSiteType, sName,
+                    True))
+            for (dx, dy), dIcon, dName in nonMatingSites:
+                if sSiteType in ('attrIn', 'replaceAttrIc'):
+                    xOff = -1
+                    yOff = -icon.ATTR_SITE_OFFSET
+                else:
+                    xOff = 1
+                    yOff = icon.ATTR_SITE_OFFSET
+                self.snapList.append((sx-dx+xOff, sy-dy+yOff, sh, sIcon, dIcon,
+                    sSiteType, sName, False))
         self.snapped = None
         self._updateDrag(evt)
 
@@ -2521,7 +2563,7 @@ class Window:
             wasSnapped = self.snapped
             self.snapped = None
             nearest = SNAP_DIST + 1
-            for sx, sy, sHgt, sIcon, movIcon, siteType, siteName in self.snapList:
+            for sx, sy, sHgt, sIcon, movIcon, siteType, siteName, mated in self.snapList:
                 if sHgt == 0 or y < sy:
                     dist = abs(x-sx) + abs(y-sy)
                 elif y > sy + sHgt:
@@ -2530,6 +2572,8 @@ class Window:
                 else:  # y is vertically within the range of a sequence site
                     dist = abs(x-sx)
                     sy = y
+                if not mated:
+                    dist *= NON_MATING_SNAP_PENALTY
                 if dist < nearest:
                     nearest = dist
                     snappedX = sx
@@ -2606,18 +2650,23 @@ class Window:
             dragImage.paste(self.transparentDragimage, mask=self.transparentDragimage)
         else:
             dragImage.paste(self.dragImage, mask=self.dragImage)
-            # If we're snapped to a list-insertion site, add a visual indicator to cue
-            # the user that dropping will result in a *series* insertion
+            # Add a visual indicator to cue the user as to what type of operation will
+            # happen on drop: comma for series-insert, caret for prefix-insert, and arrow
+            # for sequence insert.
             if self.snapped is not None:
                 sIcon, movIcon, siteType, siteName = self.snapped
                 if siteType == 'insertInput':
-                    x = movIcon.rect[0] + movIcon.sites.output.xOffset + \
-                        SERIES_INSERT_IND_X_OFF
-                    y = movIcon.rect[1] + movIcon.sites.output.yOffset + \
-                        SERIES_INSERT_IND_Y_OFF
+                    if movIcon.hasSite('output'):
+                        indX = movIcon.sites.output.xOffset
+                        indY = movIcon.sites.output.yOffset
+                    else:
+                        indX = indY = 0
+                        print("_updateDrag: adding comma indicator for unexpected snap")
+                    x = movIcon.rect[0] + indX + SERIES_INSERT_IND_X_OFF
+                    y = movIcon.rect[1] + indY + SERIES_INSERT_IND_Y_OFF
                     dragImage.paste(seriesInsertIndImg, (x, y), mask=seriesInsertIndImg)
-                elif siteType in ('input', 'attrIn', 'cprhIn') and \
-                        sIcon.childAt(siteName) is not None:
+                elif siteType in ('input', 'attrIn', 'cprhIn') and (sIcon.childAt(
+                        siteName) is not None or siteName in ('output', 'attrOut')):
                     if movIcon.hasSite('output'):
                         indX = movIcon.sites.output.xOffset
                         indY = movIcon.sites.output.yOffset
@@ -2631,6 +2680,7 @@ class Window:
                         indX = movIcon.sites.seqInsert.xOffset
                         indY = movIcon.sites.seqInsert.yOffset
                     else:
+                        print("_updateDrag: adding caret indicator for unexpected snap")
                         indX = indY = 0  # Shouldn't happen, but will prevent crash
                     x = movIcon.rect[0] + indX + CARET_INSERT_IND_X_OFF
                     y = movIcon.rect[1] + indY + CARET_INSERT_IND_Y_OFF
@@ -2645,6 +2695,7 @@ class Window:
                         if blockicons.isPseudoBlockIc(movIcon):
                             indX -= comn.BLOCK_INDENT
                     else:
+                        print("_updateDrag: adding arrow indicator for unexpected snap")
                         indX = indY = 0
                     x = movIcon.rect[0] + indX + SEQ_INSERT_IND_X_OFF
                     y = movIcon.rect[1] + indY + SEQ_INSERT_IND_Y_OFF
