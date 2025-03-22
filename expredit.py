@@ -51,6 +51,11 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
             # top-level statement on which it is inserting (normally happens implicitly
             # via our calls to replaceTop, but must be done explicitly, here).
             stmtComment = atIcon.hasStmtComment()
+            if not topInsertedIcon.hasSite('seqOut'):
+                # We're inserting an attribute icon
+                entryIc = entryicon.EntryIcon(window=atIcon.window)
+                entryIc.appendPendingArgs([topInsertedIcon])
+                topInsertedIcon = entryIc
             atIcon.window.replaceTop(atIcon, topInsertedIcon, transferStmtComment=False)
             #... there was a case where rightmostSite somehow incorrectly returned an
             #    attribute site of an inserted naked tuple, here, but I can't reproduce
@@ -926,103 +931,6 @@ class LexTrav:
             if stmtComment and self.started and not self.stopped:
                 yield stmtComment, 1
 
-def extendDragTargetLexical(startIcon, pointerX, pointerY):
-    """Return a set of the icons to highlight for replacement as a drag target based on
-    the location pointed to by coordinates pointerX and pointerY (as this is a drag
-    target, these actually represent the dragging icons insert site as opposed to the
-    mouse but we assume that the caller has calculated this for us).  Will always return
-    a set of icons, regardless of the pointer position (never returns None)."""
-    # Figure out the statement (vertically) containing the pointer in the sequence
-    # following (and including) the statement containing startIcon.
-    startIconStmt = startIcon.topLevelParent()
-    lastStmtInSeq = None
-    pointerBeyondSeq = False
-    for stmtIcon in icon.traverseSeq(startIconStmt, includeStartingIcon=True):
-        nextStmt = stmtIcon.nextInSeq()
-        if nextStmt is not None and nextStmt.rect[1] < pointerY:
-            # Safe to skip testing this statement if the next one starts above pointerY
-            continue
-        hierRect = stmtIcon.hierRect()
-        minY = hierRect[1]
-        maxY = hierRect[3]
-        if pointerY < minY:
-            if stmtIcon is startIconStmt:
-                # Pointer is above the starting statement
-                return {startIcon}
-            # Pointer is between the previous statement and this one, which shouldn't be
-            # possible, but handle it, just in case this somehow becomes possible
-            endIconStmt = stmtIcon.prevInSeq()
-            break
-        if pointerY <= maxY:
-            endIconStmt = stmtIcon
-            break
-        lastStmtInSeq = stmtIcon
-    else:
-        # Pointer is beyond the end of the sequence
-        endIconStmt = lastStmtInSeq
-        pointerBeyondSeq = True
-    # Lexically traverse the statement containing the pointer (or preceding it if the
-    # pointer is beyond the end of the last statement (pointerBeyondSeq is True)
-    foundStart = startIconStmt is not endIconStmt
-    minDistToLeftIc = minDistToRightIc = None
-    icOnLeft = icOnRight = None
-    leftIcPart = rightIcPart = None
-    for icOrSite, partId in lexicalTraverse(endIconStmt):
-        if pointerBeyondSeq:
-            lastIc = icOrSite
-            lastIcPart = partId
-            continue
-        if not foundStart:
-            if isSameIcOrSite(icOrSite, startIcon):
-                foundStart = True
-            continue
-        if isinstance(icOrSite, icon.Icon):
-            ic = icOrSite
-            distToLeftIc = ic.partIsLeftOfPoint(partId, pointerX, pointerY)
-            if distToLeftIc is None:
-                distToRightIc = ic.partIsRightOfPoint(partId, pointerX, pointerY)
-                if distToRightIc is None:
-                    continue
-                if minDistToRightIc is None or minDistToRightIc > distToRightIc:
-                    minDistToRightIc = distToRightIc
-                    icOnRight = ic
-                    rightIcPart = partId
-            else:
-                if minDistToLeftIc is None or \
-                        distToLeftIc < minDistToLeftIc:
-                    minDistToLeftIc = distToLeftIc
-                    icOnLeft = ic
-                    leftIcPart = partId
-        else:
-            ic, site = icOrSite
-            distToLeftIc = emptySiteIsLeftOfPoint(ic, site, pointerX, pointerY)
-            if distToLeftIc is None:
-                distToRightIc = emptySiteIsRightOfPoint(ic, site, pointerX, pointerY)
-                if distToRightIc is None:
-                    continue
-                if minDistToRightIc is None or minDistToRightIc > distToRightIc:
-                    minDistToRightIc = distToRightIc
-                    icOnRight = icOrSite
-                    rightIcPart = None
-            else:
-                if minDistToLeftIc is None or \
-                        distToLeftIc < minDistToLeftIc:
-                    minDistToLeftIc = distToLeftIc
-                    icOnLeft = icOrSite
-                    leftIcPart = None
-    if pointerBeyondSeq:
-        rVal = iconsInLexicalRangeByPart(startIcon, lastIc, lastIcPart)
-        return rVal if rVal is not None else {startIcon}
-    elif icOnLeft:
-        rVal = iconsInLexicalRangeByPart(startIcon, icOnLeft, leftIcPart)
-        return rVal if rVal is not None else {startIcon}
-    elif icOnRight:
-        rVal = iconsInLexicalRangeByPart(startIcon, icOnRight, rightIcPart,
-            stopBeforeLast=True)
-        return rVal if rVal is not None else {startIcon}
-    else:
-        return {startIcon}
-
 def iconPartBeforePointer(stmt, x, y):
     """Return the icon, partId, and a flag indicating whether x,y touches it, for the
     icon within the hierarchy under stmt, lexically 'before' point x,y.  It is assumed
@@ -1095,12 +1003,16 @@ def iconPartBeforePointer(stmt, x, y):
             return icOrSite,  partId, False
     return None, None, False
 
-def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y):
+def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y, fwdOnly=False):
     """Returns a selection set (icons and some sites as tuples) in the first value, and
     a cursor position in the second (icon) and third (site) indicating the icons that
     should be selected between the anchor site or part and mouse (per x, y).  The
     cursor icon will be returned as None to indicate an unanchored selection, as will
-    result when the anchor is an icon part and the user is pointing to the same part."""
+    result when the anchor is an icon part and the user is pointing to the same part.
+    If fwdOnly is set to True, only return results lexically forward of the part or site.
+    Note that fwdOnly is currently used only by callers providing anchorPartId and
+    ignoring the returned cursor recommendation, so no effort has been expended on
+    calculating an appropriate cursor site for that case."""
     anchorStmt = topLevelParentOfSelEntry(anchorIc)
     _, anchorMinY, _, anchorMaxY = anchorStmt.hierRect(inclStmtComment=True)
     # Figure out which statement in the same sequence as anchorStmt y falls within
@@ -1139,6 +1051,8 @@ def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y):
             return newSel, lastStmt, 'seqOut'
     else:
         # Pointer is above anchor stmt
+        if fwdOnly:
+            return {anchorIc}, None, None
         pointerDirection = -1
         lastStmt = anchorStmt
         for stmt in icon.traverseSeq(anchorStmt, includeStartingIcon=False, reverse=True):
@@ -1209,6 +1123,8 @@ def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y):
                     pointerDirection = 1
                 else:
                     pointerDirection = -1
+    if fwdOnly and pointerDirection < 0:
+        return {anchorIc}, None, None
     # Now that we know the selection direction, we can resolve the unresolved selection
     # borders (where we're anchored or pointing-to an icon rather than a site) and find
     # the icons to select.

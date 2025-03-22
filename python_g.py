@@ -296,6 +296,8 @@ class Window:
             command=self._saveAsCb)
         menu.add_separator()
         menu.add_command(label="Close", command=self.close)
+        menu.add_separator()
+        menu.add_command(label="Settings...", command=self.settings)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu, underline=0)
         menu.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
@@ -1282,12 +1284,14 @@ class Window:
 
     def _shiftPressCb(self, evt):
         # If the shift key is pressed while dragging icons, we don't want the user to
-        # have to wait for mouse movement to engage target selection
+        # have to wait for mouse movement to engage or disengage target selection, or
+        # switch in and out of replace-mode (as opposed to on the next mouse movement,
+        # which is how _updateDrag is otherwise driven).
         if evt.state & SHIFT_MASK:
             # The shift key repeats, but luckily the KeyPress binding gives us the old
             # state, so we can filter the repeats from the key being held
             return
-        if self.dragging and self.dragTagetModePtrOffset is None:
+        if self.dragging:
             # As noted above, Tkinter dispatches this event before changing the key mask
             # evt.state.  It *might* be safe to just clear the bit in evt, but I can't
             # guarantee that this won't affect the calling Tkinter code, so make a copy.
@@ -1296,10 +1300,11 @@ class Window:
             self._updateDrag(evtCopy)
 
     def _shiftReleaseCb(self, evt):
-        # If the shift key is released while dragging icons, we want to disengage target
-        # selection immediately (as opposed to on the next mouse movement, which is how
-        # updateDrag is otherwise driven).
-        if self.dragging and self.dragTagetModePtrOffset is not None:
+        # If the shift key is released while dragging icons, we don't want the user to
+        # have to wait for mouse movement to engage or disengage target selection, or
+        # switch in and out of replace-mode (as opposed to on the next mouse movement,
+        # which is how _updateDrag is otherwise driven).
+        if self.dragging:
             # Tkinter, for whatever reason, dispatches this event before changing the
             # key mask in evt.state.  While it might be safe to just clear the SHIFT_MASK
             # bit in evt, I can't guarantee that changing it won't affect the calling
@@ -2299,6 +2304,9 @@ class Window:
             return self.cursor.icon.focusOut()
         return True
 
+    def settings(self):
+        appData.displaySettingsDialog()
+
     def _startDrag(self, evt, icons, dragACopy=False):
         btnDownIcPartPos = icon.addPoints(self.buttonDownIcon.rect[:2],
             self.buttonDownIcon.offsetOfPart(self.buttonDownIcPart))
@@ -2512,7 +2520,7 @@ class Window:
                 if sTest is None or sTest(siteData[1], siteData[2]):
                     if sSiteType in ('attrIn', 'replaceAttrIc'):
                         matingSites.append(siteData)
-                    if sSiteType in ('input', 'replaceExprIc'):
+                    if sSiteType in ('input', 'replaceExprIc', 'replaceStmtIc'):
                         nonMatingSites.append(siteData)
             for siteData in draggingCprhOuts:
                 if sSiteType in ('cprhIn', 'replaceCprhIc'):
@@ -2545,25 +2553,66 @@ class Window:
     def _updateDrag(self, evt):
         if not self.dragging:
             return
-        if self.dragTagetModePtrOffset is not None and not evt.state & SHIFT_MASK:
-            # The user has released the shift key: cancel target selection and resume
-            # normal dragging
-            self.dragTagetModePtrOffset = None
-        # If the drag results in mating sites being within snapping distance, change the
-        # drag position to mate them exactly (snap them together)
+        # If we're in drag target selection mode, see if the user has cancelled.  If we
+        # have replace-sites turned ON, holding the shift key continues the mode and
+        # releasing it returns to normal dragging.  If replace-sites are turned OFF,
+        # holding the shift key enters replacement mode, and releasing it when icons
+        # are highlighted for replacement starts target selection mode
         btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+        if appData.settings.createReplaceSites:
+            if self.dragTagetModePtrOffset is not None and not evt.state & SHIFT_MASK:
+                self.dragTagetModePtrOffset = None
+            inReplaceMode = False
+        else:
+            inReplaceMode = evt.state & SHIFT_MASK
+            if self.snapped is not None and self.snapped[2] in ('replaceExprIc',
+                    'replaceAttrIc', 'replaceCprhIc', 'replaceStmtIc', 'replaceStmt'):
+                # We are in replace-mode (which we indicate as being 'snapped' to a
+                # replace site).  Use the state of the Shift key to determine whether to
+                # enter or exit target selection mode.
+                if evt.state & SHIFT_MASK:
+                    self.dragTagetModePtrOffset = None
+                elif self.dragTagetModePtrOffset is None:
+                    self.dragTagetModePtrOffset = dragPtrSitePos(self.snapped[1],
+                        self.dragImageOffset[0], self.dragImageOffset[1])
+        # Determine snapping based on mode: target selection mode, replace mode, or
+        # normal dragging mode.  Replacement via replace sites versus replacement via
+        # replace-mode initiated by Shift key is determined by the createReplaceSites
+        # option controlled by the Settings... dialog ().
         if self.dragTagetModePtrOffset is not None:
-            # If we're in drag-target selection mode, allow the drag image to move, even
+            # We're in drag-target selection mode: allow the drag image to move, even
             # though we're technically snapped to the highlighted site
             snappedX = self.dragImageOffset[0] + btnX
             snappedY = self.dragImageOffset[1] + btnY
+        elif inReplaceMode:
+            # We're in replace mode: find the active site position of the moving icons
+            # and see if it is touching an icon.
+            snappedX = self.dragImageOffset[0] + btnX
+            snappedY = self.dragImageOffset[1] + btnY
+            for sx, sy, sHgt, sIcon, movIcon, siteType, siteName, mated in self.snapList:
+                if siteType in ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
+                        'replaceStmtIc', 'replaceStmt'):
+                    dragPtX, dragPtY = dragPtrSitePos(movIcon, snappedX, snappedY)
+                    partId = sIcon.touchesPosition(dragPtX, dragPtY)
+                    if partId is not None:
+                        self.snapped = sIcon, movIcon, siteType, siteName, partId
+                        break
+            else:
+                self.snapped = None
         else:
+            # We're in normal drag snapping mode: If the drag results in compatible sites
+            # being within snapping distance, change the drag position to mate them
+            # exactly (snap them together)
             x = snappedX = self.dragImageOffset[0] + btnX
             y = snappedY = self.dragImageOffset[1] + btnY
             wasSnapped = self.snapped
             self.snapped = None
             nearest = SNAP_DIST + 1
             for sx, sy, sHgt, sIcon, movIcon, siteType, siteName, mated in self.snapList:
+                if not appData.settings.createReplaceSites and siteType in \
+                        ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
+                        'replaceStmtIc', 'replaceStmt'):
+                    continue
                 if sHgt == 0 or y < sy:
                     dist = abs(x-sx) + abs(y-sy)
                 elif y > sy + sHgt:
@@ -2578,7 +2627,7 @@ class Window:
                     nearest = dist
                     snappedX = sx
                     snappedY = sy
-                    self.snapped = (sIcon, movIcon, siteType, siteName)
+                    self.snapped = sIcon, movIcon, siteType, siteName, 1
             # Commented out code below is useful for debugging snapping
             # if not wasSnapped and self.snapped:
             #     sIcon, movIcon, siteType, siteName = self.snapped
@@ -2587,7 +2636,7 @@ class Window:
             # If the user has pressed the shift key while the dragging icons are snapped
             # to a replace site, switch to drag target selection mode
             if evt.state & SHIFT_MASK and self.snapped is not None:
-                sIcon, movIcon, siteType, siteName = self.snapped
+                sIcon, movIcon, siteType, siteName, _ = self.snapped
                 if siteType in ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
                         'replaceStmtIc', 'replaceStmt'):
                     sIconSnapList = sIcon.snapLists()
@@ -2605,7 +2654,7 @@ class Window:
         # Manage highlighting of icons showing pending replacements
         useTransparentDragImage = False
         if self.dragTagetModePtrOffset is not None:
-            sIcon, movIcon, siteType, siteName = self.snapped
+            sIcon, movIcon, siteType, siteName, partId = self.snapped
             btnToSiteX, btnToSiteY = self.dragTagetModePtrOffset
             pointerX = btnX + btnToSiteX
             pointerY = btnY + btnToSiteY
@@ -2613,21 +2662,23 @@ class Window:
             if siteType == 'replaceStmt':
                 highlightedIcons = expredit.extendDragTargetByStmt(sIcon, pointerX,
                     pointerY)
-            elif pointerX <= snapSiteX and pointerY <= snapSiteY:
+            elif appData.settings.dualMethodImmedSelect and \
+                    pointerX <= snapSiteX and pointerY <= snapSiteY:
                 step = int(math.sqrt((snapSiteX - pointerX)**2 + \
                     (snapSiteY - pointerY)**2) / HIER_SELECT_STEP_DIST)
                 topReplaceIc = expredit.extendDefaultReplaceSite(movIcon, sIcon)
                 highlightedIcons = expredit.extendDragTargetStructural(topReplaceIc, step)
                 useTransparentDragImage = True
             else:
-                highlightedIcons = expredit.extendDragTargetLexical(sIcon, pointerX,
-                    pointerY)
+                highlightedIcons, _, _ = expredit.extendSelectToPointer(sIcon, None,
+                    partId, pointerX, pointerY,
+                    fwdOnly=appData.settings.dualMethodImmedSelect)
         else:
             snappedToReplaceSite = self.snapped is not None and (self.snapped[2] in
                 ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc', 'replaceStmtIc',
                  'replaceStmt') or self.snapped[3] == 'replaceComment')
             if snappedToReplaceSite:
-                sIcon, movIcon, siteType, siteName = self.snapped
+                sIcon, movIcon, siteType, siteName, _ = self.snapped
                 topReplaceIc = expredit.extendDefaultReplaceSite(movIcon, sIcon)
                 highlightedIcons = set(topReplaceIc.traverse(inclStmtComment=
                     self.snapped[2] == 'replaceStmt'))
@@ -2654,51 +2705,26 @@ class Window:
             # happen on drop: comma for series-insert, caret for prefix-insert, and arrow
             # for sequence insert.
             if self.snapped is not None:
-                sIcon, movIcon, siteType, siteName = self.snapped
+                sIcon, movIcon, siteType, siteName, _ = self.snapped
                 if siteType == 'insertInput':
-                    if movIcon.hasSite('output'):
-                        indX = movIcon.sites.output.xOffset
-                        indY = movIcon.sites.output.yOffset
-                    else:
-                        indX = indY = 0
-                        print("_updateDrag: adding comma indicator for unexpected snap")
-                    x = movIcon.rect[0] + indX + SERIES_INSERT_IND_X_OFF
-                    y = movIcon.rect[1] + indY + SERIES_INSERT_IND_Y_OFF
+                    x, y = dragPtrSitePos(movIcon, SERIES_INSERT_IND_X_OFF,
+                        SERIES_INSERT_IND_Y_OFF)
+                    if movIcon.hasSite('attrOut'):
+                        # We don't snap attributes to list-insert sites, but has happened
+                        y -= icon.ATTR_SITE_OFFSET
                     dragImage.paste(seriesInsertIndImg, (x, y), mask=seriesInsertIndImg)
                 elif siteType in ('input', 'attrIn', 'cprhIn') and (sIcon.childAt(
                         siteName) is not None or siteName in ('output', 'attrOut')):
-                    if movIcon.hasSite('output'):
-                        indX = movIcon.sites.output.xOffset
-                        indY = movIcon.sites.output.yOffset
-                    elif movIcon.hasSite('attrOut'):
-                        indX = movIcon.sites.attrOut.xOffset
-                        indY = movIcon.sites.attrOut.yOffset - icon.ATTR_SITE_OFFSET
-                    elif movIcon.hasSite('cprhOut'):
-                        indX = movIcon.sites.cprhOut.xOffset
-                        indY = movIcon.sites.cprhOut.yOffset
-                    elif movIcon.hasSite('seqInsert'):  # Can drag for or if to cprh site
-                        indX = movIcon.sites.seqInsert.xOffset
-                        indY = movIcon.sites.seqInsert.yOffset
-                    else:
-                        print("_updateDrag: adding caret indicator for unexpected snap")
-                        indX = indY = 0  # Shouldn't happen, but will prevent crash
-                    x = movIcon.rect[0] + indX + CARET_INSERT_IND_X_OFF
-                    y = movIcon.rect[1] + indY + CARET_INSERT_IND_Y_OFF
+                    x, y = dragPtrSitePos(movIcon, CARET_INSERT_IND_X_OFF,
+                        CARET_INSERT_IND_Y_OFF)
+                    if movIcon.hasSite('attrOut'):
+                        y -= icon.ATTR_SITE_OFFSET
                     dragImage.paste(caretInsertIndImg, (x, y), mask=caretInsertIndImg)
                 elif siteType in ('seqIn', 'seqOut'):
-                    if movIcon.hasSite('output'):
-                        indX = movIcon.sites.output.xOffset
-                        indY = movIcon.sites.output.yOffset
-                    elif movIcon.hasSite('seqInsert'):
-                        indX = movIcon.sites.seqInsert.xOffset
-                        indY = movIcon.sites.seqInsert.yOffset
-                        if blockicons.isPseudoBlockIc(movIcon):
-                            indX -= comn.BLOCK_INDENT
-                    else:
-                        print("_updateDrag: adding arrow indicator for unexpected snap")
-                        indX = indY = 0
-                    x = movIcon.rect[0] + indX + SEQ_INSERT_IND_X_OFF
-                    y = movIcon.rect[1] + indY + SEQ_INSERT_IND_Y_OFF
+                    x, y = dragPtrSitePos(movIcon, SEQ_INSERT_IND_X_OFF,
+                        SEQ_INSERT_IND_Y_OFF)
+                    if blockicons.isPseudoBlockIc(movIcon):
+                        x -= comn.BLOCK_INDENT
                     dragImage.paste(seqInsertIndImg, (x, y), mask=seqInsertIndImg)
         self.drawImage(dragImage, self.contentToImageCoord(snappedX, snappedY))
         self.lastDragImageRegion = dragImageRegion
@@ -2707,7 +2733,7 @@ class Window:
         topDraggingIcons = [ic for seq in self.dragging for ic in seq]
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
-            statIcon, movIcon, siteType, siteName = self.snapped
+            statIcon, movIcon, siteType, siteName, _ = self.snapped
             if siteName == "stmtComment":
                 rightmostIc, rightmostSite = icon.rightmostSite(statIcon)
                 cursorIc, cursorSite = self.insertIconsFromSequences(rightmostIc,
@@ -3073,13 +3099,15 @@ class Window:
             return
         pointerX, pointerY = self.imageToContentCoord(evt.x, evt.y)
         startX, startY = self.buttonDownLoc
-        if pointerX <= startX and pointerY <= startY:
+        if appData.settings.dualMethodImmedSelect and \
+                pointerX <= startX and pointerY <= startY:
             step = int(math.sqrt((startX - pointerX)**2 + \
                 (startY - pointerY)**2) / HIER_SELECT_STEP_DIST)
             newSel = expredit.extendDragTargetStructural(self.immediateDragAnchorIc, step)
         else:
             newSel, _, _ = expredit.extendSelectToPointer(self.immediateDragAnchorIc,
-                None, self.immediateDragAnchorPartId, pointerX, pointerY)
+                None, self.immediateDragAnchorPartId, pointerX, pointerY,
+                fwdOnly=appData.settings.dualMethodImmedSelect)
         oldSel = self.immediateDragHighlight
         self.immediateDragHighlight = newSel
         redrawRect = comn.AccumRects()
@@ -3756,11 +3784,10 @@ class Window:
         """Internals of remove icons, returning a cursor position, rather than setting
         it, and not attempting to move the cursor into created placeholder(s)."""
         # If parameter 'icons' is not already a set, turn it into one to more efficiently
-        # determines if an icon is on the deleted list.
-        if isinstance(icons, set):
-            deletedSet = icons
-        else:
-            deletedSet = set(icons)
+        # determines if an icon is on the deleted list.  If it is already one, make a
+        # copy, since we end up making a (stupid, minor) modification to sync block-end
+        # selection status with their owners.
+        deletedSet = set(icons)
         # Find the top icons of the statement hierarchy for the icons being deleted, and
         # also ensure that block-ends mirror their owners in the deleted set (normally
         # block ends do match their owners, but they can apparently get out of sync).
@@ -4221,7 +4248,7 @@ class Window:
                         removedComments.append(stmtComment)
                     if stmt is endStmt:
                         break
-                    stmt = stmt.nextinSeq()
+                    stmt = stmt.nextInSeq()
         # Remove the selected icons
         self.requestRedraw(firstStmtOfSelection.hierRect())
         stmtBeforeSelection = firstStmtOfSelection.prevInSeq()
@@ -6007,6 +6034,8 @@ class App:
         self.newWindow()
         self.frameCount = 0
         self.blinkCancelId = None
+        self.settings = Settings()
+        self.settingsDialog = None
         #self.animate()
 
     def mainLoop(self):
@@ -6036,6 +6065,16 @@ class App:
         else:
             window.close()
 
+    def displaySettingsDialog(self):
+        if self.settingsDialog is None:
+            self.settingsDialog = SettingsDialog(self.root, self.settings)
+        self.settingsDialog.top.lift()
+        self.settingsDialog.top.focus_force()
+
+    def closeSettingsDialog(self):
+        self.settingsDialog.top.destroy()
+        self.settingsDialog = None
+
     def resetBlinkTimer(self, holdTime=CURSOR_BLINK_RATE):
         """Cancel the next cursor blink and reschedule it for holdTime milliseconds in
         the future."""
@@ -6056,6 +6095,62 @@ class App:
             if window.winName == filename:
                 return window
         return None
+
+class SettingsDialog:
+    def __init__(self, master, settings):
+        self.top = tk.Toplevel(master)
+        self.settings = settings
+        self.top.title('Settings')
+        # outerFrame = tk.Frame(self.top)
+        rsFrame = tk.Frame(self.top)
+        rsFrame.grid(row=0, column=0, sticky=tk.W)
+        label = tk.Label(rsFrame, text="Add sites for drag-replace:")
+        label.grid(row=0, column=0, columnspan=2, sticky=tk.W)
+        self.rsType = tk.StringVar(self.top, 'sites' if self.settings.createReplaceSites
+            else 'shift')
+        btn = tk.Radiobutton(rsFrame, text="Use Shift key", variable=self.rsType,
+            value='shift')
+        btn.grid(row=1, column=0, sticky=tk.W)
+        btn = tk.Radiobutton(rsFrame, text="Use replace sites", variable=self.rsType,
+            value='sites')
+        btn.grid(row=1, column=1, sticky=tk.W)
+        rsFrame.columnconfigure(0, weight=0)
+        rsFrame.columnconfigure(0, weight=1)
+        isFrame = tk.Frame(self.top)
+        isFrame.grid(row=1, column=0, sticky=tk.W)
+        label = tk.Label(isFrame, text="Immediate/drag-target selection method:")
+        label.grid(row=0, column=0, columnspan=2)
+        self.immedSel = tk.StringVar(self.top, 'dual' if
+            self.settings.dualMethodImmedSelect else 'lexical')
+        btn = tk.Radiobutton(isFrame, text="Split lexical/structural",
+            variable=self.immedSel, value='dual')
+        btn.grid(row=1, column=0, sticky=tk.W)
+        btn = tk.Radiobutton(isFrame, text="Fully lexical", variable=self.immedSel,
+            value='lexical')
+        btn.grid(row=1, column=1, sticky=tk.W)
+        isFrame.columnconfigure(0, weight=1)
+        isFrame.columnconfigure(0, weight=0)
+        btnFrame = tk.Frame(self.top)
+        btnFrame.grid(row=2, column=0)
+        cancelBtn = tk.Button(btnFrame, text='Cancel', command=self.cancel)
+        cancelBtn.grid(row=0, column=0)
+        acceptBtn = tk.Button(btnFrame, text='Accept', command=self.accept)
+        acceptBtn.grid(row=0, column=1)
+        self.top.bind("<Escape>", self.cancel)
+        self.top.bind("<Return>", self.accept)
+
+    def cancel(self, evt=None):
+        appData.closeSettingsDialog()
+
+    def accept(self, evt=None):
+        self.settings.createReplaceSites = self.rsType.get() == 'sites'
+        self.settings.dualMethodImmedSelect = self.immedSel.get() == 'dual'
+        appData.closeSettingsDialog()
+
+class Settings:
+    def __init__(self):
+        self.createReplaceSites = False
+        self.dualMethodImmedSelect = True
 
 def isStmtComment(ic):
     return isinstance(ic, commenticon.CommentIcon) and ic.attachedToStmt is not None
@@ -6448,6 +6543,23 @@ def emptySitesInRect(ic, rect):
                             rVal = []
                         rVal.append((ic, site.name))
     return rVal
+
+def dragPtrSitePos(topDragIcon, dragImgPosX, dragImgPosY):
+    """In a drag operation, there is now a single icon site whose position determines
+    where all of the dragging icons will be inserted (if it gets snapped).  The drag
+    operations record this icon, but not the reference site, which must be inferred from
+    the type of icon.  This function infers the site and returns the site position in
+    the drag image, offset by (dragImgPosX, dragImgPosY)."""
+    for s in ('output', 'attrOut', 'cprhOut', 'seqInsert'):
+        if topDragIcon.hasSite(s):
+            dragSite = getattr(topDragIcon.sites, s)
+            x = dragSite.xOffset + topDragIcon.rect[0]
+            y = dragSite.yOffset + topDragIcon.rect[1]
+            break
+    else:
+        print('Could not identify active site of dragging icon')
+        x, y = topDragIcon.rect[:2]
+    return x + dragImgPosX, y + dragImgPosY
 
 class StreamToTextWidget:
     """Imitate an output text stream and append any text written to it to a specified
