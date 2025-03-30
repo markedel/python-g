@@ -205,7 +205,7 @@ class StringIcon(icon.Icon):
             if not (prevChar.isalnum() and removedText.isalnum() or
                     prevChar.isspace() and removedText.isspace()):
                 self.window.undo.addBoundary()
-        self.cursorPos = fromPos
+        self.setCursorPos(fromPos)
         return True
 
     def insertText(self, text, insertPos, undoFwdDelete=False):
@@ -234,9 +234,9 @@ class StringIcon(icon.Icon):
             # are always worthy of undo
             self.window.undo.addBoundary()
         if undoFwdDelete:
-            self.cursorPos = insertPos
+            self.setCursorPos(insertPos)
         else:
-            self.cursorPos = insertPos + len(text)
+            self.setCursorPos(insertPos + len(text))
         return True
 
     def addText(self, text):
@@ -397,9 +397,9 @@ class StringIcon(icon.Icon):
             if self.string == '':
                 removeEmptyAttrOnlyIcon(self)
             else:
-                self.cursorPos = -1
+                self.setCursorPos(-1)
         elif self.cursorPos <= -1:
-            self.cursorPos = 0
+            self.setCursorPos(0)
             self.focusOut()
             self.window.cursor.setToBestCoincidentSite(self, 'output')
             self.window.undo.addBoundary()
@@ -421,7 +421,7 @@ class StringIcon(icon.Icon):
                 else:
                     self.window.cursor.setToIconSite(parent, parent.siteOf(self))
             else:
-                self.cursorPos -= 1
+                self.setCursorPos(self.cursorPos - 1)
         elif direction == "Right":
             if self.cursorPos == len(self.string):
                 # Move cursor out of string icon.  Note the special case for attached
@@ -433,9 +433,9 @@ class StringIcon(icon.Icon):
                 else:
                     self.window.cursor.setToIconSite(self, 'attrIcon')
             elif self.cursorPos < 0:
-                self.cursorPos = 0
+                self.setCursorPos(0)
             else:
-                self.cursorPos += 1
+                self.setCursorPos(self.cursorPos + 1)
         elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
             newY = y + lineSpacing * {'Up': -1, 'Down': 1}[direction]
@@ -493,7 +493,7 @@ class StringIcon(icon.Icon):
     def backspace(self, siteId, evt):
         if siteId != 'attrIcon':
             return
-        self.cursorPos = len(self.string)
+        self.setCursorPos(len(self.string))
         self.window.cursor.setToText(self)
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
@@ -648,6 +648,8 @@ class StringIcon(icon.Icon):
         else:
             self.cursorPos = max(-1, min(len(self.string), pos))
         self._updateTypeoverState()
+        if self.window.cursor.type == 'text' and self.window.cursor.icon is self:
+            self.window.requestScroll('cursor')
 
     def isDocStringIcon(self):
         if not self.hasSite('seqIn'):

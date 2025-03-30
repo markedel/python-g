@@ -244,7 +244,7 @@ class CommentIcon(icon.Icon):
                 else:
                     self.window.cursor.setToIconSite(self, 'prefixInsert')
             else:
-                self.cursorPos -= 1
+                self.setCursorPos(self.cursorPos - 1)
         elif direction == "Right":
             if self.cursorPos == len(self.string):
                 # Move the cursor out of the icon
@@ -256,7 +256,7 @@ class CommentIcon(icon.Icon):
                 else:
                     self.window.cursor.setToIconSite(self, 'seqOut')
             else:
-                self.cursorPos += 1
+                self.setCursorPos(self.cursorPos + 1)
         elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
             newY = y + lineSpacing * {'Up':-1, 'Down':1}[direction]
@@ -416,6 +416,8 @@ class CommentIcon(icon.Icon):
             self.cursorPos = len(self.string)
         else:
             self.cursorPos = max(0, min(len(self.string), pos))
+        if self.window.cursor.type == 'text' and self.window.cursor.icon is self:
+            self.window.requestScroll('cursor')
 
     def markLayoutDirty(self):
         if self.attachedToStmt:
@@ -569,9 +571,9 @@ class CommentIcon(icon.Icon):
         if cursor.icon is otherComment and cursor.type in('text', 'icon'):
             otherPos = 0 if cursor.type == 'icon' else otherComment.cursorPos
             if before:
-                self.cursorPos = otherPos
+                self.setCursorPos(otherPos)
             else:
-                self.cursorPos = originalTextLen + len(sep) + otherPos
+                self.setCursorPos(originalTextLen + len(sep) + otherPos)
             cursor.setToText(self, placeEntryText=False)
         self.markLayoutDirty()
 
@@ -608,7 +610,7 @@ class CommentIcon(icon.Icon):
         self.string = self.string[:pos] + text + self.string[pos:]
         if moveCursorTo is not None:
             movedCursorFrom = self.cursorPos
-            self.cursorPos = moveCursorTo
+            self.setCursorPos(moveCursorTo)
         else:
             movedCursorFrom = None
         self.window.undo.registerCallback(self._removeText, pos, pos + len(text),
@@ -621,7 +623,7 @@ class CommentIcon(icon.Icon):
         self.string = self.string[:fromPos] + self.string[toPos:]
         if moveCursorTo is not None:
             movedCursorFrom = self.cursorPos
-            self.cursorPos = moveCursorTo
+            self.setCursorPos(moveCursorTo)
         else:
             movedCursorFrom = None
         self.window.undo.registerCallback(self._insertText, fromPos, removedText,

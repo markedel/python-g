@@ -122,6 +122,13 @@ TYPING_ERR_HOLD_TIME = 5000
 # enough to read but light enough to be able to make out text underneath, which allows
 # users to see icons highlighted for replacement.
 DRAG_OVLY_OPACITY = 0.25
+# Number of pixels around the drag insertion point to bring into view via autoscroll as
+# the user drags icons around the window.
+DRAG_AUTOSCROLL_MARGIN = 9
+# Number of pixels per millisecond to scroll during autoscroll per pixel of distance of
+# the pointer from the edge of the window.  For example: 1 pixel out, the speed is .015
+# pixels/msec, but at 10 pixels out it is .15 pixels/msec (150 pixels/sec).
+AUTOSCROLL_SPEED_FACTOR = .015
 
 # anchorImage = comn.asciiToImage((
 #  ".......6%%6.......",
@@ -241,7 +248,7 @@ noAppendIcons = {blockicons.ElseIcon, blockicons.TryIcon, blockicons.FinallyIcon
 
 def msTime():
     """Return a millisecond-resolution timestamp"""
-    return int(time.monotonic() - startUpTime * 1000)
+    return int((time.monotonic() - startUpTime) * 1000)
 
 def makeRect(pos1, pos2):
     """Make a rectangle tuple from two points (our rectangles are ordered)"""
@@ -369,6 +376,10 @@ class Window:
         self.top.bind("<KeyPress-Shift_R>", self._shiftPressCb)
         self.top.bind("<KeyRelease-Shift_L>", self._shiftReleaseCb)
         self.top.bind("<KeyRelease-Shift_R>", self._shiftReleaseCb)
+        self.top.bind("<KeyPress-Control_L>", self._ctrlPressCb)
+        self.top.bind("<KeyPress-Control_R>", self._ctrlPressCb)
+        self.top.bind("<KeyRelease-Control_L>", self._ctrlReleaseCb)
+        self.top.bind("<KeyRelease-Control_R>", self._ctrlReleaseCb)
         self.imgFrame.grid(row=0, column=0, sticky=tk.NSEW)
         self.xScrollbar = tk.Scrollbar(iconFrame, orient=tk.HORIZONTAL,
             width=SCROLL_BAR_WIDTH, command=self._xScrollCb)
@@ -419,14 +430,17 @@ class Window:
         self.buttonDownIcPart = None
         self.doubleClickFlag = False
         self.dragging = None
+        self.dragIcon = None
         self.dragTagetModePtrOffset = None
         self.dragImageOffset = None
         self.dragImage = None
+        self.dragModeModifierState = None
         self.snapped = None
         self.transparentDragimage = None
         self.lastDragImageRegion = None
         self.highlightedForReplace = set()
         self.inRectSelect = False
+        self.inToggleMode = False
         self.inImmediateRectSelect = False
         self.lastRectSelect = None  # Note, in image coords (not content)
         self.inStmtSelect = False
@@ -478,6 +492,14 @@ class Window:
         self.activeTypeovers = set()
         # Accumulates screen area needing refresh, to be processed by refreshDirty()
         self.refreshRequests = comn.AccumRects()
+        # Pending request for autoscroll, set via self.requestScroll(), and processed via
+        # self.refreshDirty().  Value depends upon type of scroll requested.
+        self.scrollRequest = None
+        # Time of the last autoscroll operation, used for speed control
+        self.autoscrollTimestamp = None
+        # ID of tkinter callback request for calling _updateDrag while the mouse is
+        # outside of the window (and not moving) to continue autoscroll
+        self.pendingAutoscroll = None
         # Set if icons marked with dirty layouts should also be run through redundant
         # parenthesis removal.
         self.redundantParenFilterRequested = False
@@ -688,6 +710,10 @@ class Window:
             self._endImmediateSelDrag()
             self.buttonDownTime = None
             return
+        elif self.inStmtSelect:
+            self._endStmtSelect()
+            self.buttonDownTime = None
+            return
         elif msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
             # In order to handle double-click, button release actions are not done
             # until we know that a double-click can't still happen (_delayedBtnUpActions).
@@ -787,8 +813,29 @@ class Window:
             self.top.title(WIN_TITLE_PREFIX + self.winName)
 
     def _configureCb(self, evt):
-        """Called when window is initially displayed or resized"""
+        """Called when window is initially displayed or resized, and also when scroll
+        bars appear and disappear"""
         if evt.width != self.image.width or evt.height != self.image.height:
+            # If we add or remove the horizontal scroll bar during autoscroll, it will
+            # drastically affect the scrolling speed.  Detect that, here, and jump the
+            # mouse pointer up or down to match  (The vertical scroll bar won't appear or
+            # disappear during autoscroll as it depends only on content.)  Note that in
+            # the case of dragging icons, the pointer position is not what we're basing
+            # autoscrolling on, hence the ugly calculation just to ensure that the user
+            # is autoscrolling downward (below the bottom of the window where the scroll
+            # bar will affect it).
+            if self.pendingAutoscroll is not None:
+                heightChange = evt.height - self.image.height
+                if abs(heightChange) == SCROLL_BAR_WIDTH - 1:
+                    if self.dragging and self.dragIcon is not None:
+                        _, ptrY = dragPtrSitePos(self.dragIcon, 0,
+                            self.top.winfo_pointery() - self.top.winfo_rooty())
+                        ptrY += DRAG_AUTOSCROLL_MARGIN
+                    else:
+                        ptrY = self.top.winfo_pointery() - self.top.winfo_rooty()
+                    if ptrY >= self.image.height:
+                        nudgeMouseCursor(0, heightChange)
+            # Re-allocate the backing store to fit the new window size.
             self.image = Image.new('RGB', (evt.width, evt.height), color=WINDOW_BG_COLOR)
             self.draw = ImageDraw.Draw(self.image)
         self._updateScrollRanges()
@@ -900,6 +947,105 @@ class Window:
             self.scrollOrigin = scrollOriginX, yMin + int((yMax - yMin) * float(fract))
         self._updateScrollRanges()
         self.refresh(redraw=True)
+
+    def scrollTo(self, scrollToRect, redraw=True):
+        """Scroll the window such that scrollToRect is brought into view."""
+        left, top = self.scrollOrigin
+        right = left + self.image.width
+        bottom = top + self.image.height
+        reqLeft, reqTop, reqRight, reqBottom = scrollToRect
+        xMin, yMin, xMax, yMax = self.scrollExtent
+        newXOrigin = newYOrigin = None
+        if reqLeft < left:
+            newXOrigin = max(reqLeft, xMin)
+        elif reqRight > right:
+            newXOrigin = min(reqRight, xMax) - self.image.width
+        if reqTop < top:
+            newYOrigin = max(reqTop, yMin)
+        elif reqBottom > bottom:
+            newYOrigin = min(reqBottom, yMax) - self.image.height
+        if newXOrigin is None and newYOrigin is None:
+            return False
+        if newXOrigin is None:
+            self.scrollOrigin = left, newYOrigin
+        elif newYOrigin is None:
+            self.scrollOrigin = newXOrigin, top
+        else:
+            self.scrollOrigin = newXOrigin, newYOrigin
+        self._updateScrollRanges()
+        if redraw:
+            self.refresh(redraw=True)
+        return True
+
+    def scrollToCursor(self, redraw=True):
+        cursorOutline = self.cursor.getOutline(addAutoscrollMargin=True)
+        if cursorOutline is None:
+            return False
+        return self.scrollTo(cursorOutline, redraw=redraw)
+
+    def autoscrollToward(self, scrollToRect, redraw=True):
+        """Begin or continue speed-controlled autoscrolling toward the farthest point in
+        scrollToRect from the the viewable area of the window.  If scrollToRect is
+        entirely inside of the window or if the window is already scrolled as far as it
+        can go the that direction, returns False.  Otherwise it returns True.  It is up
+        to the caller to manage periodic calls, but the return value is intended to
+        indicate whether it should schedule an idle or timer callback.  I "strongly*
+        recommend an idle callback (tkinter after_idle method), as tkinter updates the
+        scroll bars in it's internal (slightly higher priority) equivalent, and too short
+        a timeout can lock it out, leaving the scroll bars frozen. With a timer callback,
+        I had to set the timeout all the way up to 150ms on my development machine to get
+        the scroll bars to track reliably, which made scrolling noticeably grainy and
+        would require the timeout to be a system-dependent value needing tuning."""
+        # Determine the 'scroll direction' vector
+        left, top = self.scrollOrigin
+        right = left + self.image.width
+        bottom = top + self.image.height
+        reqLeft, reqTop, reqRight, reqBottom = scrollToRect
+        x = y = 0
+        if reqLeft < left:
+            x = reqLeft - left
+        elif reqRight > right:
+            x = reqRight - right
+        if reqTop < top:
+            y = reqTop - top
+        elif reqBottom > bottom:
+            y = reqBottom - bottom
+        if x == 0 and y == 0:
+            self.autoscrollTimestamp = None
+            return False
+        # If we're not autoscrolling, yet, we can't talk about velocity since we have no
+        # time reference for the last movement.  However, our velocity factor comes from
+        # how far (in pixels) outside of the window we want to point, so a reasonable
+        # first move, is to jump directly to the requested location.
+        if self.autoscrollTimestamp is None:
+            self.scrollTo(scrollToRect, redraw=redraw)
+            self.autoscrollTimestamp = msTime()
+            return True
+        # Scale the direction vector by the autoscroll speed times time since last step
+        newTimestamp = msTime()
+        elapsed = newTimestamp - self.autoscrollTimestamp
+        if elapsed == 0:
+            return True
+        x = int(x * elapsed * AUTOSCROLL_SPEED_FACTOR)
+        y = int(y * elapsed * AUTOSCROLL_SPEED_FACTOR)
+        xMin, yMin, xMax, yMax = self.scrollExtent
+        if left + x < xMin:
+            x = xMin - left
+        elif right + x > xMax:
+            x = xMax - right
+        if top + y < yMin:
+            y = yMin - top
+        if bottom + y > yMax:
+            y = yMax - bottom
+        newScrollOrigin = left + x, top + y
+        if newScrollOrigin == self.scrollOrigin:
+            return True
+        self.scrollOrigin = newScrollOrigin
+        self._updateScrollRanges()
+        if redraw:
+            self.refresh(redraw=True)
+        self.autoscrollTimestamp = newTimestamp
+        return True
 
     def _exposeCb(self, _evt):
         """Called when a new part of the window is exposed and needs to be redrawn"""
@@ -1154,19 +1300,19 @@ class Window:
         shiftPressed = evt.state & SHIFT_MASK
         ctrlPressed = evt.state & CTRL_MASK
         if self.dragging is not None:
-            self._updateDrag(evt)
+            self._updateDrag()
             return
         if self.inRectSelect:
-            self._updateRectSelect(evt)
+            self._updateRectSelect()
             return
         if self.inStmtSelect:
-            self._updateStmtSelect(evt)
+            self._updateStmtSelect()
             return
         if self.inLexSelDrag:
-            self._updateLexSelDrag(evt)
+            self._updateLexSelDrag()
             return
         if self.inImmediateDrag:
-            self._updateImmediateSelDrag(evt)
+            self._updateImmediateSelDrag()
             return
         # Not currently dragging, but button is down
         btnX, btnY = self.buttonDownLoc
@@ -1198,7 +1344,11 @@ class Window:
                 self.buttonDownTime = None
                 return
             if ic is None:
-                self._startRectSelect(evt, immediate=True)
+                seqSiteIc = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
+                if seqSiteIc is not None:
+                    self._startStmtSelect(seqSiteIc, evt, immediate=True)
+                else:
+                    self._startRectSelect(evt, immediate=True)
             else:
                 self._startImmediateSelDrag(evt, ic, self.buttonDownIcPart)
         elif rightMouse and ic is None and not shiftPressed and not ctrlPressed:
@@ -1286,32 +1436,37 @@ class Window:
         # If the shift key is pressed while dragging icons, we don't want the user to
         # have to wait for mouse movement to engage or disengage target selection, or
         # switch in and out of replace-mode (as opposed to on the next mouse movement,
-        # which is how _updateDrag is otherwise driven).
-        if evt.state & SHIFT_MASK:
-            # The shift key repeats, but luckily the KeyPress binding gives us the old
-            # state, so we can filter the repeats from the key being held
-            return
+        # which is how _updateDrag is otherwise driven).  Also, _updateDrag needs to
+        # operate from a tkinter 'after' method, where it doesn't have access to event
+        # data, so we also inform it regarding changes to the state of the shift key.
         if self.dragging:
-            # As noted above, Tkinter dispatches this event before changing the key mask
-            # evt.state.  It *might* be safe to just clear the bit in evt, but I can't
-            # guarantee that this won't affect the calling Tkinter code, so make a copy.
-            evtCopy = copy.copy(evt)
-            evtCopy.state = evt.state | SHIFT_MASK
-            self._updateDrag(evtCopy)
+            self._updateDrag(modeModifierState=True)
 
     def _shiftReleaseCb(self, evt):
         # If the shift key is released while dragging icons, we don't want the user to
         # have to wait for mouse movement to engage or disengage target selection, or
         # switch in and out of replace-mode (as opposed to on the next mouse movement,
-        # which is how _updateDrag is otherwise driven).
+        # which is how _updateDrag is otherwise driven).  Also, _updateDrag needs to
+        # operate from a tkinter 'after' method, where it doesn't have access to event
+        # data, so we also inform it regarding changes to the state of the shift key.
         if self.dragging:
-            # Tkinter, for whatever reason, dispatches this event before changing the
-            # key mask in evt.state.  While it might be safe to just clear the SHIFT_MASK
-            # bit in evt, I can't guarantee that changing it won't affect the calling
-            # Tkinter code, so instead, we pass _updateDrag a modified copy.
-            evtCopy = copy.copy(evt)
-            evtCopy.state = evt.state & ~SHIFT_MASK
-            self._updateDrag(evtCopy)
+            self._updateDrag(modeModifierState=False)
+
+    def _ctrlPressCb(self, evt):
+        # If the Ctrl key is pressed during rectangular selection, we don't want to have
+        # to wait for mouse movement to engage toggle mode.  Also, _updateRectSelect
+        # needs to operate from a tkinter 'after' method, where it doesn't have access to
+        # event data, so we also inform it regarding changes to the state of the key.
+        if self.inRectSelect:
+            self._updateRectSelect(setToggleMode=True)
+
+    def _ctrlReleaseCb(self, evt):
+        # If the Ctrl key is released during rectangular selection, we don't want to have
+        # to wait for mouse movement to disengage toggle mode.  Also, _updateRectSelect
+        # needs to operate from a tkinter 'after' method, where it doesn't have access to
+        # event data, so we also inform it regarding changes to the state of the key.
+        if self.inRectSelect:
+            self._updateRectSelect(setToggleMode=False)
 
     def _buttonPressCb(self, evt):
         if self.dragging:
@@ -2181,6 +2336,7 @@ class Window:
         self._cancelDrag()
         self._cancelImmediateDrag()
         self._cancelRectSelect()
+        self._cancelStmtSelect()
         self.buttonDownTime = None
         self.refreshDirty(addUndoBoundary=True)
 
@@ -2405,6 +2561,11 @@ class Window:
             if newPartPos != btnDownIcPartPos:
                 newPartOffset = icon.subtractPoints(btnDownIcPartPos, newPartPos)
                 self.dragImageOffset = icon.addPoints(self.dragImageOffset, newPartOffset)
+        self._computeDragSnapList()
+        self.snapped = None
+        self._updateDrag(modeModifierState=evt.state & SHIFT_MASK)
+
+    def _computeDragSnapList(self):
         # Construct a master snap list for all mating sites between stationary and
         # dragged icons.  Earlier versions of this code carefully paired free outputs
         # and seqInsert sites so the user could drag on a selection containing disjoint
@@ -2418,9 +2579,8 @@ class Window:
         draggingAttrOuts = []
         draggingCprhOuts = []
         draggingConditionals = []
-        dragIcon = self.buttonDownIcon.topLevelParent()
-        dragIcon = icon.findSeqStart(dragIcon)
-        dragSnapList = dragIcon.snapLists()
+        self.dragIcon = icon.findSeqStart(self.buttonDownIcon.topLevelParent())
+        dragSnapList = self.dragIcon.snapLists()
         for ic, (x, y), name in dragSnapList.get("output", []):
             draggingOutputs.append(((x, y), ic, name))
         for ic, (x, y), name in dragSnapList.get("seqInsert", []):
@@ -2432,8 +2592,8 @@ class Window:
         for ic, (x, y), name, siteType, test in dragSnapList.get("conditional", []):
             draggingConditionals.append(((x, y), ic, name, test))
         stationaryInputs = []
-        draggingComment = isinstance(dragIcon, commenticon.CommentIcon)
-        compatibleWithExpr = canCvtSeqsToList(draggingSequences)
+        draggingComment = isinstance(self.dragIcon, commenticon.CommentIcon)
+        compatibleWithExpr = canCvtSeqsToList(self.dragging)
         # The code has gone back and forth between supporting dedicated sites for list-
         # style insert ('insertInput' type) and having a single insert site with modifier
         # keys to disambiguate list insert from append/prepend.  Having just one type of
@@ -2547,30 +2707,36 @@ class Window:
                     yOff = icon.ATTR_SITE_OFFSET
                 self.snapList.append((sx-dx+xOff, sy-dy+yOff, sh, sIcon, dIcon,
                     sSiteType, sName, False))
-        self.snapped = None
-        self._updateDrag(evt)
 
-    def _updateDrag(self, evt):
+    def _updateDrag(self, modeModifierState=None):
         if not self.dragging:
             return
+        # Because _updateDrag has to operate from a tkinter 'after' callback during auto-
+        # scroll, it doesn't always have access to event data, and so polls the pointer
+        # position and saves the state of the shift key as passed in by calls from shift
+        # key press and release callbacks via the modeModifierState keyword argument.
+        if modeModifierState is not None:
+            self.dragModeModifierState = modeModifierState
+        btnX, btnY = self.imageToContentCoord(
+            self.imgFrame.winfo_pointerx() - self.imgFrame.winfo_rootx(),
+            self.imgFrame.winfo_pointery()- self.imgFrame.winfo_rooty())
         # If we're in drag target selection mode, see if the user has cancelled.  If we
         # have replace-sites turned ON, holding the shift key continues the mode and
         # releasing it returns to normal dragging.  If replace-sites are turned OFF,
         # holding the shift key enters replacement mode, and releasing it when icons
         # are highlighted for replacement starts target selection mode
-        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
         if appData.settings.createReplaceSites:
-            if self.dragTagetModePtrOffset is not None and not evt.state & SHIFT_MASK:
+            if self.dragTagetModePtrOffset is not None and not self.dragModeModifierState:
                 self.dragTagetModePtrOffset = None
             inReplaceMode = False
         else:
-            inReplaceMode = evt.state & SHIFT_MASK
+            inReplaceMode = self.dragModeModifierState
             if self.snapped is not None and self.snapped[2] in ('replaceExprIc',
                     'replaceAttrIc', 'replaceCprhIc', 'replaceStmtIc', 'replaceStmt'):
                 # We are in replace-mode (which we indicate as being 'snapped' to a
                 # replace site).  Use the state of the Shift key to determine whether to
                 # enter or exit target selection mode.
-                if evt.state & SHIFT_MASK:
+                if self.dragModeModifierState:
                     self.dragTagetModePtrOffset = None
                 elif self.dragTagetModePtrOffset is None:
                     self.dragTagetModePtrOffset = dragPtrSitePos(self.snapped[1],
@@ -2635,7 +2801,7 @@ class Window:
             #         sIcon.dumpName(), siteType, siteName))
             # If the user has pressed the shift key while the dragging icons are snapped
             # to a replace site, switch to drag target selection mode
-            if evt.state & SHIFT_MASK and self.snapped is not None:
+            if self.dragModeModifierState and self.snapped is not None:
                 sIcon, movIcon, siteType, siteName, _ = self.snapped
                 if siteType in ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
                         'replaceStmtIc', 'replaceStmt'):
@@ -2644,13 +2810,6 @@ class Window:
                     snapBtnX = snappedX - self.dragImageOffset[0]
                     snapBtnY = snappedY - self.dragImageOffset[1]
                     self.dragTagetModePtrOffset = snapSiteX-snapBtnX, snapSiteY-snapBtnY
-        # Erase the old drag image
-        width = self.dragImage.width
-        height = self.dragImage.height
-        dragImageRegion = (snappedX, snappedY, snappedX+width, snappedY+height)
-        if self.lastDragImageRegion is not None:
-            for r in exposedRegions(self.lastDragImageRegion, dragImageRegion):
-                self.refresh(r, redraw=False)
         # Manage highlighting of icons showing pending replacements
         useTransparentDragImage = False
         if self.dragTagetModePtrOffset is not None:
@@ -2695,6 +2854,9 @@ class Window:
         # Draw the image of the moving icons in their new locations directly to the
         # display (leaving self.image clean).  This makes dragging fast by eliminating
         # individual icon drawing while the user is dragging.
+        width = self.dragImage.width
+        height = self.dragImage.height
+        dragImageRegion = (snappedX, snappedY, snappedX + width, snappedY + height)
         crop = self.contentToImageRect(dragImageRegion)
         dragImage = self.image.crop(crop)
         if useTransparentDragImage:
@@ -2726,8 +2888,44 @@ class Window:
                     if blockicons.isPseudoBlockIc(movIcon):
                         x -= comn.BLOCK_INDENT
                     dragImage.paste(seqInsertIndImg, (x, y), mask=seqInsertIndImg)
+        # Autoscroll to make sure insert point is in view.  If we autoscrolled, the
+        # mouse position will be different wrt. the content coordinate system, and the
+        # snapList will not cover the newly exposed region.  Also, since the mouse has
+        # technically 'moved', we probably don't want to stay snapped (unless we're in
+        # target selection mode)
+        origScrollOrig = self.scrollOrigin
+        dragFocusX, dragFocusY = dragPtrSitePos(self.dragIcon, snappedX, snappedY)
+        autoscrollAfter = self.autoscrollToward((dragFocusX - DRAG_AUTOSCROLL_MARGIN,
+            dragFocusY - DRAG_AUTOSCROLL_MARGIN, dragFocusX + DRAG_AUTOSCROLL_MARGIN,
+            dragFocusY + DRAG_AUTOSCROLL_MARGIN), redraw=False)
+        if autoscrollAfter and self.pendingAutoscroll is None:
+            # We want to keep autoscrolling, even if the user doesn't move the mouse
+            self.pendingAutoscroll = self.top.after_idle(self._updateDragAutoscroll)
+        if self.scrollOrigin != origScrollOrig:
+            origX, origY = origScrollOrig
+            newX, newY = self.scrollOrigin
+            deltaX = newX - origX
+            deltaY = newY - origY
+            snappedX += deltaX
+            snappedY += deltaY
+            dragImageRegion = comn.offsetRect(dragImageRegion, deltaX, deltaY)
+            self._computeDragSnapList()
+            if self.dragTagetModePtrOffset is None:
+                self.snapped = None
+            self.refresh(redraw=True, showOutlines=True)
+        # Erase the old drag image (unless we've autoscrolled, in which case it's already
+        # erased) and draw the new one directly to the window, ignoring the backing store
+        if self.scrollOrigin == origScrollOrig:
+            if self.lastDragImageRegion is not None:
+                for r in exposedRegions(self.lastDragImageRegion, dragImageRegion):
+                    self.refresh(r, redraw=False)
         self.drawImage(dragImage, self.contentToImageCoord(snappedX, snappedY))
         self.lastDragImageRegion = dragImageRegion
+
+    def _updateDragAutoscroll(self):
+        """Timer callback for autoscroll during icon drag"""
+        self.pendingAutoscroll = None
+        self._updateDrag()
 
     def _endDrag(self, evt):
         topDraggingIcons = [ic for seq in self.dragging for ic in seq]
@@ -2851,18 +3049,36 @@ class Window:
             self.immediateDragHighlight = set()
         self.lastRectSelect = None
         self.rectSelectInitialState = self.selectedSet.copy()
-        self._updateRectSelect(evt)
+        self._updateRectSelect()
         self.refreshDirty()
 
-    def _updateRectSelect(self, evt):
-        toggle = evt.state & CTRL_MASK and not self.inImmediateRectSelect
-        newRect = makeRect(self.buttonDownLoc, self.imageToContentCoord(evt.x, evt.y))
+    def _updateRectSelect(self, setToggleMode=None):
+        # Since we get called from an after_idle callback during autoscroll, we may not
+        # have access to event data, so we read the pointer explicitly, and get the
+        # status of the Ctrl key via the setToggleMode parameter from keyboard callbacks.
+        if setToggleMode is not None:
+            self.inToggleMode = setToggleMode
+        toggle = self.inToggleMode and not self.inImmediateRectSelect
+        btnX, btnY = self.imageToContentCoord(
+            self.imgFrame.winfo_pointerx() - self.imgFrame.winfo_rootx(),
+            self.imgFrame.winfo_pointery()- self.imgFrame.winfo_rooty())
+        # If the pointer is outside of the window, try to autoscroll and potentially set
+        # up idle callback for continuing scrolling.
+        origScrollOrig = self.scrollOrigin
+        schedAutoscroll = self.autoscrollToward((btnX, btnY, btnX, btnY))
+        if schedAutoscroll:
+            self.pendingAutoscroll = self.top.after_idle(self._updateRectAutoscroll)
+        # Limit the rectangle y extent to what we have already covered, and the (possibly
+        # new) window borders, since we can't get intersection data from un-drawn icons.
+        btnY = max(btnY, self.scrollOrigin[1])
+        btnY = min(btnY, self.scrollOrigin[1] + self.image.height)
+        newRect = makeRect(self.buttonDownLoc, (btnX, btnY))
         if self.lastRectSelect is None:
             combinedRegion = newRect
         else:
             combinedRegion = comn.combineRects(newRect, self.lastRectSelect)
-            self._eraseRectSelect()
-        redrawRegion = comn.AccumRects()
+        cL, cT, cR, cB = combinedRegion
+        redrawRegion = comn.AccumRects((cL, cT, cR + 1, cB + 1))
         curSel = self.immediateDragHighlight if self.inImmediateRectSelect else \
             self.selectedSet
         selectSet = set()
@@ -2901,7 +3117,8 @@ class Window:
         else:
             self.selectedSet -= eraseSet
             self.selectedSet |= selectSet
-        self.refresh(redrawRegion.get(), redraw=True)
+        if origScrollOrig == self.scrollOrigin:
+            self.refresh(redrawRegion.get(), redraw=True)
         l, t, r, b = self.contentToImageRect(newRect)
         hLineImg = Image.new('RGB', (r - l, 1), color=RECT_SELECT_COLOR)
         vLineImg = Image.new('RGB', (1, b - t), color=RECT_SELECT_COLOR)
@@ -2910,6 +3127,10 @@ class Window:
         self.drawImage(vLineImg, (l, t))
         self.drawImage(vLineImg, (r, t))
         self.lastRectSelect = newRect
+
+    def _updateRectAutoscroll(self):
+        self.pendingAutoscroll = None
+        self._updateRectSelect()
 
     def _eraseRectSelect(self):
         l, t, r, b = self.lastRectSelect
@@ -2963,17 +3184,27 @@ class Window:
         self.cursor.restoreState(self.rectSelectCursor)
         self.cursor.draw()
 
-    def _startStmtSelect(self, seqSiteIc, evt):
-        self.unselectAll()
+    def _startStmtSelect(self, seqSiteIc, evt, immediate=False):
+        if not immediate:
+            self.unselectAll()
         self.stmtSelectSeqStart = icon.findSeqStart(seqSiteIc)
         self.topIcons[self.stmtSelectSeqStart].applyOffset()
         self.inStmtSelect = True
+        self.inImmediateStmtSelect = immediate
         self.lastStmtHighlightRects = None
-        self._updateStmtSelect(evt)
+        self._updateStmtSelect()
 
-    def _updateStmtSelect(self, evt):
+    def _updateStmtSelect(self):
+        btnX, btnY = self.imageToContentCoord(
+            self.imgFrame.winfo_pointerx() - self.imgFrame.winfo_rootx(),
+            self.imgFrame.winfo_pointery()- self.imgFrame.winfo_rooty())
+        # If the pointer is outside of the window, try to autoscroll and potentially set
+        # up idle callback for continuing scrolling.
+        origScrollOrig = self.scrollOrigin
+        schedAutoscroll = self.autoscrollToward((btnX, btnY, btnX, btnY), redraw=False)
+        if schedAutoscroll:
+            self.pendingAutoscroll = self.top.after_idle(self._updateStmtSelAutoscroll)
         anchorY = self.buttonDownLoc[1]
-        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
         drawTop = min(anchorY, btnY)
         drawBottom = max(anchorY, btnY)
         # Trim selection top to start of sequence
@@ -2986,6 +3217,9 @@ class Window:
         # coordinate change points within the range
         xChangePoints = None
         icBottom = None
+        selectSet = self.immediateDragHighlight if self.inImmediateStmtSelect else \
+            self.selectedSet
+        topStmt = bottomStmt = None
         for ic in icon.traverseSeq(self.stmtSelectSeqStart):
             seqInX, seqInY = ic.posOfSite('seqIn')
             seqOutX, seqOutY = ic.posOfSite('seqOut')
@@ -2996,11 +3230,17 @@ class Window:
             if xChangePoints is not None and seqInX != seqOutX and seqOutY <= drawBottom:
                 xChangePoints.append((seqOutX, seqOutY + 2))
             needsSelect = drawBottom > seqInY and drawTop < seqOutY
-            selected = ic.isSelected()
+            selected = ic in selectSet
+            if needsSelect and topStmt is None:
+                topStmt = ic
+            if needsSelect and topStmt is not None:
+                bottomStmt = ic
             if not selected and needsSelect or selected and not needsSelect:
-                for selIc in ic.traverse(inclStmtComment=True):
-                    selIc.select(needsSelect)
-                    redrawRegion.add(selIc.rect)
+                if needsSelect:
+                    expredit.addHierToSel(selectSet, ic)
+                else:
+                    expredit.removeHierFromSel(selectSet, ic)
+                redrawRegion.add(ic.hierRect(inclStmtComment=True))
             if seqInY < anchorY < seqOutY:
                 if drawTop > seqInY:  # If user started next to icon, highlight it fully
                     drawTop = seqInY
@@ -3010,11 +3250,9 @@ class Window:
         if drawBottom > icBottom:
             drawBottom = icBottom
         # Compute the selection and deselection rectangles from the change points
-        prevX = None
         for x, y in xChangePoints:
             if y > drawTop:
                 break
-            prevX = x
         selectLeft = self.stmtSelectSeqStart.posOfSite('seqIn')[0] - 1
         selectRight = selectLeft + 3
         drawRects = [(selectLeft, drawTop, selectRight, drawBottom)]
@@ -3027,24 +3265,65 @@ class Window:
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
                 redrawRegion.add(eraseRect)
-        self.refresh(redrawRegion.get(), redraw=True)
+        if self.scrollOrigin == origScrollOrig:
+            self.refresh(redrawRegion.get(), redraw=True)
+        else:
+            self.refresh(redraw=True)
         # Draw the selection shading
         for drawRect in drawRects:
             drawImgRect = self.contentToImageRect(drawRect)
             image = self.image.crop(drawImgRect)
-            colorImg = Image.new('RGB', (image.width, image.height), color=(0, 0, 255)) # color=icon.SELECT_TINT)
+            if self.inImmediateStmtSelect:
+                color = icon.IMMEDIATE_COPY_TINT
+            else:
+                color = icon.SELECT_TINT
+            colorImg = Image.new('RGB', (image.width, image.height), color=color)
             selImg = Image.blend(image, colorImg, .15)
             self.drawImage(selImg, drawImgRect[:2])
         self.lastStmtHighlightRects = drawRects
+        # Move the cursor to the active end of the selection (... it might be better to
+        # do this in _endStmtSelect, but for now, I don't want to pass the data there)
+        if not self.inImmediateStmtSelect and topStmt is not None:
+            _, topSiteY = topStmt.posOfSite('seqIn')
+            _, bottomSiteY = bottomStmt.posOfSite('seqOut')
+            if abs(btnY - topSiteY) <= abs(btnY-bottomSiteY):
+                self.cursor.setToIconSite(topStmt, 'seqIn', placeEntryText=False,
+                    requestScroll=False)
+            else:
+                self.cursor.setToIconSite(bottomStmt, 'seqOut', placeEntryText=False,
+                    requestScroll=False)
 
-    def _endStmtSelect(self):
+    def _updateStmtSelAutoscroll(self):
+        self.pendingAutoscroll = None
+        self._updateStmtSelect()
+
+    def _cancelStmtSelect(self):
+        if not self.inStmtSelect:
+            return
+        self._endStmtSelect(cancel=True)
+
+    def _endStmtSelect(self, cancel=False):
         redrawRegion = comn.AccumRects()
         self.inStmtSelect = False
         # Erase the shaded zone
         if self.lastStmtHighlightRects is not None:
             for eraseRect in self.lastStmtHighlightRects:
                 redrawRegion.add(eraseRect)
+        # For immediate selections, clear the selection highlighting
+        if self.inImmediateStmtSelect:
+            affectedEntries = self.immediateDragHighlight
+            self.immediateDragHighlight = set()
+            for i in affectedEntries:
+                redrawRegion.add(expredit.iconOfSelEntry(i).rect)
         self.refresh(redrawRegion.get(), redraw=True)
+        # Do immediate copy of (formerly) highlighted selection.  This can still fail
+        # if the destination is inappropriate, but we do the same thing either way.
+        if self.inImmediateStmtSelect and not cancel:
+            self.immediateCopy(affectedEntries)
+        # Move the cursor to the 'active' end of the selection
+        if not self.inImmediateStmtSelect:
+            anchorStmt = self.buttonDownIcon
+        self.inImmediateStntSelect = False
         self.lastStmtHighlightRects = None
 
     def _startLexSelDrag(self, evt, anchorIc, anchorSite=None, anchorPartId=None):
@@ -3056,10 +3335,27 @@ class Window:
         self.lexDragAnchorSite = anchorSite
         self.lexDragAnchorPartId = anchorPartId
         self.inLexSelDrag = True
-        self._updateLexSelDrag(evt)
+        self._updateLexSelDrag()
 
-    def _updateLexSelDrag(self, evt):
-        btnX, btnY = self.imageToContentCoord(evt.x, evt.y)
+    def _updateLexSelDrag(self):
+        if not self.inLexSelDrag:
+            return
+        # Because we may be require autoscroll and get called from a tkinter 'after'
+        # callback, we may not have access to event data, so read the mouse explicitly.
+        btnX, btnY = self.imageToContentCoord(
+            self.imgFrame.winfo_pointerx() - self.imgFrame.winfo_rootx(),
+            self.imgFrame.winfo_pointery()- self.imgFrame.winfo_rooty())
+        # If the pointer is outside of the window, try to autoscroll and potentially set
+        # up idle callback for continuing scrolling.
+        origScrollOrig = self.scrollOrigin
+        autoscrollAfter = self.autoscrollToward((btnX, btnY, btnX, btnY))
+        if autoscrollAfter and self.pendingAutoscroll is None:
+            self.pendingAutoscroll = self.top.after_idle(self._updateLexSelAutoscroll)
+        # Limit the y extent to what we have already covered, and the (possibly new)
+        # window borders, since we can't test pointer relationship to un-drawn icons.
+        btnY = max(btnY, self.scrollOrigin[1])
+        btnY = min(btnY, self.scrollOrigin[1] + self.image.height)
+        # Find the new set of selected icons
         newSel, curIc, curSite = expredit.extendSelectToPointer(self.lexDragAnchorIc,
             self.lexDragAnchorSite, self.lexDragAnchorPartId, btnX, btnY)
         # Update the selection, redrawing just the changed icons
@@ -3072,14 +3368,23 @@ class Window:
         for i in draw:
             redrawRect.add(expredit.iconOfSelEntry(i).rect)
             self.select(i, True)
-        if redrawRect.get() is not None:
-            self.refresh(redrawRect.get(), redraw=True)
-        # Place the cursor at the active end of the selection
-        # ... do we want to defer this to _endLexSelDrag?
+        # Place the cursor at the active end of the selection (... it might be better to
+        # do this in _endLexSelDrag, but for now, I don't want to pass the data there)
         if curIc is None:
             self.cursor.removeCursor()
         else:
-            self.cursor.setToIconSite(curIc, curSite)
+            self.cursor.setToIconSite(curIc, curSite, placeEntryText=False,
+                requestScroll=False)
+        # Redraw all of the changed bits (in the autoscroll case, we are wastefully
+        # drawing some things twice, but we need things drawn before we can test them
+        # against the pointer, so I believe this is unavoidable.
+        if redrawRect.get() is not None:
+            self.refresh(redrawRect.get(), redraw=True)
+
+    def _updateLexSelAutoscroll(self):
+        """Timer callback for autoscroll during icon drag"""
+        self.pendingAutoscroll = None
+        self._updateLexSelDrag()
 
     def _endLexSelDrag(self):
         self.lexDragAnchorIc = None
@@ -3092,12 +3397,27 @@ class Window:
         self.immediateDragAnchorPartId = anchorPartId
         self.immediateDragHighlight = set()
         self.inImmediateDrag = True
-        self._updateImmediateSelDrag(evt)
+        self._updateImmediateSelDrag()
 
-    def _updateImmediateSelDrag(self, evt):
+    def _updateImmediateSelDrag(self):
         if not self.inImmediateDrag:
             return
-        pointerX, pointerY = self.imageToContentCoord(evt.x, evt.y)
+        # Because we may be require autoscroll and get called from a tkinter 'after'
+        # callback, we may not have access to event data, so read the mouse explicitly.
+        pointerX, pointerY = self.imageToContentCoord(
+            self.imgFrame.winfo_pointerx() - self.imgFrame.winfo_rootx(),
+            self.imgFrame.winfo_pointery()- self.imgFrame.winfo_rooty())
+        # If the pointer is outside of the window, try to autoscroll and potentially set
+        # up idle callback for continuing scrolling.
+        origScrollOrig = self.scrollOrigin
+        autoscrollAfter = self.autoscrollToward((pointerX, pointerY, pointerX, pointerY))
+        if autoscrollAfter and self.pendingAutoscroll is None:
+            self.pendingAutoscroll = self.top.after_idle(self._updateImmedSelAutoscroll)
+        # Limit the y extent to what we have already covered, and the (possibly new)
+        # window borders, since we can't test pointer relationship to un-drawn icons.
+        pointerY = max(pointerY, self.scrollOrigin[1])
+        pointerY = min(pointerY, self.scrollOrigin[1] + self.image.height)
+        # Find the new set of selected icons
         startX, startY = self.buttonDownLoc
         if appData.settings.dualMethodImmedSelect and \
                 pointerX <= startX and pointerY <= startY:
@@ -3108,15 +3428,24 @@ class Window:
             newSel, _, _ = expredit.extendSelectToPointer(self.immediateDragAnchorIc,
                 None, self.immediateDragAnchorPartId, pointerX, pointerY,
                 fwdOnly=appData.settings.dualMethodImmedSelect)
+        # Refresh the modified area of the window
         oldSel = self.immediateDragHighlight
-        self.immediateDragHighlight = newSel
+        erase = oldSel.difference(newSel)
+        draw = newSel.difference(oldSel)
         redrawRect = comn.AccumRects()
-        for i in oldSel:
+        for i in erase:
             redrawRect.add(expredit.iconOfSelEntry(i).rect)
-        for i in newSel:
+            self.immediateDragHighlight.remove(i)
+        for i in draw:
             redrawRect.add(expredit.iconOfSelEntry(i).rect)
+            self.immediateDragHighlight.add(i)
+        # Redraw all of the changed bits.
         if redrawRect.get() is not None:
             self.refresh(redrawRect.get(), redraw=True)
+
+    def _updateImmedSelAutoscroll(self):
+        self.pendingAutoscroll = None
+        self._updateImmediateSelDrag()
 
     def _endImmediateSelDrag(self):
         self.immediateDragAnchorIc = None
@@ -3582,23 +3911,37 @@ class Window:
         if filterRedundantParens:
             self.redundantParenFilterRequested = True
 
+    def requestScroll(self, scrollType):
+        """Request autoscroll to take place after icon layout in refreshDirty.  So far,
+        the only allowed scrollType is 'cursor', as most other types of autoscroll are
+        implemented as part of a drag operation that is processed continuously."""
+        self.scrollRequest = scrollType
+
     def refreshDirty(self, addUndoBoundary=False, minimizePendingArgs=True,
             redrawCursor=True):
         """Refresh any icons whose layout is marked as dirty (via the markLayoutDirty
-        method of the icon), and redraw and refresh any window areas marked as needing
-        redraw (via window method requestRedraw).  If nothing is marked as dirty, no
-        redrawing will be done.  The function serves a more general purpose of finishing
-        any user operation that may have altered the icon structure (including simple
-        cursor movement because focus changes can also alter the icon structure).  As
-        such, it also includes clean-up for entry icon pending args (minimizePendingArgs),
-        cursor redraw and hold (redrawCursor), and optionally adding an undo boundary
-        (addUndoBoundary)."""
+        method of the icon), redraw and refresh any window areas marked as needing redraw
+        (via window method requestRedraw), and pending autoscroll requests (requested via
+        requestScroll).  If nothing is marked as dirty, no redrawing will be done.  The
+        function serves a more general purpose of finishing any user operation that may
+        have altered the icon structure (including simple cursor movement because focus
+        changes can also alter the icon structure).  As such, it also includes clean-up
+        for entry icon pending args (minimizePendingArgs), cursor redraw and hold
+        (redrawCursor), and optionally adding an undo boundary (addUndoBoundary)."""
         if minimizePendingArgs and self.cursor.type == "text" and \
                 isinstance(self.cursor.icon, entryicon.EntryIcon):
             self.cursor.icon.minimizePendingArgs()
         self.refreshRequests.add(self.layoutDirtyIcons(
-            filterRedundantParens=self.redundantParenFilterRequested))
-        if self.refreshRequests.get() is not None:
+            filterRedundantParens=self.redundantParenFilterRequested,
+                updateScrollRanges=self.scrollRequest is not None))
+        redrawAll = False
+        if self.scrollRequest is not None:
+            if self.scrollRequest == 'cursor':
+                if self.scrollToCursor(redraw=False):
+                    redrawAll = True
+        if redrawAll:
+            self.refresh(redraw=True)
+        elif self.refreshRequests.get() is not None:
             self.refresh(self.refreshRequests.get(), redraw=True)
         if addUndoBoundary:
             self.undo.addBoundary()
@@ -5520,7 +5863,8 @@ class Window:
                     topIconSeqs[seqIcon] = topOfSeq
         return sequenceTops.keys()
 
-    def layoutDirtyIcons(self, draggingIcons=None, filterRedundantParens=True):
+    def layoutDirtyIcons(self, draggingIcons=None, filterRedundantParens=True,
+            updateScrollRanges=True):
         """Look for icons marked as needing layout and lay them out.  If draggingIcons is
         specified, assume a stand-alone list of top icons not of the window.  Otherwise
         look at all of the icons in the window.  Returns a rectangle representing the
@@ -5533,7 +5877,8 @@ class Window:
         else:
             for seqStartPage in self.sequences:
                 redrawRegion.add(self.layoutIconsInPage(seqStartPage, filterRedundantParens))
-        self._updateScrollRanges()
+        if updateScrollRanges:
+            self._updateScrollRanges()
         return redrawRegion.get()
 
     def layoutIconsInPage(self, startPage, filterRedundantParens, checkAllForDirty=True):

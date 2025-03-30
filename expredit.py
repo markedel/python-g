@@ -1690,6 +1690,19 @@ def addHierToSel(selectionSet, topIcon, inclStmtComment=True):
                     if site.att is None:
                         selectionSet.add((ic, site.name))
 
+def removeHierFromSel(selectionSet, topIcon, inclStmtComment=True):
+    """Remove all of the icons under topIcon from a set (selectionSet) representing a
+    selection.  This is more than just a traversal, since selection rules require entries
+    for empty series sites even if their parent is selected (their *absence* implies that
+    they are not selected)."""
+    for ic in topIcon.traverse(inclStmtComment=inclStmtComment):
+        selectionSet.discard(ic)
+        for siteOrSeries in ic.sites.allSites(expandSeries=False):
+            if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+                for site in siteOrSeries:
+                    if site.att is None:
+                        selectionSet.discard((ic, site.name))
+
 def siteLeftOfPart(ic, partId=None):
     """Returns icon and site for the cursor site to the left of part, partId, of icon,
     ic.  Unlike the Icon.siteRightOfPart method, where the site will always belong to

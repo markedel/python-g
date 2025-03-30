@@ -42,6 +42,10 @@ HORIZ_ARROW_MAX_DIST = 600
 # Weight of x distance in y cursor movement
 VERT_ARROW_X_WEIGHT = 2
 
+# Number of pixels beyond cursor position to reveal with autoscroll
+AUTOSCROLL_H_MARGIN = 5
+AUTOSCROLL_V_MARGIN = 7
+
 inputSiteCursorImage = comn.asciiToImage((
     "..% ",
     "..% ",
@@ -160,10 +164,11 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        self.window.requestScroll('cursor')
         self.clearAnchorHint()
 
     def setToIconSite(self, ic, siteIdOrSeriesName, seriesIndex=None, eraseOld=True,
-            drawNew=False, placeEntryText=True):
+            drawNew=False, placeEntryText=True, requestScroll=True):
         """Place the cursor on an icon site.  Be aware that this can cause
         rearrangement of icons by virtue of taking focus from an entry icon, which will
         then try to place its text content and pending arguments.  You must therefore
@@ -191,6 +196,8 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        if requestScroll:
+            self.window.requestScroll('cursor')
         self.clearAnchorHint()
 
     def setToText(self, ic, pos=None, eraseOld=True, drawNew=False, placeEntryText=True):
@@ -221,6 +228,10 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        # Note that the autoscroll request is done in in the icon's setCursorPos method,
+        # but skipped if the icon doesn't have the cursor.  Therefore, when code calls
+        # setCursorPos first, it will not yet have been done.
+        self.window.requestScroll('cursor')
         self.clearAnchorHint()
 
     def setToTypeover(self, ic, eraseOld=True, drawNew=False):
@@ -238,6 +249,7 @@ class Cursor:
         if drawNew:
             self.draw()
         self.window.resetBlinkTimer()
+        self.window.requestScroll('cursor')
         self.clearAnchorHint()
 
     def setToBestCoincidentSite(self, ic, site):
@@ -270,6 +282,16 @@ class Cursor:
             self.selectToSiteOrPart(ic, site)
         else:
             self.setTo(cursorType, ic, site, pos)
+
+    def getOutline(self, addAutoscrollMargin=False):
+        cursorImg, left, top = self._getImgAndPos()
+        if cursorImg is None:
+            return None
+        right = left + cursorImg.width
+        bottom = top + cursorImg.height
+        if addAutoscrollMargin:
+            return (left - AUTOSCROLL_H_MARGIN, top - AUTOSCROLL_V_MARGIN,
+            right + AUTOSCROLL_H_MARGIN, bottom + AUTOSCROLL_V_MARGIN)
 
     @dataclass
     class SavedState:
@@ -481,14 +503,26 @@ class Cursor:
     def draw(self):
         if self.type is None or self.window.dragging is not None:
             return
-        elif self.type == "window":
+        cursorImg, x, y = self._getImgAndPos()
+        if cursorImg is None:
+            return
+        cursorRegion = (x, y, x + cursorImg.width, y + cursorImg.height)
+        self.lastDrawRect = cursorRegion
+        cursorRegion = self.window.contentToImageRect(cursorRegion)
+        cursorDrawImg = self.window.image.crop(cursorRegion)
+        cursorDrawImg.paste(cursorImg, mask=cursorImg)
+        self.window.drawImage(cursorDrawImg, cursorRegion[:2])
+        self.blinkState = True
+
+    def _getImgAndPos(self):
+        if self.type == "window":
             cursorImg = inputSiteCursorImage
             x, y = self.pos
             y -= inputSiteCursorOffset
         elif self.type == "icon":
             sitePos = self.icon.posOfSite(self.site)
             if sitePos is None:
-                return # Cursor can be moved before site fully exists, so fail softly
+                return None, 0, 0  # fail softly if cursor moved before site fully exists
             x, y = sitePos
             if self.siteType in ("input", "output"):
                 cursorImg = inputSiteCursorImage
@@ -509,29 +543,25 @@ class Cursor:
                 x -= cprhSiteCursorXOffset
                 y -= cprhSiteCursorYOffset
             else:
-                return
+                return None, 0, 0
         elif self.type == "text":
             eIcon = self.icon
             if eIcon is None:
-                return
+                return None, 0, 0
             cursorImg = eIcon.textCursorImage()
             x, y = eIcon.cursorWindowPos()
             y -= cursorImg.height // 2
         elif self.type == "typeover":
             if self.icon is None:
-                return
+                return None, 0, 0
             cursorImg = typeoverCursorImage
             x, y = self.icon.rect[:2]
             xOffset, yOffset = self.icon.typeoverCursorPos()
             x += xOffset
             y += yOffset - cursorImg.height // 2
-        cursorRegion = (x, y, x + cursorImg.width, y + cursorImg.height)
-        self.lastDrawRect = cursorRegion
-        cursorRegion = self.window.contentToImageRect(cursorRegion)
-        cursorDrawImg = self.window.image.crop(cursorRegion)
-        cursorDrawImg.paste(cursorImg, mask=cursorImg)
-        self.window.drawImage(cursorDrawImg, cursorRegion[:2])
-        self.blinkState = True
+        else:
+            return None, 0, 0
+        return cursorImg, x, y
 
     def drawAndHold(self, holdTime=python_g.CURSOR_BLINK_RATE):
         """Redraw cursor and reset the blink timer to keep it visible for a full blink
@@ -805,10 +835,13 @@ def geometricTraverse(fromIcon, fromSite, direction, enterTextFields=True,
             direction == 'Up':
         return 'icon', fromIcon.prevInSeq(includeModuleAnchor=True), 'seqIn', None
     # Build a list of possible destination cursor positions, normalizing attribute
-    # site positions to the center of the cursor (in/out site position).
+    # site positions to the center of the cursor (in/out site position), and sequence
+    # sites to be far enough left to find output and prefix-insert sites.
     cursorX, cursorY = fromIcon.posOfSite(fromSite)
     if fromIcon.typeOf(fromSite) == "attrIn":
         cursorY -= icon.ATTR_SITE_OFFSET  # Normalize to input/output site y
+    if fromSite in ('seqIn', 'seqOut'):
+        cursorX -= icon.SEQ_SITE_OFFSET
     cursorType, ic, site, pos = geometricTraverseFromPos(cursorX, cursorY, direction,
         fromIcon.window, limitAdjacentStmt=fromIcon, enterTextFields=enterTextFields)
     if not allowEscapeToWindow and cursorType == 'window':
@@ -848,10 +881,10 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
             cursorSites.append((x, y, 'icon', ic, name, None))
         for ic, (x, y), name in snapLists.get('seqIn', []):
             if direction in ('Up', 'Down'):
-                cursorSites.append((x, y, 'icon', ic, name, None))
+                cursorSites.append((x - icon.SEQ_SITE_OFFSET, y, 'icon', ic, name, None))
         for ic, (x, y), name in snapLists.get('seqOut', []):
             if  direction in ('Up', 'Down') or not hasOutSite:
-                cursorSites.append((x, y, 'icon', ic, name, None))
+                cursorSites.append((x - icon.SEQ_SITE_OFFSET, y, 'icon', ic, name, None))
         for ic, (x, y), name in snapLists.get("attrIn", []):
             cursorSites.append((x, y - icon.ATTR_SITE_OFFSET, 'icon', ic, name, None))
         if winIcon.parent() is None:

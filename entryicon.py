@@ -673,7 +673,7 @@ class EntryIcon(icon.Icon):
                 # Allow insertion, even though it's bad, because user is "editing", and
                 # may go through bad states to get to good ones.
                 self.text = newText
-                self.cursorPos = newCursorPos
+                self.setCursorPos(newCursorPos)
         self.markLayoutDirty()
         return None
 
@@ -687,7 +687,7 @@ class EntryIcon(icon.Icon):
             # Erase the character before the text cursor
             self.window.requestRedraw(self.topLevelParent().hierRect())
             self.text = self.text[:self.cursorPos-1] + self.text[self.cursorPos:]
-            self.cursorPos -= 1
+            self.setCursorPos(self.cursorPos - 1)
             self.markLayoutDirty()
             return
         if self.text == '':
@@ -859,7 +859,7 @@ class EntryIcon(icon.Icon):
             self.appendPendingArgs(oldPendingArgs + newPendingArgs)
             newEntryIcon.replaceWith(highestIcon)
             self.text = newText
-            self.cursorPos = len(newEntryIcon.text)
+            self.setCursorPos(len(newEntryIcon.text))
             self.window.cursor.setToText(self)
             combinedEntryIcon = self
         # There are actually a small number cases where the pending args can now be
@@ -969,7 +969,7 @@ class EntryIcon(icon.Icon):
                         self.window.cursor.setToIconSite(cursorIcon, cursorSite)
                 self.window.refreshDirty(minimizePendingArgs=False)
             else:
-                self.cursorPos -= 1
+                self.setCursorPos(self.cursorPos - 1)
         elif direction == "Right":
             if self.cursorPos == len(self.text):
                 # Move cursor out of entry icon.  For right cursor movement, use the
@@ -985,7 +985,7 @@ class EntryIcon(icon.Icon):
                     cursor.setToIconSite(parent, parent.sites.firstCursorSite())
                 self.window.refreshDirty(minimizePendingArgs=False)
             else:
-                self.cursorPos += 1
+                self.setCursorPos(self.cursorPos + 1)
         elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
             self.window.cursor.erase()
@@ -1279,7 +1279,7 @@ class EntryIcon(icon.Icon):
         if parseResult == "accept":
             self.text = newText
             self.window.cursor.erase()
-            self.cursorPos = newCursorPos
+            self.setCursorPos(newCursorPos)
             self.window.cursor.draw()
             self.markLayoutDirty()
             return None
@@ -1555,7 +1555,7 @@ class EntryIcon(icon.Icon):
             self.removeCodeBlock()
             cursorIcon.replaceChild(self, cursorSite)
         self.text = remainingText
-        self.cursorPos = len(remainingText)
+        self.setCursorPos(len(remainingText))
         if hasattr(ic, 'setCursorPos'):
             self.window.cursor.setToText(ic)
         else:
@@ -2608,6 +2608,8 @@ class EntryIcon(icon.Icon):
             self.cursorPos = len(self.text)
         else:
             self.cursorPos = max(0, min(len(self.text), pos))
+        if self.window.cursor.type == 'text' and self.window.cursor.icon is self:
+            self.window.requestScroll('cursor')
 
     def textCursorImage(self):
         return textCursorImage
