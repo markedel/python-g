@@ -1562,7 +1562,7 @@ class YieldIcon(icon.Icon):
                 icon.drawSeqSites(self, img, 0, bodyTopY)
             if needOutSite:
                 outImageY = bodyHeight // 2 - icon.outSiteImage.height // 2
-                img.paste(icon.outSiteImage, (0, outImageY), mask=icon.outSiteImage)
+                img.paste(icon.outSiteImage, (0, outImageY))
             self.drawList = [((0, bodyTopY), img)]
             # Minimal spines (if list has multi-row layout)
             argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH

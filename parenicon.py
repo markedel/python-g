@@ -53,7 +53,7 @@ class CursorParenIcon(icon.Icon):
             outSiteY = self.sites.output.yOffset
             outImgY = outSiteY - icon.outSiteImage.height // 2
             if needOutSite:
-                img.paste(icon.outSiteImage, (outSiteX, outImgY), mask=icon.outSiteImage)
+                img.paste(icon.outSiteImage, (outSiteX, outImgY))
             inSiteX = self.sites.argIcon.xOffset
             inImageY = self.sites.argIcon.yOffset - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inSiteX, inImageY))

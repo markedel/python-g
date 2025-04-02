@@ -173,8 +173,33 @@ moduleAnchorSeqOutOffset = anchorImage.width//2, anchorImage.height-2
 MODULE_ANCHOR_X = 9
 MODULE_ANCHOR_Y = 1
 
-# Indicator to add near a snap site to indicate pending series (list comma) insert.
-# Offsets are from the snapped site position to the top left corner of the image.
+# Images used to show the 'active' drag site for a group of dragged icons.  Offsets are
+# from the snapped site position to the top left corner of the image.
+attrOutDragMark = comn.asciiToImage((
+ "8448",
+ "4%%4",
+ "4%%4",
+ "8558"))
+ATTR_OUT_DRAG_MARK_X_OFF = 0
+ATTR_OUT_DRAG_MARK_Y_OFF = -1
+seqInsertDragMark = comn.asciiToImage((
+ ".9631",
+ "5%%%%",
+ ".9631"))
+SEQ_INS_DRAG_MARK_X_OFF = 0
+SEQ_INS_DRAG_MARK_Y_OFF = -1
+outSiteDragMarker = comn.asciiToImage((
+ "..%",
+ ".%%",
+ "%%%",
+ ".%%",
+ "..%"))
+OUT_SITE_DRAG_MARK_X_OFF = 0
+OUT_SITE_DRAG_MARK_Y_OFF = -2
+
+# Indicators to add near a snap sites to emphasize snap and inform the user what sort of
+# insertion will take place on mouse-up.  Offsets are from the snapped site position to
+# the top left corner of the image.
 seriesInsertIndImg = comn.asciiToImage((
  ".5%8",
  "5%%%",
@@ -185,9 +210,6 @@ seriesInsertIndImg = comn.asciiToImage((
  "%5.."))
 SERIES_INSERT_IND_X_OFF = 0
 SERIES_INSERT_IND_Y_OFF = 0
-
-# Indicator to add near a snap site to indicate pending prefix insert.  Offsets are from
-# the snapped site position to the top left corner of the image.
 caretInsertIndImg = comn.asciiToImage((
  "..%..",
  ".6%6.",
@@ -197,9 +219,18 @@ caretInsertIndImg = comn.asciiToImage((
  "%5.5%"))
 CARET_INSERT_IND_X_OFF = 0
 CARET_INSERT_IND_Y_OFF = 3
-
-# Indicator to add near a snap site to indicate pending sequence insertion. Offsets are
-# from the snapped site position to the top left corner of the image.
+plusInsertIndImg = comn.asciiToImage((
+ ".     ..",
+ ". 7%7 ..",
+ "  7%7   ",
+ "777%777 ",
+ "%%%%%%% ",
+ "777%777 ",
+ "  7%7   ",
+ ". 7%7 ..",
+ ".     .."))
+PLUS_INSERT_IND_X_OFF = 0
+PLUS_INSERT_IND_Y_OFF = -4
 seqInsertIndImg = comn.asciiToImage((
  "...   ...",
  ".. %% ...",
@@ -212,8 +243,6 @@ seqInsertIndImg = comn.asciiToImage((
  "...   ..."))
 SEQ_INSERT_IND_X_OFF = 0
 SEQ_INSERT_IND_Y_OFF = -4
-
-
 
 startUpTime = time.monotonic()
 
@@ -2866,7 +2895,21 @@ class Window:
             # Add a visual indicator to cue the user as to what type of operation will
             # happen on drop: comma for series-insert, caret for prefix-insert, and arrow
             # for sequence insert.
-            if self.snapped is not None:
+            if self.snapped is None:
+                if self.dragIcon.hasSite('output'):
+                    x, y = dragPtrSitePos(self.dragIcon, OUT_SITE_DRAG_MARK_X_OFF,
+                        OUT_SITE_DRAG_MARK_Y_OFF)
+                    dragImage.paste(outSiteDragMarker, (x, y), mask=outSiteDragMarker)
+                elif self.dragIcon.hasSite('attrOut'):
+                    x, y = dragPtrSitePos(self.dragIcon, ATTR_OUT_DRAG_MARK_X_OFF,
+                        ATTR_OUT_DRAG_MARK_Y_OFF)
+                    dragImage.paste(attrOutDragMark, (x, y), mask=attrOutDragMark)
+                elif self.dragIcon.hasSite('seqIn'):
+
+                    x, y = dragPtrSitePos(self.dragIcon, SEQ_INS_DRAG_MARK_X_OFF,
+                        SEQ_INS_DRAG_MARK_Y_OFF)
+                    dragImage.paste(seqInsertDragMark, (x, y), mask=seqInsertDragMark)
+            else:
                 sIcon, movIcon, siteType, siteName, _ = self.snapped
                 if siteType == 'insertInput':
                     x, y = dragPtrSitePos(movIcon, SERIES_INSERT_IND_X_OFF,
@@ -2875,13 +2918,19 @@ class Window:
                         # We don't snap attributes to list-insert sites, but has happened
                         y -= icon.ATTR_SITE_OFFSET
                     dragImage.paste(seriesInsertIndImg, (x, y), mask=seriesInsertIndImg)
-                elif siteType in ('input', 'attrIn', 'cprhIn') and (sIcon.childAt(
-                        siteName) is not None or siteName in ('output', 'attrOut')):
-                    x, y = dragPtrSitePos(movIcon, CARET_INSERT_IND_X_OFF,
-                        CARET_INSERT_IND_Y_OFF)
+                elif siteType in ('input', 'attrIn', 'cprhIn'):
+                    if sIcon.childAt(siteName) or siteName in ('output', 'attrOut'):
+                       xOff = CARET_INSERT_IND_X_OFF
+                       yOff = CARET_INSERT_IND_Y_OFF
+                       indImg = caretInsertIndImg
+                    else:
+                        xOff = PLUS_INSERT_IND_X_OFF
+                        yOff = PLUS_INSERT_IND_Y_OFF
+                        indImg = plusInsertIndImg
+                    x, y = dragPtrSitePos(movIcon, xOff, yOff)
                     if movIcon.hasSite('attrOut'):
                         y -= icon.ATTR_SITE_OFFSET
-                    dragImage.paste(caretInsertIndImg, (x, y), mask=caretInsertIndImg)
+                    dragImage.paste(indImg, (x, y), mask=indImg)
                 elif siteType in ('seqIn', 'seqOut'):
                     x, y = dragPtrSitePos(movIcon, SEQ_INSERT_IND_X_OFF,
                         SEQ_INSERT_IND_Y_OFF)
@@ -3056,6 +3105,8 @@ class Window:
         # Since we get called from an after_idle callback during autoscroll, we may not
         # have access to event data, so we read the pointer explicitly, and get the
         # status of the Ctrl key via the setToggleMode parameter from keyboard callbacks.
+        if not self.inRectSelect:
+            return
         if setToggleMode is not None:
             self.inToggleMode = setToggleMode
         toggle = self.inToggleMode and not self.inImmediateRectSelect

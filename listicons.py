@@ -488,7 +488,7 @@ class ListTypeIcon(icon.Icon):
             self.argList.drawBodySites(leftImg)
             # Unclosed icons need to be dimmed and crossed out
             inSiteX = leftImg.width - icon.inSiteImage.width
-            if not self.closed:
+            if not self.closed and not (isinstance(self, TupleIcon) and self.noParens):
                 cntrY = self.sites.output.yOffset
                 draw = ImageDraw.Draw(leftImg)
                 draw.line((leftImgX+1, cntrY, inSiteX, cntrY),
@@ -1083,7 +1083,7 @@ class TupleIcon(ListTypeIcon):
         self.reopen()
         self.noParens = True
         self.drawList = None
-        self.coincidentSite = 'argIcons_0'
+        self.coincidentSite = None if self.argList.isMultiRow() else 'argIcons_0'
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.restoreParens)
 
@@ -1101,6 +1101,13 @@ class TupleIcon(ListTypeIcon):
             print("Something tried to close a naked tuple")
             return
         super().close(typeover=typeover)
+
+    def doLayout(self, outSiteX, outSiteY, layout):
+        ListTypeIcon.doLayout(self, outSiteX, outSiteY, layout)
+        # If layout changes the number of rows of a naked tuple, it changes whether or
+        # not we have a site coincident with our output.
+        if self.noParens:
+            self.coincidentSite = None if self.argList.isMultiRow() else 'argIcons_0'
 
     def calcLayouts(self):
         # If a naked tuple is no longer at the top level and needs its parens restored,
@@ -1220,7 +1227,7 @@ class TupleIcon(ListTypeIcon):
     def snapLists(self, forCursor=False):
         # Tweak naked tuple snapList to move site away from (left of) sequence site
         siteSnapLists = ListTypeIcon.snapLists(self, forCursor)
-        if not self.noParens or self.argList.simpleSpineWillDraw() or 'insertInput' \
+        if not self.noParens or self.argList.isMultiRow() or 'insertInput' \
                 not in siteSnapLists or len(siteSnapLists) == 0:
             return siteSnapLists
         firstInsertSnapSite = list(siteSnapLists['insertInput'][0])

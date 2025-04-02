@@ -14,19 +14,12 @@ import expredit
 
 tgtSiteNamePattern = re.compile('targets(\d?)_')
 
+# Empty image reserving place for the sequence insert indicator (that is now added by the
+# drag code to indicate the *single* icon with the active drag site).  The associated
+# drawing code should eventually be removed, but the icon rectangle still needs to
+# encompass this area, since the sequence insert site is technically part of the icon.
 assignDragImage = comn.asciiToImage((
  "......",
- "......",
- "......",
- "......",
- "......",
- "...ooo",
- "..o%%%",
- "55%%%.",
- "%%%%..",
- "55%%%.",
- "..o%%%",
- "...ooo",
  "......",
  "......",
  "......",

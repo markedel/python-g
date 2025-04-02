@@ -156,7 +156,10 @@ class ListLayoutMgr:
         """Return True if ListLayoutMgr has simpleSpine enabled and the chosen layout
         (last doLayout call) was multi-row (requires drawSimpleSpine call and includes
         space for drawing the simple spine)."""
-        return self.simpleSpine and self.rowWidths and len(self.rowWidths) >= 2
+        return self.simpleSpine and self.isMultiRow()
+
+    def isMultiRow(self):
+        return self.rowWidths and len(self.rowWidths) >= 2
 
     def makeInsertSnapList(self):
         """Generate snap sites for item insertion"""

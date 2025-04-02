@@ -190,7 +190,6 @@ commaTypeoverImage = comn.asciiToImage((
  "o8      o",
  "o       o",
  "ooooooooo"))
-commaImageSiteYOffset = 3
 
 colonImage = comn.asciiToImage((
  "ooooo",
@@ -247,12 +246,16 @@ rSimpleSpineImage = comn.asciiToImage((
  "o7o",
  "ooo"))
 
+# Sequence insert sites were originally drawn by the draw() methods, but since we've
+# changed to a single-active-site model for dragging, we don't want these sites showing
+# up on icons that won't actually snap.  However, we do still want icons to reserve space
+# for the marker that extends to the site, hence (for now) this mostly-empty image.
 dragSeqImage = comn.asciiToImage((
- "..ooo",
- ".o%%o",
- "o%%%%",
- ".o%%o",
- "..ooo"))
+ "....o",
+ "....o",
+ "....o",
+ "....o",
+ "....o"))
 
 branchFootImage = comn.asciiToImage((
  "ooooooooooooooooooooooooooo",
