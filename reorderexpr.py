@@ -4,6 +4,7 @@ import opicons
 import listicons
 import subscripticon
 import parenicon
+import infixicon
 
 def _reduceOperatorStack(operatorStack, operandStack):
     """This is the inner component of reorderArithExpr (see below).  Pop a single operator
@@ -164,7 +165,7 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
     if topNode is None:
         yield MissingArgToken()
     elif topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon,
-            listicons.DictElemIcon, listicons.ArgAssignIcon):
+            listicons.DictElemIcon, listicons.ArgAssignIcon, infixicon.TypeAnnIcon):
         hasParens = topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
             topNode.hasParens  # infix ops dict elem and arg assign can't have parens
         if hasParens:

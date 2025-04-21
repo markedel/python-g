@@ -630,6 +630,15 @@ class EntryIcon(icon.Icon):
         error string on failure, None on success."""
         if len(text) > MAX_ENTRY_PASTE:
             text = text[:MAX_ENTRY_PASTE]
+        if text in '->' and isinstance(self.attachedIcon(), blockicons.DefIcon) and \
+                self.attachedSite() == 'returnType':
+            # In all other cases, typeover is to the right of the cursor or entry icon,
+            # but for DefIcon return type annotation, we preemptively leap over the
+            # (normally typed) '->' and trim the characters out of the entry icon,
+            # implicitly assuming (hmm...) that types won't start with '-' or '>'
+            self.text = ''
+            self.setCursorPos(0)
+            return None
         if len(text) > 1:
             # This is a multi-character paste, and could come from anywhere.  Trim and
             # Filter out non-usable characters.  We accept all of the printable ascii
@@ -1234,8 +1243,9 @@ class EntryIcon(icon.Icon):
         else:  # Currently no other cursor places, must be expr
             parseResult, handlerIc = runIconTextEntryHandlers(self, newText, onAttr=False)
             if parseResult is None:
-                forSeries = self.attachedIcon() is not None and \
-                    iconsites.isSeriesSiteId(self.attachedSite())
+                coincIcon, coincSite = iconsites.highestCoincidentSite(
+                    self.attachedIcon(), self.attachedSite())
+                forSeries = iconsites.isSeriesSiteId(coincSite)
                 parseResult = parseExprText(newText, self.window, forSeriesSite=forSeries)
         if wasRejected(parseResult) and self.attachedSiteType() == 'input':
             coincidentSite = self.attachedIcon().hasCoincidentSite()
@@ -1358,6 +1368,22 @@ class EntryIcon(icon.Icon):
                 return None
         elif parseResult == "makeSubscript":
             self.insertOpenParen(subscripticon.SubscriptIcon)
+            self.window.undo.addBoundary()
+            return None
+        elif parseResult == "addArgList":
+            # This (very specific) action is currently only added by the class def icon
+            # which needs to create its inheritance list when the user types '(', but
+            # textEntryHandlers are not allowed to jump the entry icon to a new site
+            for ic in self.attachedIcon().parentage():
+                if isinstance(ic, blockicons.ClassDefIcon):
+                    classDefIc = ic
+                    break
+            else:
+                return "Internal error, couldn't find class def to add '('"
+            classDefIc.addArgs()
+            self.attachedIcon().replaceChild(None, self.attachedSite())
+            classDefIc.replaceChild(self, 'argIcons_0')
+            self.remove()
             self.window.undo.addBoundary()
             return None
         # Parser emitted an icon.  Splice it in to the hierarchy in place of the entry
@@ -1568,7 +1594,14 @@ class EntryIcon(icon.Icon):
             # formerly attached.  This is not just saving a user keystroke, by never
             # entering the state where we have an entry icon with text and pending args
             # on a no-arg statement, we save having to worry about that state, elsewhere.
+            # Make an exception for block-introducing colon, which we ignore at the end
+            # of a block-owning statement, but not as a new statement of its own.
             topIcon = self.attachedIcon().topLevelParent()
+            if remainingText == ':' and blockicons.isBlockOwnerIc(topIcon) or \
+                    blockicons.isPseudoBlockIc(topIcon) and not self.hasPendingArgs():
+                self.text = ''
+                self.remove()
+                return None
             if topIcon is self.attachedIcon() and topIcon.hasSite('seqOut'):
                 topIcon.replaceChild(None, self.attachedSite())
                 icon.insertSeq(self, topIcon)
@@ -1851,7 +1884,9 @@ class EntryIcon(icon.Icon):
                 matchChar = {'endParen':'(', 'endBracket':'[', 'endBrace':'{'}[token]
                 return "No matching %s" % matchChar
             self.remove()  # Safe, since args would have invalidated typeover
-            self.window.cursor.setToIconSite(typeoverIc, 'attrIcon')
+            cursorSite = 'returnType' if isinstance(typeoverIc, blockicons.DefIcon) \
+                else 'attrIcon'
+            self.window.cursor.setToIconSite(typeoverIc, cursorSite)
             return None
         if transferArgsFrom is not None:
             # If the icon that matches or an intervening open paren/bracket/brace might
@@ -1996,14 +2031,32 @@ class EntryIcon(icon.Icon):
     def insertColon(self):
         if self.attachedIcon() is None:
             # Not allowed to type colon at the top level: Reject
-            return "Colon must be in context of a dictionary or subscript"
+            return "Colon must be in context of a dictionary or subscript, or follow " \
+                "an identifier in a context where type annotation can be applied"
         # Find the top of the expression to which the entry icon is attached
         ic, splitSite = findEnclosingSite(self)
         if isinstance(ic, listicons.DictIcon):
             return self.insertDictColon(ic)
         if isinstance(ic, subscripticon.SubscriptIcon):
             return self.insertSubscriptColon(ic)
-        return "Colon must be in context of a dictionary or subscript"
+        if isinstance(ic, (blockicons.ForIcon, blockicons.WithIcon, blockicons.WhileIcon,
+                blockicons.IfIcon, blockicons.ElifIcon, blockicons.DefOrClassIcon,
+                blockicons.ExceptIcon)):
+            rightmostIc, rightmostSite = icon.rightmostSite(ic)
+            if rightmostIc is self:
+                self.remove()
+                return None
+        if ic is None and isinstance(self.attachedIcon(), (blockicons.ElseIcon,
+                blockicons.TryIcon, blockicons.DefOrClassIcon, blockicons.FinallyIcon)) \
+                and self.attachedSite() == 'attrIcon':
+            self.remove()
+            return None
+        if ic is None or isinstance(ic, listicons.TupleIcon) and ic.noParens \
+                or isinstance(ic, assignicons.AssignIcon) and splitSite[:8] == 'targets0'\
+                or isinstance(ic, blockicons.DefIcon) and splitSite[:8] == 'argIcons':
+            return self.insertTypeAnn(ic, splitSite)
+        return "Colon must be in context of a dictionary or subscript, or follow " \
+            "an identifier in a context where type annotation can be applied"
 
     def insertYieldIcon(self, ic):
         """This handles a weird corner case in Python syntax, where yield can be used as
@@ -2162,6 +2215,127 @@ class EntryIcon(icon.Icon):
             newDictElem.replaceChild(left, 'leftArg')
             newDictElem.replaceChild(right, 'rightArg')
             self.remove()
+        return None
+
+    def insertTypeAnn(self, enclosingIc, enclosingSite):
+        # We only get here if we know this is a reasonable parent (or lack thereof) for
+        # type annotation
+        if enclosingIc is None:
+            # We're attached to an expression that starts at the top level.
+            topParent = self.topLevelParent()
+            if isinstance(topParent, infixicon.TypeAnnIcon):
+                # There's already a colon in this clause.  We allow a colon to be typed
+                # in the left arg of an existing clause, which is handled by adding a new
+                # clause.  Since we're on the top level, that involves creating a naked
+                # tuple, which we do here and let the more-general code later on do the
+                # actual work.  If the colon is within the type annotation, is an error.
+                typeAnnSite = topParent.siteOf(self, recursive=True)
+                if typeAnnSite != 'leftArg':
+                    return "Type annotation already contains a colon"
+                newTuple = listicons.TupleIcon(window=self.window, noParens=True)
+                self.window.replaceTop(topParent, newTuple)
+                newTuple.replaceChild(topParent, 'argIcons_0')
+                enclosingIc = newTuple
+                enclosingSite = 'argIcons_0'
+            else:
+                if topParent is self:
+                    # There's nothing at the site except the entry icon (and whatever we
+                    # are holding).  Place a new TypeAnnIcon, move entry icon to right
+                    # arg, try to place pending args and remove
+                    newTypeAnn = infixicon.TypeAnnIcon(window=self.window)
+                    self.window.replaceTop(self, newTypeAnn)
+                    newTypeAnn.replaceChild(self, 'rightArg')
+                    if self.remove():
+                        self.window.cursor.setToIconSite(newTypeAnn, 'rightArg')
+                    return None
+                # Vet the icon that the entry icon is attached to as a reasonable target
+                # for type annotation
+                attachedIc = self.attachedIcon()
+                attrRoot = icon.findAttrOutputSite(attachedIc)
+                highestCoincIcon = iconsites.highestCoincidentIcon(attrRoot)
+                if highestCoincIcon is not topParent or not \
+                        infixicon.isValidAnnotationTarget(attachedIc, stopAtIc=self):
+                    return "Not a valid target for type annotation"
+                # Insert the type annotation icon at the site as an operator
+                newTypeAnn = infixicon.TypeAnnIcon(window=self.window)
+                left, right = splitExprAtIcon(self, enclosingIc, None, self)
+                self.window.replaceTop(topParent, newTypeAnn)
+                newTypeAnn.replaceChild(left, 'leftArg')
+                newTypeAnn.replaceChild(right, 'rightArg')
+                if self.remove():
+                    self.window.cursor.setToIconSite(newTypeAnn, 'rightArg')
+                # Outside of function def, should not encounter icons of lower precedence
+                # (= or *), but through great contortion it is possible.
+                reorderexpr.reorderArithExpr(newTypeAnn)
+                return None
+        child = enclosingIc.childAt(enclosingSite)
+        pendingArg, pendIdx, seriesIdx = icon.firstPlaceListIcon(self.listPendingArgs())
+        if isinstance(child, infixicon.TypeAnnIcon) or \
+                isinstance(child, listicons.ArgAssignIcon) and \
+                isinstance(child.childAt('leftArg'), infixicon.TypeAnnIcon):
+            # There's already a colon in this clause.  Within a function def, w allow a
+            # colon to be typed on the left of an existing clause, since that is how one
+            # naturally types a new clause (when they begin after the comma or to
+            # the left of the first clause).  Typing a colon on the right side of
+            # a typeAnnIcon is not expected without a comma, and not allowed.
+            if isinstance(child, listicons.ArgAssignIcon):
+                if child.siteOf(self, recursive=True) != 'leftArg':
+                    return "Can't add type annotation to argument default value"
+                typeAnnIc = child.childAt('leftArg')
+            else:
+                typeAnnIc = child
+            typeAnnSite = typeAnnIc.siteOf(self, recursive=True)
+            if isinstance(enclosingIc, blockicons.DefIcon) and typeAnnSite != 'leftArg':
+                return "Type annotation already contains a colon"
+            # Split across entry icon, insert both a colon and a comma w/typeover
+            left, right = splitExprAtIcon(self, child, None, self)
+            newTypeAnn = infixicon.TypeAnnIcon(window=self.window)
+            newTypeAnn.replaceChild(left, 'leftArg')
+            enclosingIc.replaceChild(newTypeAnn, enclosingSite, leavePlace=True)
+            nextSite = iconsites.nextSeriesSiteId(enclosingSite)
+            enclosingIc.insertChild(child, nextSite)
+            child.replaceChild(right, 'leftArg')
+            # Remove entry icon, placing pending args on the right side of the new
+            # comma but cursor before the comma... Checking for pending args needs to
+            # happen earlier while we can still bail
+            if self.remove():
+                self.window.cursor.setToIconSite(newTypeAnn, 'rightArg')
+            enclosingIc.setTypeover(0, nextSite)
+            self.window.watchTypeover(enclosingIc)
+        elif isinstance(child, listicons.ArgAssignIcon):
+            if child.siteOf(self, recursive=True) != 'leftArg':
+                return "Can't add type annotation to argument default value"
+            newTypeAnn = infixicon.TypeAnnIcon(window=self.window)
+            left, right = splitExprAtIcon(self, enclosingIc, None, self)
+            enclosingIc.replaceChild(newTypeAnn, enclosingSite)
+            newTypeAnn.replaceChild(left, 'leftArg')
+            newTypeAnn.replaceChild(right, 'rightArg')
+            if self.remove():
+                self.window.cursor.setToIconSite(newTypeAnn, 'rightArg')
+            reorderexpr.reorderArithExpr(newTypeAnn)
+        elif child is self:
+            # There's nothing at the site except entry icon and whatever we are holding.
+            # Place a new TypeAnnIcon, move entry icon to right arg, try to place
+            # pending args and remove
+            newTypeAnn = infixicon.TypeAnnIcon(window=self.window)
+            enclosingIc.replaceChild(newTypeAnn, enclosingSite)
+            newTypeAnn.replaceChild(self, 'rightArg')
+            if self.remove():
+                self.window.cursor.setToIconSite(newTypeAnn, 'rightArg')
+        else:
+            # There's something at the site.  Put a colon in it
+            if isinstance(child, (listicons.StarIcon, listicons.StarStarIcon)):
+                if isinstance(child.childAt('argIcon'), infixicon.TypeAnnIcon):
+                    # There's already a type annotation, here
+                    return "Can't add type annotation to type annotation"
+            newTypeAnn = infixicon.TypeAnnIcon(window=self.window)
+            left, right = splitExprAtIcon(self, enclosingIc, None, self)
+            enclosingIc.replaceChild(newTypeAnn, enclosingSite)
+            newTypeAnn.replaceChild(left, 'leftArg')
+            newTypeAnn.replaceChild(right, 'rightArg')
+            reorderexpr.reorderArithExpr(newTypeAnn)
+            if self.remove():
+                self.window.cursor.setToIconSite(newTypeAnn, 'rightArg')
         return None
 
     def insertSubscriptColon(self, onIcon):
@@ -2861,7 +3035,7 @@ def parseTopLevelText(text, window):
             return "accept"
         delim = text[-1]
         if text[:-1] == stmt and delim in delimitChars:
-            if stmt in noArgStmts and delim not in emptyDelimiters:
+            if stmt in noArgStmts and delim not in emptyDelimiters and delim != ':':
                 # Accepting unusable delimiters would cause trouble later
                 return "reject:%s does not take an argument" % text[:-1]
             kwds = {}
@@ -2888,6 +3062,9 @@ def parseTopLevelText(text, window):
             if delim.isalpha():
                 return nameicons.DecoratorIcon(window), delim
             return "reject:@ must be followed by decorator function name"
+    if text == ':':
+        if len(text) == 1:
+            return "reject:Must specify target for type annotation"
     return parseExprText(text, window)
 
 def parseWindowBgText(text, window):
@@ -3441,8 +3618,9 @@ def _appendOperator(newOpIcon, onIcon, onSite):
     # operation has equal precedence, and the associativity of the operation matches
     # the side of the operation on which the insertion is being made.
     for op in argIcon.parentage():
-        if stopAtParens or op.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon,
-                opicons.UnaryOpIcon) or newOpIcon.precedence > op.precedence or \
+        if stopAtParens or not isinstance(op, (opicons.BinOpIcon, opicons.IfExpIcon,
+                opicons.UnaryOpIcon, infixicon.InfixIcon)) or \
+                newOpIcon.precedence > op.precedence or \
                 newOpIcon.precedence == op.precedence and (
                  op.leftAssoc() and op.leftArg() is childOp or
                  op.rightAssoc() and op.rightArg() is childOp):
@@ -3454,7 +3632,7 @@ def _appendOperator(newOpIcon, onIcon, onSite):
         if op.__class__ is opicons.UnaryOpIcon:
             op.replaceChild(leftArg, "argIcon")
             leftArg = op
-        else:  # BinaryOp
+        else:  # BinaryOp or infix
             if op.leftArg() is childOp:  # Insertion was on left side of operation
                 op.replaceChild(rightArg, binOpLeftArgSite(op))
                 if op.leftArg() is None:
@@ -3463,7 +3641,7 @@ def _appendOperator(newOpIcon, onIcon, onSite):
             else:                       # Insertion was on right side of operation
                 op.replaceChild(leftArg, binOpRightArgSite(op))
                 leftArg = op
-            if op.hasParens:
+            if op.__class__ is opicons.BinOpIcon and op.hasParens:
                 # If the op has parens and the new op has been inserted within them,
                 # do not go beyond the parent operation
                 stopAtParens = True

@@ -2429,6 +2429,7 @@ class ArgAssignIcon(infixicon.InfixIcon):
 
     def __init__(self, window=None, location=None):
         infixicon.InfixIcon.__init__(self, "=", argAssignImage, False, window, location)
+        self.precedence = -2  # Needs to be < TypeAnnIcon (':')
 
     def highlightErrors(self, errHighlight):
         if errHighlight is not None:
@@ -2458,8 +2459,10 @@ class ArgAssignIcon(infixicon.InfixIcon):
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         needsCtx = not self._validateContext() and not export
         brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+        allowTypeAnn = self.parent() is not None and \
+            isinstance(self.parent(), blockicons.DefIcon)
         text = nameicons.createNameFieldSaveText(brkLvl, self.sites.leftArg, contNeeded,
-            export)
+            export, allowTypeAnn=allowTypeAnn)
         text.add(None, "=")
         icon.addArgSaveText(text, brkLvl, self.sites.rightArg, contNeeded, export)
         if needsCtx:
@@ -2494,6 +2497,7 @@ class StarIcon(opicons.UnaryOpIcon):
 
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '*', window, location)
+        self.precedence = -2  # Has to be able to own type annotation
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on being part of an argument or parameter list,
@@ -2550,7 +2554,8 @@ class StarIcon(opicons.UnaryOpIcon):
         # a store or del context.
         text = filefmt.SegmentedText('*')
         parent = self.parent()
-        if self.sites.argIcon.att is None and not export:
+        argIcon = self.childAt('argIcon')
+        if argIcon is None and not export:
             # Python only allows * with no arg in function def and lambda
             if not isinstance(parent, (blockicons.DefIcon, blockicons.LambdaIcon)):
                 text.wrapCtxMacro(parentBreakLevel + 1, 'f', needsCont=contNeeded)
@@ -2558,11 +2563,17 @@ class StarIcon(opicons.UnaryOpIcon):
         needCtx = not export and parent is not None and \
             not iconsites.isSeriesSiteId(parent.siteOf(self)) and \
             not isinstance(parent, parenicon.CursorParenIcon)
+        if isinstance(argIcon, infixicon.TypeAnnIcon) and not isinstance(parent,
+                blockicons.DefIcon):
+            needCtx = True
+            parseCtx = 'n'
+        else:
+            parseCtx = 'f'
         brkLvl = parentBreakLevel + (1 if needCtx else 0)
         arg = argSaveTextForContext(brkLvl, self.sites.argIcon, contNeeded, export, ctx)
         text.concat(None, arg, contNeeded)
         if needCtx:
-            text.wrapCtxMacro(brkLvl, parseCtx='f', needsCont=contNeeded)
+            text.wrapCtxMacro(brkLvl, parseCtx=parseCtx, needsCont=contNeeded)
         return text
 
     def clipboardRepr(self, offset, iconsToCopy):
@@ -2584,6 +2595,13 @@ class StarIcon(opicons.UnaryOpIcon):
                 else:
                     errHighlight = icon.ErrorHighlight(
                         "Can't use starred expression in this context")
+            argIcon = self.childAt('argIcon')
+            if isinstance(argIcon, infixicon.TypeAnnIcon) and not isinstance(parent,
+                    blockicons.DefIcon):
+                self.errHighlight = None
+                argIcon.highlightErrors(icon.ErrorHighlight("Type annotation on "
+                    "argument of * is only allowed within a function definition"))
+                return
         self.errHighlight = errHighlight
         for ic in self.children():
             ic.highlightErrors(errHighlight)
@@ -2596,6 +2614,7 @@ class StarStarIcon(opicons.UnaryOpIcon):
 
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '**', window, location)
+        self.precedence = -2  # Has to be able to own type annotation
 
     def snapLists(self, forCursor=False):
         # Make snapping conditional on being part of an argument or parameter list,
@@ -2622,7 +2641,7 @@ class StarStarIcon(opicons.UnaryOpIcon):
         brkLvl = parentBreakLevel + (1 if needCtx else 0)
         icon.addArgSaveText(text, brkLvl, self.sites.argIcon, contNeeded, export)
         if needCtx:
-            text.wrapCtxMacro(brkLvl, parseCtx='f', needsCont=contNeeded)
+            text.wrapCtxMacro(brkLvl, parseCtx='n', needsCont=contNeeded)
         return text
 
     def highlightErrors(self, errHighlight):
@@ -3175,6 +3194,12 @@ def highlightErrorsForContext(site, ctx, restrictToSingle=False):
             attr = ic.sites.attrIcon.att
         argCtx = ctx if attr is None else None
         highlightErrorsForContext(ic.sites.argIcon, argCtx, restrictToSingle)
+    elif isinstance(ic, infixicon.TypeAnnIcon):
+        if ctx == 'del':
+            ic.highlightErrors(icon.ErrorHighlight(
+                "Type information is not allowed in del context"))
+        else:
+            ic.highlightErrors(None)
     else:
         ic.highlightErrors(icon.ErrorHighlight("Not a valid target for %s" % ctx))
     while attr is not None:
@@ -3260,8 +3285,6 @@ def canPlaceArgsInclCprh(placeList, onIcon, onSite, overwriteStart=False):
     """Determine which arguments from placeList would be placed if the placeArgsInclCprh
     were called on the same arguments (see placeArgsInclCprh for description)."""
     return _placeArgsInclCprhOnParen(placeList, onIcon, onSite, overwriteStart, False)
-    if not _needToCvtParenToPlace(placeList, onIcon, onSite, overwriteStart):
-        return
 
 def placeArgsInclCprh(placeList, onIcon, onSite, overwriteStart=False):
     """Comprehension sites can't hold a cursor or an entry icon (a design decision due to
@@ -3696,13 +3719,28 @@ def createArgAssignIconFromFakeAst(astNode, window):
     # assignment expression outside of the the context of a call or function def.
     # Translate it to an icon.
     assignIcon = ArgAssignIcon(window)
-    kwdAst = astNode.keywordAst
-    valueIcon = icon.createFromAst(kwdAst.value, window)
-    if kwdAst.arg is None:
-        starStarIcon = StarStarIcon(window)
-        starStarIcon.replaceChild(valueIcon, 'argIcon')
-        return starStarIcon
-    nameIcon = nameicons.createIconForNameField(kwdAst, kwdAst.arg, window)
+    if isinstance(astNode.fromAst, ast.keyword):
+        kwdAst = astNode.fromAst
+        valueIcon = icon.createFromAst(kwdAst.value, window)
+        if kwdAst.arg is None:
+            starStarIcon = StarStarIcon(window)
+            starStarIcon.replaceChild(valueIcon, 'argIcon')
+            return starStarIcon
+        nameIcon = nameicons.createIconForNameField(kwdAst, kwdAst.arg, window)
+    elif isinstance(astNode.fromAst, ast.AnnAssign):
+        annAssignAst = astNode.fromAst
+        valueIcon = icon.createFromAst(annAssignAst.value, window)
+        nameIcon = nameicons.createIconForNameField(annAssignAst.target,
+            annAssignAst.target.id, window, annotation=annAssignAst.annotation)
+    elif isinstance(astNode.fromAst, ast.Assign):
+        assignAst = astNode.fromAst
+        valueIcon = icon.createFromAst(assignAst.value, window)
+        targetAst = assignAst.targets[0]
+        nameIcon = nameicons.createIconForNameField(targetAst, targetAst.id, window)
+    else:
+        print("createArgAssignIconFromFakeAst did not expect ast of type:",
+            astNode.fromAst.__class__.__name__)
+        return assignIcon
     assignIcon.replaceChild(nameIcon, 'leftArg')
     assignIcon.replaceChild(valueIcon, 'rightArg')
     return assignIcon

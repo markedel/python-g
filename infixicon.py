@@ -14,6 +14,27 @@ import listicons
 # (which is not currently there).
 delimitOperators = (':')
 
+typeAnnImage = comn.asciiToImage((
+ "ooooooo",
+ "o     o",
+ "o 77  o",
+ "o 77  o",
+ "o     o",
+ "o    o.",
+ "o   o..",
+ "o 77 o.",
+ "o 77  o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "o     o",
+ "ooooooo"))
+TYPE_ANN_INPUT_SHIFT = -3
+
 class InfixIcon(icon.Icon):
     def __init__(self, op, opImg=None, isKwd=False, window=None, location=None):
         icon.Icon.__init__(self, window)
@@ -97,7 +118,8 @@ class InfixIcon(icon.Icon):
             lArgWidth = icon.EMPTY_ARG_WIDTH if lArgLayout is None else lArgLayout.width
             layout.lArgWidth = lArgWidth
             rArgSiteX = lArgWidth - 1 + opWidth - 1
-            layout.addSubLayout(rArgLayout, "rightArg", rArgSiteX, 0)
+            rArgSiteY = self.sites.rightArg.yOffset - opHeight // 2
+            layout.addSubLayout(rArgLayout, "rightArg", rArgSiteX, rArgSiteY)
             rArgWidth = icon.EMPTY_ARG_WIDTH if rArgLayout is None else rArgLayout.width
             layout.width = rArgSiteX + rArgWidth
             layouts.append(layout)
@@ -171,26 +193,31 @@ class InfixIcon(icon.Icon):
                 # that the icon being replaced is coincident with that site.
                 highestIcon = iconsites.highestCoincidentIcon(ic)
                 parent = highestIcon.parent()
-                if parent is not None:
-                    allowable = self.allowableParents.get(parent.__class__.__name__)
-                    if allowable is not None :
-                        parentSite = parent.siteOf(highestIcon)
-                        if iconsites.isSeriesSiteId(parentSite):
-                            parentSite, _ = iconsites.splitSeriesSiteId(parentSite)
-                        if allowable == parentSite:
-                            return True
-            if iconsites.isSeriesSiteId(siteId):
-                siteName, siteIdx = iconsites.splitSeriesSiteId(siteId)
-            else:
-                siteName = siteId
-            allowable = self.allowableParents.get(ic.__class__.__name__)
-            if allowable is not None and allowable == siteName:
-                return True
-        if 'output' in snapLists:  # Infix icons can end up in a sequence (via deletion)
+                if parent is not None and \
+                        self.isAllowableSite(parent, parent.siteOf(highestIcon)):
+                    return True
+            return self.isAllowableSite(ic, siteId)
+        if 'output' in snapLists:
             outSites = snapLists['output']
             snapLists['output'] = []
             snapLists['conditional'] = \
                 [(*snapData, 'output', snapFn) for snapData in outSites]
+        # Also allow snapping of an infix icon with an empty site on the left on the
+        # attribute site of an icon whose attribute-root is on an allowable parent site
+        if self.leftArg() is None:
+            def snapFn(ic, siteId):
+                if siteId == 'attrIcon':
+                    attrRoot = icon.findAttrOutputSite(ic)
+                    attrRootParent = attrRoot.parent()
+                    if attrRootParent is None:
+                        return True
+                    if self.isAllowableSite(attrRootParent,
+                            attrRootParent.siteOf(attrRoot)):
+                        return True
+                return False
+            yOffset = self.rect[1] + self.sites.output.yOffset + icon.ATTR_SITE_OFFSET
+            snapLists['conditional'].append((self, (0, yOffset), 'output', 'output',
+                snapFn))
         return snapLists
 
     def backspace(self, siteId, evt):
@@ -268,6 +295,31 @@ class InfixIcon(icon.Icon):
         self.replaceChild(None, 'rightArg')
         return entryIcon
 
+    def isAllowableSite(self, ic=None, siteName=None):
+        if not hasattr(self, 'allowableParents'):
+            return True
+        if ic is None:
+            ic = self.parent()
+        if ic is None and None in self.allowableParents:
+            # Icon is allowed on the top level
+            return True
+        if siteName is None:
+            siteName = ic.siteOf(self)
+        if ic.__class__.__name__ not in self.allowableParents:
+            if 'NakedTuple' in self.allowableParents and \
+                    isinstance(ic, listicons.TupleIcon) and ic.noParens:
+                return True
+            return False
+        allowableSites = self.allowableParents[ic.__class__.__name__]
+        if iconsites.isSeriesSiteId(siteName):
+            siteName, siteIdx = iconsites.splitSeriesSiteId(siteName)
+        if siteName == allowableSites:
+            return True
+        if allowableSites[-1] == '*' and \
+                siteName[:len(allowableSites) - 1] == allowableSites[:-1]:
+            return True
+        return False
+
 class AsIcon(InfixIcon):
     # Defining 'allowableParents' triggers two important and non-obvious external
     # features related to snapping: 1) It tells the super-class (InfixIcon) snapList
@@ -292,15 +344,7 @@ class AsIcon(InfixIcon):
         elif parent is None:
             needCtx = True
         else:
-            if parentClass in self.allowableParents:
-                parentSite = parent.siteOf(self)
-                if iconsites.isSeriesSiteId(parentSite):
-                    siteName, siteIdx = iconsites.splitSeriesSiteId(parentSite)
-                else:
-                    siteName = parentSite
-                needCtx = siteName != self.allowableParents[parentClass]
-            else:
-                needCtx = True
+            needCtx = not self.isAllowableSite()
         brkLvl = parentBreakLevel + (2 if needCtx else 1)
         text = icon.argSaveText(brkLvl, self.sites.leftArg, contNeeded, export)
         text.add(None, " as ")
@@ -314,19 +358,14 @@ class AsIcon(InfixIcon):
         if needCtx:
             text.wrapCtxMacro(parentBreakLevel+1, parseCtx='s', needsCont=contNeeded)
         return text
-    
+
     def highlightErrors(self, errHighlight):
         if errHighlight is None:
             parent = self.parent()
             if parent is not None:
                 parentClass = parent.__class__.__name__
                 if parentClass in self.allowableParents:
-                    parentSite = parent.siteOf(self)
-                    if iconsites.isSeriesSiteId(parentSite):
-                        siteName, siteIdx = iconsites.splitSeriesSiteId(parentSite)
-                    else:
-                        siteName = parentSite
-                    if siteName != self.allowableParents[parentClass]:
+                    if not self.isAllowableSite(parent, parent.siteOf(self)):
                         errHighlight = icon.ErrorHighlight(
                             "An 'as' statement is not allowed, here")
                 else:
@@ -335,3 +374,124 @@ class AsIcon(InfixIcon):
         self.errHighlight = errHighlight
         for ic in self.children():
             ic.highlightErrors(errHighlight)
+
+class TypeAnnIcon(InfixIcon):
+    """Holds type annotation data for a variable or parameter."""
+    # Defining 'allowableParents' triggers two important and non-obvious external
+    # features related to snapping: 1) It tells the super-class (InfixIcon) snapList
+    # method to make snapping conditional on the parent site being directly on an icon
+    # of the given class and a site with the given name.  2) It enables dragged icons of
+    # this class to also snap to replacement sites of icons that are coincident with (but
+    # not directly attached to) the listed icons and sites.  The mechanism for #2 is
+    # handled in expredit.extendDefaultReplaceSite, which notices snapped icons with an
+    # allowableParents attribute and expands the replace target to reach the allowable
+    # parent site, provided that the icon being replaced is coincident with that site.
+    allowableParents = {'DefIcon':'argIcons', 'AssignIcon':'targets*',
+        'ArgAssignIcon':'leftArg', 'StarIcon':'argIcon', 'StarStarIcon':'argIcon',
+        None:None, 'NakedTuple':'argIcons'}
+    canProcessCtx = True
+
+    def __init__(self, window=None, location=None):
+        InfixIcon.__init__(self, ":", typeAnnImage, False, window, location)
+        self.sites.rightArg.yOffset += TYPE_ANN_INPUT_SHIFT
+
+    def highlightErrors(self, errHighlight):
+        parent = self.parent()
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        if not self.isAllowableSite():
+            icon.Icon.highlightErrors(self, icon.ErrorHighlight("':' to specify type "
+                "annotation can only appear by itself or within an assignment or "
+                "function definition"))
+            return
+        if parent.__class__.__name__ == 'TupleIcon':
+            icon.Icon.highlightErrors(self, icon.ErrorHighlight(
+                "Type annotation cannot be part of a series"))
+            return
+        if parent.__class__.__name__ == 'AssignIcon':
+            if parent.hasSite('targets1_0'):
+                icon.Icon.highlightErrors(self, icon.ErrorHighlight(
+                    "Type annotation cannot be used with multiple assignments"))
+                return
+            if parent.hasSite('targets0_1'):
+                icon.Icon.highlightErrors(self, icon.ErrorHighlight(
+                    "Type annotation cannot be used with unpacking"))
+                return
+        self.errHighlight = None
+        targetIc = self.childAt('leftArg')
+        annIc = self.childAt('rightArg')
+        if targetIc is not None:
+            if isValidAnnotationTarget(targetIc):
+                targetIc.highlightErrors(None)
+            else:
+                targetIc.highlightErrors(icon.ErrorHighlight(
+                    "Not a valid target for type annotation"))
+        if annIc is not None:
+            annIc.highlightErrors(icon.TypeAnnHighlight())
+
+    def snapLists(self, forCursor=False):
+        snapLists = InfixIcon.snapLists(self, forCursor)
+        # Add snap sites for sequence sites (unlike other infix icons, type annotation
+        # is legitimate Python syntax at the top level).  Note that the default snap
+        # sites are a bit over-permissive on what can be on the right site, but I
+        # don't feel like adding the extra code to support.
+        if forCursor:
+            return snapLists
+        def snapFn(ic, siteId):
+            if siteId in ('seqIn', 'seqOut'):
+                return True
+        siteYOffset = self.rect[1] + self.sites.output.yOffset
+        snapLists['conditional'].append((self, (0, siteYOffset), 'output', 'output',
+            snapFn))
+        return snapLists
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        if export:
+            needsCtx = False
+        else:
+            needsCtx = not self.isAllowableSite()
+            parent = self.parent()
+            if parent is not None:
+                parentClass = parent.__class__.__name__
+                if parentClass == 'TupleIcon' or parentClass == 'AssignIcon' and \
+                        (parent.hasSite('targets1_0') or parent.hasSite('targets0_1')):
+                    needsCtx = True
+        brkLvl = parentBreakLevel + (2 if needsCtx else 1)
+        text = icon.argSaveText(brkLvl, self.sites.leftArg, contNeeded, export)
+        text.add(None, ":")
+        icon.addArgSaveText(text, brkLvl, self.sites.rightArg, contNeeded, export)
+        if needsCtx:
+            text.wrapCtxMacro(parentBreakLevel+1, parseCtx='e')
+        return text
+
+    def createAst(self):
+        leftArg = self.leftArg()
+        if leftArg is None:
+            raise icon.IconExecException(self, "Missing argument to type annotation")
+        # This is acceptable for execution, but if we go back to using asts for other
+        # things, it will lose the type annotation
+        return leftArg.createAst()
+
+    def execute(self):
+        if self.sites.leftArg.att is None:
+            raise icon.IconExecException(self, "Missing argument name")
+        if self.sites.rightArg.att is None:
+            raise icon.IconExecException(self, "Missing argument value")
+        key = self.sites.leftArg.att.execute()
+        value = self.sites.rightArg.att.execute()
+        return key, value
+
+def isValidAnnotationTarget(ic, stopAtIc=None):
+    if ic is None:
+        return True
+    if ic is stopAtIc:
+        return True
+    if ic.__class__.__name__ == 'CursorParenIcon':
+        return isValidAnnotationTarget(ic.childAt('argIcon'), stopAtIc=stopAtIc)
+    elif isinstance(ic, (nameicons.IdentifierIcon, nameicons.AttrIcon)):
+        return isValidAnnotationTarget(ic.childAt('attrIcon'), stopAtIc=stopAtIc)
+    elif ic.__class__.__name__ == 'SubscriptIcon':
+        return isValidAnnotationTarget(ic.childAt('attrIcon'), stopAtIc=stopAtIc)
+    else:
+        return False

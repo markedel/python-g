@@ -40,11 +40,12 @@ CPRH_PARSE_STUB = '___pyg_cprh_parse_stub'
 #   d   dictionary element
 #   c   comprehension clause
 #   e   expression
-#   f   function argument assignment or **
+#   f   function arguments (also originally used for function def parameters)
+#   n   function def only parameter (in particular, those including type annotation)
 #   i   "import from" relative module syntax: ...x
 #   l   a series of values (l for list)
 # In Ctx and Entry macros, omitting the parse context type implies 'e'.
-macroArgContextTypes = {'a', 's', 'd', 'c', 'e', 'f', 'i', 'l'}
+macroArgContextTypes = {'a', 's', 'd', 'c', 'e', 'f', 'n', 'i', 'l'}
 
 # Dark Unicode arrow for inserting in code lines to show the location of errors in error
 # dialogs (Python's normal method using a caret is problematic with proportional fonts).
@@ -255,12 +256,12 @@ class MacroParser:
             replaceText = makeMacroPlaceholder(modLineNum, modColNum, macroArgs)
             iconFn = lambda node, args, argAsts, win: None
         elif macroName == "Ctx":
-            if macroArgCodeType not in (None, 'e', 'd', 's', 'f', 'i'):
+            if macroArgCodeType not in (None, 'e', 'd', 's', 'f', 'n', 'i'):
                 raise MacroFailException(origText, macroStartIdx, origLineNum,
                     message='Ctx macro only allows code argument types e, d, f, or s')
             if macroArgs is not None and macroArgs not in "KDC":
                 raise MacroFailException(origText, macroStartIdx, origLineNum, message=\
-                    'Ctx macro only allows argument types e, d, f, s, i, D, K, and C')
+                    'Ctx macro only allows argument types e, d, f, n, s, i, D, K, and C')
             replaceText = makeMacroPlaceholder(modLineNum, modColNum, macroArgs)
             iconFn = ctxMacroFn
         elif macroName == "Entry":
@@ -826,6 +827,29 @@ def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslat
         ctxMask = (maskLen, 1)
         expandedText = FN_CALL_PARSE_STUB + '(' + expandedText + ')'
         annotations.offsetLineColIds(maskLen)
+    elif parseCtx == 'n':
+        # While 'n' purports to be function def context, it actually uses top-level
+        # parsing.  ast.FunctionDef requires complex set-up and post-analysis to parse
+        # its various argument types due to ordering constraints and the way it regroups
+        # arguments by type.  Instead we strip off and restore the starred arguments that
+        # the top level parser would choke on, and manually convert the results to be
+        # compatible with the icon conversion code.
+        removedPrefix = None
+        if expandedText in '*/':
+            # Give standalone '*' and '/' a fake argument to allow them to be processed
+            removedPrefix = expandedText
+            expandedText = FN_CALL_PARSE_STUB
+            ctxMask = (0, len(FN_CALL_PARSE_STUB))
+        elif expandedText[:2] == '**':
+            expandedText = expandedText[2:]
+            annotations.offsetLineColIds(-2)
+            ctxMask = None
+            removedPrefix = '**'
+        elif expandedText[0] == '*':
+            expandedText = expandedText[1:]
+            annotations.offsetLineColIds(-1)
+            ctxMask = None
+            removedPrefix = '*'
     elif parseCtx == 'i':
         ctxMask = (5, 8 + len(IMPORT_NAME_STUB))
         expandedText = 'from ' + expandedText + ' import ' + IMPORT_NAME_STUB
@@ -886,6 +910,25 @@ def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslat
         else:
             print("Unexpected content in 'f' context AST node")
             return None
+    elif parseCtx == 'n':
+        if removedPrefix is None:  # a=x or a
+            if isinstance(stmtAst, ast.Assign):
+                return ArgAssignFakeAst(stmtAst)
+            elif isinstance(stmtAst, ast.AnnAssign):
+                if stmtAst.value is None:
+                    return stmtAst
+                return ArgAssignFakeAst(stmtAst)
+            return stmtAst.value
+        valueAst = stmtAst if isinstance(stmtAst, ast.AnnAssign) else stmtAst.value
+        if removedPrefix == '*':  # *a
+            return ast.Starred(value=valueAst)
+        elif removedPrefix == '**':  # **a (uses keyword syntax)
+            return ArgAssignFakeAst(ast.keyword(arg=None, value=valueAst))
+        elif removedPrefix == '/':
+            return PosOnlyMarkerFakeAst()
+        else:
+            print("Unexpected content in 'n' context AST node")
+            return None
     elif parseCtx == 'i':
         return RelImportNameFakeAst(stmtAst.module, stmtAst.level)
     elif parseCtx == 'c':
@@ -898,6 +941,8 @@ def parseExpandedTextToAsts(expandedText, origText, annotations, lineNumTranslat
         stmtAst.value.isNakedTuple = True
         return stmtAst.value
     else:  # parseCtx in ('a', 'e'):
+        if isinstance(stmtAst, ast.AnnAssign):
+            return stmtAst
         return stmtAst.value
 
 def _recoverTextDataOmittedFromAst(text, moduleAst, annotations, forImport):
@@ -2315,9 +2360,12 @@ class DictElemFakeAst:
         self.key = keyAst
         self.value = valueAst
 
+class PosOnlyMarkerFakeAst:
+    pass
+
 class ArgAssignFakeAst:
-    def __init__(self, keywordAst):
-        self.keywordAst = keywordAst
+    def __init__(self, fromAst):
+        self.fromAst = fromAst
 
 class CprhForFakeAst:
     def __init__(self, target, iter, isAsync):

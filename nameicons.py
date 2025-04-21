@@ -17,21 +17,46 @@ import infixicon
 import parenicon
 import stringicon
 
+posOnlyImage = comn.asciiToImage((
+ "ooooooooooooo",
+ "o           o",
+ "o           o",
+ "o        %  o",
+ "o       55  o",
+ "o       %   o",
+ "o      55   o",
+ "o     7%    o",
+ "o    3%3    o",
+ "o   7%%%7   o",
+ "o    3%3    o",
+ "o    %7     o",
+ "o   55      o",
+ "o   %       o",
+ "o  55       o",
+ "o  %        o",
+ "o          o",
+ "ooooooooooooo"))
+
 namedConsts = {'True':True, 'False':False, 'None':None}
 
 class TextIcon(icon.Icon):
-    def __init__(self, text, window=None, location=None, cursorOnlyAttrSite=False):
+    def __init__(self, text, window=None, location=None, cursorOnlyAttrSite=False,
+            useImage=None):
         icon.Icon.__init__(self, window)
         self.text = text
         self.hasAttrIn = not cursorOnlyAttrSite
-        bodyWidth, bodyHeight = icon.getTextSize(self.text)
-        bodyHeight = max(icon.minTxtHgt, bodyHeight)
-        bodyWidth += 2 * icon.TEXT_MARGIN + 1
-        bodyHeight += 2 * icon.TEXT_MARGIN + 1
+        self.useImage = useImage
+        if useImage:
+            bodyWidth, bodyHeight = useImage.size
+        else:
+            bodyWidth, bodyHeight = icon.getTextSize(self.text)
+            bodyHeight = max(icon.minTxtHgt, bodyHeight)
+            bodyWidth += 2 * icon.TEXT_MARGIN + 1
+            bodyHeight += 2 * icon.TEXT_MARGIN + 1
         self.bodySize = (bodyWidth, bodyHeight)
         self.sites.add('output', 'output', 0, bodyHeight // 2)
         self.sites.add('attrIcon', 'attrIn', bodyWidth,
-         bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=cursorOnlyAttrSite)
+            bodyHeight // 2 + icon.ATTR_SITE_OFFSET, cursorOnly=cursorOnlyAttrSite)
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 0)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
@@ -46,7 +71,10 @@ class TextIcon(icon.Icon):
         if self.drawList is None:
             img = Image.new('RGBA', (comn.rectWidth(self.rect),
                 comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = icon.iconBoxedText(self.text)
+            if self.useImage:
+                txtImg = self.useImage
+            else:
+                txtImg = icon.iconBoxedText(self.text)
             img.paste(txtImg, (icon.outSiteImage.width - 1, 0))
             if needSeqSites:
                 icon.drawSeqSites(self, img, 0, 0)
@@ -232,7 +260,8 @@ class NumericIcon(TextIcon):
 
 class PosOnlyMarkerIcon(TextIcon):
     def __init__(self, window=None, location=None):
-        TextIcon.__init__(self, '/', window, location)
+        TextIcon.__init__(self, '/', window, location, cursorOnlyAttrSite=True,
+            useImage=posOnlyImage)
 
 class AttrIcon(icon.Icon):
     def __init__(self, name, window=None, location=None):
@@ -2321,10 +2350,19 @@ def moduleNameToIcons(name, level, window):
     relativeIcon.replaceChild(baseIdentifier, 'argIcon')
     return relativeIcon
 
-def createIconForNameField(astNode, nameFieldString, window, fieldIdx=0):
-    """Same as plural version of the call for a single field (the more common case)."""
+def createIconForNameField(astNode, nameFieldString, window, fieldIdx=0, annotation=None):
+    """Same as plural version of the call for a single field (the more common case).
+    Unlike the plural version, also takes an optional annotation expression ast for
+    function defs, assignments that can accept type annotation."""
     icons = createIconsForNameFields(astNode, (nameFieldString,), window, fieldIdx)
-    return icons[0]
+    nameIc = icons[0]
+    if annotation is None:
+        return nameIc
+    typeAnnIc = infixicon.TypeAnnIcon(window=window)
+    typeAnnIc.replaceChild(nameIc, 'leftArg')
+    typeAnn = icon.createFromAst(annotation, window)
+    typeAnnIc.replaceChild(typeAnn, 'rightArg')
+    return typeAnnIc
 
 def createIconsForNameFields(astNode, nameFieldStrings, window, startIdx=0):
     """For AST nodes that have text fields where we allow arbitrary icons, a macro,
@@ -2349,12 +2387,13 @@ def createIconsForNameFields(astNode, nameFieldStrings, window, startIdx=0):
                 icons.append(IdentifierIcon(name, window))
     return icons
 
-def createNameFieldSaveText(brkLvl, site, needsCont, export):
+def createNameFieldSaveText(brkLvl, site, needsCont, export, allowTypeAnn=False):
     """Create file/paste text to represent the content of a field where Python will only
     accept a simple identifier, but is an input site in the icon representation and so
     may contain any sort of expression.  Generates a $Ctx$ macro to hold anything that
     is not an identifier."""
-    if site.att is None or isinstance(site.att, IdentifierIcon) or export:
+    if site.att is None or isinstance(site.att, IdentifierIcon) or export or \
+            allowTypeAnn and isinstance(site.att, infixicon.TypeAnnIcon):
         return icon.argSaveText(brkLvl, site, needsCont, export)
     argText = icon.argSaveText(brkLvl+1, site, needsCont, export)
     argText.wrapCtxMacro(brkLvl, parseCtx=None, needsCont=needsCont)
@@ -2432,6 +2471,14 @@ def determineCtx(ic):
     elif parentClass is infixicon.AsIcon:
         if parentSite == 'rightArg':
             return ast.Store()
+    elif parentClass is infixicon.TypeAnnIcon:
+        if parentSite == 'leftArg':
+            grandparent = parent.parent()
+            if grandparent is not None:
+                grandparentSite = grandparent.siteOf(parent)
+                if isinstance(grandparent, assignicons.AssignIcon):
+                    if grandparentSite[:7] == 'targets':
+                        return ast.Store()
     elif parentClass is DelIcon:
         return ast.Del()
     return ast.Load()
@@ -2642,3 +2689,7 @@ def createParseFailIcon(astNode, window):
     return IdentifierIcon("**Couldn't Parse AST node: %s**" % astNode.__class__.__name__,
         window)
 icon.registerAstDecodeFallback(createParseFailIcon)
+
+def createPosOnlyMarkerFromFakeAst(astNode, window):
+    return PosOnlyMarkerIcon(window)
+icon.registerIconCreateFn(filefmt.PosOnlyMarkerFakeAst, createPosOnlyMarkerFromFakeAst)

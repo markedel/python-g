@@ -917,6 +917,8 @@ class LexTrav:
                     yield from self.traverse(node, site.name)
                 if self.started and not self.stopped:
                     yield node, 3
+            if node.hasSite('returnType') and node.childAt('returnType') is not None:
+                yield from self.traverse(node, 'returnType')
         else:
             if self.started and not self.stopped:
                 yield node, 1
@@ -1311,23 +1313,22 @@ def extendDragTargetByStmt(startStmt, pointerX, pointerY):
 def extendDefaultReplaceSite(movIcon, sIcon):
     """Normally, when the user snaps an icon to a replace site, the default replacement
     target is the hierarchy under that icon.  However, there are some cases where that
-    is inappropriate. Currently, all involve dragging children of the InfixIcon that have
+    is inappropriate.  Currently, all involve dragging InfixIcon child classes that have
     rules about what icons they can appear under.  We want the user to be able to snap
     these to the replace site of the leftmost coincident icon, as this is usually easier
     than locating the top icon, and would otherwise need to be prohibited to prevent
     embedding one of these at a lower level (i.e. f(a=b=c) or {a:b:c})."""
+    sIconParent = sIcon.parent()
+    if isinstance(sIconParent, infixicon.TypeAnnIcon) and \
+            sIconParent.siteOf(sIcon) == 'leftArg':
+        return sIcon.parent()
     if not hasattr(movIcon, 'allowableParents'):
         return sIcon
-    allowableParents = movIcon.allowableParents
     highestIcon = iconsites.highestCoincidentIcon(sIcon)
     parent = highestIcon.parent()
-    allowableSite = allowableParents.get(parent.__class__.__name__)
-    if allowableSite is None:
+    if parent is None or parent.__class__.__name__ not in movIcon.allowableParents:
         return sIcon
-    siteName = parent.siteOf(highestIcon)
-    if iconsites.isSeriesSiteId(siteName):
-        siteName, _ = iconsites.splitSeriesSiteId(siteName)
-    if allowableSite == siteName:
+    if movIcon.isAllowableSite(parent, parent.siteOf(highestIcon)):
         return highestIcon
     return sIcon
 

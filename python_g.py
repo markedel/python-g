@@ -21,6 +21,7 @@ import entryicon
 import stringicon
 import parenicon
 import commenticon
+import infixicon
 import undo
 import filefmt
 import expredit
@@ -1106,9 +1107,25 @@ class Window:
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
             rejectReason = self.cursor.icon.addText(char)
         elif self.cursor.type == "icon":
+            # Quietly ignore extra space and block-introducing colons (note that the
+            # entry icon needs to be equally capable of handling these cases, and this
+            # merely prevents unnecessary creation and destruction of said icon).
             if char == ' ':
-                # Quietly ignore extra space to eat unnecessary padding
                 return
+            if char == ':':
+                if isinstance(self.cursor.icon, (blockicons.ElseIcon, blockicons.TryIcon,
+                        blockicons.DefOrClassIcon, blockicons.FinallyIcon)) \
+                        and self.cursor.site == 'attrIcon':
+                    return
+                topIc = self.cursor.icon.topLevelParent()
+                if isinstance(topIc, (blockicons.ForIcon, blockicons.WithIcon,
+                        blockicons.WhileIcon, blockicons.IfIcon, blockicons.ElifIcon,
+                        blockicons.ClassDefIcon, blockicons.ExceptIcon)):
+                    rightmostIc, rightmostSite = icon.rightmostSite(topIc)
+                    if self.cursor.icon == rightmostIc and \
+                            self.cursor.site == rightmostSite:
+                        return
+            # Create an entry icon at the cursor location and feed it the character
             origCursorIcon = self.cursor.icon
             origCursorSite = self.cursor.site
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
@@ -1419,6 +1436,11 @@ class Window:
                     blockicons.ExceptIcon, blockicons.FinallyIcon):
                 self._startDrag(evt, blockicons.clauseBlockIcons(ic),
                     dragACopy=rightMouse)
+            elif isinstance(ic, infixicon.TypeAnnIcon):
+                dragIcs = {ic}
+                if ic.rightArg() is not None:
+                    dragIcs |= expredit.createHierSel(ic.rightArg())
+                self._startDrag(evt, dragIcs, dragACopy=rightMouse)
             else:
                 self._startDrag(evt, expredit.createHierSel(
                     findLeftOuterIcon(self.assocGrouping(ic),  self.buttonDownLoc),
@@ -1667,8 +1689,8 @@ class Window:
         if isinstance(clickedIcon, tuple):
             # The user has clicked on an empty series site, which we do allow to be
             # selected, but only toggled between selection and cursor (not extended).
-            hierSel = leftSel = None
-            hasHierSel = hasLeftSel = hasCommentSel = hasBlockSel = False
+            hierSel = leftSel = typeAnnSel = None
+            hasHierSel = hasLeftSel = hasCommentSel = hasBlockSel = hasTypeAnnSel = False
         else:
             hierSel = expredit.createHierSel(clickedIcon)
             hasHierSel = singleSel != hierSel
@@ -1690,11 +1712,21 @@ class Window:
                 commentSel.add(clickedIcon.blockEnd)
             else:
                 hasBlockSel = False
+            if isinstance(clickedIcon, infixicon.TypeAnnIcon) and \
+                    clickedIcon.rightArg() is not None:
+                hasTypeAnnSel = True
+                typeAnnSel = {clickedIcon,
+                    *expredit.createHierSel(clickedIcon.rightArg())}
+            else:
+                hasTypeAnnSel = False
+                typeAnnSel = None
         if not currentSel:
             if siteIcon is not None and (not siteSelected or site != self.cursor.site):
                 return "moveCursor"
             return "select"
         elif currentSel == singleSel:
+            if hasTypeAnnSel:
+                return "typeAnn"
             if hasHierSel:
                 return "hier"
             if hasLeftSel:
@@ -1712,6 +1744,10 @@ class Window:
             if hasBlockSel:
                 return "icAndBlock"
             return "moveCursor"
+        elif currentSel == typeAnnSel:
+            if clickedIcon.leftArg() is None:
+                return "moveCursor"
+            return "hier"
         elif currentSel == leftSel:
             if hasCommentSel:
                 return "comment"
@@ -3740,6 +3776,8 @@ class Window:
             # Complex should probably be a numeric icon subtype or a specialty icon of
             # its own, or maybe just left as an object type.
             ic = filefmt.parseTextToIcons(f'complex({obj.real}, {obj.imag})', self)[0]
+        elif callable(obj):
+            ic = stringicon.StringIcon('"Callable <no repr, yet>"', window=self)
         else:
             ic = filefmt.parseTextToIcons(repr(obj), self)[0]
         return ic
@@ -3786,7 +3824,7 @@ class Window:
         leftmost component, 'comment' changes the selection to the top icon in the
         statement and its associated statement comment, 'icAndBlock' changes the
         selection to the entire code block containing ic"""
-        if op in ('select', 'hier', 'left', 'block'):
+        if op in ('select', 'hier', 'left', 'typeAnn', 'block'):
             self.unselectAll()
         # ... I'm leaving the commented-out code below as a reminder that I removed it
         #     because it's clearly wrong for comments and strings, but worried that I've
@@ -3811,6 +3849,8 @@ class Window:
         elif op == 'left':
             ic = findLeftOuterIcon(self.assocGrouping(ic), self.buttonDownLoc)
             changedIcons = list(ic.traverse())
+        elif op == 'typeAnn' and ic.hasSite('rightArg'):
+            changedIcons = [ic, *expredit.createHierSel(ic.childAt('rightArg'))]
         else:
             changedIcons = [ic]
         for ic in changedIcons:
@@ -5563,14 +5603,17 @@ class Window:
             seqStartIcons.sort()
             firstSeqPos = None
             for y, x, startIcon in seqStartIcons:
-                seqIter = (ic for ic in icon.traverseSeq(startIcon) if ic in
-                    selectedTopIcons)
+                def seqIter():
+                    for ic in icon.traverseSeq(startIcon):
+                        if (ic.primary if isinstance(ic, icon.BlockEnd) else ic) in \
+                                selectedTopIcons:
+                            yield ic
                 if firstSeqPos is None:
                     firstSeqPos = x, y
                     pos = 0, 0
                 else:
                     pos = icon.subtractPoints((x, y), firstSeqPos)
-                yield pos, startIcon is self.modSeqIcon, seqIter
+                yield pos, startIcon is self.modSeqIcon, seqIter()
         else:
             # Traverse all sequences in the window
             for startPage in self.sequences:
@@ -6394,6 +6437,12 @@ def findLeftOuterIcon(clickedIcon, btnPressLoc, fromIcon=None):
                 if left.__class__ not in (opicons.BinOpIcon, opicons.IfExpIcon) or \
                         not left.hasParens or left.locIsOnLeftParen(btnPressLoc):
                     return fromIcon  # Claim outermost status for this icon
+    if isinstance(fromIcon, infixicon.InfixIcon):
+        leftSiteIcon = fromIcon.leftArg()
+        if leftSiteIcon is not None:
+            left = findLeftOuterIcon(clickedIcon, btnPressLoc, leftSiteIcon)
+            if left is leftSiteIcon:
+                return fromIcon  # Claim outermost status for this icon
     # Pass on any results from below fromIcon in the hierarchy
     children = fromIcon.children()
     if children is not None:

@@ -10,6 +10,7 @@ import nameicons
 import listicons
 import opicons
 import entryicon
+import infixicon
 import expredit
 
 tgtSiteNamePattern = re.compile('targets(\d?)_')
@@ -970,3 +971,19 @@ def createAugmentedAssignIconFromAst(astNode, window):
         assignIcon.replaceChild(icon.createFromAst(astNode.value, window), "values_0")
     return assignIcon
 icon.registerIconCreateFn(ast.AugAssign, createAugmentedAssignIconFromAst)
+
+def createTAnnAssignIconFromAst(astNode, window):
+    target = icon.createFromAst(astNode.target, window)
+    typeAnn = icon.createFromAst(astNode.annotation, window)
+    typeAnnIcon = infixicon.TypeAnnIcon(window)
+    typeAnnIcon.replaceChild(target, 'leftArg')
+    typeAnnIcon.replaceChild(typeAnn, 'rightArg')
+    value = icon.createFromAst(astNode.value, window)
+    if astNode.value is None:
+        return typeAnnIcon
+    else:
+        assignIcon = AssignIcon(window=window)
+        assignIcon.replaceChild(typeAnnIcon, 'targets0_0')
+        assignIcon.replaceChild(value, 'values_0')
+        return assignIcon
+icon.registerIconCreateFn(ast.AnnAssign, createTAnnAssignIconFromAst)

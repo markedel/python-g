@@ -1,0 +1,40 @@
+def f(**x:int):$:x$pass
+def f(**x):$:x$pass
+def f(x:int=3):$:x$pass
+def f(x=3):$:x$pass
+def f(*x):$:x$pass
+def f(*x:int):$:x$pass
+def f($Ctx:Kn($*$)$):  # '*' should be highlighted
+    $:x$pass
+def f(x:int):$:x$pass
+def f(x):$:x$pass
+def f(a, b, /, c):$:x$pass
+def f(a, /):$:x$pass
+def f($Ctx:n($/$)$):  # '/' should be highlighted
+    $:x$pass
+def f(a, /, b):$:x$pass
+def f(a, /, **b:int):$:x$pass
+def f(a, /, c:int, **b:int):$:x$pass
+def f(a, /, c:int, $Ctx:Kn($*$)$, **b:int):  # '*' should be highlighted
+    $:x$pass
+def f(a, /, c:int, *, z=e, **b:int):$:x$pass
+def f(*a, $Ctx:Kn($*b$)$):  #  '*b' should be highlighted
+    $:x$pass
+def f($Ctx:Kn($*$)$, $Ctx:Kn($*b$)$):  # '*' and '*b' should be highlighted
+    $:x$pass
+def f($Ctx:n($**a$)$, b):  # 'b' should be highlighted
+    $:x$pass
+def f(*a, $Ctx:Kn($**b$)$, $Ctx:Kn($*c$)$):  # '*c' should be highlighted
+    $:x$pass
+def f(a, /, b, $Ctx:n($/$)$, c):  # Second '/' should be highlighted
+    $:x$pass
+def f(a, *b, $Ctx:K($c$)$, $Ctx:Kn($/$)$):  # 'c' and '/' should be highlighted
+    $:x$pass
+def f(a=3, $Ctx:K($b$)$):  # 'b'should be highlighted
+    $:x$pass
+def $Empty$(x):  # Empty name field should be highlighted
+    $:x$pass
+def $Ctx($a * b$)$(x):  # 'a*b' should be highlighted
+    $:x$pass
+def $Ctx:e($x:int$)$(y:int):  # 'x:int' should be highlighted
+    $:x$pass

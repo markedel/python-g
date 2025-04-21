@@ -67,6 +67,7 @@ TYPEOVER_COLOR = (220, 220, 220, 255)
 SELECT_TINT = (0, 0, 255, 40)
 EXEC_ERR_TINT = (255, 0, 0, 100)
 SYNTAX_ERR_TINT = (255, 64, 64, 40)
+TYPE_ANN_TINT = (255, 255, 255, 128)
 PENDING_REMOVE_TINT = (255, 10, 10, 100)
 IMMEDIATE_COPY_TINT = (0, 180, 255, 40)
 BLACK = (0, 0, 0, 255)
@@ -85,6 +86,7 @@ STYLE_SYNTAX_ERR = 4
 STYLE_EXEC_ERR = 8
 STYLE_PENDING_REMOVE = 16
 STYLE_IMMEDIATE_COPY = 32
+STYLE_TYPE_ANN = 64
 
 # Pixel offset from input/output site to series insertion site.  Corresponds to the dot
 # of the comma symbol.  (Note that this is dynamically repositioned at the left and right
@@ -1184,8 +1186,10 @@ class Icon:
             x, y = location
         if self.isSelected():
             style |= STYLE_SELECTED
-        if self.errHighlight:
+        if isinstance(self.errHighlight, ErrorHighlight):
             style |= STYLE_SYNTAX_ERR
+        elif isinstance(self.errHighlight, TypeAnnHighlight):
+            style |= STYLE_TYPE_ANN
         if self.window.highlightedForReplace is not None and \
                 self in self.window.highlightedForReplace:
             style |= STYLE_PENDING_REMOVE
@@ -1659,6 +1663,11 @@ class ErrorHighlight:
     def __init__(self, reasonText):
         self.text = reasonText
 
+class TypeAnnHighlight:
+    """Attached to errHighlight field of icons that are being used for type annotation
+    (grayed text)."""
+    text = "Type annotation (not an error)"
+
 def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
     """clipping rectangle is in the coordinate system of the destination image"""
     if clipRect is None:
@@ -1703,6 +1712,8 @@ def tintSelectedImage(image, style):
         color = SELECT_TINT
     elif style & STYLE_SYNTAX_ERR:
         color = SYNTAX_ERR_TINT
+    elif style & STYLE_TYPE_ANN:
+        color = TYPE_ANN_TINT
     elif outlineMask is None:  # No outline and no additional coloring
         return image
     if color is not None:
