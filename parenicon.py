@@ -11,6 +11,8 @@ import reorderexpr
 import nameicons
 
 class CursorParenIcon(icon.Icon):
+    pythonDocRef = [("Parenthesis", "reference/expressions.html#parenthesized-forms")]
+
     def __init__(self, closed=False, window=None, typeover=False, location=None):
         # Note that while the constructor can accept a typeover indicator, the icon does
         # not currently support typeover, because there are no cases (yet) where initial

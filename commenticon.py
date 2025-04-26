@@ -60,6 +60,8 @@ lineSepPixels = 2
 lineSpacing = charHeight + lineSepPixels
 
 class CommentIcon(icon.Icon):
+    pythonDocRef = [("Comments", "reference/lexical_analysis.html#comments")]
+
     def __init__(self, text='', attachedToStmt=None, window=None, location=None,
             ann=None):
         icon.Icon.__init__(self, window)

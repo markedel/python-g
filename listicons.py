@@ -1028,6 +1028,14 @@ class ListIcon(ListTypeIcon):
         img = listRBktTypeoverImage if self.endParenTypeover else listRBktImage
         return icon.yStretchImage(img, listRBrktExtendDupRows, desiredHeight)
 
+    def getPythonDocRef(self):
+        if self.isComprehension():
+            return [("Comprehensions", "reference/expressions.html#comprehensions"),
+                ("List Comprehension",
+                "tutorial/datastructures.html#list-comprehensions")]
+        return [("Lists", "library/stdtypes.html#lists"),
+            ("Mutable Sequences", "reference/datamodel.html#index-22")]
+
 class TupleIcon(ListTypeIcon):
     """Tuple icons have a bunch of special cases worth mentioning:
         1) We retain the python text-syntax for a single element tuple containing a
@@ -1274,6 +1282,13 @@ class TupleIcon(ListTypeIcon):
         if self.noParens:
             return "(naked tuple)"
         return "(" + (self.rightText if self.closed else "")
+
+    def getPythonDocRef(self):
+        if self.isComprehension():
+            return [("Generator Expressions",
+                "reference/expressions.html#generator-expressions")]
+        return [("Tuples", "library/stdtypes.html#tuples"),
+        ("Immututable Sequences", "reference/datamodel.html#index-17")]
 
 class DictIcon(ListTypeIcon):
     def __init__(self, window, closed=True, obj=None, typeover=False, location=None):
@@ -1559,7 +1574,26 @@ class DictIcon(ListTypeIcon):
                     return False
         return True
 
+    def getPythonDocRef(self):
+        dictDocRefs = [("Dictionary", "library/stdtypes.html#typesmapping"),
+            ("Mappings", "reference/datamodel.html#index-29")]
+        setDocRefs = [("Set", "library/stdtypes.html#types-set"),
+            ("Set types", "reference/datamodel.html#index-26")]
+        isAmbiguous = self._findCtxViolations()
+        if isAmbiguous:
+            docRefs = dictDocRefs + setDocRefs
+        else:
+            firstElem = self.childAt('argIcons_0')
+            isDict = firstElem is None or isinstance(firstElem, (DictElemIcon,
+                StarStarIcon))
+            docRefs = dictDocRefs if isDict else setDocRefs
+        if self.isComprehension():
+            docRefs.insert(0, ("Comprehensions",
+                "reference/expressions.html#comprehensions"))
+        return docRefs
+
 class CallIcon(icon.Icon):
+    pythonDocRef = [("Calls", "reference/expressions.html#calls")]
     hasTypeover = True
 
     def __init__(self, window, closed=True, typeover=False, location=None):
@@ -2026,6 +2060,17 @@ class CprhIfIcon(icon.Icon):
                 return False
         return False  # Shouldn't happen
 
+    def getPythonDocRef(self):
+        cprhDocRef = ("Comprehensions", "reference/expressions.html#comprehensions")
+        genDocRef = ("Generator Expressions",
+            "reference/expressions.html#generator-expressions")
+        parent = self .parent()
+        if isinstance(parent, (ListIcon, DictIcon)):
+            return [cprhDocRef]
+        elif isinstance(parent, TupleIcon):
+            return [genDocRef]
+        return [cprhDocRef, genDocRef]
+
 class CprhForIcon(icon.Icon):
     def __init__(self, isAsync=False, typeover=False, window=None, location=None):
         icon.Icon.__init__(self, window)
@@ -2368,6 +2413,17 @@ class CprhForIcon(icon.Icon):
         bodyRect = (bodyLeft, icTop, bodyLeft + bodyWidth, icTop + bodyHeight)
         return comn.rectsTouch(rect, bodyRect)
 
+    def getPythonDocRef(self):
+        cprhDocRef = ("Comprehensions", "reference/expressions.html#comprehensions")
+        genDocRef = ("Generator Expressions",
+            "reference/expressions.html#generator-expressions")
+        parent = self .parent()
+        if isinstance(parent, (ListIcon, DictIcon)):
+            return [cprhDocRef]
+        elif isinstance(parent, TupleIcon):
+            return [genDocRef]
+        return [cprhDocRef, genDocRef]
+
 class DictElemIcon(infixicon.InfixIcon):
     """Individual entry in a dictionary constant"""
     # Defining 'allowableParents' triggers two important and non-obvious external
@@ -2380,6 +2436,8 @@ class DictElemIcon(infixicon.InfixIcon):
     # allowableParents attribute and expands the replace target to reach the allowable
     # parent site, provided that the icon being replaced is coincident with that site.
     allowableParents = {'DictIcon':'argIcons'}
+    pythonDocRef = [("Dictionary", "library/stdtypes.html#typesmapping"),
+        ("Mappings", "reference/datamodel.html#index-29")]
 
     def __init__(self, window=None, location=None):
         infixicon.InfixIcon.__init__(self, ":", colonImage, False, window, location)
@@ -2491,6 +2549,20 @@ class ArgAssignIcon(infixicon.InfixIcon):
         if not isinstance(self.sites.leftArg.att, nameicons.IdentifierIcon):
             raise icon.IconExecException(self, "Argument name is not identifier")
         return self.sites.leftArg.att.name, self.sites.rightArg.att.execute()
+
+    def getPythonDocRef(self):
+        parent = self .parent()
+        if isinstance(parent, CallIcon):
+            return [("Keyword Arguments", "reference/expressions.html#calls")]
+        elif isinstance(parent, blockicons.DefIcon):
+            return [("Parameter Defaults",
+                "reference/compound_stmts.html#function-definitions")]
+        elif isinstance(parent, blockicons.ClassDefIcon):
+            return [("Class Definitions",
+                "reference/compound_stmts.html#class-definitions")]
+        elif isinstance(parent, blockicons.LambdaIcon):
+            return [("Parameter Defaults", "reference/expressions.html#lambdas")]
+        return [("Keyword Arguments", "reference/expressions.html#calls")]
 
 class StarIcon(opicons.UnaryOpIcon):
     individualAllowedParents = (CallIcon, blockicons.DefIcon, ListIcon, TupleIcon)
@@ -2609,6 +2681,18 @@ class StarIcon(opicons.UnaryOpIcon):
     def dumpName(self):
         return "star"
 
+    def getPythonDocRef(self):
+        parent = self .parent()
+        if isinstance(parent, assignicons.AssignIcon):
+            return [("* Assignment Target",
+                "reference/simple_stmts.html#assignment-statements")]
+        elif isinstance(parent, blockicons.DefIcon):
+            return [("* in Function Def",
+                "reference/compound_stmts.html#function-definitions")]
+        elif isinstance(parent, nameicons.ImportFromIcon):
+            return [("relative imports", "reference/simple_stmts.html#index-37")]
+        return [("* Iterable Unpacking", "reference/expressions.html#expression-lists")]
+
 class StarStarIcon(opicons.UnaryOpIcon):
     allowedParents = (CallIcon, blockicons.DefOrClassIcon, DictIcon)
 
@@ -2662,6 +2746,17 @@ class StarStarIcon(opicons.UnaryOpIcon):
 
     def dumpName(self):
         return "star star"
+
+    def getPythonDocRef(self):
+        parent = self .parent()
+        if isinstance(parent, CallIcon):
+            return [("Keyword Arguments", "reference/expressions.html#calls")]
+        elif isinstance(parent, blockicons.DefIcon):
+            return [("** in Function Def",
+                "reference/compound_stmts.html#function-definitions")]
+        elif isinstance(parent, DictIcon):
+            return [("Dictionary Unpacking", "library/stdtypes.html#typesmapping")]
+        return [("* Iterable Unpacking", "reference/expressions.html#expression-lists")]
 
 def createComprehensionAst(ic):
     eltIcon = ic.childAt('argIcons_0')

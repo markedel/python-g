@@ -459,7 +459,19 @@ class AssignIcon(icon.Icon):
         # Values clause or right spine or = following last target clause
         return 'values_0'
 
+    def getPythonDocRef(self):
+        docRefs = [("Assignment Statements",
+            "reference/simple_stmts.html#assignment-statements")]
+        leftTgt = self.childAt('targets0_0')
+        if leftTgt is not None and isinstance(leftTgt, infixicon.TypeAnnIcon):
+            docRefs.append(('Annotated Assign Stmts',
+                "reference/simple_stmts.html#annotated-assignment-statements"))
+        return docRefs
+
 class AugmentedAssignIcon(icon.Icon):
+    pythonDocRef = [("Augmented Assign Stmts",
+        "reference/simple_stmts.html#augmented-assignment-statements")]
+
     def __init__(self, op, window, location=None):
         icon.Icon.__init__(self, window)
         self.op = op

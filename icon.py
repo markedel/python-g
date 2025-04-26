@@ -40,7 +40,7 @@ textFont = ImageFont.truetype('c:/Windows/fonts/consola.ttf', 13)
 stmtAstClasses = {ast.Assign, ast.AugAssign, ast.While, ast.For, ast.AsyncFor, ast.If,
  ast.Try, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Return, ast.With,
  ast.AsyncWith, ast.Delete, ast.Pass, ast.Continue, ast.Break, ast.Global, ast.Nonlocal,
- ast.Import, ast.ImportFrom, ast.Raise}
+ ast.Import, ast.ImportFrom, ast.Raise, ast.Assert}
 
 # Site depths are offsets from the icon (left or right) border.  Sequence sites were
 # originally positioned 1 pixel in from the left and bottom border, which led to the
@@ -368,6 +368,15 @@ class Icon:
 
     # Icons that can be used in store and del contexts will override this to be True
     canProcessCtx = False
+
+    # Icon classes can set this to provide static html reference(s) to the Python
+    # documentation, that will appear in the context-sensitive icon menu.  Icons that
+    # need to actively select references should provide a getDocRef() method, instead.
+    # The format is a list of tuples, each containing two items: 1) the menu item name
+    # (not including the leading 'Doc:', part), and 2) the html reference including
+    # location of the .html file in the (Windows) .chm document collection in href form,
+    # for example: [("del Statement", "reference/simple_stmts.html#the-del-statement")]
+    pythonDocRef = None
 
     def __init__(self, window=None, canProcessCtx=False):
         self.window = window
@@ -1570,6 +1579,22 @@ class Icon:
         changed, which is why mutable icons must supply the second (compareContent=True)
         mode of operation."""
         return False
+
+    def getPythonDocRef(self):
+        """Icons that need to dynamically choose which Python documentation references
+        to provide, can override this method, which will be called when assembling the
+        context-sensitive icon menu.  (Icons that always serve the same reference(s),
+        can simply override the class variable, pythonDocRef.)  The method should return
+        a list of html reference strings including the file name and relative path within
+        the Doc subdirectory and (currently Windows-only) PythonNNN.chm file of the
+        current Python interpreter.  To see the source files and find the required
+        reference ids, you can decompile the .chm file using the '-decompile' command
+        line option of the Windows 'hh' command.  You can also ask the document viewer
+        to report both its link content and nearest href, by pointing at the link or at
+        a location in the document and selecting 'Properties' from the right-mouse
+        backkground menu, though I suggest viewing the source and choosing the named
+        ids over 'index-20' type references which might get reassigned."""
+        return self.pythonDocRef
 
 class BlockEnd(Icon):
     def __init__(self, primary, window=None, location=None):

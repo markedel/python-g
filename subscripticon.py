@@ -102,6 +102,7 @@ subscriptRBktTypeoverImage = comn.asciiToImage(subscriptRBktTypeoverPixmap)
 
 class SubscriptIcon(icon.Icon):
     hasTypeover = True
+    pythonDocRef = [("Subscripts", "reference/expressions.html#subscriptions")]
 
     def __init__(self, numSubscripts=1, window=None, closed=True, typeover=False,
             location=None):

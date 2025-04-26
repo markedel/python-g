@@ -34,10 +34,88 @@ posOnlyImage = comn.asciiToImage((
  "o   %       o",
  "o  55       o",
  "o  %        o",
- "o          o",
+ "o           o",
  "ooooooooooooo"))
 
-namedConsts = {'True':True, 'False':False, 'None':None}
+ellipsisImage = comn.asciiToImage((
+ "ooooooooooooooooo",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o 959  959  959 o",
+ "o 5%5  5%5  5%5 o",
+ "o 959  959  959 o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "o               o",
+ "ooooooooooooooooo"))
+
+namedConsts = {'True':True, 'False':False, 'None':None, 'NotImplemented':NotImplemented,
+    '__debug__':__debug__}
+
+# Documentation references for Python's built-in functions and special methods
+pythonBuiltInFns = {'abs', 'delattr', 'hash', 'memoryview', 'set', 'all', 'dict', 'help',
+    'min', 'setattr', 'any', 'dir', 'hex', 'next', 'slice', 'ascii', 'divmod', 'id',
+    'object', 'sorted', 'bin', 'enumerate', 'input', 'oct', 'staticmethod', 'bool',
+    'eval', 'int', 'open', 'str', 'breakpoint', 'exec', 'isinstance', 'ord', 'sum',
+    'bytearray', 'filter', 'issubclass', 'pow', 'super', 'bytes', 'float', 'iter',
+    'print', 'tuple', 'callable', 'format', 'len', 'property', 'type', 'chr',
+    'frozenset', 'list', 'range', 'vars', 'classmethod', 'getattr', 'locals', 'repr',
+    'zip', 'compile', 'globals', 'map', 'reversed', '__import__', 'complex', 'hasattr',
+    'max', 'round'}
+builtInFnRef = "\Doc\python385.chm::/library/functions.html#%s"
+specialMethodRef = "reference/datamodel.html#object.%s"
+pythonSpecialMethods = {'__new__', '__init__', '__del__', '__repr__', '__str__',
+    '__bytes__', '__format__', '__lt__', '__le__', '__eq__', '__ne__', '__gt__',
+    '__ge__', '__hash__', '__bool__', '__getattr__', '__getattribute__', '__setattr__',
+    '__delattr__', '__dir__', '__get__', '__set__', '__delete__', '__set_name__',
+    '__slots__', '__init_subclass__', '__class_getitem__', '__call__', '__len__',
+    '__length_hint__', '__getitem__', '__setitem__', '__delitem__', '__missing__',
+    '__iter__', '__reversed__', '__contains__', '__add__', '__sub__', '__mul__',
+    '__matmul__', '__truediv__', '__floordiv__', '__mod__', '__divmod__', '__pow__',
+    '__lshift__', '__rshift__', '__and__', '__xor__', '__or__', '__radd__', '__rsub__',
+    '__rmul__', '__rmatmul__', '__rtruediv__', '__rfloordiv__', '__rmod__',
+    '__rdivmod__', '__rpow__', '__rlshift__', '__rrshift__', '__rand__', '__rxor__',
+    '__ror__', '__iadd__', '__isub__', '__imul__', '__imatmul__', '__itruediv__',
+    '__ifloordiv__', '__imod__', '__ipow__', '__ilshift__', '__irshift__', '__iand__',
+    '__ixor__', '__ior__', '__neg__', '__pos__', '__abs__', '__invert__', '__complex__',
+    '__int__', '__float__', '__index__', '__round__', '__trunc__', '__floor__',
+    '__ceil__', '__enter__', '__exit__', '__await__', '__aiter__', '__anext__',
+    '__aenter__', '__aexit__'}
+pythonSpecialAttrs = {'__dict__':'object.__dict__', '__class__':'instance.__class__',
+    '__bases__':'class.__bases__', '__name__':'definition.__name__',
+    '__qualname__':'definition__qualname__', '__mro__':'class.__mro__',
+    '__subclasses__':'class.__subclasses__'}
+specialAttrsRef = "library/stdtypes.html#%s"
+fnSpecialAttrs = {'__doc__', '__name__', '__qualname__', '__module__', '__defaults__',
+    '__code__', '__globals__', '__dict__', '__closure__', '__annotations__',
+    '__kwdefaults__'}
+fnSpecialAttrsRef = "reference/datamodel.html#index-34"
+pyExceptionNames = {'BaseException', 'SystemExit', 'KeyboardInterrupt', 'GeneratorExit',
+    'Exception', 'StopIteration', 'StopAsyncIteration', 'ArithmeticError',
+    'FloatingPointError', 'OverflowError', 'ZeroDivisionError', 'AssertionError'
+    'AttributeError', 'BufferError', 'EOFError', 'ImportError', 'ModuleNotFoundError'
+    'LookupError', 'IndexError', 'KeyError', 'MemoryError', 'NameError',
+    'UnboundLocalError', 'OSError', 'BlockingIOError', 'ChildProcessError',
+    'ConnectionError', 'BrokenPipeError', 'ConnectionAbortedError',
+    'ConnectionRefusedError', 'ConnectionResetError', 'FileExistsError',
+    'FileNotFoundError', 'InterruptedError', 'IsADirectoryError', 'NotADirectoryError',
+    'PermissionError', 'ProcessLookupError', 'TimeoutError', 'ReferenceError',
+    'RuntimeError', 'NotImplementedError', 'RecursionError', 'SyntaxError',
+    'IndentationError', 'TabError', 'SystemError', 'TypeError', 'ValueError',
+    'UnicodeError', 'UnicodeDecodeError', 'UnicodeEncodeError', 'UnicodeTranslateError',
+    'Warning', 'DeprecationWarning', 'PendingDeprecationWarning', 'RuntimeWarning',
+    'SyntaxWarning', 'UserWarning', 'FutureWarning', 'ImportWarning', 'UnicodeWarning',
+    'BytesWarning', 'ResourceWarning'}
+pyExceptionsRef = "library/exceptions.html#%s"
 
 class TextIcon(icon.Icon):
     def __init__(self, text, window=None, location=None, cursorOnlyAttrSite=False,
@@ -216,7 +294,33 @@ class IdentifierIcon(TextIcon):
             return False
         return complex(realIcon.value, imagIcon.value) == data
 
+    def getPythonDocRef(self):
+        if self.name in pythonBuiltInFns and \
+                isinstance(self.childAt('attrIcon'), listicons.CallIcon):
+            return [(self.name, builtInFnRef % self.name)]
+        if self.name in pythonSpecialMethods and (isinstance(self.parent(),
+                blockicons.DefIcon) and self.parent().siteOf(self) == 'nameIcon'):
+            return [(self.name + ' method', specialMethodRef % self.name)]
+        if self.name in pyExceptionNames:
+            return [(self.name, pyExceptionsRef % self.name)]
+        if self.name in namedConsts:
+            return [(self.name + ' (Constant)', 'library/constants.html#%s' % self.name)]
+        docRefs = [("Identifiers",
+            "reference/lexical_analysis.html#identifiers-and-keywords")]
+        for attrIc in icon.traverseAttrs(self, includeStart=False):
+            if isinstance(attrIc, AttrIcon):
+                docRefs.append(("Attribute References",
+                    "reference/expressions.html#attribute-references"))
+            elif isinstance(attrIc, listicons.CallIcon):
+                docRefs.append(("Calls", "reference/expressions.html#calls"))
+            elif attrIc.__class__.__name__ == 'SubscriptIcon':
+                docRefs.append(("Subscripts", "reference/expressions.html#subscriptions"))
+        return docRefs
+
 class NumericIcon(TextIcon):
+    pythonDocRef = [
+        ("Numeric Types", "library/stdtypes.html#numeric-types-int-float-complex")]
+
     def __init__(self, value, window=None, location=None):
         if type(value) is str:
             text = value
@@ -259,9 +363,33 @@ class NumericIcon(TextIcon):
         return data == self.value
 
 class PosOnlyMarkerIcon(TextIcon):
+    pythonDocRef = [("Pos-only marker",
+        "reference/compound_stmts.html#function-definitions")]
+
     def __init__(self, window=None, location=None):
         TextIcon.__init__(self, '/', window, location, cursorOnlyAttrSite=True,
             useImage=posOnlyImage)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = PosOnlyMarkerIcon(window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
+
+class EllipsisIcon(TextIcon):
+    pythonDocRef = [("Ellipsis",
+        "library/stdtypes.html#the-ellipsis-object")]
+
+    def __init__(self, window=None, location=None):
+        TextIcon.__init__(self, '...', window, location, cursorOnlyAttrSite=True,
+            useImage=ellipsisImage)
+
+    def createAst(self):
+        return ast.Constant(lineno=self.id, col_offset=0, end_lineno=1, value=Ellipsis)
+
+    def duplicate(self, linkToOriginal=False):
+        ic = EllipsisIcon(window=self.window)
+        self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
+        return ic
 
 class AttrIcon(icon.Icon):
     def __init__(self, name, window=None, location=None):
@@ -372,6 +500,23 @@ class AttrIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
         return None
 
+    def getPythonDocRef(self):
+        if self.name in pythonSpecialMethods:
+            return [(self.name + ' Method', specialMethodRef % self.name)]
+        if self.name in pythonSpecialAttrs:
+            return [(self.name + ' Attribute',
+                specialAttrsRef % pythonSpecialAttrs[self.name])]
+        if self.name in fnSpecialAttrs:
+            return [(self.name + ' Attribute', fnSpecialAttrsRef)]
+        docRefs = [
+            ("Attribute References", "reference/expressions.html#attribute-references")]
+        for attrIc in icon.traverseAttrs(self, includeStart=False):
+            if isinstance(attrIc, listicons.CallIcon):
+                docRefs.append(("Calls", "reference/expressions.html#calls"))
+            elif attrIc.__class__.__name__ == 'SubscriptIcon':
+                docRefs.append(("Subscripts", "reference/expressions.html#subscriptions"))
+        return docRefs
+
 class NoArgStmtIcon(icon.Icon):
     def __init__(self, stmt, window, location):
         icon.Icon.__init__(self, window)
@@ -456,6 +601,8 @@ class NoArgStmtIcon(icon.Icon):
         return None
 
 class PassIcon(NoArgStmtIcon):
+    pythonDocRef = [("pass Statement", "reference/simple_stmts.html#the-pass-statement")]
+
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "pass", window, location)
 
@@ -463,6 +610,9 @@ class PassIcon(NoArgStmtIcon):
         return ast.Pass(lineno=self.id, col_offset=0)
 
 class ContinueIcon(NoArgStmtIcon):
+    pythonDocRef = [("continue Statement",
+        "reference/simple_stmts.html#the-continue-statement")]
+
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "continue", window, location)
 
@@ -475,6 +625,9 @@ class ContinueIcon(NoArgStmtIcon):
         icon.Icon.highlightErrors(self, errHighlight)
 
 class BreakIcon(NoArgStmtIcon):
+    pythonDocRef = [("break Statement",
+        "reference/simple_stmts.html#the-break-statement")]
+
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "break", window, location)
 
@@ -621,6 +774,9 @@ class SeriesStmtIcon(icon.Icon):
         return 'values_0'
 
 class ReturnIcon(SeriesStmtIcon):
+    pythonDocRef = [("return Statement",
+        "reference/simple_stmts.html#the-return-statement")]
+
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "return", window, allowTrailingComma=True,
             location=location)
@@ -661,6 +817,8 @@ class ReturnIcon(SeriesStmtIcon):
         icon.Icon.highlightErrors(self, errHighlight)
 
 class DelIcon(SeriesStmtIcon):
+    pythonDocRef = [("del Statement", "reference/simple_stmts.html#the-del-statement")]
+
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "del", window, requireArg=True, location=location)
 
@@ -689,7 +847,71 @@ class DelIcon(SeriesStmtIcon):
         text.concat(brkLvl, tgtTxt)
         return text
 
+class AssertIcon(SeriesStmtIcon):
+    # Note that this icon isn't really finished.  Assert is strictly limited to two
+    # arguments, but we're basing it on the SeriesStmtIcon which allows an unlimited
+    # number.  This might be excused as being helpful for entry, but we can't be excused
+    # for *dropping* those extra arguments on save/copy
+    pythonDocRef = [("assert Statement",
+        "reference/simple_stmts.html#the-assert-statement")]
+
+    def __init__(self, window=None, location=None):
+        SeriesStmtIcon.__init__(self, "assert", window, requireArg=True,
+            location=location)
+
+    def createAst(self):
+        if len(self.sites.values) > 2:
+            raise icon.IconExecException(self, "Too many arguments")
+        for site in self.sites.values:
+            if site.att is None:
+                raise icon.IconExecException(self, "Missing argument(s)")
+        testAst = self.childAt('values_0').createAst()
+        if self.hasSite('values_1'):
+            msgAst = self.childAt('values_1').createAst()
+        else:
+            msgAst = None
+        return ast.Assert(testAst, msgAst, lineno=self.id, col_offset=0)
+
+    def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
+        brkLvl = parentBreakLevel + 1
+        text = filefmt.SegmentedText("assert ")
+        valuesSites = self.sites.values
+        if len(valuesSites) == 0 or len(valuesSites) == 1 and valuesSites[0].att is None:
+            if not export:
+                text.add(brkLvl, '$Empty$', contNeeded)
+            return text
+        testArg = icon.argSaveText(brkLvl, self.sites.values[0], contNeeded, export)
+        text.concat(brkLvl, testArg, contNeeded)
+        if len(self.sites.values) > 1:
+            text.add(None, ', ', contNeeded)
+            msgArg = icon.argSaveText(brkLvl, self.sites.values[1], contNeeded, export)
+            text.concat(brkLvl, msgArg, contNeeded)
+        #... quietly drop arguments past 2 on copy/load
+        return text
+
+    def highlightErrors(self, errHighlight):
+        if errHighlight is not None:
+            icon.Icon.highlightErrors(self, errHighlight)
+            return
+        # Allow any expression in both test and message field
+        testIc = self.childAt('values_0')
+        if testIc is not None:
+            testIc.highlightErrors(None)
+        if len(self.sites.values) > 1:
+            msgIc = self.childAt('values_1')
+            if msgIc is not None:
+                msgIc.highlightErrors(None)
+        if len(self.sites.values) > 2:
+            for site in self.sites.values[2:]:
+                ic = site.att
+                if ic is not None:
+                    ic.highlightErrors(icon.ErrorHighlight(
+                        "assert takes only 2 arguments (test and message)"))
+
 class GlobalIcon(SeriesStmtIcon):
+    pythonDocRef = [("global Statement",
+        "reference/simple_stmts.html#the-global-statement")]
+
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "global", window, requireArg=True,
             location=location)
@@ -757,6 +979,9 @@ class GlobalIcon(SeriesStmtIcon):
                     "Not a valid variable name (identifier)"))
 
 class NonlocalIcon(SeriesStmtIcon):
+    pythonDocRef = [("nonlocal Statement",
+        "reference/simple_stmts.html#the-nonlocal-statement")]
+
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "nonlocal", window, requireArg=True,
             location=location)
@@ -824,6 +1049,9 @@ class NonlocalIcon(SeriesStmtIcon):
                     "This is not valid as a variable name (identifier)"))
 
 class ImportIcon(SeriesStmtIcon):
+    pythonDocRef = [("The Import System", "reference/import.html#the-import-system"),
+        ("import Statement", "reference/simple_stmts.html#the-import-statement")]
+
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "import", window, requireArg=True,
             location=location)
@@ -1007,6 +1235,8 @@ class ImportIcon(SeriesStmtIcon):
 class ImportFromIcon(icon.Icon):
     hasTypeover = True
     relDelimPattern = re.compile('[a-zA-Z ]')
+    pythonDocRef = [("The Import System", "reference/import.html#the-import-system"),
+        ("import Statement", "reference/simple_stmts.html#the-import-statement")]
 
     def __init__(self, window=None, typeover=False, location=None):
         icon.Icon.__init__(self, window)
@@ -1488,6 +1718,9 @@ class ImportFromIcon(icon.Icon):
         return 'importsIcons_0'
 
 class RelativeImportIcon(opicons.UnaryOpIcon):
+    pythonDocRef = [("relative imports", "reference/simple_stmts.html#index-39"),
+        ("import Statement", "reference/simple_stmts.html#the-import-statement")]
+
     def __init__(self, level, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '. ' * level, window, location)
         self.level = level
@@ -1557,6 +1790,9 @@ class RelativeImportIcon(opicons.UnaryOpIcon):
         return ic
 
 class YieldIcon(icon.Icon):
+    pythonDocRef = [("yield Statement",
+        "reference/simple_stmts.html#the-yield-statement")]
+
     def __init__(self, window=None, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth = icon.getTextSize("yield", icon.boldFont)[0] + 2 * icon.TEXT_MARGIN + 1
@@ -1710,6 +1946,10 @@ class YieldIcon(icon.Icon):
         return 'values_0'
 
 class YieldFromIcon(opicons.UnaryOpIcon):
+    pythonDocRef = [("yield Statement",
+        "reference/simple_stmts.html#the-yield-statement"),
+        ("Yield Expressions", "reference/expressions.html#yield-expressions")]
+
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, 'yield from', window, location)
 
@@ -1728,6 +1968,8 @@ class YieldFromIcon(opicons.UnaryOpIcon):
         return ast.YieldFrom(self.arg().createAst(), lineno=self.id, col_offset=0)
 
 class AwaitIcon(opicons.UnaryOpIcon):
+    pythonDocRef = [("await Expression", "reference/expressions.html#await-expression")]
+
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, 'await', window, location)
 
@@ -1741,6 +1983,9 @@ class AwaitIcon(opicons.UnaryOpIcon):
         return ast.Await(self.arg().createAst(), lineno=self.id, col_offset=0)
 
 class RaiseIcon(icon.Icon):
+    pythonDocRef = [("raise Statement",
+        "reference/simple_stmts.html#the-raise-statement")]
+
     def __init__(self, hasFrom=False, window=None, typeover=False, location=None):
         icon.Icon.__init__(self, window)
         self.hasFrom = hasFrom
@@ -2059,6 +2304,8 @@ class DecoratorIcon(icon.Icon):
     # class def icons, which own their parens. However in the decorator case, this
     # parallels the AST form, which uses and actual ast.Call node to hold the decorator
     # information.
+    pythonDocRef = [("Decorator", "glossary.html#term-decorator")]
+
     def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth = icon.getTextSize('@', icon.boldFont)[0] + 2*icon.TEXT_MARGIN + 1
@@ -2580,6 +2827,16 @@ def createBreakIconFromAst(astNode, window):
     return BreakIcon(window)
 icon.registerIconCreateFn(ast.Break, createBreakIconFromAst)
 
+def createAssertIconFromAst(astNode, window):
+    topIcon = AssertIcon(window)
+    testIcon = icon.createFromAst(astNode.test, window)
+    topIcon.insertChild(testIcon, "values", 0)
+    if astNode.msg is not None:
+        msgIcon = icon.createFromAst(astNode.msg, window)
+        topIcon.insertChild(msgIcon, "values", 1)
+    return topIcon
+icon.registerIconCreateFn(ast.Assert, createAssertIconFromAst)
+
 def createGlobalIconFromAst(astNode, window):
     topIcon = GlobalIcon(window)
     nameIcons = createIconsForNameFields(astNode, astNode.names, window)
@@ -2625,8 +2882,8 @@ def createConstIconFromAst(astNode, window):
             strippedInitString = initStr[3:-3]
             initStr = quote + inspect.cleandoc(strippedInitString) + quote
         return stringicon.StringIcon(initStr, window)
-    if isinstance(astNode.value, type(...)):
-        return NumericIcon(astNode.value, window)
+    elif isinstance(astNode.value, type(...)):
+        return EllipsisIcon(window)
     # Documentation threatens to return constant tuples and frozensets (which could
     # get quite complex), but 3.8 seems to stick to strings and numbers
     return IdentifierIcon("**Couldn't Parse Constant**", window)

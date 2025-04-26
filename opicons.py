@@ -115,6 +115,8 @@ binOpAsts = {'+':ast.Add, '-':ast.Sub, '*':ast.Mult, '/':ast.Div, '//':ast.Floor
  '%':ast.Mod, '**':ast.Pow, '<<':ast.LShift, '>>':ast.RShift, '|':ast.Or, '^':ast.BitXor,
  '&':ast.BitAnd}
 
+boolOpAsts = {'and':ast.And, 'or':ast.Or}
+
 compareAsts = {'is':ast.Is, 'is not':ast.IsNot, '<':ast.Lt, '<=':ast.LtE, '>':ast.Gt,
  '>=':ast.GtE, '==':ast.Eq, '!=':ast.NotEq, 'in':ast.In, 'not in':ast.NotIn}
 
@@ -128,6 +130,32 @@ boolOps = {ast.And:'and', ast.Or:'or'}
 
 compareOps = {ast.Eq:'==', ast.NotEq:'!=', ast.Lt:'<', ast.LtE:'<=', ast.Gt:'>',
  ast.GtE:'>=', ast.Is:'is', ast.IsNot:'is not', ast.In:'in', ast.NotIn:'not in'}
+
+unaryOpDocRefs = {
+    '+':[("+ Unary Operator","library/stdtypes.html#index-13"), ("Unary Operators",
+        "reference/expressions.html#unary-arithmetic-and-bitwise-operations")],
+    '-':[("- Unary Operator", "library/stdtypes.html#index-13"), ("Unary Operators",
+        "reference/expressions.html#unary-arithmetic-and-bitwise-operations")],
+    '~': [("~ Operator", "library/stdtypes.html#index-13"), ("Bitwise Operators",
+        "reference/expressions.html#unary-arithmetic-and-bitwise-operations")],
+    'not': [("not Boolean Op", "library/stdtypes.html#boolean-operations-and-or-not"),
+        ("Boolean Operations", "reference/expressions.html#boolean-operations")]}
+binOpRefTypes = {'+':0, '-':0, '*':0, '/':0, '//':0, '%':0, '**':0, '@':0,
+    '<<':1, '>>':1, '|':1, '^':1, '&':1,  'and':2, 'or':2, 'in':2, 'not in':2,
+    'is':2, 'is not':2, '<':3, '<=':3, '>':3, '>=':3, '==':3, '!=':3, '=':3, ':':3}
+binOpDocRefs = [
+    [ # 0 Numeric
+    ("Binary Numeric Ops", "library/stdtypes.html#index-13"),
+    ("Arithmetic Operators", "reference/expressions.html#binary-arithmetic-operations")],
+    [ # 1 Bitwise
+    ("Bitwise Binary Ops", "reference/expressions.html#binary-bitwise-operations"),
+    ("Bitwise Arithmetic", "library/stdtypes.html#bitwise-operations-on-integer-types")],
+    [ # 2 Boolean
+    ("Boolean Operators", "reference/expressions.html#boolean-operations"),
+    ("Boolean Arithmetic", "library/stdtypes.html#boolean-operations-and-or-not")],
+    [ # 3 Comparison
+    ("Comparison Operators", "library/stdtypes.html#comparisons"),
+    ("Comparisons", "reference/expressions.html#comparisons")]]
 
 class UnaryOpIcon(icon.Icon):
     def __init__(self, op, window, location=None):
@@ -285,6 +313,12 @@ class UnaryOpIcon(icon.Icon):
             return False
         argIcon = self.sites.argIcon.att
         return argIcon is not None and argIcon.compareData(-data)
+
+    def getPythonDocRef(self):
+        if self.pythonDocRef is not None:
+            # Subclasses should still be able to use class variable to specify doc
+            return self.pythonDocRef
+        return unaryOpDocRefs.get(self.operator)
 
 class BinOpIcon(icon.Icon):
     def __init__(self, op, window, location=None):
@@ -610,6 +644,13 @@ class BinOpIcon(icon.Icon):
                 leftArgAst = leftArgAst.left
             return ast.Compare(left=leftArgAst, ops=ops, comparators=comparators,
                 lineno=self.id, col_offset=0)
+        if self.operator in boolOpAsts:
+            # The Python parser aggregates consecutive operations with the same operator
+            # into a single ast.BoolOp AST, where we're leaving everything in tree form.
+            # This seems to execute just fine: am I missing something?
+            return ast.BoolOp(lineno=self.id, col_offset=0,
+                values=[self.leftArg().createAst(), self.rightArg().createAst()],
+                op=boolOpAsts[self.operator]())
         return ast.BinOp(lineno=self.id, col_offset=0, left=self.leftArg().createAst(),
             op=binOpAsts[self.operator](), right=self.rightArg().createAst())
 
@@ -671,7 +712,16 @@ class BinOpIcon(icon.Icon):
             self.hasParens = False
             self.sites.attrIcon.order = None
 
+    def getPythonDocRef(self):
+        docRefIdx = binOpRefTypes.get(self.operator)
+        if docRefIdx is None:
+            return None
+        return binOpDocRefs[docRefIdx]
+
 class DivideIcon(icon.Icon):
+    pythonDocRef = [("Divide Operator", "library/stdtypes.html#index-13"),
+    ("Arithmetic Operators", "reference/expressions.html#binary-arithmetic-operations")]
+
     def __init__(self, floorDiv=False, window=None, location=None):
         icon.Icon.__init__(self, window)
         self.precedence = 11
@@ -899,6 +949,8 @@ class DivideIcon(icon.Icon):
 class IfExpIcon(icon.Icon):
     """Ternary if-else expression"""
     hasTypeover = True
+    pythonDocRef = [("Conditional Expression",
+        "reference/expressions.html#conditional-expressions")]
 
     def __init__(self, window, typeover=False, location=None):
         icon.Icon.__init__(self, window)

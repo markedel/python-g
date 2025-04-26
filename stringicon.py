@@ -67,6 +67,10 @@ lineSepPixels = 2
 lineSpacing = charHeight + lineSepPixels
 
 class StringIcon(icon.Icon):
+    pythonDocRef = [("Strings", "library/stdtypes.html#text-sequence-type-str"),
+        ("String Literals", "reference/lexical_analysis.html#string-and-bytes-literals"),
+        ("str Type", "reference/datamodel.html#index-18")]
+
     def __init__(self, initReprStr=None, window=None, typeover=False, location=None):
         icon.Icon.__init__(self, window)
         if initReprStr is None:

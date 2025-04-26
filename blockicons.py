@@ -395,7 +395,19 @@ class WithIcon(icon.Icon):
     def siteRightOfPart(self, partId):
         return 'values_0'
 
+    def getPythonDocRef(self):
+        if self.stmt[0] == 'a':
+            return [("async with Statement",
+                "reference/compound_stmts.html#the-async-with-statement")]
+        else:
+            return [("with Statement",
+                "reference/compound_stmts.html#the-with-statement")]
+
 class WhileIcon(icon.Icon):
+    pythonDocRef = [("while Statement",
+        "reference/compound_stmts.html#the-while-statement")]
+
+
     def __init__(self, createBlockEnd=True, window=None, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth, bodyHeight = icon.getTextSize("while", icon.boldFont)
@@ -925,7 +937,17 @@ class ForIcon(icon.Icon):
             return 'targets_0'
         return 'iterIcons_0'
 
+    def getPythonDocRef(self):
+        if self.stmt == "async for":
+            return [("async for Statement",
+                "reference/compound_stmts.html#the-async-for-statement")]
+        else:
+            return [("for Statement",
+                "reference/compound_stmts.html#the-for-statement")]
+
 class IfIcon(icon.Icon):
+    pythonDocRef = [("if Statement", "reference/compound_stmts.html#the-if-statement")]
+
     def __init__(self, createBlockEnd=True, window=None, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth, bodyHeight = icon.getTextSize("if", icon.boldFont)
@@ -1087,6 +1109,8 @@ class IfIcon(icon.Icon):
         return None
 
 class ElifIcon(icon.Icon):
+    pythonDocRef = [("if Statement", "reference/compound_stmts.html#the-if-statement")]
+
     def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth, bodyHeight = icon.getTextSize("elif ", icon.boldFont)
@@ -1244,6 +1268,8 @@ class ElifIcon(icon.Icon):
         return None
 
 class TryIcon(icon.Icon):
+    pythonDocRef = [("try Statement", "reference/compound_stmts.html#the-try-statement")]
+
     def __init__(self, createBlockEnd=True, window=None, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth, bodyHeight = icon.getTextSize("try", icon.boldFont)
@@ -1367,6 +1393,8 @@ class TryIcon(icon.Icon):
         return ast.Try(**bodyAsts, lineno=self.id, col_offset=0)
 
 class ExceptIcon(icon.Icon):
+    pythonDocRef = [("try Statement", "reference/compound_stmts.html#the-try-statement")]
+
     def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth, bodyHeight = icon.getTextSize("except", icon.boldFont)
@@ -1594,6 +1622,8 @@ class ExceptIcon(icon.Icon):
         return None  # ... no idea what to do here, yet.
 
 class FinallyIcon(icon.Icon):
+    pythonDocRef = [("try Statement", "reference/compound_stmts.html#the-try-statement")]
+
     def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
         bodyWidth, bodyHeight = icon.getTextSize("finally", icon.boldFont)
@@ -1853,6 +1883,29 @@ class ElseIcon(icon.Icon):
 
     def execute(self):
         return None  # ... no idea what to do here, yet.
+
+    def getPythonDocRef(self):
+        blockOwner = None
+        for ic in icon.traverseSeq(self, includeStartingIcon=False, reverse=True,
+                skipInnerBlocks=True):
+            if hasattr(ic, 'blockEnd'):
+                if not isinstance(ic, self.allowedBlocks):
+                    errHighlight = icon.ErrorHighlight(
+                        "else can only appear in if, for, while, or try")
+                blockOwner = ic
+                break
+        else:
+            return None
+        if isinstance(blockOwner, IfIcon):
+            return [("if Statement", "reference/compound_stmts.html#the-if-statement")]
+        elif isinstance(blockOwner, ForIcon):
+            return [("for Statement", "reference/compound_stmts.html#the-for-statement")]
+        elif isinstance(blockOwner, WhileIcon):
+            return [("while Statement",
+                "reference/compound_stmts.html#the-while-statement")]
+        elif isinstance(blockOwner, TryIcon):
+            return [("try Statement", "reference/compound_stmts.html#the-try-statement")]
+        return None
 
 class DefOrClassIcon(icon.Icon):
     hasTypeover = True
@@ -2318,6 +2371,9 @@ class DefOrClassIcon(icon.Icon):
         return 'attrIcon'
 
 class ClassDefIcon(DefOrClassIcon):
+    pythonDocRef = [("Class Definitions",
+        "reference/compound_stmts.html#class-definitions")]
+
     def __init__(self, hasArgs=False, createBlockEnd=True, window=None, typeover=False,
             location=None):
         DefOrClassIcon.__init__(self, "class", hasArgs, createBlockEnd, window, typeover,
@@ -2595,7 +2651,17 @@ class DefIcon(DefOrClassIcon):
         return _defPlaceArgsCommon(self, placeList, startSiteId, overwriteStart,
             False)
 
+    def getPythonDocRef(self):
+        docRefs =  [("Function Definitions",
+            "reference/compound_stmts.html#function-definitions")]
+        if self.isAsync:
+            docRefs.append(('Coroutines',
+                "reference/simple_stmts.html#coroutines"))
+        return docRefs
+
 class LambdaIcon(icon.Icon):
+    pythonDocRef = [("Lambdas", "reference/expressions.html#lambdas")]
+
     hasTypeover = True
 
     def __init__(self, window=None, typeover=False, location=None):

@@ -2969,6 +2969,10 @@ def parseExprText(text, window, forSeriesSite=False):
         return "colon"
     if text == '=':
         return assignicons.AssignIcon(1, window), None
+    if text == '...':
+        return nameicons.EllipsisIcon(window), None
+    if text in ('.', '..'):
+        return 'accept'
     if text == '*' and forSeriesSite:
         return listicons.StarIcon(window), None
     if stringPattern.fullmatch(text):

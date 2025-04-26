@@ -375,6 +375,21 @@ class AsIcon(InfixIcon):
         for ic in self.children():
             ic.highlightErrors(errHighlight)
 
+    def getPythonDocRef(self):
+        parent = self.parent()
+        if parent is not None:
+            parentClass = parent.__class__.__name__
+            if parentClass == 'WithIcon':
+                return [("with Statement",
+                    "reference/compound_stmts.html#the-with-statement")]
+            elif parentClass in ('ImportIcon', 'ImportFromIcon'):
+                return [("The Import System", "import-system"), ("import Statement",
+                    "reference/simple_stmts.html#the-import-statement")]
+            elif parentClass == 'ExceptIcon':
+                return [("try Statement",
+                    "reference/compound_stmts.html#the-try-statement")]
+        return None
+
 class TypeAnnIcon(InfixIcon):
     """Holds type annotation data for a variable or parameter."""
     # Defining 'allowableParents' triggers two important and non-obvious external
@@ -390,6 +405,8 @@ class TypeAnnIcon(InfixIcon):
         'ArgAssignIcon':'leftArg', 'StarIcon':'argIcon', 'StarStarIcon':'argIcon',
         None:None, 'NakedTuple':'argIcons'}
     canProcessCtx = True
+    pythonDocRef = [("Annotated Assignment Statements",
+        "reference/simple_stmts.html#annotated-assignment-statements")]
 
     def __init__(self, window=None, location=None):
         InfixIcon.__init__(self, ":", typeAnnImage, False, window, location)

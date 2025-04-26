@@ -1,6 +1,5 @@
 # Copyright Mark Edel  All rights reserved
 # Python-g main module
-import copy
 import io
 import math
 import tkinter as tk
@@ -791,6 +790,12 @@ class Window:
                 popup.add_cascade(label="Change To", menu=self.listPopup)
             if self.popupIcon.errHighlight is not None:
                 popup.add_command(label="Why Highlighted...", command=self._showSyntaxErr)
+            docRefs = self.popupIcon.getPythonDocRef()
+            if docRefs is not None:
+                popup.add_separator()
+                for docName, docRef in docRefs:
+                    popup.add_command(label="Doc: " + docName,
+                        command=lambda d=docRef: self._showPythonDoc(d))
         # Pop it up
         try:
             popup.tk_popup(evt.x_root, evt.y_root, 0)
@@ -3776,8 +3781,12 @@ class Window:
             # Complex should probably be a numeric icon subtype or a specialty icon of
             # its own, or maybe just left as an object type.
             ic = filefmt.parseTextToIcons(f'complex({obj.real}, {obj.imag})', self)[0]
+        elif isinstance(obj, Exception):
+            ic = stringicon.StringIcon('"Exception <no repr, yet>"', window=self)
         elif callable(obj):
             ic = stringicon.StringIcon('"Callable <no repr, yet>"', window=self)
+        elif obj is ...:
+            ic = nameicons.EllipsisIcon(window=self)
         else:
             ic = filefmt.parseTextToIcons(repr(obj), self)[0]
         return ic
@@ -3815,6 +3824,9 @@ class Window:
         if errHighlight is not None:
             tkinter.messagebox.showerror("Syntax Error", message=errHighlight.text,
                 parent=self.imgFrame)
+
+    def _showPythonDoc(self, docRef):
+        openPythonDocumentation(docRef)
 
     def _select(self, ic, op='select'):
         """Change the selection.  Options are 'select': selects single icon, 'toggle':
@@ -7022,6 +7034,8 @@ class StreamToTextWidget:
         pass
 
 #... Move to OS-dependent module (once that's created)
+import sys
+import subprocess
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 def nudgeMouseCursor(x, y):
@@ -7030,6 +7044,29 @@ def nudgeMouseCursor(x, y):
     cursorPos.x += x
     cursorPos.y += y
     ctypes.windll.user32.SetCursorPos(cursorPos.x, cursorPos.y)
+docChmFile = None
+def openPythonDocumentation(pythonDocRef):
+    global docChmFile
+    if docChmFile is False:
+        return False
+    if docChmFile is None:
+        docDir = sys.exec_prefix + '/Doc'
+        try:
+            docDirFiles = os.listdir(docDir)
+        except:
+            docChmFile = False
+            print("Could not find Python documentation directory")
+            return False
+        chmFiles = [f for f in docDirFiles if f[:6] == 'python' and f[-4:] == '.chm']
+        if len(chmFiles) == 0:
+            docChmFile = False
+            print("Could not find Python documentation .chm file")
+            return False
+        if len(chmFiles) > 1:
+            print("Multiple Python documentation files found, using: %s" % chmFiles[0])
+        docChmFile = docDir + '/' + chmFiles[0]
+    hhArg = docChmFile + '::/' + pythonDocRef
+    subprocess.Popen(['hh', hhArg], creationflags=subprocess.DETACHED_PROCESS)
 
 if __name__ == '__main__':
     appData = App()
