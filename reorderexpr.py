@@ -165,7 +165,8 @@ def traverseExprLeftToRight(topNode, allowedNonParen=None, closeParenAfter=None)
     if topNode is None:
         yield MissingArgToken()
     elif topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon,
-            listicons.DictElemIcon, listicons.ArgAssignIcon, infixicon.TypeAnnIcon):
+            subscripticon.SliceIcon, listicons.DictElemIcon, listicons.ArgAssignIcon,
+            infixicon.TypeAnnIcon):
         hasParens = topNode.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and \
             topNode.hasParens  # infix ops dict elem and arg assign can't have parens
         if hasParens:
@@ -238,13 +239,6 @@ class OpenParenToken:
             self.contentSite = None
         elif parenIcon.hasSite('argIcons_0'):
             self.contentSite = parenIcon.sites.argIcons[-1].name
-        elif isinstance(parenIcon, subscripticon.SubscriptIcon):
-            if parenIcon.hasSite('stepIcon'):
-                self.contentSite = 'stepIcon'
-            elif parenIcon.hasSite('upperIcon'):
-                self.contentSite = 'upperIcon'
-            else:
-                self.contentSite = 'indexIcon'
         else:
             self.contentSite = 'argIcon'
         self.closed = self.parenIcon.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) \
@@ -271,6 +265,9 @@ class BinaryOpToken:
         if isinstance(ic, opicons.IfExpIcon):
             self.leftArgSite = 'trueExpr'
             self.rightArgSite = 'falseExpr'
+        elif isinstance(ic, subscripticon.SliceIcon):
+            self.leftArgSite = 'indexIcon'
+            self.rightArgSite = 'stepIcon' if ic.hasSite('stepIcon') else 'upperIcon'
         else:
             self.leftArgSite = 'leftArg'
             self.rightArgSite = 'rightArg'

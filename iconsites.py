@@ -568,7 +568,8 @@ def highestCoincidentIcon(ic, arithOnly=False):
         if parent is None or not isCoincidentSite(parent, parent.siteOf(ic)):
             return ic
         if arithOnly and (hasattr(parent, 'noParens') and parent.noParens or
-                parent.__class__.__name__ in ('AssignIcon', 'AugmentedAssignIcon')):
+                parent.__class__.__name__ in ('AssignIcon', 'AugmentedAssignIcon',
+                'SliceIcon')):
             return ic
         ic = parent
 

@@ -21,6 +21,7 @@ import stringicon
 import parenicon
 import commenticon
 import infixicon
+import subscripticon
 import undo
 import filefmt
 import expredit
@@ -1102,12 +1103,36 @@ class Window:
         if self.buttonDownTime is not None and \
                 msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
             self._delayedBtnUpActions()
-        # If there's a cursor displayed somewhere, use it, otherwise, use selection.
+        # If there's a selection, use that as the destination.  If not use cursor.
         # Except in the case of typeovers, text is either fed directly to an accepting
         # widget using its addText method, or an entry icon is created at the requested
         # site and text is added to that.  The addText method for icons that support a
         # text cursor return a reject-reason string on failure and None on success.
-        if self.cursor.type == "text":
+        if len(self.selectedSet) != 0:
+            self._pruneSelectedIcons()
+        if len(self.selectedSet) != 0:
+            # Replace the selection (or first contiguous range of it) with an entry
+            # icon, and pass the character on to that entry icon to process.
+            # Unfortunately, to fully understand the context in which we will be
+            # inserting the character, we need to go through with the removal of the
+            # selected icons.  If we then fail to insert the character, use undo to
+            # unwind the removal and replacement with the entry icon.  Before we do
+            # any of that, add a (probably redundant) undo boundary, to guarantee
+            # that undo  will not overstep and revert an operation prior to the
+            # keystroke.  To keep the entry icon from being deleted during the
+            # replacement process, we start it with the illegal string '&&&', but
+            # remove it before properly adding the character with addText().
+            self.undo.addBoundary()
+            entryIcon = entryicon.EntryIcon(window=self, initialString='&&&')
+            self.replaceSelectedIcons(self.selectedSet, [[entryIcon]])
+            entryIcon.clearText()
+            self.cursor.setToText(entryIcon, drawNew=False)
+            rejectReason = entryIcon.addText(char)
+            if rejectReason is None:
+                self.clearSelection()
+            else:
+                self.undo.undo()
+        elif self.cursor.type == "text":
             # If it's an active entry icon, feed it the character
             self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
             rejectReason = self.cursor.icon.addText(char)
@@ -1162,35 +1187,11 @@ class Window:
             self.refresh(ic.rect, redraw=True)
             return
         else:
-            # If there's an appropriate selection, use that
-            self._pruneSelectedIcons()
-            if len(self.selectedSet) == 0:
-                rejectReason = "No cursor or selection"
-            else:
-                # Replace the selection (or first contiguous range of it) with an entry
-                # icon, and pass the character on to that entry icon to process.
-                # Unfortunately, to fully understand the context in which we will be
-                # inserting the character, we need to go through with the removal of the
-                # selected icons.  If we then fail to insert the character, use undo to
-                # unwind the removal and replacement with the entry icon.  Before we do
-                # any of that, add a (probably redundant) undo boundary, to guarantee
-                # that undo  will not overstep and revert an operation prior to the
-                # keystroke.  To keep the entry icon from being deleted during the
-                # replacement process, we start it with the illegal string '&&&', but
-                # remove it before properly adding the character with addText().
-                self.undo.addBoundary()
-                entryIcon = entryicon.EntryIcon(window=self, initialString='&&&')
-                self.replaceSelectedIcons(self.selectedSet, [[entryIcon]])
-                entryIcon.clearText()
-                self.cursor.setToText(entryIcon, drawNew=False)
-                rejectReason = entryIcon.addText(char)
-                if rejectReason is None:
-                    self.clearSelection()
-                else:
-                    self.undo.undo()
+            rejectReason = "No cursor or selection"
         if rejectReason is not None:
             # Text was rejected, beep and flash the error reason
             self.displayTypingError(rejectReason)
+            self.refreshDirty()
         else:
             # Text was accepted.  Note that no undo boundary is added here, as .addText
             # methods handle it to control grouping of operations.
@@ -2594,6 +2595,15 @@ class Window:
         # they were originally attached.
         topDraggingIcons = [ic for seq in draggingSequences for ic in seq]
         self.dragging = draggingSequences
+        # Icon substitution between slice icons ('a:b:c') and their 'slice()' form is
+        # done outside of the normal substitution mechanism, which for complicated
+        # reasons discussed in convertDirtySlices, is driven via the layout request
+        # mechanism.  Dragging icons need explicit conversion while they are still
+        # findable, before the layout request.  We specifically exclude the icons that
+        # will be inserted directly on the snap site to keep the slices in their more
+        # aesthetic form, and then clean them up in _endDrag, with convertDroppedSlices.
+        self.dragIcon = icon.findSeqStart(self.buttonDownIcon.topLevelParent())
+        subscripticon.convertDirtySlices(self, topDraggingIcons, self.dragIcon)
         # Recalculate layouts for dirty icons remaining in the window and those that will
         # be dragged, and refresh the whole display with icon outlines turned on.
         self.layoutDirtyIcons()
@@ -2649,7 +2659,6 @@ class Window:
         draggingAttrOuts = []
         draggingCprhOuts = []
         draggingConditionals = []
-        self.dragIcon = icon.findSeqStart(self.buttonDownIcon.topLevelParent())
         dragSnapList = self.dragIcon.snapLists()
         for ic, (x, y), name in dragSnapList.get("output", []):
             draggingOutputs.append(((x, y), ic, name))
@@ -3018,10 +3027,14 @@ class Window:
         self._updateDrag()
 
     def _endDrag(self, evt):
-        topDraggingIcons = [ic for seq in self.dragging for ic in seq]
         if self.snapped is not None:
             # The drag ended in a snap.  Attach or replace existing icons at the site
             statIcon, movIcon, siteType, siteName, _ = self.snapped
+            # We allowed slice icons to exist in the dragged icons, but now that we know
+            # where they will be inserted, we need to convert those that did not go in to
+            # subscript contexts, into their call 'slice()' form.
+            subscripticon.convertDroppedSlices(movIcon, statIcon, siteName,
+                self.dragging)
             if siteName == "stmtComment":
                 rightmostIc, rightmostSite = icon.rightmostSite(statIcon)
                 cursorIc, cursorSite = self.insertIconsFromSequences(rightmostIc,
@@ -3063,7 +3076,12 @@ class Window:
         else:
             # Not snapped.  Place on window background.  Dropping an entry icon on the
             # top level outside of a sequence may allow it to be removed, since
-            # placeholders are not needed
+            # placeholders are not needed.  Also, we allowed slice icons to exist in the
+            # dragged icons, but now that that they'll be placed on the window background
+            # we need to convert them into their call 'slice()' form.
+            subscripticon.convertDroppedSlices(self.dragIcon, None, None,
+                self.dragging)
+            topDraggingIcons = [ic for seq in self.dragging for ic in seq]
             l, t, r, b = self.lastDragImageRegion
             for topIc in topDraggingIcons:
                 for ic in topIc.traverse(inclStmtComment=True):
@@ -3788,7 +3806,7 @@ class Window:
         elif obj is ...:
             ic = nameicons.EllipsisIcon(window=self)
         else:
-            ic = filefmt.parseTextToIcons(repr(obj), self)[0]
+            ic = filefmt.parseTextToIcons(repr(obj), self)[0][0]
         return ic
 
     def _handleExecErr(self, excep, executedIcon=None):
@@ -4021,7 +4039,7 @@ class Window:
         self.scrollRequest = scrollType
 
     def refreshDirty(self, addUndoBoundary=False, minimizePendingArgs=True,
-            redrawCursor=True):
+            redrawCursor=True, fixSubscriptsAndSlices=True):
         """Refresh any icons whose layout is marked as dirty (via the markLayoutDirty
         method of the icon), redraw and refresh any window areas marked as needing redraw
         (via window method requestRedraw), and pending autoscroll requests (requested via
@@ -4030,13 +4048,15 @@ class Window:
         have altered the icon structure (including simple cursor movement because focus
         changes can also alter the icon structure).  As such, it also includes clean-up
         for entry icon pending args (minimizePendingArgs), cursor redraw and hold
-        (redrawCursor), and optionally adding an undo boundary (addUndoBoundary)."""
+        (redrawCursor), handling slice icon interchange and rebalancing (fixSubscriptsAnd
+        Slices), and optionally adding an undo boundary (addUndoBoundary)."""
         if minimizePendingArgs and self.cursor.type == "text" and \
                 isinstance(self.cursor.icon, entryicon.EntryIcon):
             self.cursor.icon.minimizePendingArgs()
         self.refreshRequests.add(self.layoutDirtyIcons(
             filterRedundantParens=self.redundantParenFilterRequested,
-                updateScrollRanges=self.scrollRequest is not None))
+                updateScrollRanges=self.scrollRequest is not None,
+                fixSubscriptsAndSlices=fixSubscriptsAndSlices))
         redrawAll = False
         if self.scrollRequest is not None:
             if self.scrollRequest == 'cursor':
@@ -4514,11 +4534,17 @@ class Window:
                     prevIc = None
                     for i, ic in enumerate(seqList):
                         if not ic.hasSite('seqIn'):
-                            entryIc = entryicon.EntryIcon(window=self)
-                            entryIc.appendPendingArgs([ic])
-                            entryIc.selectIfFirstArgSelected()
-                            ic = entryIc
-                            seqList[i] = entryIc
+                            if isinstance(ic, subscripticon.SliceIcon):
+                                subsIc = ic.convertToCall(replace=False)
+                                if watchSubs is not None and ic in watchSubs:
+                                    watchSubs[ic] = subsIc
+                                ic = subsIc
+                            else:
+                                entryIc = entryicon.EntryIcon(window=self)
+                                entryIc.appendPendingArgs([ic])
+                                entryIc.selectIfFirstArgSelected()
+                                ic = entryIc
+                            seqList[i] = ic
                         if prevIc is not None and ic is not prevIc.childAt('seqOut'):
                             prevIc.replaceChild(ic, 'seqOut')
                         prevIc = ic
@@ -5271,7 +5297,14 @@ class Window:
             pendingDecorators = False
             blockCtx = blockicons.BlockContextStack()
             for isSingleStmt, ic in flagIndividual(seqIter):
-                if isinstance(ic, icon.BlockEnd) and ic not in pruneBlockEnds:
+                if isinstance(ic, icon.BlockEnd):
+                    if ic in pruneBlockEnds:
+                        # Block end owner is not in selection: don't reproduce it.
+                        # ... Note that this test was previously part of the block-end
+                        #     test, and the pruned block ends were therefore processed as
+                        #     normal icons. I am very confused as to how this escaped
+                        #     notice, as it crashed for every copy from a block owner.
+                        continue
                     # Python requires a 'pass' statement for empty blocks and something
                     # to decorate for decorators
                     if pendingDecorators:
@@ -5970,11 +6003,22 @@ class Window:
         return sequenceTops.keys()
 
     def layoutDirtyIcons(self, draggingIcons=None, filterRedundantParens=True,
-            updateScrollRanges=True):
+            updateScrollRanges=True, fixSubscriptsAndSlices=True):
         """Look for icons marked as needing layout and lay them out.  If draggingIcons is
         specified, assume a stand-alone list of top icons not of the window.  Otherwise
-        look at all of the icons in the window.  Returns a rectangle representing the
-        changed areas that need to be redrawn, or None if nothing changed."""
+        look at all of the icons in the window.  Also combines unrelated functions of
+        removing redundant parens, updating scroll bar ranges, and a portion of icon
+        substitution.  These are gathered here to form the "cleanup phase" of editing
+        operations.  Returns a rectangle representing the changed areas that need to be
+        redrawn, or None if nothing changed."""
+        # Icon substitution on SliceIcons, handled here because the original substitution
+        # method (still used for comprehensions) required integration into all code that
+        # could copy, remove, or insert a comprehension, and therefore not feasible to
+        # to extend to slices, which attach to standard input sites and can take the form
+        # of a common function call (see description in subscripticon.convertDirtySlices)
+        if fixSubscriptsAndSlices:
+            subscripticon.convertDirtySlices(self)
+        # Layout icons on the pages marked as dirty
         redrawRegion = comn.AccumRects()
         if draggingIcons is not None:
             for seq in self.findSequences(draggingIcons):
@@ -5983,6 +6027,7 @@ class Window:
         else:
             for seqStartPage in self.sequences:
                 redrawRegion.add(self.layoutIconsInPage(seqStartPage, filterRedundantParens))
+        # Update scroll bars
         if updateScrollRanges:
             self._updateScrollRanges()
         return redrawRegion.get()

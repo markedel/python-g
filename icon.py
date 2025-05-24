@@ -940,6 +940,8 @@ class Icon:
         else:
             self.sites.lookup(siteId).attach(self, newChild, childSite)
         self.markLayoutDirty()
+        if newChild is not None:
+            newChild.markLayoutDirty()
 
     def replaceWith(self, replacementIcon):
         """Replace this icon (self) with another icon in the parent site to which it
@@ -1001,6 +1003,8 @@ class Icon:
             self.sites.insertSeriesSiteByNameAndIndex(self, seriesName, seriesIdx)
             self.sites.lookupSeries(seriesName)[seriesIdx].attach(self, child, childSite)
         self.markLayoutDirty()
+        if child is not None:
+            child.markLayoutDirty()
 
     def insertChildren(self, children, seriesOrSiteName, seriesIdx=None, childSite=None,
             preserveNoneAtZero=False):

@@ -649,6 +649,11 @@ class EntryIcon(icon.Icon):
             chars = [c for c in text if 32 <= ord(c) < 0xff or c.isidentifier()]
             if len(chars) < len(text):
                 text = ''.join(chars)
+        if text == ' ' and len(self.text) == 0:
+            # There's nothing to parse.  A user typing a space in an empty entry icon
+            # means "parse this", indicating "get rid of the entry ic" (if possible)
+            self.remove()
+            return None
         if text == ' ' and not (self.text[:3] == 'not' and self.cursorPos == 3 and
                 self.attachedToAttribute() or
                 self.text[:5] in ('async', 'yield') and self.cursorPos == 5):
@@ -1768,43 +1773,84 @@ class EntryIcon(icon.Icon):
         attachedSite = self.attachedSite()
         transferParentArgs = None
         transferParentCprhs = None
-        if attachedIc is not None and iconClass is not subscripticon.SubscriptIcon:
+        newParenIcon = None
+        if attachedIc is not None:
             seqIc, seqSite = findEnclosingSite(self)
-            if seqIc and iconsites.isSeriesSiteId(seqSite) and \
+            if isinstance(seqIc, subscripticon.SubscriptIcon) and \
+                    isinstance(seqIc.childAt(seqSite), subscripticon.SliceIcon):
+                # User is typing within a slice.  If they're typing another subscript,
+                # allow the new bracket to split the slice, but if not, keep it contained
+                # to within the slice.  This code needs more work, as it can violate our
+                # rules for unclosed paren ownership by leaving a paren/bracket/brace
+                # that lexically would take possession of subsequent elements (and
+                # possibly part of the slice to which it's attached), and will therefore
+                # leave users unable to match an unclosed brace in some cases.
+                if iconClass is subscripticon.SubscriptIcon:
+                    newParenIcon = subscripticon.SubscriptIcon(window=self.window,
+                        closed=False)
+                    left, right = splitExprAtIcon(self, seqIc, newParenIcon,  self)
+                    seqIc.replaceChild(None, seqSite)
+                    if right is not None:
+                        newParenIcon.replaceChild(right, 'argIcons_0')
+                    seqIc.insertChild(left, seqSite)
+                    name, idx = iconsites.splitSeriesSiteId(seqSite)
+                    numParentSites = len(getattr(seqIc.sites, name))
+                    transferParentArgs = seqIc, iconsites.nextSeriesSiteId(seqSite), \
+                        numParentSites
+                else:
+                    transferParentArgs = None
+            elif seqIc and iconsites.isSeriesSiteId(seqSite) and \
                     seqIc.typeOf(seqSite) == 'input':
                 siteName, siteIdx = iconsites.splitSeriesSiteId(seqSite)
                 rightOfSite = iconsites.makeSeriesSiteId(siteName, siteIdx + 1)
                 if seqIc.hasSite(rightOfSite):
-                    transferParentArgs = seqIc, rightOfSite
+                    name, idx = iconsites.splitSeriesSiteId(rightOfSite)
+                    numParentSites = len(getattr(seqIc.sites, name))
+                    if isinstance(seqIc, subscripticon.SubscriptIcon) and \
+                            iconClass is not subscripticon.SubscriptIcon:
+                        # Inside subscripts and slices, grammar rules go out the window.
+                        # Parens are lower priority than slice colons, so we don't want
+                        # to cross them
+                        for i in range(idx, numParentSites):
+                            arg = seqIc.childAt(name, i)
+                            if isinstance(arg, subscripticon.SliceIcon):
+                                numParentSites = i
+                                break
+                    transferParentArgs = seqIc, rightOfSite, numParentSites
+                    # Convert cursor paren to tuple if there are arguments to transfer
                     if iconClass is parenicon.CursorParenIcon:
-                        iconClass = listicons.TupleIcon
+                        if numParentSites > idx:
+                            iconClass = listicons.TupleIcon
+                        else:
+                            transferParentArgs = None
             if seqIc and isinstance(seqIc, (listicons.TupleIcon, listicons.ListIcon,
                     listicons.DictIcon)) and seqIc.isComprehension():
                 transferParentCprhs = seqIc
                 if iconClass is parenicon.CursorParenIcon:
                     iconClass = listicons.TupleIcon  # paren can't accept comprehensions
         # Create an icon of the requested class and move the entry icon inside of it
-        if iconClass is parenicon.CursorParenIcon:
-            closed = False  # We leave even empty paren open to detect () for empty tuple
-            typeover = False
-        elif transferParentCprhs:
-            closed = True  # Show ownership of comprehensions
-            typeover = False
-        else:
-            closed = transferParentArgs is None and _canCloseParen(self)
-            typeover = closed
-        newParenIcon = iconClass(window=self.window, closed=closed, typeover=typeover)
-        if attachedIc is None:
-            self.window.replaceTop(self, newParenIcon)
-        else:
-            attachedIc.replaceChild(newParenIcon, attachedSite)
-        if iconClass is parenicon.CursorParenIcon:
-            inputSite = 'argIcon'
-        elif iconClass is subscripticon.SubscriptIcon:
-            inputSite = 'indexIcon'
+        if newParenIcon is None:
+            if iconClass is parenicon.CursorParenIcon:
+                closed = False  # We leave even empty paren open to detect () for empty tuple
+                typeover = False
+            elif transferParentCprhs:
+                closed = True  # Show ownership of comprehensions
+                typeover = False
+            else:
+                closed = transferParentArgs is None and _canCloseParen(self)
+                typeover = closed
+            newParenIcon = iconClass(window=self.window, closed=closed, typeover=typeover)
+            if attachedIc is None:
+                self.window.replaceTop(self, newParenIcon)
+            else:
+                attachedIc.replaceChild(newParenIcon, attachedSite)
+            if iconClass is parenicon.CursorParenIcon:
+                inputSite = 'argIcon'
+            else:
+                inputSite = 'argIcons_0'
+            newParenIcon.replaceChild(self, inputSite)
         else:
             inputSite = 'argIcons_0'
-        newParenIcon.replaceChild(self, inputSite)
         # Attempt to get rid of the entry icon and place pending args in its place
         if not self.remove():
             if self._canPlacePendingArgs(self.attachedIcon(), self.attachedSite(),
@@ -1821,9 +1867,8 @@ class EntryIcon(icon.Icon):
             reorderexpr.reorderArithExpr(newParenIcon)
         # Transfer sequence clauses after the new open paren/bracket/brace to it
         if transferParentArgs:
-            rightOfIc, rightOfSite = transferParentArgs
+            rightOfIc, rightOfSite, numParentSites = transferParentArgs
             name, idx = iconsites.splitSeriesSiteId(rightOfSite)
-            numParentSites = len(getattr(rightOfIc.sites, name))
             args = [rightOfIc.childAt(name, i) for i in range(idx, numParentSites)]
             for i in range(idx, numParentSites):
                 rightOfIc.replaceChild(None, iconsites.makeSeriesSiteId(name, idx))
@@ -1842,6 +1887,12 @@ class EntryIcon(icon.Icon):
                 else:
                     cvtTupleToCursorParen(rightOfIc, closed=rightOfIc.closed,
                         typeover=rightOfIc.typeoverSites()[0] is not None)
+            if isinstance(newParenIcon, subscripticon.SubscriptIcon):
+                # If we've transferred the args into a subscript icon, check for slice
+                # calls that can be converted to slice icons.
+                for arg in newParenIcon.argIcons():
+                    if subscripticon.SliceIcon.isSliceCallForm(arg):
+                        subscripticon.SliceIcon.convertCallToSlice(arg)
         # Transfer comprehension clauses to the newly opened paren/bracket/brace
         if transferParentCprhs:
             cprhIcons = [site.att for site in transferParentCprhs.sites.cprhIcons if
@@ -2339,29 +2390,46 @@ class EntryIcon(icon.Icon):
         return None
 
     def insertSubscriptColon(self, onIcon):
-        if onIcon.hasSite('stepIcon'):
-            return "Subscript already has all 3 clauses (start:stop:step)"
+        # onIcon will be a subscript icon.  Figure out if we're adding to an existing
+        # slice or an expression
         onSite = onIcon.siteOf(self, recursive=True)
-        # Split the expression holding the entry icon in two at the entry icon
-        left, right = splitExprAtIcon(self, onIcon, None, self)
-        # Create a new clause and put the two halves in to them
-        if onIcon.hasSite('upperIcon'):
-            onIcon.changeNumSubscripts(3)
-            siteAdded = 'stepIcon'
+        childIc = onIcon.childAt(onSite)
+        if childIc is self:
+            # The entry icon is directly on the subscript icon site, meaning there is no
+            # expression and no subscript icon.  Just add an empty subscript, and move
+            # the entry icon after the colon
+            sliceIcon = subscripticon.SliceIcon(window=self.window)
+            self.replaceWith(sliceIcon)
+            sliceIcon.replaceChild(self, 'upperIcon')
+        elif isinstance(childIc, subscripticon.SliceIcon):
+            # The entry icon is within an existing slice
+            sliceIcon = childIc
+            if sliceIcon.hasSite('stepIcon'):
+                return "Slice already has all 3 clauses (start:stop:step)"
+            sliceSite = sliceIcon.siteOf(self, recursive=True)
+            # Split the expression holding the entry icon in two at the entry icon
+            left, right = splitExprAtIcon(self, sliceIcon, None, self)
+            # Create a new clause and put the two halves in to them
+            sliceIcon.addStepSite()
+            # If the cursor was on the first site, may need to shift second-site icons
+            if sliceSite == 'indexIcon':
+                toShift = sliceIcon.childAt('upperIcon')
+                sliceIcon.replaceChild(None, "upperIcon")
+                sliceIcon.replaceChild(toShift, 'stepIcon')
+                nextSite = 'upperIcon'
+            else:
+                nextSite = 'stepIcon'
+            # Place the newly-split expression in to its assigned slots
+            sliceIcon.replaceChild(left, sliceSite)
+            sliceIcon.replaceChild(right, nextSite)
         else:
-            onIcon.changeNumSubscripts(2)
-            siteAdded = 'upperIcon'
-        # If the cursor was on the first site, may need to shift second-site icons
-        if onSite == 'indexIcon' and siteAdded == "stepIcon":
-            toShift = onIcon.childAt('upperIcon')
-            onIcon.replaceChild(None, "upperIcon")
-            onIcon.replaceChild(toShift, 'stepIcon')
-            nextSite = 'upperIcon'
-        else:
-            nextSite = siteAdded
-        # Place the newly-split expression in to its assigned slots
-        onIcon.replaceChild(left, onSite)
-        onIcon.replaceChild(right, nextSite)
+            # The entry icon is within an expression.  Split it and divide it across
+            # a new slice icon
+            left, right = splitExprAtIcon(self, onIcon, None, self)
+            sliceIcon = subscripticon.SliceIcon(window=self.window)
+            onIcon.replaceChild(sliceIcon, onSite)
+            sliceIcon.replaceChild(left, 'indexIcon')
+            sliceIcon.replaceChild(right, 'upperIcon')
         # Remove entry icon and place pending arguments (if possible)
         self.remove()
         return None
@@ -3108,10 +3176,18 @@ def runIconTextEntryHandlers(entryIc, text, onAttr):
     return None, None
 
 def binOpLeftArgSite(ic):
-    return 'trueExpr' if ic.__class__ == opicons.IfExpIcon else 'leftArg'
+    if isinstance(ic, opicons.IfExpIcon):
+        return 'trueExpr'
+    if isinstance(ic, subscripticon.SliceIcon):
+        return 'indexIcon'
+    return 'leftArg'
 
 def binOpRightArgSite(ic):
-    return 'falseExpr' if ic.__class__ == opicons.IfExpIcon else 'rightArg'
+    if isinstance(ic, opicons.IfExpIcon):
+        return 'falseExpr'
+    if isinstance(ic, subscripticon.SliceIcon):
+        return 'stepIcon' if ic.hasSite('stepIcon') else 'upperIcon'
+    return 'rightArg'
 
 def searchForOpenParen(token, closeParenAt):
     """Find an open paren/bracket/brace to match an end paren/bracket/brace placed at a
@@ -3126,6 +3202,7 @@ def searchForOpenParen(token, closeParenAt):
     # matching icon will always be a parent or owner of the site requested.
     ic = closeParenAt
     transferArgsFrom = None
+    matchSubscriptOnly = False
     while True:
         parent = ic.parent()
         if parent is None:
@@ -3139,26 +3216,16 @@ def searchForOpenParen(token, closeParenAt):
                 return ic, transferArgsFrom
             if token == "endParen" and isinstance(ic, listicons.TupleIcon) and \
                     not ic.closed and not ic.noParens:
-                # Found either an unclosed tuple (... removed if clause above to activate
-                # on naked tuples, which I hope was just wrong and not needed elsewhere)
                 return ic, transferArgsFrom if transferArgsFrom else ic
             if token == "endParen" and isinstance(ic, listicons.CallIcon) and \
                     not ic.closed:
                 return ic, transferArgsFrom if transferArgsFrom else ic
             if token == "endBracket" and isinstance(ic, listicons.ListIcon) and \
-                    not ic.closed:
+                    not ic.closed and not matchSubscriptOnly:
                 return ic, transferArgsFrom if transferArgsFrom else ic
             if token == "endBracket" and isinstance(ic, subscripticon.SubscriptIcon) and \
                     not ic.closed:
-                # Can only match from the rightmost slice, otherwise there are colons to
-                # the right which can't be left on their own
-                sliceSite = ic.siteOf(closeParenAt, recursive=True)
-                if sliceSite is None:
-                    sliceSite = site
-                if ic.hasSite('stepIcon') and sliceSite != 'stepIcon' or \
-                        ic.hasSite('upperIcon') and sliceSite == 'indexIcon':
-                    break
-                return ic, transferArgsFrom
+                return ic, transferArgsFrom if transferArgsFrom else ic
             if token == "endBrace" and isinstance(ic, listicons.DictIcon) and \
                     not ic.closed:
                 return ic, transferArgsFrom if transferArgsFrom else ic
@@ -3168,12 +3235,21 @@ def searchForOpenParen(token, closeParenAt):
             rightmostSite = ic.sites.lastCursorSite()
             if ic.typeOf(rightmostSite) not in ('input', 'cprhIn') or \
                     hasattr(ic, 'closed') and ic.closed or \
-                    isinstance(ic, opicons.IfExpIcon) and site == 'testExpr':
+                    isinstance(ic, opicons.IfExpIcon) and site == 'testExpr' or \
+                    isinstance(ic, subscripticon.SliceIcon) and site != 'indexIcon':
                 # Anything that doesn't have an input on the right or is closed can be
                 # assumed to enclose its children and search should not extend beyond.
-                # Inline if is the exception in having a middle site that encloses its
-                # child icon
-                break
+                # Inline if and slice are the exceptions in having a middle site that
+                # encloses its child icon (technically, there are cases where we could
+                # split a slice icon to match a subscript paren, but currently the code
+                # in reorderexpr that does the splitting can't handle that.
+                if isinstance(ic, subscripticon.SliceIcon) and token == "endBracket" \
+                        and site == 'stepIcon' or (not ic.hasSite('stepIcon') and
+                        site == 'upperIcon'):
+                    # Only subscripts can cross a slice colon
+                    matchSubscriptOnly = True
+                else:
+                    break
             if hasattr(ic, 'closed'):
                 # Anything that is not closed does not stop search, but may require
                 # argument transfer (canonical ordering ensures that the innermost
@@ -3237,12 +3313,7 @@ def reopenParen(ic):
     if isinstance(ic, parenicon.CursorParenIcon):
         lastArgSite = 'argIcon'
     elif isinstance(ic, subscripticon.SubscriptIcon):
-        if ic.hasSite('stepIcon'):
-            lastArgSite = 'stepIcon'
-        elif ic.hasSite('upperIcon'):
-            lastArgSite = 'upperIcon'
-        else:
-            lastArgSite = 'indexIcon'
+        lastArgSite = ic.sites.argIcons[-1].name
     elif ic.isComprehension():
         lastArgSite = ic.sites.cprhIcons[-2].name
     else:
@@ -3285,6 +3356,29 @@ def reopenParen(ic):
     if boundingParent is None or not iconsites.isSeriesSiteId(boundingParentSite):
         # There was no bounding icon or the bounding icon was not a sequence
         return
+    if isinstance(boundingParent, subscripticon.SubscriptIcon):
+        bpSite = boundingParent.siteOf(ic, recursive=True)
+        bpChild = boundingParent.childAt(bpSite)
+        if isinstance(bpChild, subscripticon.SliceIcon):
+            sliceSite = bpChild.siteOf(ic, recursive=True)
+            if sliceSite == 'indexIcon':
+                # ic is on the left site of a slice icon.  The grammar ambiguity
+                # resulting from slices having priority over parens, means we want to
+                # give the rightmost element of the list/tuple/etc. to the slice and
+                # the rest to the top level of the subscript level
+                nArgs = 1 if isinstance(ic, parenicon.CursorParenIcon) else \
+                    len(ic.sites.argIcons)
+                if nArgs != 1:
+                    lastArgSite = iconsites.makeSeriesSiteId('argIcons', nArgs-1)
+                    lastArg = ic.childAt(lastArgSite)
+                    ic.replaceChild(None, lastArgSite)
+                    sliceArg = bpChild.childAt(sliceSite)
+                    bpChild.replaceChild(None, sliceSite)
+                    bpChild.replaceChild(lastArg, sliceSite)
+                    boundingParent.insertChild(sliceArg, bpSite)
+                    if isinstance(ic, listicons.TupleIcon) and nArgs == 2:
+                        cvtTupleToCursorParen(ic, False, False)
+                return
     siteName, siteIdx = iconsites.splitSeriesSiteId(boundingParentSite)
     nextSite = iconsites.makeSeriesSiteId(siteName, siteIdx + 1)
     if not boundingParent.hasSite(nextSite):
@@ -3297,17 +3391,11 @@ def reopenParen(ic):
     for recipient in rightmostIc.parentage():
         if recipient is ic:
             break
-        if hasattr(recipient, 'closed') and not recipient.closed and not isinstance(ic,
-                subscripticon.SubscriptIcon):
+        if hasattr(recipient, 'closed') and not recipient.closed:
             break
     else:
         recipient = ic
         print("Missed reopened paren in transfer argument search")
-    if isinstance(recipient, subscripticon.SubscriptIcon):
-        # If recipient is a subscript, we can't transfer args, leaving an open bracket
-        # with clauses following that belong to a parent. This is weird, but necessary so
-        # users can adjust the right paren of a subscript that happens to be in a list.
-        return
     if isinstance(recipient, parenicon.CursorParenIcon):
         # recipient is a cursor paren: change it to tuple to accept more arguments
         tupleIcon = listicons.TupleIcon(window=recipient.window, closed=False)
@@ -3416,11 +3504,12 @@ def findEnclosingSite(startIc, startSite=None):
             if parentClass in (opicons.BinOpIcon, opicons.IfExpIcon) and \
                     parent.hasParens or \
                     parentClass in (opicons.DivideIcon, parenicon.CursorParenIcon,
-                        subscripticon.SubscriptIcon, listicons.CprhForIcon,
-                        listicons.CprhIfIcon) or \
+                        listicons.CprhForIcon, listicons.CprhIfIcon) or \
                     parentClass is opicons.IfExpIcon and site == 'testExpr' or \
                     parentClass is assignicons.AugmentedAssignIcon and \
-                        site == 'targetIcon' or parentClass in cursors.stmtIcons:
+                        site == 'targetIcon' or parentClass in cursors.stmtIcons or \
+                    parentClass is subscripticon.SliceIcon and site == 'upperIcon' and \
+                        parent.hasSite('stepIcon'):
                 return parent, site
         ic = parent
         parent = ic.parent()
@@ -3490,9 +3579,9 @@ def splitExprAtIcon(splitAt, splitTo, replaceLeft, replaceRight):
         if isinstance(parent, opicons.UnaryOpIcon):
             parent.replaceChild(leftArg, 'argIcon')
             leftArg = parent
-        elif childSiteType == 'input' and (isinstance(parent, infixicon.InfixIcon) or
-                parent.__class__ in (opicons.BinOpIcon, opicons.IfExpIcon) and not
-                parent.hasParens):
+        elif childSiteType == 'input' and (isinstance(parent, (infixicon.InfixIcon,
+                subscripticon.SliceIcon)) or parent.__class__ in (opicons.BinOpIcon,
+                opicons.IfExpIcon) and not parent.hasParens):
             # Parent is a binary op icon without parens, and site is one of the two
             # input sites
             if parent.leftArg() is child:  # Insertion was on left side of operator

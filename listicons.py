@@ -1595,6 +1595,9 @@ class DictIcon(ListTypeIcon):
 class CallIcon(icon.Icon):
     pythonDocRef = [("Calls", "reference/expressions.html#calls")]
     hasTypeover = True
+    # Property to tell wrapping layout and save-text generators not to allow wrap
+    # at the attribute site (as most attributes normally can).
+    sticksToAttr = True
 
     def __init__(self, window, closed=True, typeover=False, location=None):
         icon.Icon.__init__(self, window)
@@ -1608,9 +1611,6 @@ class CallIcon(icon.Icon):
         width, height = self._size()
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + width, y + height)
-        # Property to tell wrapping layout and save-text generators not to allow wrap
-        # at the attribute site (as most attributes normally can).
-        self.sticksToAttr = True
         if closed:
             self.close(typeover)
 
@@ -2853,7 +2853,7 @@ def backspaceListIcon(ic, site, evt):
                         'cursorOnly'):
                     attrPlaceFail = True
             elif numArgs == 0:
-                attrPlaceFail = parent is not None and not isinstance(ic, CallIcon)
+                attrPlaceFail = parent is not None and not ic.hasSite('attrOut')
                 attrDestination = parent
             else:
                 attrDestination, attrDestSite = icon.rightmostSite(nonEmptyArgs[-1])
@@ -2947,7 +2947,7 @@ def backspaceListIcon(ic, site, evt):
             if attrIcon and not attrPlaceFail:
                 # Place attribute on the content icon or last comprehension
                 attrDestination.replaceChild(attrIcon, attrDestSite)
-            elif attrIcon and not isinstance(ic, CallIcon):
+            elif attrIcon and not ic.hasSite('attrOut'):
                 # Can't place attribute on content icon, add an entry icon, but don't
                 # give it the cursor.  Note that we don't do this if ic is a callIcon
                 # because we don't want to create two entry icons
@@ -2969,16 +2969,10 @@ def backspaceListIcon(ic, site, evt):
                 # site can accept it.  If not (ic is CallIcon and attached to attribute),
                 # then load the content in to the pendingArg of an entry icon
                 parentSite = parent.siteOf(ic)
-                if not isinstance(ic, CallIcon):
+                if not ic.hasSite('attrOut'):
                     parent.replaceChild(content, parentSite)
-                    topNode = reorderexpr.reorderArithExpr(content)
-                    coincSite = topNode.hasCoincidentSite()
-                    if coincSite:
-                        curIc, curSite = iconsites.lowestCoincidentSite(topNode,
-                            coincSite)
-                        win.cursor.setToIconSite(curIc, curSite)
-                    else:
-                        win.cursor.setToIconSite(topNode, 'output')
+                    reorderexpr.reorderArithExpr(content)
+                    win.cursor.setToIconSite(parent, parentSite)
                 else:  # ic is on an attribute site.  Create an entry icon
                     entryIcon = entryicon.EntryIcon(window=win)
                     parent.replaceChild(entryIcon, 'attrIcon')
@@ -3001,7 +2995,7 @@ def backspaceListIcon(ic, site, evt):
                 for i in range(len(args)):
                     ic.replaceChild(None, 'argIcons_0')
                 newTuple.insertChildren(args, 'argIcons', 0)
-            if attrPlaceFail and not isinstance(ic, CallIcon):
+            if attrPlaceFail and not ic.hasSite('attrOut'):
                 # Can't place attribute on last arg, add an entry icon, but don't
                 # give it the cursor.  Note that we don't do this if ic is a callIcon
                 # because we don't want to create two entry icons
@@ -3039,7 +3033,7 @@ def backspaceListIcon(ic, site, evt):
                     recipientSite = 'argIcons_0'
                 cursorIcon = ic.parent()
                 cursorSite = cursorIcon.siteOf(ic)
-                if isinstance(ic, CallIcon):
+                if ic.hasSite('attrOut'):
                     # If ic is a CallIcon, it's attached to an attribute site, so we need
                     # to create an entry icon to adapt the first element of the list
                     # (which is an input site).  The code below is a bit of a hack.
@@ -3093,8 +3087,6 @@ def backspaceListIcon(ic, site, evt):
                     recipient.replaceChild(ic, recipientSite)
                     reorderexpr.reorderArithExpr(left)
                     reorderexpr.reorderArithExpr(right)
-                    cursorIcon = recipient
-                    cursorSite = recipientSite
                 args = [site.att for site in ic.sites.argIcons]
                 for i in range(len(args)):
                     ic.replaceChild(None, 'argIcons_0')

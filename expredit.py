@@ -12,6 +12,7 @@ import reorderexpr
 import filefmt
 import cursors
 import blockicons
+import subscripticon
 
 def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
     """Insert a single tree of icons into another tree of icons.  Note that this is low-
@@ -851,6 +852,15 @@ class LexTrav:
                 if self.started and not self.stopped:
                     yield node, 4
                 yield from self.traverse(node, 'attrIcon')
+        elif isinstance(node, subscripticon.SliceIcon):
+            yield from self.traverse(node, 'indexIcon')
+            if self.started and not self.stopped:
+                yield node, 1
+            yield from self.traverse(node, 'upperIcon')
+            if node.hasSite('stepIcon'):
+                if self.started and not self.stopped:
+                    yield node, 2
+                yield from self.traverse(node, 'stepIcon')
         elif isinstance(node, listicons.TupleIcon) and node.noParens:
             for site in node.sites.argIcons:
                 yield from self.traverse(node, site.name)
@@ -1313,7 +1323,7 @@ def extendDragTargetByStmt(startStmt, pointerX, pointerY):
 def extendDefaultReplaceSite(movIcon, sIcon):
     """Normally, when the user snaps an icon to a replace site, the default replacement
     target is the hierarchy under that icon.  However, there are some cases where that
-    is inappropriate.  Currently, all involve dragging InfixIcon child classes that have
+    is inappropriate.  Currently, most involve dragging InfixIcon child classes that have
     rules about what icons they can appear under.  We want the user to be able to snap
     these to the replace site of the leftmost coincident icon, as this is usually easier
     than locating the top icon, and would otherwise need to be prohibited to prevent
@@ -1322,6 +1332,10 @@ def extendDefaultReplaceSite(movIcon, sIcon):
     if isinstance(sIconParent, infixicon.TypeAnnIcon) and \
             sIconParent.siteOf(sIcon) == 'leftArg':
         return sIcon.parent()
+    if isinstance(movIcon, subscripticon.SliceIcon):
+        highestIcon = iconsites.highestCoincidentIcon(sIcon)
+        parent = highestIcon.parent()
+        return highestIcon if isinstance(parent, subscripticon.SubscriptIcon) else sIcon
     if not hasattr(movIcon, 'allowableParents'):
         return sIcon
     highestIcon = iconsites.highestCoincidentIcon(sIcon)

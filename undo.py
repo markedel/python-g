@@ -105,7 +105,8 @@ class UndoRedoList:
         # undoing/redoing the undo operation.  Top it off with a boundary
         redoList.append(Boundary(self.window))
         # Update dirty layouts and redraw the areas affected
-        self.window.refreshDirty(addUndoBoundary=False, minimizePendingArgs=False)
+        self.window.refreshDirty(addUndoBoundary=False, minimizePendingArgs=False,
+            fixSubscriptsAndSlices=False)
 
     def _addUndoRedoEntry(self, undoEntry, isUnterminated=False):
         """Add undo entry to the appropriate list (undo or redo) based upon whether
