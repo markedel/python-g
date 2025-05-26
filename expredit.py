@@ -1187,6 +1187,7 @@ def extendDragTargetStructural(fromIcon, step):
     attachSiteType = None if parent is None else parent.typeOf(parent.siteOf(fromIcon))
     rootIc = fromIcon
     seriesSitesSelected = None
+    selectStmtComment = None
     for i in range(step):
         # If seriesSitesSelected was set, this iteration will be the same rootIc, (parent
         # of the series) but for the icon itself rather than its series entries.
@@ -1195,6 +1196,9 @@ def extendDragTargetStructural(fromIcon, step):
             continue
         parent = rootIc.parent()
         if parent is None:
+            # We reached the top and didn't use all of the indicated steps, add the
+            # statement comment (if there is one).
+            selectStmtComment = rootIc.hasStmtComment()
             break
         # If ic is on a series site with multiple entries, return the series, as a step,
         # before returning the parent (see top of loop).  That is, unless the parent is a
@@ -1224,26 +1228,18 @@ def extendDragTargetStructural(fromIcon, step):
             parent = grandparent
             grandparent = parent.parent()
         rootIc = parent
-    # Replace the uncommented code below with the commented-out version once we have
-    # support for selection of empty sites
-    # if seriesSitesSelected is None:
-    #     return selectSetHier(rootIc)
-    # else:
-    #     selectedSet = set()
-    #     for site in getattr(rootIc.sites, seriesSitesSelected):
-    #         ic = rootIc.childAt(site.name)
-    #         if ic is None:
-    #             selectedSet.add((ic, site.name))
-    #         else:
-    #             selectedSet += selectSetHier(ic)
     if seriesSitesSelected is None:
-        return set(rootIc.traverse(includeSelf=True))
+        return createHierSel(rootIc, inclStmtComment=selectStmtComment)
     else:
         selectedSet = set()
         for site in getattr(rootIc.sites, seriesSitesSelected):
             ic = rootIc.childAt(site.name)
-            if ic is not None:
-                selectedSet |= set(ic.traverse(includeSelf=True))
+            if ic is None:
+                selectedSet.add((rootIc, site.name))
+            else:
+                addHierToSel(selectedSet, ic)
+        if selectStmtComment is not None:
+            selectedSet.add(selectStmtComment)
     return selectedSet
 
 def extendDragTargetByStmt(startStmt, pointerX, pointerY):
