@@ -67,6 +67,7 @@ lineSepPixels = 2
 lineSpacing = charHeight + lineSepPixels
 
 class StringIcon(icon.Icon):
+    canEditText = True
     pythonDocRef = [("Strings", "library/stdtypes.html#text-sequence-type-str"),
         ("String Literals", "reference/lexical_analysis.html#string-and-bytes-literals"),
         ("str Type", "reference/datamodel.html#index-18")]
@@ -171,6 +172,55 @@ class StringIcon(icon.Icon):
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
 
+    def highlightTextSelection(self, drawListImage, partId=1):
+        """tint the draw-list-image (produced by draw() method) to highlight the current
+        text selection in the icon."""
+        sel = self.window.sel
+        if not sel.isText() or self not in sel.textSel:
+            return
+        textLeft = icon.outSiteImage.width - 1 + icon.TEXT_MARGIN + int(charWidth)
+        textTop = icon.TEXT_MARGIN + STRING_V_TEXT_OFFSET
+        # First line has different indent (or dedent) depending if there is a string type
+        # and if selection starts left of icon and should include quote and string type
+        line1Shift = int(charWidth * len(self.strType))
+        line1Dedent = 0 if self is sel.leftIc else icon.TEXT_MARGIN + \
+            int(charWidth * (1 + len(self.strType)))
+        selStart = sel.leftPos if self is sel.leftIc else 0
+        selEnd = sel.rightPos if self is sel.rightIc else 99999999
+        lineCharStart = 0
+        isMultiIconSel = len(sel.textSel) > 1
+        for i, line in enumerate(self.wrappedString):
+            lineCharEnd = lineCharStart + len(line)
+            lineTop = textTop + i * lineSpacing
+            lineBottom = lineTop + charHeight
+            if selStart < lineCharEnd and selEnd > lineCharStart or line1Dedent != 0:
+                tintLeft = textLeft + line1Shift + (0 if selStart <= lineCharStart else
+                    int(charWidth * (selStart - lineCharStart))) - line1Dedent
+                tintRight = textLeft + line1Shift + int(charWidth * (len(line)
+                    if selEnd >= lineCharEnd else (selEnd - lineCharStart)))
+                if self is not sel.rightIc and i == len(self.wrappedString) - 1:
+                    tintRight += icon.TEXT_MARGIN + int(charWidth)  # highlight end quote
+                if isMultiIconSel:
+                    if tintLeft != 0:
+                        icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT,
+                            (0, lineTop, tintLeft, lineBottom + lineSepPixels))
+                    if tintRight != drawListImage.width:
+                        icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT,
+                            (tintRight, lineTop, drawListImage.width,
+                            lineBottom + lineSepPixels))
+                divY = lineBottom - icon.TEXT_SEL_UNDERLINE_THICKNESS
+                icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT, (tintLeft,
+                    lineTop, tintRight, divY))
+                icon.tintImageRect(drawListImage, icon.TEXT_SEL_DARK_TINT, (tintLeft,
+                    divY, tintRight, lineBottom))
+                icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT, (tintLeft,
+                    lineBottom, tintRight, lineBottom + lineSepPixels))
+            elif isMultiIconSel:
+                icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT,
+                    (0, lineTop, drawListImage.width, lineBottom + lineSepPixels))
+            lineCharStart = lineCharEnd
+            line1Shift = line1Dedent = 0
+
     def focusIn(self):
         self.hasFocus = True
         return True
@@ -242,6 +292,20 @@ class StringIcon(icon.Icon):
         else:
             self.setCursorPos(insertPos + len(text))
         return True
+
+    def replaceText(self, text, fromPos, toPos, moveCursorTo=None, isUnterminated=False):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        self.markLayoutDirty()
+        if toPos == 'end': toPos = len(self.string)
+        removedText = self.string[fromPos:toPos]
+        self.string = self.string[:fromPos] + text + self.string[toPos:]
+        if moveCursorTo is not None:
+            movedCursorFrom = self.cursorPos
+            self.setCursorPos(moveCursorTo)
+        else:
+            movedCursorFrom = None
+        self.window.undo.registerCallback(self.replaceText, removedText, fromPos,
+            fromPos + len(text), movedCursorFrom, isUnterminated=isUnterminated)
 
     def addText(self, text):
         """Add a character or text at the cursor.  Returns error string on failure, None
@@ -350,12 +414,16 @@ class StringIcon(icon.Icon):
             return False
         return True
 
-    def nearestCursorPos(self, x, y):
+    def nearestCursorPos(self, x, y, followWrap=False):
         """Returns cursor index and x, y position of the cursor position nearest text
         cursor position to the given x,y coordinate.  This is the same information as
-        returned by cursorInText, except in this case we expect x,y to be outside of the
-        text area, presumably processing geometric arrow key traversal.
-
+        returned by cursorInText, except in this case we allow x,y to be outside of the
+        text area, for example, processing geometric arrow key traversal selection
+        extension via mouse-click.  If followWrap is set to True, positions to the right
+        of a wrapped line of text where y is passed the whitespace wrap point or newline,
+        will return the next legal cursor position (on the next line).  Otherwise it will
+        return the rightmost legal text cursor position on the line (left of the newline
+        or wrapping space).
         For string icons, we only allow traversal in to the quoted part of the string.
         Editing the string type requires traversal from inside the string."""
         left = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1 + \
@@ -367,7 +435,7 @@ class StringIcon(icon.Icon):
         yMargin = charHeight // 2
         cursorX = min(right - xMargin, max(left + xMargin, x))
         cursorY = min(bottom - yMargin, max(top + yMargin, y))
-        cursorPos, windowXY = self.cursorInText((cursorX, cursorY))
+        cursorPos, windowXY = self.cursorInText((cursorX, cursorY), not followWrap)
         if cursorPos <0:
             return 0, self.cursorWindowPos()
         return cursorPos, windowXY
@@ -411,49 +479,142 @@ class StringIcon(icon.Icon):
             self.removeText(self.cursorPos-1, self.cursorPos)
 
     def forwardDelete(self, evt=None):
-        self.removeText(self.cursorPos, self.cursorPos+1, isFwdDelete=True)
+        if self.cursorPos == len(self.string):
+            # ... what does it mean to delete-off right quote?  1) move cursor to
+            #     right quote edit field, 2) add quote-edit field on right, 3) bring
+            #     next icon into string?
+            print("Don't know what fwd delete of right string quote should do, yet...")
+        else:
+            self.removeText(self.cursorPos, self.cursorPos+1, isFwdDelete=True)
 
-    def arrowAction(self, direction):
+    def arrowAction(self, direction,evt):
         cursor = self.window.cursor
         cursor.erase()
         if direction == "Left":
             if self.cursorPos <= 0:
                 # Move the cursor out of the string icon
-                parent = self.parent()
-                if parent is None:
-                    self.window.cursor.setToIconSite(self, 'output')
+                if evt.state & comn.ALT_MASK:
+                    # Alt key allows traversal to previous proto-text
+                    ic, partId, pos = cursors.prevTextPos(self, 0, 1, direction='Left')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
+                elif evt.state & comn.SHIFT_MASK:
+                    # Extend selection out of icon w/o Alt key held.  This is only
+                    # allowed when there's already a multi-icon text selection
+                    if not self.window.sel.isText():
+                        return  # There's no selection
+                    for ic in self.window.sel.textSel.keys():
+                        if ic is not self:
+                            break
+                    else:
+                        return  # The text selection spans only this icon
+                    ic, partId, pos = cursors.prevTextPos(self, 0, 1, direction='Left')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
                 else:
-                    self.window.cursor.setToIconSite(parent, parent.siteOf(self))
+                    parent = self.parent()
+                    if parent is None:
+                        self.window.cursor.setToIconSite(self, 'output')
+                    else:
+                        self.window.cursor.setToIconSite(parent, parent.siteOf(self))
             else:
-                self.setCursorPos(self.cursorPos - 1)
+                cursor.moveToTextSite(self, 1, self.cursorPos - 1, evt)
         elif direction == "Right":
             if self.cursorPos == len(self.string):
                 # Move cursor out of string icon.  Note the special case for attached
                 # entry icon where we generally avoid the site to the left in lexical
                 # traversal, particularly when inserting a string because the user needs
                 # to continue their insertion to rejoin the code they've orphaned.
-                if isinstance(self.childAt('attrIcon'), entryicon.EntryIcon):
-                    self.window.cursor.setToText(self.childAt('attrIcon'))
+                if evt.state & comn.ALT_MASK:
+                    # Alt key allows traversal to previous proto-text
+                    ic, partId, pos = cursors.nextTextPos(self, self.cursorPos, 1,
+                        direction='Right')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
+                elif evt.state & comn.SHIFT_MASK:
+                    # Extend selection out of icon w/o Alt key held.  This is only
+                    # allowed when there's already a multi-icon text selection
+                    if not self.window.sel.isText():
+                        return
+                    for ic in self.window.sel.textSel.keys():
+                        if ic is not self:
+                            break
+                    else:
+                        return
+                    ic, partId, pos = cursors.nextTextPos(self, self.cursorPos, 1,
+                        direction='Right')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
                 else:
-                    self.window.cursor.setToIconSite(self, 'attrIcon')
+                    if isinstance(self.childAt('attrIcon'), entryicon.EntryIcon):
+                        self.window.cursor.setToText(self.childAt('attrIcon'))
+                    else:
+                        self.window.cursor.setToIconSite(self, 'attrIcon')
             elif self.cursorPos < 0:
                 self.setCursorPos(0)
             else:
-                self.setCursorPos(self.cursorPos + 1)
+                cursor.moveToTextSite(self, 1, self.cursorPos + 1, evt)
         elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
             newY = y + lineSpacing * {'Up': -1, 'Down': 1}[direction]
-            self.window.cursor.erase()
-            if self.becomeEntryIcon(clickPos=(x, newY))[0] is None:
-                cursorType, ic, site, pos = cursors.geometricTraverseFromPos(x, y,
-                    direction, self.window, self)
-                if cursorType == 'window':
+            # self.window.cursor.erase()
+            cursorTextIdx, cursorWindowPos = self.cursorInText((x, newY))
+            if cursorTextIdx is None:
+                # If the alt or shift key is pressed, we know the user is moving the
+                # cursor to a text position, and these are the only cases where we allow
+                # selection extension (Shift) or text-traversal (Alt) to another icon.
+                toTextPos = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
+                cursorType, ic, site, pos, partId = cursors.geometricTraverseFromPos(x, y,
+                    direction, self.window, self, onlyTextFields=toTextPos)
+                if toTextPos:
+                    if (ic is self or evt.state & comn.ALT_MASK) and cursorType != \
+                            'window':
+                        self.window.cursor.moveToTextSite(ic, partId, pos, evt)
+                    return
+                elif cursorType == 'window':
                     cursorType = 'icon'
                     site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
-                    ic = self
-                self.window.cursor.setTo(cursorType, ic, site, pos)
+                    ic = self.topLevelParent()
+                self.window.cursor.setTo(cursorType, ic, site, pos, partId)
+            else:
+                self.window.cursor.moveToTextSite(self, 1, cursorTextIdx, evt)
         self._updateTypeoverState()
         cursor.draw()
+
+    def doubleClickAction(self, clickPos):
+        cursorTextIdx, cursorWindowPos = self.cursorInText(clickPos)
+        if cursorTextIdx is None:
+            return None, None
+        sel = self.window.sel
+        sel.unselectAll()
+        self.window.cursor.removeCursor()
+        clickX, _ = clickPos
+        nearestCursorX, _ = cursorWindowPos
+        clickedCharIdx = max(0, cursorTextIdx - 1) if clickX < nearestCursorX else \
+            min(cursorTextIdx, len(self.string) - 1)
+        clickedChar = self.string[clickedCharIdx]
+        if clickedChar.isspace():
+            # User clicked on a whitespace character, select surrounding space
+            startIdx = clickedCharIdx
+            for i in range(clickedCharIdx-1, -1, -1):
+                if not self.string[i].isspace():
+                    break
+                startIdx = i
+            endIdx = clickedCharIdx + 1
+            for i in range(clickedCharIdx + 1, len(self.string)):
+                if not self.string[i].isspace():
+                    break
+                endIdx = i + 1
+        else:
+            # User clicked on a non-whitespace character, select surrounding word
+            startIdx = clickedCharIdx
+            for i in range(clickedCharIdx-1, -1, -1):
+                if self.string[i].isspace():
+                    break
+                startIdx = i
+            endIdx = clickedCharIdx + 1
+            for i in range(clickedCharIdx + 1, len(self.string)):
+                if self.string[i].isspace():
+                    break
+                endIdx = i + 1
+        sel.selectTextBetween(self, 1, startIdx, self, 1, endIdx)
+        self.window.requestRedraw(self.rect)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         bodyWidth, bodyHeight = layout.bodySize
@@ -602,7 +763,8 @@ class StringIcon(icon.Icon):
     def textEntryHandler(self, entryIc, text, onAttr):
         if entryIc.parent() is self and self.string == '' and len(self.quote) == 1 and \
                 text in ('"', "'"):
-            return StringIcon(self.quote*6, window=self.window, typeover=True), None
+            return StringIcon(self.strType + self.quote*6, window=self.window,
+                typeover=True), None
         return None
 
     def textCursorImage(self):
@@ -618,13 +780,13 @@ class StringIcon(icon.Icon):
             outline=(0, 0, 0, 255), fill=(0, 0, 0, 0))
         return self.strTypeCursor
 
-    def cursorWindowPos(self):
+    def cursorWindowPos(self, posOfImg=False):
         x, y = self.rect[:2]
         x += icon.outSiteImage.width - 1 + icon.TEXT_MARGIN
-        y += icon.TEXT_MARGIN + STRING_V_TEXT_OFFSET
         if self.cursorPos < 0:
             x -= 1
         else:
+            y += icon.TEXT_MARGIN + STRING_V_TEXT_OFFSET
             lineCount = 0
             charCount = 0
             charsInLine = 0
@@ -643,7 +805,8 @@ class StringIcon(icon.Icon):
                 charCount += len(line)
             x += int((charsInLine + 1) * charWidth)
             y += lineCount * lineSpacing
-        y += charHeight // 2
+        if not posOfImg:
+            y += charHeight // 2
         return x, y
 
     def setCursorPos(self, pos):
@@ -669,6 +832,11 @@ class StringIcon(icon.Icon):
                     commenticon.VerticalBlankIcon)):
                 return False
 
+    def textCursorRange(self, partId=None):
+        """Common method between text-editing-capable icons for getting the range of
+        text-cursor traversable positions."""
+        return 0, len(self.string)
+
     def _updateTypeoverState(self):
         if self.typeoverIdx is not None and not self.cursorPos == len(self.string):
             self.typeoverIdx = None
@@ -678,18 +846,7 @@ class StringIcon(icon.Icon):
         oldQuote = self.quote
         if newQuote == oldQuote:
             return
-        if len(oldQuote) < len(newQuote):
-            # Convert single quote to triple quote
-            newString = replaceEscapeChar(self.string, '\\' + oldQuote, oldQuote)
-            newString = replaceEscapeChar(newString, '\\n', '\n')
-        elif len(newQuote) < len(oldQuote):
-            # Convert triple quote to single quote
-            newString = replaceEscapeChar(self.string, newQuote, '\\' + newQuote)
-            newString = replaceEscapeChar(newString, '\n', '\\n')
-        else:
-            newString = replaceEscapeChar(self.string, newQuote, '\\' + newQuote)
-            newString = replaceEscapeChar(newString, '\\' + oldQuote, oldQuote)
-        self.string = newString
+        self.string = convertStringQuoteType(self.string, oldQuote, newQuote)
         self.quote = newQuote
         self.markLayoutDirty()
         self.strTypeCursor = None
@@ -771,13 +928,13 @@ class StringIcon(icon.Icon):
             widths = []
             lineLists = []
             for width in range(startWidth+1, minWidth-1, -1):
-                lines, _ = comn.wordWrap(words, width)
+                lines, nChars = comn.wordWrap(words, width)
                 if len(lines) > currentHeight:
                     for i in range(len(lines) - currentHeight):
                         widths.append(None)
                         lineLists.append(None)
                     currentHeight = len(lines)
-                widths[currentHeight - 1] = width
+                widths[currentHeight - 1] = nChars
                 lineLists[currentHeight - 1] = lines
         # Create layout structures for each of the optimal widths found.  Layout includes
         # a wrapped version of the entire string, where the first and last characters
@@ -808,6 +965,39 @@ class StringIcon(icon.Icon):
             layout.bodySize = layoutWidth, layoutHeight
             layouts.append(layout)
         return layouts
+
+def convertStringQuoteType(string, oldQuote, newQuote):
+    """Convert a string of the type stored by the string icon for quote-type oldQuote,
+    to one appropriate for use with quote-type newQuote.  newQuote or oldQuote can also
+    be passed as None to convert to/from a Python string object (whose quotes have
+    already been parsed)."""
+    if oldQuote == newQuote:
+        return string
+    elif oldQuote is None:
+        # Convert from unquoted string (normal Python string object)
+        newString = replaceEscapeChar(string, newQuote, '\\' + newQuote)
+        if len(newQuote) == 1:
+            newString = replaceEscapeChar(newString, '\n', '\\n')
+        return newString
+    elif newQuote is None:
+        # Convert to unquoted string (normal Python string object)
+        newString = replaceEscapeChar(string, '\\' + oldQuote, oldQuote)
+        if len(oldQuote) == 1:
+            newString = replaceEscapeChar(newString, '\\n', '\n')
+        return newString
+    elif len(oldQuote) < len(newQuote):
+        # Convert single quote to triple quote
+        newString = replaceEscapeChar(string, '\\' + oldQuote, oldQuote)
+        newString = replaceEscapeChar(newString, '\\n', '\n')
+    elif len(newQuote) < len(oldQuote):
+        # Convert triple quote to single quote
+        newString = replaceEscapeChar(string, newQuote, '\\' + newQuote)
+        newString = replaceEscapeChar(newString, '\n', '\\n')
+    else:
+        # Convert single to single or triple to triple
+        newString = replaceEscapeChar(string, newQuote, '\\' + newQuote)
+        newString = replaceEscapeChar(newString, '\\' + oldQuote, oldQuote)
+    return newString
 
 def replaceEscapeChar(str, fromChars, toChars):
     """Replace escaped characters in a string being mindful of escaped backslashes."""
@@ -861,7 +1051,12 @@ def splitSrcStr(srcStr):
         strType = srcStr[0].lower()
     else:
         strType = ''
-    return strType, quote, srcStr[len(strType) + len(quote):-len(quote)]
+    string = srcStr[len(strType) + len(quote):-len(quote)]
+    # The string source representation is allowed to contain line continuations, which we
+    # don't want in the icon (which will do its own wrapping based on layout and without
+    # added backslashes and newlines)
+    string = string.replace('\\\n', '')
+    return strType, quote, string
 
 def removeEmptyAttrOnlyIcon(ic):
     """This was temporarily code to patch around window.removeIcons not being fully
@@ -919,4 +1114,3 @@ def removeEmptyAttrOnlyIcon(ic):
             win.cursor.setToIconSite(parent, parentSite)
             win.removeIcons([ic])
     ic.window.undo.addBoundary()
-

@@ -65,6 +65,8 @@ SHOW_OUTLINE_TINT = (220, 220, 220, 255)
 KEYWORD_COLOR = (48, 0, 128, 255)
 TYPEOVER_COLOR = (220, 220, 220, 255)
 SELECT_TINT = (0, 0, 255, 40)
+TEXT_SEL_LIGHT_TINT = (0, 100, 255, 25)
+TEXT_SEL_DARK_TINT = (0, 0, 255, 80)
 EXEC_ERR_TINT = (255, 0, 0, 100)
 SYNTAX_ERR_TINT = (255, 64, 64, 40)
 TYPE_ANN_TINT = (255, 255, 255, 128)
@@ -119,6 +121,10 @@ STMT_COMMENT_OFFSET = 4
 # but may be empty when the statement arguments take up more vertical space, and elevate
 # the seqOut site above the bottom of the space allocated for the statement.
 BLOCK_SEQ_MARGIN = 2
+
+# Text selections have a dark (underline) part and a light (upper) part, and are confined
+# to text and text-margin parts of an icon.  Width of the underline part in pixels.
+TEXT_SEL_UNDERLINE_THICKNESS = 3
 
 outSiteImage = comn.asciiToImage((
  "..o",
@@ -271,6 +277,24 @@ seqOutBumpImage = comn.asciiToImage((
 
 emptyImage = Image.new('RGBA', (0, 0))
 
+protoTextCursorImage = comn.asciiToImage((
+ "%%%%%",
+ ".5%5.",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ "..%..",
+ ".5%5.",
+ "%%%%%"))
+
 renderCache = {}
 
 # Icon to insert when createIconFromAst fails (set by registerAstDecodeFallback())
@@ -369,6 +393,9 @@ class Icon:
     # Icons that can be used in store and del contexts will override this to be True
     canProcessCtx = False
 
+    # Icons that support text editing (comments, strings, entry-icon) set this to True
+    canEditText = False
+
     # Icon classes can set this to provide static html reference(s) to the Python
     # documentation, that will appear in the context-sensitive icon menu.  Icons that
     # need to actively select references should provide a getDocRef() method, instead.
@@ -377,6 +404,13 @@ class Icon:
     # location of the .html file in the (Windows) .chm document collection in href form,
     # for example: [("del Statement", "reference/simple_stmts.html#the-del-statement")]
     pythonDocRef = None
+
+    # Icon classes that are split into multiple independently-positioned (and usually
+    # lexically separated) parts can set this to provide a static list of icon partIds.
+    # The Icon base class version of the activePartIds() method will return this list.
+    # Icons with dynamically appearing parts, such as optional parens, should override
+    # the activePartIds method itself to provide this information.
+    partIdList = None
 
     def __init__(self, window=None, canProcessCtx=False):
         self.window = window
@@ -423,10 +457,10 @@ class Icon:
         # need to look up "which icons are currently selected" which is too expensive for
         # windows with large numbers of icons, so it is now maintained as a set in the
         # window structure rather than an icon property
-        self.window.select(self, select)
+        self.window.sel.select(self, select)
 
     def isSelected(self):
-        return self.window.isSelected(self)
+        return self.window.sel.isSelected(self)
 
     def layout(self, location=None, siteId=None):
         """Compute layout and set locations for icon and its children (do not redraw).
@@ -600,9 +634,9 @@ class Icon:
         drawn image that is part of the icon, but is ignored in picking and lexical
         traversal (commas being the only current example of such).  Note that there are
         still some icons that delete their drawLists after drawing temporary sites for
-        dragging.  I'm not sure how these get through all the partId-related code without
-        dumping diagnostics or messing up dragging or target selection, but they may need
-        to be fixed at some point."""
+        dragging.  These are remnants of a pre-part-id model which escaped conversion by
+        virtue of this call never being invoked for them, but will probably need to be
+        fixed at some point."""
         if self.drawList is None:
             print('drawListIdxToPartId missing drawlist (%s)?' % self.dumpName())
             return None
@@ -622,13 +656,65 @@ class Icon:
         """Inverse of drawListIdxToPartId, uses drawListIdxToPartId, so icons do not need
         to override to support their own mapping."""
         if self.drawList is None or len(self.drawList) == 0:
-            print('No mapping for partId of icon %s' % self.dumpName())
+            print('No mapping for partId %d of icon %s' % (partId, self.dumpName()))
             return None
         for idx in range(len(self.drawList)):
             if partId == self.drawListIdxToPartId(idx):
                 return idx
         print('Could not find partId %d of icon %s' % (partId, self.dumpName()))
         return None
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        """Text selections highlight "text" in icon parts crossed by the selection (see
+        documentation for text selections in Selection object in cursors.py).  As such,
+        they need to highlight individual characters of the text (even though real
+        editing of the text takes place only after converting an entry icon).  Icons must
+        define this function to provide the necessary information for highlighting those
+        characters.  Returns: text, font, left, top, right, bottom, partId, and
+        partIsEditable.  font may be returned as None to indicate that the icon image is
+        not constructed from text.  However, many icon parts not technically drawn with
+        text, will still have a text-equivalent, and text will only be returned as None
+        when there is no such equivalent.  When font is None the function will still
+        return a box to define the area for text highlighting.  The returned dimensions
+        for the text box are relative to the icon origin, to provide the information
+        needed for text highlighting and text cursor positioning.  partIsEditable will be
+        True if the user can modify the text of the part (that is, whether the text can
+        be transferred to an entry icon for editing)."""
+        print("No selection text metrics specified for icon (normal for image icons"
+            "remove when finished with text selection)", self.dumpName())
+        return None, None, None, None, None, None, None, None
+
+    def nearestTextCursorPos(self, partId, x, y, followWrap=False):
+        """Returns the text cursor position and content-coordinate location of the text
+        or proto-text cursor position nearest to content coordinate (x,y) for the given
+        icon part.  If the part cannot accept a text cursor, returns None, None.  If the
+        icon part can accept a cursor, returns a position regardless of how far away it
+        might be to the given location.  If followWrap is specified, when the position
+        is right of a line-wrap or newline (with no legal cursor position to the right),
+        return the next-line cursor position."""
+        if self.canEditText:
+            return self.nearestCursorPos(x, y, followWrap=followWrap)
+        text, font, left, top, right, bottom, _, _ = self.getTextSelMetrics(partId)
+        if left is None:
+            return None, None
+        left += self.rect[0]
+        right += self.rect[0]
+        top += self.rect[1]
+        bottom += self.rect[1]
+        cursorY = (top + bottom) // 2
+        if font is None:
+            if x < (left + right) // 2:
+                return 0, (left, cursorY)
+            else:
+                return 1, (right, cursorY)
+        cursorPos, cursorLoc = cursorInText((left, cursorY),(x, y), font, text,
+            nearest=True)
+        if cursorPos is None:
+            if x < (left + right) // 2:
+                return 0, (left, cursorY)
+            else:
+                return len(text), (right, cursorY)
+        return cursorPos, cursorLoc
 
     def touchesPosition(self, x, y):
         """Return a non-zero integer value if any of the drawn part of the icon falls at
@@ -878,9 +964,13 @@ class Icon:
             child = parent
         return parentList
 
-    def topLevelParent(self):
+    def topLevelParent(self, inclStmtComment=False):
         """Follow the icon hierarchy upwards and return the icon with no parent"""
-        child = self
+        if inclStmtComment and self.__class__.__name__ == 'CommentIcon' and \
+                self.attachedToStmt is not None:
+            child = self.attachedToStmt
+        else:
+            child = self
         while True:
             parent = child.parent()
             if parent is None:
@@ -1197,21 +1287,97 @@ class Icon:
         else:
             outImg = toDragImage
             x, y = location
-        if self.isSelected():
-            style |= STYLE_SELECTED
-        if isinstance(self.errHighlight, ErrorHighlight):
-            style |= STYLE_SYNTAX_ERR
-        elif isinstance(self.errHighlight, TypeAnnHighlight):
-            style |= STYLE_TYPE_ANN
-        if self.window.highlightedForReplace is not None and \
+        color = None
+        isTextSel = False
+        # Note that the order of the if clauses below determines the relative priority of
+        # each of the color highlights (rather than blending, choose the most important)
+        if style & STYLE_EXEC_ERR:
+            color = EXEC_ERR_TINT
+        elif self.window.highlightedForReplace is not None and \
                 self in self.window.highlightedForReplace:
-            style |= STYLE_PENDING_REMOVE
-        if self.window.immediateDragHighlight is not None and \
+            color = PENDING_REMOVE_TINT
+        elif self.window.immediateDragHighlight is not None and \
                 self in self.window.immediateDragHighlight:
-            style |= STYLE_IMMEDIATE_COPY
-        for (imgOffsetX, imgOffsetY), img in self.drawList:
-            pasteImageWithClip(outImg, tintSelectedImage(img, style),
-                (x + imgOffsetX, y + imgOffsetY), clip)
+            color = IMMEDIATE_COPY_TINT
+        elif self.isSelected():
+            if self.window.sel.isText():
+                isTextSel = True
+            else:
+                color = SELECT_TINT
+        elif isinstance(self.errHighlight, ErrorHighlight):
+            color = SYNTAX_ERR_TINT
+        elif isinstance(self.errHighlight, TypeAnnHighlight):
+            color = TYPE_ANN_TINT
+        showOutline = style & STYLE_OUTLINE
+        for idx, ((imgOffsetX, imgOffsetY), img) in enumerate(self.drawList):
+            if isTextSel:
+                partId = self.drawListIdxToPartId(idx)
+                selected, underlineHighlight = self.window.sel.isTextSelected(self,
+                    partId)
+                if underlineHighlight:
+                    if showOutline:
+                        tintedImg = tintSelectedImage(img, showOutline, color)
+                    else:
+                        tintedImg = img.copy()
+                    self._highlightTextSel(tintedImg, partId, imgOffsetX, imgOffsetY)
+                else:
+                    tintedImg = tintSelectedImage(img, showOutline, TEXT_SEL_LIGHT_TINT)
+            else:
+                if color is None and not showOutline:
+                    tintedImg = img
+                else:
+                    tintedImg = tintSelectedImage(img, showOutline, color)
+            pasteImageWithClip(outImg, tintedImg, (x + imgOffsetX, y + imgOffsetY), clip)
+
+    def _highlightTextSel(self, img, partId, partImgOffX, partImgOffY):
+        sel = self.window.sel
+        if hasattr(self, 'highlightTextSelection'):
+            # Icons can provide their own code for highlighting
+            self.highlightTextSelection(img, partId)
+            return
+        text, font, left, top, right, bottom, _, editable = self.getTextSelMetrics(partId)
+        if left is None:
+            # If there's no data available, tint the entire image
+            return tintSelectedImage(img, False, SELECT_TINT)
+        left -= partImgOffX
+        right -= partImgOffX
+        top -= partImgOffY
+        bottom -= partImgOffY
+        if self is sel.leftIc and partId == sel.leftPartId:
+            if sel.leftPos == 0:
+                startX = left
+            elif text is None or font is None or sel.leftPos >= len(text):
+                startX = right
+            else:
+                startX = left + font.getsize(text[:sel.leftPos])[0]
+        else:
+            startX = 0
+        if self is sel.rightIc and partId == sel.rightPartId:
+            if sel.rightPos == 0:
+                endX = left
+            elif text is None or font is None or sel.rightPos >= len(text):
+                endX = right
+            else:
+                endX = left + font.getsize(text[:sel.rightPos])[0]
+        else:
+            endX = img.width
+        # Draw the underline (dark tint) and background (light tint) separately so the
+        # colors are not diluted (...it might be simpler and perform better to just color
+        # the part with light tint and define the dark tint to expect to be drawn over
+        # the light tint)
+        bottom += TEXT_MARGIN
+        divY = bottom - 1 - TEXT_SEL_UNDERLINE_THICKNESS
+        tintImageRect(img, TEXT_SEL_LIGHT_TINT, (startX, 0, endX, divY))
+        tintImageRect(img, TEXT_SEL_DARK_TINT, (startX, divY, endX, bottom - 1))
+        if startX != 0:
+            tintImageRect(img, TEXT_SEL_LIGHT_TINT, (0, 0, startX, img.height))
+        if endX != img.width:
+            tintImageRect(img, TEXT_SEL_LIGHT_TINT, (endX, 0, img.width, img.height))
+        if bottom < img.height:
+            # Sadly, where originally the underline reached the bottom of most icons,
+            # there is now a one pixel gap, so the test above saves almost nothing.
+            tintImageRect(img, TEXT_SEL_LIGHT_TINT, (startX, bottom, endX, img.height))
+        return img
 
     def _drawEmptySites(self, toDragImage, clip, skip=None, hilightEmptySeries=False,
             allowTrailingComma=False):
@@ -1271,7 +1437,7 @@ class Icon:
             elif self.window.immediateDragHighlight is not None and \
                     icOrSite in self.window.immediateDragHighlight:
                 color = IMMEDIATE_COPY_TINT
-            elif icOrSite in self.window.selectedSet:
+            elif icOrSite in self.window.sel.selSet:
                 color = SELECT_TINT
             alpha = color[3] / 255.0
             width = (LIST_EMPTY_ARG_WIDTH if isSeriesSite else EMPTY_ARG_WIDTH) - 2
@@ -1600,6 +1766,54 @@ class Icon:
         ids over 'index-20' type references which might get reassigned."""
         return self.pythonDocRef
 
+    def textCursorWindowPos(self, partId, cursorPos):
+        """Returns the location (center x, center y in content coordinate) at which to
+        draw the proto-text cursor for the given icon (self) and partId"""
+        text, font, left, top, right, bottom, _, _ = self.getTextSelMetrics(partId)
+        if left is None:
+            print(f"textCursorWindowPos: no text selection metrics for {self.dumpName()}")
+            return 0, 0
+        x, y = self.rect[:2]
+        y += top + (bottom - top) // 2
+        if font is None or text is None:
+            if cursorPos == 0:
+                x += left - 1
+            if cursorPos == 1:
+                x += right
+            elif cursorPos > 1:
+                print('textCursorWindowPos: cursorPos out of range')
+                x += right
+        else:
+            if not isinstance(cursorPos, int):
+                print('***Where did this come from?')
+            x += left - 1 + font.getsize(text[:cursorPos])[0]
+        return x, y
+
+    def textCursorRange(self, partId):
+        """Return the minimum and maximum text cursor position within the given icon
+        part."""
+        text, font, _, _, _, _, _, _ = self.getTextSelMetrics(partId)
+        return 0, 1 if font is None else len(text)
+
+    def textCursorImage(self):
+        """Returns the image to use to draw the proto-text cursor for the icon."""
+        return protoTextCursorImage
+
+    def activePartIds(self):
+        """Returns a list of partIds for the icon parts that are currently *lexically*
+        traversed (as opposed to currently drawn, which we haven't needed yet, but might
+        consider adding with a keyword argument someday).  Only icons with dynamically
+        appearing parts need to define this, as 1) those that always have the same parts
+        in use can set this up statically by setting partIdList, and 2) those with only a
+        single part can ignore it altogether and let the base class method return the
+        default partId list of [1].  Note, of course, that partIds are also used for
+        picking, and that there are parts that are visible and are assigned partIds (such
+        as simple-spines) which are specifically not lexically traversable"""
+        if self.partIdList is not None:
+            return self.partIdList
+        else:
+            return 1,
+
 class BlockEnd(Icon):
     def __init__(self, primary, window=None, location=None):
         Icon.__init__(self, window)
@@ -1645,6 +1859,11 @@ class BlockEnd(Icon):
 
     def siteRightOfPart(self, partId):
         return 'seqOut'
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        # Block End icons have no text sites.  Note that this requires explicit support
+        # in traversal code, since entire runs of them may need to be skipped over.
+        return None, None, None, None, None, None, None, False
 
 class ImageIcon(Icon):
     def __init__(self, image, window, location=None):
@@ -1722,29 +1941,12 @@ def pasteImageWithClip(dstImage, srcImage, pos, clipRect):
     # Paste the cropped image in the drawn area
     dstImage.paste(croppedImage, box=(dl, dt), mask=croppedImage)
 
-def tintSelectedImage(image, style):
-    if style & STYLE_OUTLINE:
+def tintSelectedImage(image, showOutline, color):
+    if showOutline:
         alphaImg = image.getchannel('A')
         outlineMask = ImageMath.eval("convert(a*255, 'L')", a=alphaImg)
     else:
         outlineMask = None
-    color = None
-    # Note that the order of the if clauses below determines the relative priority of
-    # each of the color highlights (rather than blending, we choose the most important)
-    if style & STYLE_EXEC_ERR:
-        color = EXEC_ERR_TINT
-    elif style & STYLE_PENDING_REMOVE:
-        color = PENDING_REMOVE_TINT
-    elif style & STYLE_IMMEDIATE_COPY:
-        color = IMMEDIATE_COPY_TINT
-    elif style & STYLE_SELECTED:
-        color = SELECT_TINT
-    elif style & STYLE_SYNTAX_ERR:
-        color = SYNTAX_ERR_TINT
-    elif style & STYLE_TYPE_ANN:
-        color = TYPE_ANN_TINT
-    elif outlineMask is None:  # No outline and no additional coloring
-        return image
     if color is not None:
         alphaImg = image.getchannel('A')
         colorImg = Image.new('RGBA', (image.width, image.height), color=color)
@@ -1757,6 +1959,15 @@ def tintSelectedImage(image, style):
         outlineImg.paste(image, mask=image)
         return outlineImg
     return image
+
+def tintImageRect(image, color, limitRect):
+    """Apply tint (color) to an image (image) restricted to rectangle (limitRect)."""
+    croppedImg = image.crop(limitRect)
+    alphaImg = croppedImg.getchannel('A')
+    colorImg = Image.new('RGBA', (croppedImg.width, croppedImg.height), color=color)
+    colorImg.putalpha(alphaImg)
+    tintedImg = Image.blend(croppedImg, colorImg, color[3] / 255.0)
+    image.paste(tintedImg, limitRect[:2])
 
 def incorporateStmtCommentLayouts(layouts, commentLayouts, margin):
     """extend each layout in the list (layouts) to incorporate the best matching
@@ -2473,12 +2684,14 @@ def chooseOutSeqSites(ic, forDrag):
             ic.sites.seqOut.att is None or forDrag)
     return needSeqSites, needOutSite
 
-def cursorInText(textOriginPos, clickPos, font, text, padLeft=0, padRight=0):
+def cursorInText(textOriginPos, clickPos, font, text, padLeft=0, padRight=0,
+        nearest=False):
     """Determine if a given window x,y position, clickPos is within a displayed text
     string, starting at textOriginPos (by left edge and text center Y).  If so, return
     the (cursor) position within the text closest to clickPos, and the x,y window
     coordinate location for that cursor (y center).  If the clickpos is not within
-    TEXT_MARGIN of the text, return (None, None)."""
+    TEXT_MARGIN of the text, return (None, None), unless 'nearest' is True, in which
+    case, return the nearest text cursor position to clickPos."""
     textOriginX, textCenterY = textOriginPos
     textXOffset = clickPos[0] - textOriginX
     textWidth, textHeight = font.getsize(text)
@@ -2489,7 +2702,10 @@ def cursorInText(textOriginPos, clickPos, font, text, padLeft=0, padRight=0):
     textBoxBottom = textBoxTop + textHeight + 2 * TEXT_MARGIN
     textBox = (textBoxLeft, textBoxTop, textRight, textBoxBottom)
     if not pointInRect(clickPos, textBox):
-        return None, None
+        if nearest:
+            textXOffset = max(textBoxLeft, min(clickPos[0], textRight)) - textOriginX
+        else:
+            return None, None
     cursorIdx = comn.findTextOffset(font, text, textXOffset)
     cursorX = textOriginX + font.getsize(text[:cursorIdx])[0]
     return cursorIdx, (cursorX, textCenterY)

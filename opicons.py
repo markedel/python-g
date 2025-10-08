@@ -300,6 +300,22 @@ class UnaryOpIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId != 1 and siteAfter != 'argIcon':
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        leftSide = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH
+        rightSide = leftSide + bodyWidth - 1
+        textCtr = self.sites.argIcon.yOffset
+        # Unary op has double margin at left
+        left = leftSide + 2 * icon.TEXT_MARGIN
+        topSide = textCtr - bodyHeight // 2
+        top = topSide + icon.TEXT_MARGIN
+        right = rightSide - icon.TEXT_MARGIN + 1
+        bottom = topSide + bodyHeight - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.operator, self.font, left, top, right, bottom, partId, True
+
     def compareData(self, data):
         # The UnaryOp icon can be used in data representation (though maybe it should not
         # be), so must supply a function for checking against real data.  The only case
@@ -532,6 +548,11 @@ class BinOpIcon(icon.Icon):
             return idx + 1
         return idx + 2
 
+    def activePartIds(self):
+        if self.hasParens:
+            return 1, 2, 3
+        return 2,
+
     def textRepr(self):
         leftArgText = icon.argTextRepr(self.sites.leftArg)
         rightArgText = icon.argTextRepr(self.sites.rightArg)
@@ -689,6 +710,47 @@ class BinOpIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'rightArg':
             return _becomeEntryIcon(self)
         return None
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'leftArg':
+                partId = 1
+            elif siteAfter == 'rightArg':
+                partId = 2
+            elif siteAfter == 'argIcon':
+                partId = 3
+            else:
+                return None, None, None, None, None, None, None, None
+        if partId == 1:
+            textLeft = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH + \
+                icon.TEXT_MARGIN
+            textRight = self.sites.leftArg.xOffset + icon.OUTPUT_SITE_DEPTH - \
+                icon.TEXT_MARGIN
+            text = '('
+            textCtr = self.sites.leftArg.yOffset
+            font = None
+        elif partId == 2:
+            rightSide = self.sites.rightArg.xOffset + icon.OUTPUT_SITE_DEPTH
+            textRight = rightSide - icon.TEXT_MARGIN - self.depthWidth // 2
+            opWidth, opHeight = self.opSize
+            leftSide = rightSide - opWidth - self.depthWidth
+            textLeft = leftSide + icon.TEXT_MARGIN + self.depthWidth // 2
+            text = self.operator
+            textCtr = self.sites.rightArg.yOffset
+            font = icon.boldFont if self.operator[0].isalpha() else icon.globalFont
+        elif partId == 3:
+            rightSide = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH
+            textRight = rightSide - icon.TEXT_MARGIN
+            textLeft = rightSide - rParenImage.width + icon.TEXT_MARGIN
+            text = ')'
+            textCtr = self.sites.attrIcon.yOffset - icon.ATTR_SITE_OFFSET
+            font = None
+        else:
+            return None, None, None, None, None, None, None, None
+        textTop = textCtr - icon.minTxtHgt // 2
+        textBottom = textTop + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, font, textLeft, textTop, textRight, textBottom, 2, True
 
     def siteRightOfPart(self, partId):
         if partId == 1:
@@ -943,6 +1005,29 @@ class DivideIcon(icon.Icon):
     def backspace(self, siteId, evt):
         backspaceBinOpIcon(self, siteId, evt)
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId != 1 and siteAfter != 'attrIcon':
+            return None, None, None, None, None, None, None, None
+        bodyWidth, _ = self._size()
+        bodyHeight = 9  # Tweaked to put underline in visible whitespace
+        leftSide = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH
+        rightSide = leftSide + bodyWidth - 1
+        textCtr = self.sites.output.yOffset
+        left = leftSide + icon.TEXT_MARGIN
+        topSide = textCtr - bodyHeight // 2
+        top = topSide + icon.TEXT_MARGIN
+        right = rightSide - icon.TEXT_MARGIN - 1
+        bottom = topSide + bodyHeight - icon.TEXT_MARGIN
+        op = '//' if self.floorDiv else '/'
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return op, None, left, top, right, bottom, partId, True
+
+    def drawListIdxToPartId(self, idx):
+        # Only the division bar is relevant
+        if idx == 2:
+            return 1
+        return 0
+
     def siteRightOfPart(self, partId):
         return 'attrIcon'
 
@@ -1193,6 +1278,11 @@ class IfExpIcon(icon.Icon):
         elif self.parent() is None:
             return idx + 1
         return idx + 2
+
+    def activePartIds(self):
+        if self.hasParens:
+            return 1, 2, 3, 4
+        return 2, 3
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         hasParens = needsParens(self, forText=True)
@@ -1507,6 +1597,57 @@ class IfExpIcon(icon.Icon):
         elif self.hasParens and not needs:
             self.hasParens = False
             self.sites.attrIcon.order = None
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'trueExpr':
+                partId = 1
+            elif siteAfter == 'testExpr':
+                partId = 2
+            elif siteAfter == 'falseExpr':
+                partId = 3
+            elif siteAfter == 'attrIcon':
+                partId = 4
+            else:
+                return None, None, None, None, None, None, None, None
+        ifWidth, elseWidth, height = self.bodySize
+        if partId == 1:
+            textLeft = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH + \
+                icon.TEXT_MARGIN
+            textRight = self.sites.trueExpr.xOffset + icon.OUTPUT_SITE_DEPTH - \
+                icon.TEXT_MARGIN
+            text = '('
+            textCtr = self.sites.output.yOffset
+            font = None
+        elif partId == 2:
+            rightSide = self.sites.testExpr.xOffset + icon.OUTPUT_SITE_DEPTH
+            textRight = rightSide - icon.TEXT_MARGIN
+            leftSide = rightSide - ifWidth - self.depthWidth // 2 + 1
+            textLeft = leftSide + icon.TEXT_MARGIN + self.depthWidth // 2
+            text = 'if'
+            textCtr = self.sites.testExpr.yOffset
+            font = icon.boldFont
+        elif partId == 3:
+            rightSide = self.sites.falseExpr.xOffset + icon.OUTPUT_SITE_DEPTH
+            textRight = rightSide - icon.TEXT_MARGIN - self.depthWidth // 2
+            leftSide = rightSide - elseWidth - self.depthWidth // 2
+            textLeft = leftSide + icon.TEXT_MARGIN
+            text = 'else'
+            textCtr = self.sites.falseExpr.yOffset
+            font = icon.boldFont
+        elif partId == 4:
+            rightSide = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH
+            textRight = rightSide - icon.TEXT_MARGIN
+            textLeft = rightSide - rParenImage.width + icon.TEXT_MARGIN
+            text = ')'
+            textCtr = self.sites.attrIcon.yOffset - icon.ATTR_SITE_OFFSET
+            font = None
+        else:
+            return None, None, None, None, None, None, None, None
+        textTop = textCtr - icon.minTxtHgt // 2
+        textBottom = textTop + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, font, textLeft, textTop, textRight, textBottom, 2, True
 
     def siteRightOfPart(self, partId):
         if partId == 1:

@@ -215,8 +215,6 @@ class WithIcon(icon.Icon):
             self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
-        if temporaryDragSite:
-            self.drawList = None
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -392,8 +390,29 @@ class WithIcon(icon.Icon):
         bodyAsts = createBlockAsts(self)
         return ast.With(withItems, **bodyAsts, lineno=self.id, col_offset=0)
 
+    def drawListIdxToPartId(self, idx):
+        if idx == 0:
+            return 1
+        if self.valueList.simpleSpineWillDraw():
+            if idx == 1:
+                return 2
+            if idx == 2:
+                return 3
+        return 0
+
     def siteRightOfPart(self, partId):
         return 'values_0'
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'values_0'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + bodyWidth - 1 - icon.TEXT_MARGIN
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.stmt, icon.boldFont, left, top, right, bottom, 1, True
 
     def getPythonDocRef(self):
         if self.stmt[0] == 'a':
@@ -540,15 +559,27 @@ class WhileIcon(icon.Icon):
             entryIcon = self.window.replaceIconWithEntry(self, 'while', 'condIcon')
             entryIcon.setCursorPos(cursorTextIdx)
             return entryIcon, cursorWindowPos
-        if siteAfter is None or siteAfter == 'values_0':
+        if siteAfter is None or siteAfter == 'condIcon':
             return self.window.replaceIconWithEntry(self, 'while', 'condIcon')
         return None
 
     def siteRightOfPart(self, partId):
-        return 'values_0'
+        return 'condIcon'
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'condIcon'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + bodyWidth - 1 - icon.TEXT_MARGIN
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'while', icon.boldFont, left, top, right, bottom, 1, True
 
 class ForIcon(icon.Icon):
     hasTypeover = True
+    partIdList = 1, 2
 
     def __init__(self, isAsync=False, createBlockEnd=True, typeover=False,
             window=None, location=None):
@@ -937,6 +968,29 @@ class ForIcon(icon.Icon):
             return 'targets_0'
         return 'iterIcons_0'
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'targets_0':
+                partId = 1
+            elif siteAfter == 'iterIcons_0':
+                partId = 2
+        if partId not in (1, 2):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        if partId == 1:
+            width = bodyWidth
+            text = self.stmt
+        else:
+            left += bodyWidth - 1 + self.tgtList.width - 1
+            width = inWidth
+            text = 'in'
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + width - 1 - 2 * icon.TEXT_MARGIN
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, icon.boldFont, left, top, right, bottom, partId, True
+
     def getPythonDocRef(self):
         if self.stmt == "async for":
             return [("async for Statement",
@@ -1108,6 +1162,17 @@ class IfIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, 'if', 'condIcon')
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'condIcon'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + bodyWidth - 1 - icon.TEXT_MARGIN
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'if', icon.boldFont, left, top, right, bottom, 1, True
+
 class ElifIcon(icon.Icon):
     pythonDocRef = [("if Statement", "reference/compound_stmts.html#the-if-statement")]
 
@@ -1267,6 +1332,17 @@ class ElifIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, 'elif', 'condIcon')
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'condIcon'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + icon.boldFont.getsize('elif')[0]
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'elif', icon.boldFont, left, top, right, bottom, 1, True
+
 class TryIcon(icon.Icon):
     pythonDocRef = [("try Statement", "reference/compound_stmts.html#the-try-statement")]
 
@@ -1383,6 +1459,18 @@ class TryIcon(icon.Icon):
 
     def execute(self):
         return None  #... no idea what to do here, yet.
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'attrIcon'):
+            return None, None, None, None, None, None, None, None
+        width, height = self.bodySize
+        top = 0
+        bottom = top + height - 1
+        left = self.sites.seqInsert.xOffset + icon.dragSeqImage.width - 1
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'try', icon.boldFont, left + icon.TEXT_MARGIN, top + \
+            icon.TEXT_MARGIN, right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
 
     def createAst(self):
         bodyAsts = createBlockAsts(self)
@@ -1615,6 +1703,17 @@ class ExceptIcon(icon.Icon):
             rightArgAttr.highlightErrors(icon.ErrorHighlight(
                 "Must be an identifier with nothing attached"))
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'typeIcon'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + bodyWidth - 1 - icon.TEXT_MARGIN
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'except', icon.boldFont, left, top, right, bottom, 1, True
+
     def dumpName(self):
         return "except"
 
@@ -1731,6 +1830,17 @@ class FinallyIcon(icon.Icon):
             self.errHighlight = icon.ErrorHighlight(
                 "finally is not allowed outside of try block")
         checkPseudoBlockHighlights(self)
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'attrIn'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + bodyWidth - 1 - icon.TEXT_MARGIN
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'finally', icon.boldFont, left, top, right, bottom, 1, True
 
     def dumpName(self):
         return "finally"
@@ -1877,6 +1987,17 @@ class ElseIcon(icon.Icon):
                     "'try' statement must have an 'except' clause to use 'else'")
         self.errHighlight = errHighlight
         checkPseudoBlockHighlights(self)
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'attrIn'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        left = icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN
+        top = self.sites.seqIn.yOffset + icon.TEXT_MARGIN
+        right = left + bodyWidth - 1 - icon.TEXT_MARGIN
+        bottom = top + bodyHeight - icon.BLOCK_SEQ_MARGIN - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'else', icon.boldFont, left, top, right, bottom, 1, True
 
     def dumpName(self):
         return "else"
@@ -2272,11 +2393,11 @@ class DefOrClassIcon(icon.Icon):
                         argIcons = [site.att for site in self.sites.argIcons \
                             if site.att is not None]
                         if len(argIcons) > 0:
-                            self.window.unselectAll()
+                            self.window.sel.unselectAll()
                             for arg in argIcons:
                                 for i in arg.traverse():
                                     self.window.requestRedraw(i.rect)
-                                    win.select(i)
+                                    win.sel.select(i)
                             return
                     self.removeArgs()
                 # Move cursor (in the case of a function def, that's all we ever do)
@@ -2358,6 +2479,47 @@ class DefOrClassIcon(icon.Icon):
             else:
                 entryIcon.appendPendingArgs([nameIcon, argIcons])
         return entryIcon
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        rightSite = 'returnType' if self.hasSite('returnType') else 'attrIcon'
+        if partId == 1 or siteAfter == 'nameIcon':
+            rightSide = self.sites.nameIcon.xOffset + icon.OUTPUT_SITE_DEPTH
+            boxRight = rightSide - icon.TEXT_MARGIN
+            boxLeft = rightSide - self.bodySize[0] + icon.TEXT_MARGIN
+            text = self.text
+            font = icon.boldFont
+            textCtr = self.sites.nameIcon.yOffset
+            partId = 1
+        elif (partId == 2 or siteAfter == 'argIcons_0') and self.hasArgs:
+            rightSide = self.sites.argIcons[0].xOffset + icon.OUTPUT_SITE_DEPTH
+            boxRight = rightSide - icon.TEXT_MARGIN
+            boxLeft = rightSide - defLParenImage.width + icon.TEXT_MARGIN
+            text = '('
+            font = None
+            textCtr = self.sites.argIcons[0].yOffset
+            partId = 2
+        elif (partId == 3 or siteAfter == rightSite) and self.hasArgs:
+            if rightSite == 'returnType':
+                returnTypOffset = (returnTypeSiteImage.width - icon.OUTPUT_SITE_DEPTH -
+                    2) if self.hasReturnType else 0
+                rightSide = self.sites.returnType.xOffset - returnTypOffset
+            else:
+                rightSide = self.sites.attrIcon.xOffset - icon.ATTR_SITE_DEPTH
+            boxRight = rightSide - icon.TEXT_MARGIN
+            boxLeft = rightSide - defRParenImage.width + icon.TEXT_MARGIN
+            text = ')'
+            font = None
+            textCtr = self.sites.argIcons[-1].yOffset
+            partId = 3
+        else:
+            return None, None, None, None, None, None, None, None
+        boxTop = textCtr - icon.minTxtHgt // 2
+        boxBottom = boxTop + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, font, boxLeft, boxTop, boxRight, boxBottom, partId, True
+
+    def activePartIds(self):
+        return (1, 2, 3) if self.hasArgs else (1,)
 
     def siteRightOfPart(self, partId):
         if partId == 1:
@@ -2661,8 +2823,8 @@ class DefIcon(DefOrClassIcon):
 
 class LambdaIcon(icon.Icon):
     pythonDocRef = [("Lambdas", "reference/expressions.html#lambdas")]
-
     hasTypeover = True
+    partIdList = 1, 2
 
     def __init__(self, window=None, typeover=False, location=None):
         icon.Icon.__init__(self, window)
@@ -2973,6 +3135,35 @@ class LambdaIcon(icon.Icon):
 
     def canPlaceArgs(self, placeList, startSiteId=None, overwriteStart=False):
         return self._placeArgsCommon(placeList, startSiteId, overwriteStart, False)
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'argIcons_0':
+                partId = 1
+            elif siteAfter == 'exprIcon':
+                partId = 2
+        if partId not in (1, 2):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        if partId == 1:
+            leftSide = icon.OUTPUT_SITE_DEPTH
+            rightSide = leftSide + bodyWidth - 1
+            textCtr = self.sites.argIcons[0].yOffset
+            text = 'lambda'
+            font = icon.boldFont
+        else:
+            rightSide = self.sites.exprIcon.xOffset + icon.OUTPUT_SITE_DEPTH
+            leftSide = rightSide - self.colonWidth
+            textCtr = self.sites.exprIcon.yOffset
+            text = ':'
+            font = None
+        left = leftSide + icon.TEXT_MARGIN
+        topSide = textCtr - bodyHeight // 2
+        top = topSide + icon.TEXT_MARGIN
+        right = rightSide - icon.TEXT_MARGIN
+        bottom = topSide + bodyHeight - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, font, left, top, right, bottom, partId, True
 
     def siteRightOfPart(self, partId):
         if partId == 1:

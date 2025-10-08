@@ -132,6 +132,7 @@ sliceColonImage = comn.asciiToImage((
 
 class SubscriptIcon(icon.Icon):
     hasTypeover = True
+    partIdList = 1, 2
     pythonDocRef = [("Subscripts", "reference/expressions.html#subscriptions")]
     # Property to tell wrapping layout and save-text generators not to allow wrap
     # at the attribute site (as most attributes normally can).
@@ -377,6 +378,32 @@ class SubscriptIcon(icon.Icon):
                 if isinstance(site.att, SliceIcon):
                     site.att.convertToCall()
         listicons.backspaceListIcon(self, siteId, evt)
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        # For multi-row lists, this provides text boxes corresponding to the first
+        # argument site (near the top) on the left paren and to the last argument (near
+        # the bottom) on the right paren, so that underlines appear to continue from the
+        # adjacent argument (purely aesthetic choice, and centering might be better).
+        if partId == 1 or siteAfter == 'argIcons_0':
+            leftSide = self.sites.attrOut.xOffset + icon.ATTR_SITE_DEPTH
+            rightSide = self.sites.argIcons[0].xOffset + icon.OUTPUT_SITE_DEPTH
+            text = '['
+            textCtr = self.sites.argIcons[0].yOffset
+            partId = 1
+        elif partId == 2 or siteAfter == 'attrIcon':
+            rightSide = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH
+            leftSide = rightSide - subscriptRBktImage.width
+            textCtr = self.sites.argIcons[-1].yOffset
+            text = ']'
+            partId = 2
+        else:
+            return None, None, None, None, None, None, None, None
+        textLeft = leftSide + icon.TEXT_MARGIN
+        textRight = rightSide - icon.TEXT_MARGIN
+        textTop = textCtr - icon.minTxtHgt // 2
+        textBottom = textTop + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, None, textLeft, textTop, textRight, textBottom, partId, True
 
     def isComprehension(self):
         # This is defined to allow the icon to use the list icon backspace method, which
@@ -766,6 +793,38 @@ class SliceIcon(icon.Icon):
             win.cursor.setToIconSite(cursorIc, cursorSite)
         else:
             win.cursor.setToText(entryIcon, drawNew=False)
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'upperIcon':
+                partId = 1
+            elif siteAfter == 'stepIcon':
+                partId = 2
+        if partId not in (1, 2):
+            return None, None, None, None, None, None, None, None
+        width, height = sliceColonImage.size
+        if partId == 1:
+            rightSide = self.sites.upperIcon.xOffset + icon.OUTPUT_SITE_DEPTH
+            leftSide = rightSide - width
+            textCtr = self.sites.upperIcon.yOffset
+            text = ':'
+            font = icon.boldFont
+        else:
+            rightSide = self.sites.stepIcon.xOffset + icon.OUTPUT_SITE_DEPTH
+            leftSide = rightSide - width
+            textCtr = self.sites.stepIcon.yOffset
+            text = ':'
+            font = None
+        left = leftSide + icon.TEXT_MARGIN
+        topSide = textCtr - height // 2
+        top = topSide + icon.TEXT_MARGIN
+        right = rightSide - icon.TEXT_MARGIN
+        bottom = topSide + height - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, font, left, top, right, bottom, partId, True
+
+    def activePartIds(self):
+        return (1, 2) if hasattr(self.sites, 'stepIcon') else (1,)
 
     def convertToCall(self, replace=True):
         sliceIdent = nameicons.IdentifierIcon(name='slice', window=self.window)

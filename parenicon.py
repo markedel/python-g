@@ -11,6 +11,7 @@ import reorderexpr
 import nameicons
 
 class CursorParenIcon(icon.Icon):
+    partIdList = 1, 2
     pythonDocRef = [("Parenthesis", "reference/expressions.html#parenthesized-forms")]
 
     def __init__(self, closed=False, window=None, typeover=False, location=None):
@@ -328,6 +329,30 @@ class CursorParenIcon(icon.Icon):
                     win.cursor.setToIconSite(parent, parentSite)
                     reorderexpr.reorderArithExpr(content)
         win.requestRedraw(None, filterRedundantParens=True)
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId == 1 or siteAfter == 'argIcon':
+            leftSide = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH
+            textLeft = leftSide +icon.TEXT_MARGIN
+            rightSide = self.sites.argIcon.xOffset + icon.OUTPUT_SITE_DEPTH
+            textRight = rightSide - icon.TEXT_MARGIN
+            text = '('
+            textCtr = self.sites.argIcon.yOffset
+            partId = 1
+        elif partId == 2 or siteAfter == 'attrIcon':
+            rightSide = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH
+            textRight = rightSide - icon.TEXT_MARGIN
+            textLeft = rightSide - icon.globalFont.getsize(')')[0]
+            text = ')'
+            textCtr = self.sites.attrIcon.yOffset - icon.ATTR_SITE_OFFSET
+            partId = 2
+        else:
+            return None, None, None, None, None, None, None, None
+        textTop = textCtr - icon.minTxtHgt // 2
+        textBottom = textTop + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, icon.globalFont, textLeft, textTop, textRight, textBottom, partId, \
+            True
 
 def createCursorParenFromFakeAst(astNode, window, skipArgCreate=False):
     if hasattr(astNode, 'macroAnnotations'):

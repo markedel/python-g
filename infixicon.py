@@ -36,6 +36,8 @@ typeAnnImage = comn.asciiToImage((
 TYPE_ANN_INPUT_SHIFT = -3
 
 class InfixIcon(icon.Icon):
+    partIdList = (2,)
+
     def __init__(self, op, opImg=None, isKwd=False, window=None, location=None):
         icon.Icon.__init__(self, window)
         self.precedence = -1
@@ -230,15 +232,26 @@ class InfixIcon(icon.Icon):
 
     def drawListIdxToPartId(self, idx):
         if self.parent() is None:
-            return idx + 1
-        return idx + 2
+            return 0 if idx == 0 else 2
+        return 2
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 2 or siteAfter == 'rightArg'):
+            return None, None, None, None, None, None, None, None
+        outSiteX = self.sites.output.xOffset
+        leftArgX = outSiteX + icon.outSiteImage.width - 1
+        textLeft = leftArgX + self.leftArgWidth - 1 + icon.TEXT_MARGIN
+        textRight = textLeft + self.opImg.width - icon.TEXT_MARGIN
+        textTop = 1 + icon.TEXT_MARGIN
+        textBottom = self.opImg.height - icon.TEXT_MARGIN
+        font = icon.boldFont if self.operator == 'as' else icon.globalFont
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.operator, font, textLeft + 1, textTop, textRight, textBottom, 2, True
 
     def siteRightOfPart(self, partId):
-        if partId == 1:
+        if partId == 0:
             # Left-site sequence connector, which is not included in lexical traversal,
-            # but (maybe?) can be clicked on. ...I don't think it's good to have a
-            # part that can't be found in traversal.  It might be advisable to renumber
-            # the parts of this icon and return 0 for this part.
+            # but (maybe?) can be clicked on.
             return 'leftArg'
         return 'rightArg'
 
@@ -481,6 +494,19 @@ class TypeAnnIcon(InfixIcon):
         if needsCtx:
             text.wrapCtxMacro(parentBreakLevel+1, parseCtx='e')
         return text
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 2 or siteAfter == 'rightArg'):
+            return None, None, None, None, None, None, None, None
+        outSiteX = self.sites.output.xOffset
+        leftArgX = outSiteX + icon.outSiteImage.width - 1
+        textLeft = leftArgX + self.leftArgWidth - 1 + icon.TEXT_MARGIN
+        textRight = textLeft + self.opImg.width - icon.TEXT_MARGIN
+        textTop = 1 + icon.TEXT_MARGIN + TYPE_ANN_INPUT_SHIFT
+        textBottom = textTop + icon.minTxtHgt
+        font = icon.boldFont if self.operator == 'as' else icon.globalFont
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.operator, font, textLeft + 1, textTop, textRight, textBottom, 2, True
 
     def createAst(self):
         leftArg = self.leftArg()

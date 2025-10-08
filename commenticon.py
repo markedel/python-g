@@ -61,6 +61,7 @@ lineSpacing = charHeight + lineSepPixels
 
 class CommentIcon(icon.Icon):
     pythonDocRef = [("Comments", "reference/lexical_analysis.html#comments")]
+    canEditText = True
 
     def __init__(self, text='', attachedToStmt=None, window=None, location=None,
             ann=None):
@@ -136,6 +137,50 @@ class CommentIcon(icon.Icon):
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
 
+    def highlightTextSelection(self, drawListImage, partId=1):
+        """tint the draw-list-image (produced by draw() method) to highlight the current
+        text selection in the icon."""
+        sel = self.window.sel
+        if not sel.isText() or self not in sel.textSel:
+            return
+        textLeft = icon.dragSeqImage.width + poundImage.width + icon.TEXT_MARGIN
+        # textTop = icon.TEXT_MARGIN + (STMT_COMMENT_V_TEXT_OFFSET if
+        #     self.attachedToStmt else LINE_COMMENT_V_TEXT_OFFSET)
+        textTop = icon.TEXT_MARGIN + STMT_COMMENT_V_TEXT_OFFSET
+        # If selection starts left of icon, and should include pound (#) character
+        poundDedent = 0 if self is sel.leftIc else poundImage.width + icon.TEXT_MARGIN
+        selStart = sel.leftPos if self is sel.leftIc else 0
+        selEnd = sel.rightPos if self is sel.rightIc else 99999999
+        isMultiIconSel = len(sel.textSel) > 1
+        lineCharStart = 0
+        for i, line in enumerate(self.wrappedString):
+            lineCharEnd = lineCharStart + len(line)
+            lineTop = textTop + i * lineSpacing
+            lineBottom = lineTop + charHeight
+            lineTop = max(0, lineTop - lineSepPixels)
+            if selStart < lineCharEnd and selEnd > lineCharStart or poundDedent != 0:
+                tintLeft = textLeft + (0 if selStart <= lineCharStart else
+                    int(charWidth * (selStart - lineCharStart))) - poundDedent
+                tintRight = textLeft + int(charWidth * (len(line) if selEnd >=
+                    lineCharEnd else (selEnd - lineCharStart)))
+                if isMultiIconSel:
+                    if tintLeft != 0:
+                        icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT,
+                            (0, lineTop, tintLeft, lineBottom))
+                    if tintRight != drawListImage.width:
+                        icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT,
+                            (tintRight, lineTop, drawListImage.width, lineBottom))
+                divY = lineBottom - icon.TEXT_SEL_UNDERLINE_THICKNESS
+                icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT, (tintLeft,
+                    lineTop, tintRight, divY))
+                icon.tintImageRect(drawListImage, icon.TEXT_SEL_DARK_TINT, (tintLeft,
+                    divY, tintRight, lineBottom))
+            elif isMultiIconSel:
+                icon.tintImageRect(drawListImage, icon.TEXT_SEL_LIGHT_TINT,
+                    (0, lineTop, drawListImage.width, lineBottom))
+            lineCharStart = lineCharEnd
+            poundDedent = 0
+
     def focusIn(self):
         self.hasFocus = True
         return True
@@ -184,6 +229,16 @@ class CommentIcon(icon.Icon):
         cursorTo = insertPos + len(text)
         self._insertText(insertPos, text, moveCursorTo=cursorTo, isUnterminated=True)
         return None
+
+    def replaceText(self, text, fromPos, toPos):
+        """Top level text replacement command.  Unlike insertText, does not add undo
+        boundary.  Caller is also responsible for calling refreshDirty() and placing
+        cursor upon completion."""
+        # Fail softly if fromPos or toPos points outside of string
+        if toPos == 'end': toPos = len(self.string)
+        fromPos = max(0, min(fromPos, len(self.string)))
+        toPos = max(0, min(toPos, len(self.string)))
+        self._replaceText(fromPos, toPos, text)
 
     def addText(self, text):
         """Add a character or text at the cursor.  Returns error string on failure, None
@@ -234,23 +289,57 @@ class CommentIcon(icon.Icon):
     def forwardDelete(self, evt=None):
         self.removeText(self.cursorPos, self.cursorPos+1, isFwdDelete=True)
 
-    def arrowAction(self, direction):
+    def arrowAction(self, direction, evt):
         cursor = self.window.cursor
         cursor.erase()
         if direction == "Left":
             if self.cursorPos <= 0:
                 # Move the cursor out of the icon
-                if self.attachedToStmt:
+                if evt.state & comn.ALT_MASK:
+                    # Alt key allows traversal to previous proto-text
+                    ic, partId, pos = cursors.prevTextPos(self, 0, 1, direction='Left')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
+                elif evt.state & comn.SHIFT_MASK:
+                    # Extend selection out of icon w/o Alt key held.  This is only
+                    # allowed when there's already a multi-icon text selection
+                    if not self.window.sel.isText():
+                        return
+                    for ic in self.window.sel.textSel.keys():
+                        if ic is not self:
+                            break
+                    else:
+                        return
+                    ic, partId, pos = cursors.prevTextPos(self, 0, 1, direction='Left')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
+                elif self.attachedToStmt:
                     rightmostIc, rightmostSite = icon.rightmostSite(self.attachedToStmt)
-                    self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
+                    cursor.setToIconSite(rightmostIc, rightmostSite)
                 else:
-                    self.window.cursor.setToIconSite(self, 'prefixInsert')
+                    cursor.setToIconSite(self, 'prefixInsert')
             else:
-                self.setCursorPos(self.cursorPos - 1)
+                cursor.moveToTextSite(self, 1, self.cursorPos - 1, evt)
         elif direction == "Right":
             if self.cursorPos == len(self.string):
                 # Move the cursor out of the icon
-                if self.attachedToStmt:
+                if evt.state & comn.ALT_MASK:
+                    # Alt key allows traversal to previous proto-text
+                    ic, partId, pos = cursors.nextTextPos(self, self.cursorPos, 1,
+                        direction='Right')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
+                elif evt.state & comn.SHIFT_MASK:
+                    # Extend selection out of icon w/o Alt key held.  This is only
+                    # allowed when there's already a multi-icon text selection
+                    if not self.window.sel.isText():
+                        return
+                    for ic in self.window.sel.textSel.keys():
+                        if ic is not self:
+                            break
+                    else:
+                        return
+                    ic, partId, pos = cursors.nextTextPos(self, self.cursorPos, 1,
+                        direction='Right')
+                    cursor.moveToTextSite(ic, partId, pos, evt)
+                elif self.attachedToStmt:
                     if self.attachedToStmt.hasSite('seqOut'):
                         self.window.cursor.setToIconSite(self.attachedToStmt, 'seqOut')
                     else:
@@ -258,21 +347,72 @@ class CommentIcon(icon.Icon):
                 else:
                     self.window.cursor.setToIconSite(self, 'seqOut')
             else:
-                self.setCursorPos(self.cursorPos + 1)
+                cursor.moveToTextSite(self, 1, self.cursorPos + 1, evt)
         elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
             newY = y + lineSpacing * {'Up':-1, 'Down':1}[direction]
-            self.window.cursor.erase()
+            # self.window.cursor.erase() ... this seems to be duplicate
             stmt = self.attachedToStmt if self.attachedToStmt is not None else self
-            if self.becomeEntryIcon(clickPos=(x, newY))[0] is None:
-                cursorType, ic, site, pos = cursors.geometricTraverseFromPos(x, y,
-                    direction, self.window, stmt)
-                if cursorType == 'window':
-                    cursorType = 'icon'
+            cursorTextIdx, cursorWindowPos = self.cursorInText((x, newY))
+            if cursorTextIdx is None:
+                # If the alt or shift key is pressed, we know the user is moving the
+                # cursor to a text position, and these are the only cases where we allow
+                # selection extension (Shift) or text-traversal (Alt) to another icon.
+                toTextPos = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
+                cursorType, ic, site, pos, partId = cursors.geometricTraverseFromPos(x, y,
+                    direction, self.window, stmt, onlyTextFields=toTextPos)
+                if toTextPos:
+                    if (ic is self or evt.state & comn.ALT_MASK) and cursorType !=\
+                            'window':
+                        self.window.cursor.moveToTextSite(ic, partId, pos, evt)
+                elif cursorType == 'window':
                     site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
                     ic = self if self.attachedToStmt is None else self.attachedToStmt
-                self.window.cursor.setTo(cursorType, ic, site, pos)
+                    self.window.cursor.setToIconSite(ic, site)
+                else:
+                    self.window.cursor.setTo(cursorType, ic, site, pos, partId)
+            else:
+                self.window.cursor.moveToTextSite(self, 1, cursorTextIdx, evt)
         cursor.draw()
+
+    def doubleClickAction(self, clickPos):
+        cursorTextIdx, cursorWindowPos = self.cursorInText(clickPos)
+        if cursorTextIdx is None:
+            return None, None
+        sel = self.window.sel
+        sel.unselectAll()
+        self.window.cursor.removeCursor()
+        clickX, _ = clickPos
+        nearestCursorX, _ = cursorWindowPos
+        clickedCharIdx = max(0, cursorTextIdx - 1) if clickX < nearestCursorX else \
+            min(cursorTextIdx, len(self.string) - 1)
+        clickedChar = self.string[clickedCharIdx]
+        if clickedChar.isspace():
+            # User clicked on a whitespace character, select surrounding space
+            startIdx = clickedCharIdx
+            for i in range(clickedCharIdx-1, -1, -1):
+                if not self.string[i].isspace():
+                    break
+                startIdx = i
+            endIdx = clickedCharIdx + 1
+            for i in range(clickedCharIdx + 1, len(self.string)):
+                if not self.string[i].isspace():
+                    break
+                endIdx = i + 1
+        else:
+            # User clicked on a non-whitespace character, select surrounding word
+            startIdx = clickedCharIdx
+            for i in range(clickedCharIdx-1, -1, -1):
+                if self.string[i].isspace():
+                    break
+                startIdx = i
+            endIdx = clickedCharIdx + 1
+            for i in range(clickedCharIdx + 1, len(self.string)):
+                if self.string[i].isspace():
+                    break
+                endIdx = i + 1
+        sel.selectTextBetween(self, 1, startIdx, self, 1, endIdx)
+        self.window.requestRedraw(self.rect)
 
     def doLayout(self, left, top, layout):
         self.rect = (left, top, left + layout.width + icon.dragSeqImage.width - 1,
@@ -304,6 +444,9 @@ class CommentIcon(icon.Icon):
         self.window.cursor.setToText(self)
 
     def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+        # Note that while this does make the icon editable, it does not make it an entry
+        # icon, and is generally used for translating a window position to a cursor
+        # position (while also fulfilling the click function for the becomeEntryIcon
         if clickPos is not None:
             cursorTextIdx, cursorWindowPos = self.cursorInText(clickPos)
             if cursorTextIdx is None:
@@ -354,17 +497,21 @@ class CommentIcon(icon.Icon):
         cursorX = left + int(charWidth * charNum)
         return cursorIdx, (cursorX, cursorY)
 
-    def nearestCursorPos(self, x, y):
+    def nearestCursorPos(self, x, y, followWrap=False):
         """Returns cursor index and x, y position of the cursor position nearest text
         cursor position to the given x,y coordinate.  This is the same information as
         returned by cursorInText, except in this case we expect x,y to be outside of the
-        text area, presumably processing geometric arrow key traversal."""
+        text area, presumably processing geometric arrow key traversal.  If followWrap is
+        set to True, positions to the right of a wrapped line of text where y is passed
+        the whitespace wrap point or newline, will return the next legal cursor position
+        (on the next line).  Otherwise it will return the rightmost legal text cursor
+        position on the line (left of the newline or wrapping space)."""
         left, top, right, bottom = self._textAreaClickBoundary()
         xMargin = int(charWidth / 2)
         yMargin = charHeight // 2
         cursorX = min(right - xMargin, max(left + xMargin, x))
         cursorY = min(bottom - yMargin, max(top + yMargin, y))
-        return self.cursorInText((cursorX, cursorY))
+        return self.cursorInText((cursorX, cursorY), not followWrap)
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         text = filefmt.SegmentedText()
@@ -373,7 +520,8 @@ class CommentIcon(icon.Icon):
         # multiple comment icons contiguously in the same sequence, we need to keep them
         # separate, and do so by adding an empty macro when separation is needed.
         prevIcon = self.prevInSeq()
-        sepFromPrev = prevIcon is not None and isinstance(prevIcon, CommentIcon)
+        sepFromPrev = not export and prevIcon is not None and isinstance(prevIcon,
+            CommentIcon)
         text.addComment(self.string, isStmtComment=self.attachedToStmt is not None,
             annotation='' if sepFromPrev else None)
         return text
@@ -389,7 +537,7 @@ class CommentIcon(icon.Icon):
     def textCursorImage(self):
         return textCursorImage
 
-    def cursorWindowPos(self):
+    def cursorWindowPos(self, posOfImg=False):
         x, y = self.rect[:2]
         x += icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN + poundImage.width
         y += icon.TEXT_MARGIN + (STMT_COMMENT_V_TEXT_OFFSET if
@@ -410,7 +558,8 @@ class CommentIcon(icon.Icon):
             charCount += len(line)
         x += int(charsInLine * charWidth)
         y += lineCount * lineSpacing
-        y += charHeight // 2
+        if not posOfImg:
+            y += charHeight // 2
         return x, y
 
     def setCursorPos(self, pos):
@@ -606,6 +755,11 @@ class CommentIcon(icon.Icon):
         self.window.addTop(newComment)
         self.window.cursor.setToText(newComment, 0)
 
+    def textCursorRange(self, partId=None):
+        """Common method between text-editing-capable icons for getting the range of
+        text-cursor traversable positions."""
+        return 0, len(self.string)
+
     def _insertText(self, pos, text, moveCursorTo=None, isUnterminated=False):
         self.window.requestRedraw(self.topLevelParent().hierRect())
         self.markLayoutDirty()
@@ -617,6 +771,19 @@ class CommentIcon(icon.Icon):
             movedCursorFrom = None
         self.window.undo.registerCallback(self._removeText, pos, pos + len(text),
            movedCursorFrom, isUnterminated=isUnterminated)
+
+    def _replaceText(self, fromPos, toPos, text, moveCursorTo=None, isUnterminated=False):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        self.markLayoutDirty()
+        removedText = self.string[fromPos:toPos]
+        self.string = self.string[:fromPos] + text + self.string[toPos:]
+        if moveCursorTo is not None:
+            movedCursorFrom = self.cursorPos
+            self.setCursorPos(moveCursorTo)
+        else:
+            movedCursorFrom = None
+        self.window.undo.registerCallback(self._replaceText, fromPos, fromPos +
+            len(text), removedText, movedCursorFrom, isUnterminated=isUnterminated)
 
     def _removeText(self, fromPos, toPos, moveCursorTo=None, isUnterminated=False):
         self.window.requestRedraw(self.topLevelParent().hierRect())
@@ -683,6 +850,18 @@ class VerticalBlankIcon(icon.Icon):
 
     def dumpName(self):
         return '--'
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'attrIcon'):
+            return None, None, None, None, None, None, None, None
+        width, height = verticalBlankImage.size
+        top = 0
+        bottom = top + height - 1
+        left = self.sites.seqInsert.xOffset + icon.dragSeqImage.width - 1
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return '\n', None, left + icon.TEXT_MARGIN, top + icon.TEXT_MARGIN, \
+            right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
 
     def siteRightOfPart(self, partId):
         return 'seqOut'

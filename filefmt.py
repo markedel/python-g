@@ -1253,7 +1253,10 @@ class ConstAnnotator(ast.NodeVisitor):
         ast.NodeVisitor.__init__(self)
 
     def visit_Constant(self, node):
-        if isinstance(node, ast.Str):
+        if isinstance(node, (ast.Str, ast.Bytes)):
+            # Reexamining this code a year after writing it, this code seems to subtly
+            # depend on ast.Str and ast.Bytes being subclasses of ast.Constant and
+            # visit_Constant being called for them, instead of visit_Str or visit_Bytes.
             origStr = self.posToSrcTable.get((node.lineno, node.col_offset))
             if origStr is not None:
                 node.annSourceStrings = origStr
@@ -2003,6 +2006,9 @@ class SegmentedText:
         the end, because of the annoying possibility of a binary operator with a $Ctx
         macro as its right operand and another argument-containing macro as its right
         argument."""
+        if not isinstance(self.segments[0], str):
+            # Segments can be SegTextComment and QuotedString objects
+            return False
         if not ctxMacroPattern.match(self.segments[0]) or self.segments[-1][-3:] != '$)$':
             return False
         return self._macroArgsSpanText()
@@ -2013,7 +2019,7 @@ class SegmentedText:
         the end, because of the annoying possibility of a binary operator with a $Ctx
         macro as its right operand and another argument-containing macro as its right
         argument."""
-        if self.segments[0][:6] != '$Entry':
+        if not isinstance(self.segments[0], str) or self.segments[0][:6] != '$Entry':
             return False
         return self._macroArgsSpanText()
 

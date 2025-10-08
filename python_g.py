@@ -48,16 +48,7 @@ DEFAULT_WINDOW_SIZE = (800, 800)
 # and be extra-resilient against accidental dragging.
 DRAG_THRESHOLD = 8
 
-# Tkinter event modifiers
-SHIFT_MASK = 0x001
-CTRL_MASK = 0x004
-ALT_MASK = 0x20000
-LEFT_MOUSE_MASK = 0x100
-RIGHT_MOUSE_MASK = 0x400
-
 DOUBLE_CLICK_TIME = 300
-
-CURSOR_BLINK_RATE = 500
 
 # Nominal range in pixels for snapping to a site
 SNAP_DIST = 8
@@ -401,6 +392,7 @@ class Window:
         self.top.bind("<Control-d>", self._dumpCb)
         self.top.bind("<Control-l>", self._debugLayoutCb)
         self.top.bind("<Alt-l>", self._undebugLayoutCb)
+        self.top.bind("<KeyPress-Alt_L>", self._altPressCb)
         self.top.bind("<KeyRelease-Alt_L>", self._altReleaseCb)
         self.top.bind("<KeyPress-Shift_L>", self._shiftPressCb)
         self.top.bind("<KeyPress-Shift_R>", self._shiftPressCb)
@@ -484,6 +476,12 @@ class Window:
         self.lexDragAnchorIc = None
         self.lexDragAnchorSite = None
         self.lexDragAnchorPartId = None
+        self.textDragAnchorIc = None
+        self.textDragAnchorPartId = None
+        self.textDragAnchorPos = None
+        self.textDragConfined = False
+        self.inTextSelDrag = False
+
         self.popupIcon = None
         self.typingErrCancelId = None
 
@@ -497,7 +495,7 @@ class Window:
         # to be updated, they are batched and done per-page.
         self.topIcons = {}
         # List (set) of all icons that are currently selected in the window
-        self.selectedSet = set()
+        self.sel = cursors.Selection(self)
         self.image = Image.new('RGB', (width, height), color=WINDOW_BG_COLOR)
         self.draw = ImageDraw.Draw(self.image)
         self.dc = None
@@ -577,67 +575,6 @@ class Window:
 
     def close(self):
         self.top.destroy()
-
-    def selectedIcons(self, excludeEmptySites=False):
-        """Return a list of the icons in the window that are currently selected.  Due to
-        the odd method by which this is implemented (see below), performance will be
-        enhanced somewhat if code that deletes all the icons from the selection, calls
-        self.clearSelection() once it no longer needs to poll the selection.  By default,
-        the list will also contain icon+site tuples for selected empty sites.  We allow
-        these in selections to support the text-editor idiom of selecting ranges code to
-        replace/delete.  Here, only empty *series* sites are supported, as they are the
-        only type of site where removing the content usually implies removing the site
-        itself (the comma clause).  Specifying excludeEmptySites will filter out these
-        tuples and return a pure icon list.  Note that the absence of a corresponding
-        tuple implies that a given empty site is specifically not selected, so while code
-        that only cares about physical icons can ignore these entries, code that alters
-        selections must include these whenever an empty series site should be included.
-        """
-        # Selection was initially a property of icons, but that caused performance issues
-        # because finding the current selection required traversing all icons.  Now the
-        # selection is held in a set, but to support existing code which does not expect
-        # to see deleted icons in the selection, it must be cleaned per-use (which will
-        # make performance significantly WORSE when more than half of the icons in the
-        # window are selected).  It is intended that there will be a formal mechanism for
-        # removing icons, after which this code can be removed.
-        #
-        # Eventually might be nice to support extracting '=' clauses with the same editor
-        # idiom and similar mechanism used to handle empty series sites.
-        self._pruneSelectedIcons()
-        if excludeEmptySites:
-            return [ic for ic in self.selectedSet if isinstance(ic, icon.Icon)]
-        return list(self.selectedSet)
-
-    def _pruneSelectedIcons(self):
-        removeSet = set()
-        for icOrSite in self.selectedSet:
-            ic = icOrSite if isinstance(icOrSite, icon.Icon) else icOrSite[0]
-            if isStmtComment(ic):
-                topParent = ic.attachedToStmt
-            else:
-                topParent = ic.topLevelParent()
-            if topParent is None or topParent not in self.topIcons:
-                print("Removing deleted icon from selection")
-                removeSet.add(icOrSite)
-        self.selectedSet -= removeSet
-
-    def isSelected(self, ic):
-        """Return True if an icon is in the current selection, False if not.  Empty
-        series sites can also be tested by passing ic as a tuple (icon, siteName)."""
-        return ic in self.selectedSet
-
-    def select(self, ic, select=True):
-        """Add (select=True) or remove (select=False) an icon from the current selection.
-        Does not redraw or mark the icon as dirty.  Use .isSelected() to read the
-        selection state of an icon.  ic can also specify an empty series site to select
-        or unselect in the form of a tuple: (icon, siteName)."""
-        if select:
-            self.selectedSet.add(ic)
-        elif ic in self.selectedSet:
-            self.selectedSet.remove(ic)
-
-    def clearSelection(self):
-        self.selectedSet.clear()
 
     def watchMutableIcon(self, ic):
         self.liveMutableIcons.add(ic)
@@ -756,7 +693,7 @@ class Window:
         if self.doubleClickFlag:
             return  # Second click occurred, don't do the delayed action
         ic = self.buttonDownIcon
-        if self.buttonDownState & CTRL_MASK and ic is not None and not ic.isSelected():
+        if self.buttonDownState & comn.CTRL_MASK and ic is not None and not ic.isSelected():
             if hasattr(ic, 'blockEnd'):
                 sel = expredit.createBlockSel(ic, inclStmtComment=True)
             elif isinstance(ic, icon.BlockEnd):
@@ -1088,12 +1025,12 @@ class Window:
         self.refresh(redraw=False)
 
     def _keyCb(self, evt):
-        if evt.state & ALT_MASK:
+        if evt.state & comn.ALT_MASK:
             return
         char = cursors.tkCharFromEvt(evt)
         if char is None:
             return
-        if (evt.state & LEFT_MOUSE_MASK or evt.state & RIGHT_MOUSE_MASK):
+        if (evt.state & comn.LEFT_MOUSE_MASK or evt.state & comn.RIGHT_MOUSE_MASK):
             # Eventually we may have key actions during mouse drag, but for now we just
             # want to ensure that keystroke operations don't interleave unexpectedly.
             return
@@ -1108,13 +1045,13 @@ class Window:
         # widget using its addText method, or an entry icon is created at the requested
         # site and text is added to that.  The addText method for icons that support a
         # text cursor return a reject-reason string on failure and None on success.
-        if len(self.selectedSet) != 0:
-            self._pruneSelectedIcons()
-        if len(self.selectedSet) != 0:
-            # Replace the selection (or first contiguous range of it) with an entry
-            # icon, and pass the character on to that entry icon to process.
-            # Unfortunately, to fully understand the context in which we will be
-            # inserting the character, we need to go through with the removal of the
+        if len(self.sel.selSet) != 0:
+            self.sel.pruneSelectedIcons()
+        if len(self.sel.selSet) != 0:
+            # Icon selection:  Replace the selection (or first contiguous range of it)
+            # with an entry icon, and pass the character on to that entry icon to
+            # process.  Unfortunately, to fully understand the context in which we will
+            # be inserting the character, we need to go through with the removal of the
             # selected icons.  If we then fail to insert the character, use undo to
             # unwind the removal and replacement with the entry icon.  Before we do
             # any of that, add a (probably redundant) undo boundary, to guarantee
@@ -1124,18 +1061,43 @@ class Window:
             # remove it before properly adding the character with addText().
             self.undo.addBoundary()
             entryIcon = entryicon.EntryIcon(window=self, initialString='&&&')
-            self.replaceSelectedIcons(self.selectedSet, [[entryIcon]])
+            self.replaceSelectedIcons(self.sel.selSet, [[entryIcon]])
             entryIcon.clearText()
             self.cursor.setToText(entryIcon, drawNew=False)
             rejectReason = entryIcon.addText(char)
             if rejectReason is None:
-                self.clearSelection()
+                self.sel.clearSelection()
             else:
                 self.undo.undo()
+        elif self.sel.isText():
+            # Text selection:  Replace the text selection with typed character
+            self.replaceSelectedText(char)
+            return
         elif self.cursor.type == "text":
-            # If it's an active entry icon, feed it the character
-            self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
-            rejectReason = self.cursor.icon.addText(char)
+            if self.cursor.icon.canEditText:
+                # If it's an active entry icon, string, or comment, feed it the character
+                self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
+                rejectReason = self.cursor.icon.addText(char)
+            elif isinstance(self.cursor.icon, commenticon.VerticalBlankIcon):
+                entryIc = self.replaceIconWithEntry(self.cursor.icon, char)
+                self.cursor.setToText(entryIc)
+                self.refreshDirty()
+                return
+            else:
+                # If it's a proto-text cursor, convert the icon into an entry icon.  As
+                # we're starting from a proto-text cursor, we know we're on an editable
+                # part and can just call becomeEntryIcon.
+                pos = self.cursor.protoTextPosToEntryPos()
+                self.undo.addBoundary()
+                entryIc = self.cursor.icon.becomeEntryIcon()
+                if entryIc is None:
+                    rejectReason = "Internal error: could not convert icon to entry"
+                    self.undo.undo()
+                else:
+                    self.cursor.setToText(entryIc, drawNew=False, pos=pos)
+                    rejectReason = entryIc.addText(char)
+                    if rejectReason is not None:
+                        self.undo.undo()
         elif self.cursor.type == "icon":
             # Quietly ignore extra space and block-introducing colons (note that the
             # entry icon needs to be equally capable of handling these cases, and this
@@ -1345,12 +1307,13 @@ class Window:
             self.activeTypeovers.remove(ic)
 
     def _motionCb(self, evt):
-        leftMouse = evt.state & LEFT_MOUSE_MASK
-        rightMouse = evt.state & RIGHT_MOUSE_MASK
+        leftMouse = evt.state & comn.LEFT_MOUSE_MASK
+        rightMouse = evt.state & comn.RIGHT_MOUSE_MASK
         if self.buttonDownTime is None or not (leftMouse or rightMouse):
             return
-        shiftPressed = evt.state & SHIFT_MASK
-        ctrlPressed = evt.state & CTRL_MASK
+        shiftPressed = evt.state & comn.SHIFT_MASK
+        ctrlPressed = evt.state & comn.CTRL_MASK
+        altPressed = evt.state & comn.ALT_MASK
         if self.dragging is not None:
             self._updateDrag()
             return
@@ -1363,6 +1326,9 @@ class Window:
         if self.inLexSelDrag:
             self._updateLexSelDrag()
             return
+        if self.inTextSelDrag:
+            self._updateTextSelDrag()
+            return
         if self.inImmediateDrag:
             self._updateImmediateSelDrag()
             return
@@ -1371,7 +1337,9 @@ class Window:
         if abs(evt.x - btnX) + abs(evt.y - btnY) <= DRAG_THRESHOLD:
             return  # Mouse has not moved sufficiently to start a drag
         # Start a drag
-        ic = self.findIconAt(btnX, btnY)
+        #... Original "ic = self.findIconAt(btnX, btnY)" must be expired code (predating
+        #    self.buttonDownIcon), since  chaos would ensue if it differed from ic
+        ic = self.buttonDownIcon
         siteIcon, site = self.siteAt(self.buttonDownLoc)
         if leftMouse and ic is None and not (siteIcon is not None and shiftPressed):
             # If nothing was clicked, start a rectangular selection
@@ -1380,14 +1348,22 @@ class Window:
                 self._startStmtSelect(seqSiteIc, evt)
             else:
                 self._startRectSelect(evt, immediate=False)
+        elif leftMouse and ic is not None and (altPressed or ic.canEditText and
+                not self.sel.isSelected(ic, onlyAsIcon=True) and
+                ic.pointInTextArea(btnX, btnY)):
+            # Dragging in a text icon or with Alt pressed on a non-text icon: Start a
+            # text selection drag
+            self._startTextDrag(self.buttonDownIcon, self.buttonDownIcPart,
+                self.buttonDownLoc, evt)
         elif leftMouse and shiftPressed and not ctrlPressed:
+            # Shift is pressed, start a lexical drag
             if siteIcon is not None:
                 self._startLexSelDrag(evt, siteIcon, anchorSite=site)
             else:
                 self._startLexSelDrag(evt, self.buttonDownIcon,
                     anchorPartId=self.buttonDownIcPart)
         elif rightMouse and ctrlPressed:
-            if self.cursor.type is None and len(self.selectedSet) == 0:
+            if self.cursor.type is None and len(self.sel.selSet) == 0:
                 # Preempt immediate-copy dragging if there's no destination.  This is
                 # somewhat unnecessary, as the eventual goal is to not have a window with
                 # no cursor/selection, and there are already checks on insert/replace.
@@ -1407,10 +1383,10 @@ class Window:
             self.displayTypingError("Copy-drag must start on icon")
             self.buttonDownTime = None
             return
-        elif ic.isSelected():
+        elif ic.isSelected() and not self.sel.isText():
             # If a selected icon was clicked, drag all of the selected icons (both left
             # and right buttons)
-            self._startDrag(evt, self.selectedIcons(), dragACopy=rightMouse)
+            self._startDrag(evt, self.sel.selectedIcons(), dragACopy=rightMouse)
         elif not shiftPressed or ctrlPressed:
             # Drag with no modifiers starts icon drag (left) or drag copy (right)
             if self.doubleClickFlag:
@@ -1423,7 +1399,9 @@ class Window:
                     icons.add(ic.blockEnd)
                     self._startDrag(evt, icons, dragACopy=rightMouse)
                 else:
-                    # double-click drag, ignores associativity and outer icon
+                    # double-click drag ignores associativity and outer icon.  Having it
+                    # drag a single icon might be more useful, except a single click to
+                    # select, followed by drag also does this.
                     icons = set(expredit.createHierSel(ic, inclStmtComment=True))
                     self._startDrag(evt, icons, dragACopy=rightMouse)
             # It would seem natural to drag an entire sequence by the top icon, but that
@@ -1477,6 +1455,14 @@ class Window:
 
     def _focusOutCb(self, evt):
         self.cursor.erase()
+
+    def _altPressCb(self, evt):
+        if self.inTextSelDrag:
+            # For text-editing icons, text selections are confined to the icon, unless
+            # the user presses the Alt key to release.  This callback ensures that it
+            # will happen immediately upon keypress (without requiring an accompanying
+            # mouse movement).
+            self._updateTextSelDrag(releaseConfine=True)
 
     def _altReleaseCb(self, evt):
         # This is a hack to stop Tkinter from sometimes doing its menubar alt-key
@@ -1535,52 +1521,18 @@ class Window:
                 return
         x, y = self.imageToContentCoord(evt.x, evt.y)
         ic = self.findIconAt(x, y)
-        if ic is not None and evt.state & ALT_MASK:
-            if self.cursor.type == 'text':
-                if ic is self.cursor.icon:
-                    # Don't re-edit an entry icon or string we're already editing
-                    if ic.click(x, y):
-                        self.refreshDirty(addUndoBoundary=False)
-                        self.cursor.draw()
-                    return
-                else:
-                    self.cursor.icon.focusOut()
-            entryIc, oldCursorLoc = ic.becomeEntryIcon((x, y))
-            if entryIc is not None:
-                self.cursor.setToText(entryIc)
-                self.refreshDirty()
-                # Jump the mouse cursor to correct for font and text location differences
-                # after replacing the icon with the entry icon.  The icon becomeEntryIcon
-                # methods return the window location where the cursor would be placed
-                # were it placed in the original icon.  We then nudge the screen cursor
-                # by the difference between that and the location of the new entry icon's
-                # cursor in the window, thus accounting for font, spacing, and layout.
-                oldCursorX, oldCursorY = oldCursorLoc
-                newCursorX, newCursorY = entryIc.cursorWindowPos()
-                nudgeMouseCursor(newCursorX - oldCursorX, newCursorY - oldCursorY)
-            else:
-                self._select(ic)
-            return
-        if hasattr(ic, "pointInTextArea") and ic.pointInTextArea(x, y) and not \
-                ic.isSelected():
-            if not (evt.state & SHIFT_MASK or evt.state & CTRL_MASK):
-                self.unselectAll()
-            ic.click(x, y)
-            self.refreshDirty(addUndoBoundary=True)
-            self.cursor.draw()
-            return
         self.buttonDownTime = msTime()
         self.buttonDownLoc = x, y
         self.buttonDownIcon = ic
         self.buttonDownIcPart = None if ic is None else ic.touchesPosition(x, y)
         self.buttonDownState = evt.state
         self.doubleClickFlag = False
-        if (ic is None or not ic.isSelected()) and not (evt.state & SHIFT_MASK or
-                evt.state & CTRL_MASK):
-            self.unselectAll()
+        if (ic is None or not ic.isSelected()) and not (evt.state & comn.SHIFT_MASK or
+                evt.state & comn.CTRL_MASK):
+            self.sel.unselectAll()
 
     def _buttonReleaseCb(self, evt):
-        if evt.state & ALT_MASK:
+        if evt.state & comn.ALT_MASK:
             self.suppressAltReleaseAction = True
         if self.buttonDownTime is None:
             return
@@ -1596,18 +1548,24 @@ class Window:
         elif self.inLexSelDrag:
             self._endLexSelDrag()
             self.buttonDownTime = None
+        elif self.inTextSelDrag:
+            self._endTextSelDrag()
+            self.buttonDownTime = None
         elif self.doubleClickFlag:
             if msTime() - self.buttonDownTime < DOUBLE_CLICK_TIME:
-                iconToExecute = self.findIconAt(*self.buttonDownLoc)
-                if iconToExecute is None:
+                cllickedIc = self.findIconAt(*self.buttonDownLoc)
+                if cllickedIc is None:
                     ic = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
                     if ic is None:
                         self.doubleClickFlag = False
                         self._delayedBtnUpActions()
                         return
                     self._select(ic, op="block")
+                elif cllickedIc.canEditText:
+                    # Word selection
+                    cllickedIc.doubleClickAction(self.buttonDownLoc)
                 else:
-                    iconToExecute = findLeftOuterIcon(self.assocGrouping(iconToExecute),
+                    iconToExecute = findLeftOuterIcon(self.assocGrouping(cllickedIc),
                             self.buttonDownLoc)
                     if iconToExecute not in self.topIcons:
                         self.doubleClickFlag = False
@@ -1643,6 +1601,27 @@ class Window:
         if self.buttonDownTime is None:
             return
         self.buttonDownTime = None
+        if self.buttonDownState & comn.SHIFT_MASK:
+            # Extend or create selection
+            if self.buttonDownState & comn.ALT_MASK or self.sel.isText() or \
+                    self.cursor.type == 'text':
+                # Extend or create a text selection.  If the user is not holding Alt and
+                # the anchor is a cursor or starting selection confined to a single
+                # text-editable icon, limit the selection to that icon.
+                if self.buttonDownState & comn.ALT_MASK:
+                    confineToAnchor = False
+                elif self.sel.isText():
+                    confineToAnchor = self.sel.leftIc is self.sel.rightIc and \
+                        self.sel.leftIc.canEditText
+                else:  # No selection, anchored on cursor
+                    confineToAnchor = self.cursor.icon.canEditText
+                if self.sel.isText() or self.cursor.type in ('text', 'icon'):
+                    expredit.extendTextSelectToPointer(self, *self.buttonDownLoc,
+                        confineToAnchor=confineToAnchor)
+            elif self.buttonDownIcon is not None:
+                self.cursor.selectToSiteOrPart(self.buttonDownIcon,
+                    partId=self.buttonDownIcPart)
+            return
         if self.buttonDownIcon is None:
             # Clicked on window background, move cursor
             x, y = self.buttonDownLoc
@@ -1652,25 +1631,52 @@ class Window:
                 return
             siteIcon, site = self.siteAt(self.buttonDownLoc)
             if siteIcon:
-                if self.buttonDownState & SHIFT_MASK:
+                if self.buttonDownState & comn.SHIFT_MASK:
                     self.cursor.selectToSiteOrPart(siteIcon, site)
                 else:
                     self.cursor.setToIconSite(siteIcon, site)
             else:
-                self.unselectAll()
+                self.sel.unselectAll()
                 self.cursor.setToWindowPos((x, y))
             self.refreshDirty()
             return
-        if self.buttonDownState & SHIFT_MASK:
-            self.cursor.selectToSiteOrPart(self.buttonDownIcon,
-                partId=self.buttonDownIcPart)
+        if self.buttonDownState & comn.ALT_MASK:
+            if self.cursor.type == 'text':
+                if self.buttonDownIcon is self.cursor.icon and \
+                        self.buttonDownIcon.canEditText:
+                    # Don't re-edit an entry icon or string we're already editing
+                    if self.buttonDownIcon.click(*self.buttonDownLoc):
+                        self.refreshDirty(addUndoBoundary=False)
+                        self.cursor.draw()
+                    return
+                else:
+                    #... I'm not sure what this is supposed to accomplish that setting
+                    #    a new cursor position wouldn't also do, but I'm leaving it in
+                    #    (but not for proto-text cursors)
+                    if self.cursor.icon.canEditText:
+                        self.cursor.icon.focusOut()
+            self.sel.unselectAll()
+            pos = self.buttonDownIcon.nearestTextCursorPos(self.buttonDownIcPart,
+                *self.buttonDownLoc)[0]
+            if pos is not None:
+                self.cursor.setToText(self.buttonDownIcon, pos,
+                    partId=self.buttonDownIcPart)
             return
-        elif self.buttonDownState & CTRL_MASK:
+        elif self.buttonDownState & comn.CTRL_MASK:
             self._select(self.buttonDownIcon, 'toggle')
+            return
+        elif self.buttonDownIcon.canEditText and self.buttonDownIcon.pointInTextArea(
+                *self.buttonDownLoc) and not (self.buttonDownIcon.isSelected() and not
+                self.sel.isText()):
+            if not (self.buttonDownState & (comn.SHIFT_MASK | comn.CTRL_MASK)):
+                self.sel.unselectAll()
+            self.buttonDownIcon.click(*self.buttonDownLoc)
+            self.refreshDirty(addUndoBoundary=True)
+            self.cursor.draw()
             return
         action = self._nextProgressiveClickAction(self.buttonDownIcon, self.buttonDownLoc)
         if action == "moveCursor":
-            self.unselectAll()
+            self.sel.unselectAll()
             siteIcon, site = self.siteAt(self.buttonDownLoc)
             if siteIcon is not None:
                 self.cursor.setToIconSite(siteIcon, site)
@@ -1690,7 +1696,7 @@ class Window:
         which the icon is the leftmost argument."""
         siteIcon, site = self.siteAt(btnDownLoc)
         siteSelected = self.cursor.type == "icon" and self.cursor.icon is siteIcon
-        currentSel = set(self.selectedIcons())
+        currentSel = set(self.sel.selectedIcons())
         singleSel = {clickedIcon}
         if isinstance(clickedIcon, tuple):
             # The user has clicked on an empty series site, which we do allow to be
@@ -1778,21 +1784,32 @@ class Window:
 
     def _cutCb(self, _evt=None):
         self._copyCb()
-        # Note the unfortunate dependency here: passing self.selectedSet to removeIcons
-        # without calling _pruneSelectedIcons because we know that _copyCb did.
-        self.removeIcons(self.selectedSet, setCursor=True)
-        self.clearSelection()
-        self.refreshDirty(addUndoBoundary=True)
+        if self.sel.isText():
+            self.replaceSelectedText('', closeEmptyEntry=True)
+        elif len(self.sel.selSet) > 0:
+            # Note the unfortunate dependency here: passing self.sel.selSet to removeIcons
+            # without calling sel.pruneSelectedIcons because we know that _copyCb did.
+            self.removeIcons(self.sel.selSet, setCursor=True)
+            self.sel.clearSelection()
+            self.refreshDirty(addUndoBoundary=True)
 
     def _copyCb(self, evt=None):
-        self._pruneSelectedIcons()
-        if len(self.selectedSet) == 0:
+        if self.sel.isText():
+            # Text selection
+            text, startIdx, endIdx, _, _ =  self.sel.getSelectionText()
+            if text is not None:
+                self.top.clipboard_clear()
+                self.top.clipboard_append(text[startIdx:endIdx], type='STRING')
             return
+        self.sel.pruneSelectedIcons()
+        if len(self.sel.selSet) == 0:
+            return
+        # Icon selection
         with io.StringIO() as outStream:
-            self.writeSaveFileText(outStream, self.selectedSet, exportPython=False)
+            self.writeSaveFileText(outStream, self.sel.selSet, exportPython=False)
             pygText = outStream.getvalue()
         with io.StringIO() as outStream:
-            self.writeSaveFileText(outStream, self.selectedSet, exportPython=True)
+            self.writeSaveFileText(outStream, self.sel.selSet, exportPython=True)
             pyText = outStream.getvalue()
         self.top.clipboard_clear()
         self.top.clipboard_append(pygText, type='PYG')
@@ -1805,22 +1822,30 @@ class Window:
             self.displayTypingError("Can't paste into type-over region")
             return
         text = None
-        if self.cursor.type == "text":
-            # If the user is pasting in to the entry icon, string, or comment, use the
-            # clipboard text, if possible.
+        if self.cursor.type == "text" or self.sel.isText():
+            # If the user is pasting in to the entry icon, string, comment, or text
+            # selection, use the clipboard text, if possible.
             try:
                 text = self.top.clipboard_get(type="STRING")
             except:
                 text = None
             if text is not None:
-                # Try a text insert, first.  If rejected, don't complain about it, yet,
-                # because it could be code that the entry icon can't handle in text form,
-                # but that the insertion code can handle in PYG form or after parsing
-                # in plain Python form..
-                self.requestRedraw(self.cursor.icon.hierRect())
-                textRejectReason = self.cursor.icon.addText(text)
-                if textRejectReason is None:
-                    self.refreshDirty()  # Undo boundary added by addText
+                if self.sel.isText():
+                    # We have text and we have a text selection in which to paste it
+                    self.replaceSelectedText(text, leaveEntryOpen=False)
+                    return
+                # Try a text insert at the cursor.  If rejected, don't complain about it,
+                # yet, because it could be code that the entry icon can't handle in text
+                # form, but that the insertion code can handle in PYG form or after
+                # parsing in plain Python form.
+                if self.cursor.icon.canEditText:
+                    self.requestRedraw(self.cursor.icon.hierRect())
+                    textRejectReason = self.cursor.icon.addText(text)
+                    if textRejectReason is None:
+                        self.refreshDirty()  # Undo boundary added by addText
+                        return
+                else:
+                    self.replaceSelectedText(text, leaveEntryOpen=False)
                     return
         # Look at what is on the clipboard and make the best possible conversion to icons
         try:
@@ -1864,9 +1889,9 @@ class Window:
         # There was something clipboard that could be converted to icon form.  Figure out
         # where to put it.  If there's a selection, replace it, otherwise paste it at
         # the current cursor position
-        self._pruneSelectedIcons()
-        if len(self.selectedSet) > 0:
-            cursorIcon, cursorSite = self.replaceSelectedIcons(self.selectedSet,
+        self.sel.pruneSelectedIcons()
+        if len(self.sel.selSet) > 0:
+            cursorIcon, cursorSite = self.replaceSelectedIcons(self.sel.selSet,
                 pastedSeqs)
             if cursorIcon is None and cursorSite is None:
                 self.displayTypingError("Can't paste code containing top-level "
@@ -1987,10 +2012,13 @@ class Window:
             self.cursor.setToIconSite(cursorIcon, cursorSite)
 
     def _deleteCb(self, evt=None):
-        selected = self.selectedIcons()
+        if self.sel.isText():
+            self.replaceSelectedText('', closeEmptyEntry=True)
+            return
+        selected = self.sel.selectedIcons()
         if selected:
             self.removeIcons(selected, setCursor=True)
-            self.clearSelection()
+            self.sel.clearSelection()
             self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == "icon":
             # Edit or remove the icon to the right of the cursor
@@ -2004,7 +2032,7 @@ class Window:
                     rightSite != rightIcon.sites.firstCursorSite():
                 cursors.beep()
                 return
-            if evt.state & CTRL_MASK:
+            if evt.state & comn.CTRL_MASK:
                 # Delete the icon to the right of the cursor (setCursor is used rather
                 # than just letting the cursor position ride, because substitutions by
                 # removeIcons could disturb the parent icon).
@@ -2018,7 +2046,15 @@ class Window:
                     self.cursor.icon.setCursorPos(0)
             self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == 'text':
-            self.cursor.icon.forwardDelete(evt)
+            if self.cursor.icon.canEditText:
+                self.cursor.icon.forwardDelete(evt)
+            elif isinstance(self.cursor.icon, commenticon.VerticalBlankIcon):
+                self.removeIcons([self.cursor.icon], setCursor=True)
+            else:
+                pos = self.cursor.protoTextPosToEntryPos()
+                entryIc = self.cursor.icon.becomeEntryIcon()
+                self.cursor.setToText(entryIc, pos)
+                entryIc.forwardDelete(evt)
             self.refreshDirty(addUndoBoundary=False)
         else:
             cursors.beep()
@@ -2255,14 +2291,25 @@ class Window:
             self.refreshDirty(addUndoBoundary=True)
 
     def _backspaceCb(self, evt=None):
+        if self.sel.isText():
+            self.replaceSelectedText('', closeEmptyEntry=True)
+            return
         if self.cursor.type == "text":
-            self.cursor.icon.backspaceInText(evt)
+            if self.cursor.icon.canEditText:
+                self.cursor.icon.backspaceInText(evt)
+            elif isinstance(self.cursor.icon, commenticon.VerticalBlankIcon):
+                self.removeIcons([self.cursor.icon], setCursor=True)
+            else:
+                pos = self.cursor.protoTextPosToEntryPos()
+                entryIc = self.cursor.icon.becomeEntryIcon()
+                self.cursor.setToText(entryIc, pos)
+                entryIc.backspaceInText(evt)
             self.refreshDirty(addUndoBoundary=False)
         else:
-            selectedIcons = self.selectedIcons()
+            selectedIcons = self.sel.selectedIcons()
             if len(selectedIcons) > 0:
                 self.removeIcons(selectedIcons, setCursor=True)
-                self.clearSelection()
+                self.sel.clearSelection()
             elif self.cursor.type == "icon":
                 if self.cursor.siteType in ('seqIn', 'seqOut'):
                     cursorIc = self.cursor.icon
@@ -2307,7 +2354,7 @@ class Window:
                 break
             site = parent.siteOf(ic)
             ic = parent
-        if evt.state & CTRL_MASK:
+        if evt.state & comn.CTRL_MASK:
             # Delete the icon to the left of the cursor
             self.removeIcons([ic], setCursor=True)
         else:
@@ -2368,32 +2415,49 @@ class Window:
 
     def _arrowCb(self, evt):
         if self.cursor.type is None:
-            # If there is a selection but no cursor, put a cursor at the appropriate
-            # end of the selection.  This will indicate the active end of the selection
-            # for future selection adjustments.
-            _, firstIcOfSel, partIdOfFirstIcOfSel, icAfterSel, partIdOfIcAfterSel, \
-                _, _, _ = self.findFirstContiguousSelection(self.selectedSet)
-            if firstIcOfSel is None:
-                self.displayTypingError('No cursor or selection')
-                return
+            # If there is a selection but no cursor (an unanchored selection), put a
+            # cursor at the appropriate end of the selection.  This will indicate the
+            # active end of the selection for selection adjustment, or if the shift key
+            # is not held, convert the selection to a cursor position.
             direction = evt.keysym
-            if direction in ("Up", "Left"):
-                cursorIc, cursorSite = expredit.siteLeftOfPart(firstIcOfSel,
-                    partIdOfFirstIcOfSel)
-            else:
-                if partIdOfIcAfterSel is None:
-                    # findFirstContiguousSelection gives us 'None' as the partId when the
-                    # selection ends on a statement boundary
-                    cursorIc = icAfterSel
-                    cursorSite = 'seqIn'
+            if self.sel.isText():
+                if direction in ("Up", "Left"):
+                    self.cursor.setToText(self.sel.leftIc, self.sel.leftPos,
+                        partId=self.sel.leftPartId)
                 else:
-                    cursorIc, cursorSite = expredit.siteLeftOfPart(icAfterSel,
-                        partIdOfIcAfterSel)
-            self.cursor.setToIconSite(cursorIc, cursorSite)
-        if not evt.state & SHIFT_MASK:
-            self.unselectAll()
-        if evt.state & ALT_MASK and evt.keysym in ("Left", "Right") and \
-                self.cursor.type == 'icon':
+                    self.cursor.setToText(self.sel.rightIc, self.sel.rightPos,
+                        partId=self.sel.rightPartId)
+            else:
+                _, firstIcOfSel, partIdOfFirstIcOfSel, icAfterSel, partIdOfIcAfterSel, \
+                    _, _, _ = self.findFirstContiguousSelection(self.sel.selSet)
+                if firstIcOfSel is None:
+                    self.displayTypingError('No cursor or selection')
+                    return
+                if direction in ("Up", "Left"):
+                    cursorIc, cursorSite = expredit.siteLeftOfPart(firstIcOfSel,
+                        partIdOfFirstIcOfSel)
+                else:
+                    if partIdOfIcAfterSel is None:
+                        # findFirstContiguousSelection gives us 'None' as the partId when
+                        # the selection ends on a statement boundary
+                        cursorIc = icAfterSel
+                        cursorSite = 'seqIn'
+                    else:
+                        cursorIc, cursorSite = expredit.siteLeftOfPart(icAfterSel,
+                            partIdOfIcAfterSel)
+                self.cursor.setToIconSite(cursorIc, cursorSite)
+            if not evt.state & comn.SHIFT_MASK:
+                # If we're not extending the selection, the user will simply want it to
+                # resolve to a cursor at the appropriate end of selection (not beyond).
+                self.sel.unselectAll()
+                return
+        if not evt.state & comn.SHIFT_MASK or \
+                len(self.sel.selSet) > 0 and evt.state & comn.ALT_MASK:
+            # Moving mouse w/o shift erases selection, as does trying to extend an icon
+            # selection with Alt key pressed (users might prefer we converted the icon
+            # selection to a text selection, but that's questionable and complicated).
+            self.sel.unselectAll()
+        if evt.state & comn.ALT_MASK and self.cursor.type == 'icon':
             self.cursor.processBreakingArrowKey(evt)
         else:
             self.cursor.processArrowKey(evt)
@@ -2420,7 +2484,22 @@ class Window:
             return
         if not self._completeEntry(evt):
             return
-        if self.cursor.type not in ("icon", "typeover"):
+        if len(self.sel.selSet) > 0:
+            # Possible icon selection
+            self.sel.pruneSelectedIcons()
+            if len(self.sel.selSet) > 0:
+                # Confirmed icon selection: remove the selected icons, and split the
+                # statement containing them at the selection site
+                self.removeIcons(self.sel.selSet, setCursor=True)
+                if self.cursor.type == 'icon':
+                    expredit.splitStmtAtSite(self.cursor.icon, self.cursor.site)
+                self.refreshDirty(addUndoBoundary=True)
+                return
+        if self.sel.isText():
+            # There is a text selection: replace the text with a newline
+            self.replaceSelectedText('\n')
+            return
+        if self.cursor.type not in ("icon", "typeover", "text"):
             return  # Not on an icon
         if self.cursor.type == 'icon' and self.cursor.site in ('seqIn', 'seqOut'):
             blankIc = commenticon.VerticalBlankIcon(self)
@@ -2433,14 +2512,14 @@ class Window:
         topIcon = self.cursor.icon.topLevelParent()
         if topIcon is None or not topIcon.hasSite('seqOut'):
             return
-        if evt.state & SHIFT_MASK:
+        if evt.state & comn.SHIFT_MASK:
             #... not correct/complete.  Need to create entry icon with pending block
             blockStartIcon = icon.findSeqStart(topIcon, toStartOfBlock=True)
             blockOwnerIcon = blockStartIcon.prevInSeq()
             if blockOwnerIcon is not None:
                 topIcon = blockOwnerIcon.blockEnd
         self.cursor.setToIconSite(topIcon, 'seqOut')
-        self.refreshDirty()  # No undo boundary, as this is just an entry icon
+        self.refreshDirty()  # No undo boundary, as this is just cursor movement
 
     def _execCb(self, evt=None):
         """Execute the top level icon at the entry or icon cursor"""
@@ -2556,7 +2635,7 @@ class Window:
             # sequences and hierarchies.
             draggingSequences = self.removeIcons(icons, assembleDeleted=True,
                 watchSubs=subsIcs)
-        self.clearSelection()
+        self.sel.clearSelection()
         if subsIcs[self.buttonDownIcon] is not None:
             self.buttonDownIcon = subsIcs[self.buttonDownIcon]
         # For icons that depend on context to distinguish identical text syntax,
@@ -2643,7 +2722,7 @@ class Window:
                 self.dragImageOffset = icon.addPoints(self.dragImageOffset, newPartOffset)
         self._computeDragSnapList()
         self.snapped = None
-        self._updateDrag(modeModifierState=evt.state & SHIFT_MASK)
+        self._updateDrag(modeModifierState=evt.state & comn.SHIFT_MASK)
 
     def _computeDragSnapList(self):
         # Construct a master snap list for all mating sites between stationary and
@@ -3040,7 +3119,7 @@ class Window:
                 cursorIc, cursorSite = self.insertIconsFromSequences(rightmostIc,
                     rightmostSite, self.dragging)
             elif siteType == "input":
-                if evt.state & SHIFT_MASK:
+                if evt.state & comn.SHIFT_MASK:
                     cursorIc, cursorSite = self.insertIconsFromSequences(statIcon,
                         siteName, self.dragging, asSeries=True)
                 else:
@@ -3156,7 +3235,7 @@ class Window:
         if immediate:
             self.immediateDragHighlight = set()
         self.lastRectSelect = None
-        self.rectSelectInitialState = self.selectedSet.copy()
+        self.rectSelectInitialState = self.sel.selSet.copy()
         self._updateRectSelect()
         self.refreshDirty()
 
@@ -3190,7 +3269,7 @@ class Window:
         cL, cT, cR, cB = combinedRegion
         redrawRegion = comn.AccumRects((cL, cT, cR + 1, cB + 1))
         curSel = self.immediateDragHighlight if self.inImmediateRectSelect else \
-            self.selectedSet
+            self.sel.selSet
         selectSet = set()
         eraseSet = set()
         for ic in self.findIconsInRegion(combinedRegion):
@@ -3225,8 +3304,8 @@ class Window:
             self.immediateDragHighlight -= eraseSet
             self.immediateDragHighlight |= selectSet
         else:
-            self.selectedSet -= eraseSet
-            self.selectedSet |= selectSet
+            self.sel.selSet -= eraseSet
+            self.sel.selSet |= selectSet
         if origScrollOrig == self.scrollOrigin:
             self.refresh(redrawRegion.get(), redraw=True)
         l, t, r, b = self.contentToImageRect(newRect)
@@ -3270,7 +3349,7 @@ class Window:
         # selection, but we definitely don't want to if no selection was made.  Using
         # selectedSet rather than selectedIcons() might be a questionable choice as it
         # may be wrong, but it's also much cheaper.
-        if len(self.selectedSet) == 0:
+        if len(self.sel.selSet) == 0:
             self.cursor.restoreState(self.rectSelectCursor)
             self.cursor.draw()
 
@@ -3286,8 +3365,8 @@ class Window:
             self.immediateDragHighlight = set()
             self.inImmediateRectSelect = False
         else:
-            affectedEntries = self.selectedSet | self.rectSelectInitialState
-            self.selectedSet = self.rectSelectInitialState
+            affectedEntries = self.sel.selSet | self.rectSelectInitialState
+            self.sel.selSet = self.rectSelectInitialState
         for i in affectedEntries:
             redrawRect.add(expredit.iconOfSelEntry(i).rect)
         self.refresh(redrawRect.get(), redraw=True)
@@ -3296,7 +3375,7 @@ class Window:
 
     def _startStmtSelect(self, seqSiteIc, evt, immediate=False):
         if not immediate:
-            self.unselectAll()
+            self.sel.unselectAll()
         self.stmtSelectSeqStart = icon.findSeqStart(seqSiteIc)
         self.topIcons[self.stmtSelectSeqStart].applyOffset()
         self.inStmtSelect = True
@@ -3328,7 +3407,7 @@ class Window:
         xChangePoints = None
         icBottom = None
         selectSet = self.immediateDragHighlight if self.inImmediateStmtSelect else \
-            self.selectedSet
+            self.sel.selSet
         topStmt = bottomStmt = None
         for ic in icon.traverseSeq(self.stmtSelectSeqStart):
             seqInX, seqInY = ic.posOfSite('seqIn')
@@ -3440,7 +3519,7 @@ class Window:
         """Begin a lexical drag selection anchored at either a site (anchorIc,
         anchorSite), or an icon part (anchorIc, anchorPartId)."""
         # Note that the anchor for a lexical drag can be *either* a site or a partId
-        self.unselectAll()
+        self.sel.unselectAll()
         self.lexDragAnchorIc = anchorIc
         self.lexDragAnchorSite = anchorSite
         self.lexDragAnchorPartId = anchorPartId
@@ -3469,15 +3548,15 @@ class Window:
         newSel, curIc, curSite = expredit.extendSelectToPointer(self.lexDragAnchorIc,
             self.lexDragAnchorSite, self.lexDragAnchorPartId, btnX, btnY)
         # Update the selection, redrawing just the changed icons
-        erase = self.selectedSet.difference(newSel)
-        draw = newSel.difference(self.selectedSet)
+        erase = self.sel.selSet.difference(newSel)
+        draw = newSel.difference(self.sel.selSet)
         redrawRect = comn.AccumRects()
         for i in erase:
             redrawRect.add(expredit.iconOfSelEntry(i).rect)
-            self.select(i, False)
+            self.sel.select(i, False)
         for i in draw:
             redrawRect.add(expredit.iconOfSelEntry(i).rect)
-            self.select(i, True)
+            self.sel.select(i, True)
         # Place the cursor at the active end of the selection (... it might be better to
         # do this in _endLexSelDrag, but for now, I don't want to pass the data there)
         if curIc is None:
@@ -3583,6 +3662,64 @@ class Window:
         self.immediateDragHighlight = set()
         if redrawRect.get() is not None:
             self.refresh(redrawRect.get(), redraw=True)
+
+    def _startTextDrag(self, anchorIc, anchorPartId, anchorLoc, evt):
+        """Begin a text-selection drag anchored at the given text-site (anchorIc,
+        anchorPartId, anchorLoc)."""
+        anchorPos = anchorIc.nearestTextCursorPos(anchorPartId, *anchorLoc)[0]
+        if anchorPos is None:
+            # The given icon part has no text site and can't be used as a text selection
+            # anchor.  It would be nice to use a neighboring icon instead of just doing
+            # nothing, but users are probably not expecting this to work, as you can only
+            # start a selection on an icon, and block-end icons are not visible.
+            return
+        self.sel.unselectAll()
+        self.textDragAnchorIc = anchorIc
+        self.textDragAnchorPartId = anchorPartId
+        self.textDragAnchorPos = anchorPos
+        self.textDragConfined = anchorIc.canEditText and not evt.state & comn.ALT_MASK
+        self.inTextSelDrag = True
+        self._updateTextSelDrag()
+
+    def _updateTextSelDrag(self, releaseConfine=False):
+        if not self.inTextSelDrag:
+            return
+        # Because we may be require autoscroll and get called from a tkinter 'after'
+        # callback, we may not have access to event data: 1) read the mouse explicitly,
+        # and 2) use an Alt button press callback to call us to release drag confinement
+        btnX, btnY = self.imageToContentCoord(
+            self.imgFrame.winfo_pointerx() - self.imgFrame.winfo_rootx(),
+            self.imgFrame.winfo_pointery()- self.imgFrame.winfo_rooty())
+        if releaseConfine:
+            self.textDragConfined = False
+        # If the pointer is outside of the window, try to autoscroll and potentially set
+        # up idle callback for continuing scrolling.
+        autoscrollAfter = self.autoscrollToward((btnX, btnY, btnX, btnY))
+        if autoscrollAfter and self.pendingAutoscroll is None:
+            self.pendingAutoscroll = self.top.after_idle(self._updateTextSelAutoscroll)
+        # Limit the y extent to what we have already covered, and the (possibly new)
+        # window borders, since we can't test pointer relationship to un-drawn icons.
+        btnY = max(btnY, self.scrollOrigin[1])
+        btnY = min(btnY, self.scrollOrigin[1] + self.image.height)
+        # For text-editing icons, we limit the selection to the icon itself, unless the
+        # user presses Alt, in which case, we release the selection to go beyond (and
+        # once released, stay released).
+        # Find and redraw the selected text
+        expredit.extendTextSelectToPointerFromAnchor(self.textDragAnchorIc,
+            self.textDragAnchorPartId, self.textDragAnchorPos, btnX, btnY,
+            confineToAnchor=self.textDragConfined)
+
+    def _updateTextSelAutoscroll(self):
+        """Timer callback for autoscroll during icon drag"""
+        self.pendingAutoscroll = None
+        self._updateTextSelDrag()
+
+    def _endTextSelDrag(self):
+        self.textDragAnchorIc = None
+        self.textDragAnchorPartId = None
+        self.textDragAnchorPos = None
+        self.textDragConfined = False
+        self.inTextSelDrag = False
 
     def recordCursorPositionInData(self, topIcon):
         if self.cursor.type != "icon":
@@ -3855,7 +3992,7 @@ class Window:
         statement and its associated statement comment, 'icAndBlock' changes the
         selection to the entire code block containing ic"""
         if op in ('select', 'hier', 'left', 'typeAnn', 'block'):
-            self.unselectAll()
+            self.sel.unselectAll()
         # ... I'm leaving the commented-out code below as a reminder that I removed it
         #     because it's clearly wrong for comments and strings, but worried that I've
         #     forgotten about cases where the entry icon needs to preserve a selection.
@@ -3887,7 +4024,8 @@ class Window:
             if isinstance(ic, tuple):
                 # ic is actually an empty site (ic, siteName) pair
                 self.requestRedraw(ic[0].rect)
-                self.select(ic, (ic not in self.selectedSet) if op == 'toggle' else True)
+                self.sel.select(ic, (ic not in self.sel.selSet) \
+                    if op == 'toggle' else True)
             else:
                 self.requestRedraw(ic.rect)
                 if op == 'toggle':
@@ -3896,20 +4034,6 @@ class Window:
                     ic.select()
         self.cursor.removeCursor()
         self.refreshDirty()
-
-    def unselectAll(self):
-        refreshRegion = comn.AccumRects()
-        selectedIcons = self.selectedIcons()
-        if len(selectedIcons) == 0:
-            return
-        for icOrSite in selectedIcons:
-            if isinstance(icOrSite, icon.Icon):
-                refreshRegion.add(icOrSite.rect)
-            else:
-                refreshRegion.add(icOrSite[0].rect)
-        self.clearSelection()
-        if refreshRegion.get() is not None:
-            self.refresh(refreshRegion.get(), redraw=True)
 
     def displayTypingError(self, errText, quiet=False):
         if not quiet:
@@ -3980,12 +4104,22 @@ class Window:
             if isinstance(self.cursor.icon, entryicon.EntryIcon):
                 print(f"Entry Icon {repr(self.cursor.icon.text)},"
                       f"{self.cursor.icon.cursorPos}")
-            elif isinstance(self.cursor.icon, stringicon.StringIcon):
+            elif self.cursor.icon.canEditText:
                 ic = self.cursor.icon
-                print(f"String {ic.dumpName()}, {ic.cursorPos}")
-
+                print(f"Editable icon {ic.dumpName()}, {ic.cursorPos}")
+            else:
+                print(f"Proto-text icon {self.cursor.icon.dumpName()}, part "
+                    f"{self.cursor.textPartId}, pos {self.cursor.protoTextPos}")
+        self.sel.pruneSelectedIcons()
+        if len(self.sel.selSet) > 0:
+            print(f"Icon Selection {len(self.sel.selSet)} icons selected")
+        elif self.sel.isText():
+            print(f"Text Selection: from {self.sel.leftIc.dumpName()}, partId "
+                f"{self.sel.leftPartId}, pos {self.sel.leftPos} to "
+                f"{self.sel.rightIc.dumpName()}, partId "
+                f"{self.sel.rightPartId}, pos {self.sel.rightPos}")
     def _debugLayoutCb(self, evt):
-        topIcons = findTopIcons(self.selectedIcons(excludeEmptySites=True))
+        topIcons = findTopIcons(self.sel.selectedIcons(excludeEmptySites=True))
         for ic in topIcons:
             if hasattr(ic, 'debugLayoutFilterIdx'):
                 ic.debugLayoutFilterIdx += 1
@@ -3995,7 +4129,7 @@ class Window:
         self.refreshDirty(addUndoBoundary=True)
 
     def _undebugLayoutCb(self, evt):
-        for ic in self.selectedIcons(excludeEmptySites=True):
+        for ic in self.sel.selectedIcons(excludeEmptySites=True):
             if hasattr(ic, 'debugLayoutFilterIdx'):
                 delattr(ic, 'debugLayoutFilterIdx')
                 ic.markLayoutDirty()
@@ -4569,10 +4703,10 @@ class Window:
         apart to insert such statements, the replacement will not be performed and the
         function will return None, None.  On success, the function will return the icon
         and site on which to place the cursor.  Note that while the window keeps track of
-        selected icons using a set (self.selectedSet), it is not directly usable for the
+        selected icons using a set (self.sel.selSet), it is not directly usable for the
         selectedSet parameter, as it can contain icons that have been deleted.  To remove
-        those icons and make it usable, call _pruneSelectedIcons() before passing it to
-        this function."""
+        those icons and make it usable, call sel.pruneSelectedIcons() before passing it
+        to this function."""
         firstStmtOfSelection, firstIconOfSelection, _, iconAfterFirstSelection, _, \
             spansStmtBoundaries, startsOnStmtBoundary, endsOnStmtBoundary = \
             self.findFirstContiguousSelection(selectedSet)
@@ -4593,6 +4727,46 @@ class Window:
             # the remainder of a partially-selected statement at the selection end.
             insertSiteIcon, insertSite = icon.rightmostSite(firstStmtOfSelection)
         elif startsOnStmtBoundary:
+            if not spansStmtBoundaries and len(insertedSequences) == 1 and (
+                    blockicons.isBlockOwnerIc(firstIconOfSelection)) and (
+                    blockicons.isBlockOwnerIc(insertedSequences[0][0]) or
+                    isinstance(insertedSequences[0][0], entryicon.EntryIcon)) and (
+                    len(insertedSequences) == 1 or len(insertedSequences) == 2 and
+                    isinstance(insertedSequences[0][1], icon.BlockEnd)):
+                # We're replacing a block-owning icon with another block-owning icon. The
+                # mechanism we use for other replacements (separate remove and replace
+                # operations) would not maintain the code block underneath.  Instead, use
+                # the code intended for conversion to entry icon, which both generates
+                # placement lists and preserves the block.  This code is reasonable when
+                # the replacement is an entry icon, which covers the more common case of
+                # typing over a block owning icon, but quite hairy for other block-owners
+                # because 1) it fakes out becomeEntryIcon with an icon that is not
+                # technically in the window, and 2) places code with addText() which has
+                # its own questionable side-effects, such as moving the cursor.
+                convertedEntryIc = firstIconOfSelection.becomeEntryIcon(None, None)
+                self.removeIcons(selectedSet - {firstIconOfSelection,
+                    firstIconOfSelection.blockEnd})
+                insertedIc = insertedSequences[0][0]
+                cursorIc, cursorSite = icon.rightmostSite(insertedIc)
+                if isinstance(insertedIc, entryicon.EntryIcon):
+                    insertedEntryIc = insertedIc
+                else:
+                    insertedIc.window.addTop([insertedIc, insertedIc.blockEnd])
+                    insertedEntryIc = insertedIc.becomeEntryIcon()
+                    insertedEntryIc.window.removeTop([insertedEntryIc,
+                        insertedEntryIc.blockEnd])
+                insertedEntryIc.addCodeBlock()
+                pendingArgs = convertedEntryIc.listPendingArgs()
+                convertedEntryIc.window.replaceTop(convertedEntryIc, insertedEntryIc)
+                if pendingArgs is not None:
+                    convertedEntryIc.popPendingArgs('all')
+                    insertedEntryIc.appendPendingArgs(pendingArgs)
+                if insertedEntryIc is not insertedIc:
+                    insertedEntryIc.setCursorPos("end")
+                    insertedEntryIc.addText(' ')
+                    if cursorIc is insertedIc:
+                        cursorIc, cursorSite = self.cursor.icon, self.cursor.site
+                return cursorIc, cursorSite
             # The selection starts on a statement boundary.  Insert site may change after
             # deletion of selected icons, or may encompass the entire sequence.
             if endsOnStmtBoundary:
@@ -5162,6 +5336,175 @@ class Window:
                     stmtComment.mergeTextFromComment(comment)
         return cursorIcon, cursorSite
 
+    def replaceSelectedText(self, text, leaveEntryOpen=True, closeEmptyEntry=False):
+        """Replace the current text selection with the given text, or if there is no
+        text selection but a text cursor, insert the given text at the cursor.  Note that
+        unlike replaceSelected, this is a complete command, acting directly on the
+        current selection or cursor, handling refresh, clearing selection, and adding an
+        undo boundary.  The function works by replacing the entire range of selected
+        icons (not just the underlined part) with an entry icon containing a (string)
+        substituted combination of the non-underlined parts of the selection with the
+        new text (text).  Normally (leaveEntryOpen==True), the function will preserve
+        the minimal form of this entry icon for further editing.  Setting leaveEntryOpen
+        to False will allow the function to close it (if possible).  closeEmptyEntry
+        will allow the function to close the entry icon in the limited case where it has
+        neither text nor pending arguments."""
+        sel = self.sel
+        if not sel.isText():
+            if self.cursor.type == 'text':
+                # Make a 0-character text selection to describe the cursor position.
+                # Note that we need to include the icon's children as (non-underlined)
+                # parts of the selection.
+                sel = cursors.Selection(self)
+                partId = 1 if self.cursor.icon.canEditText else self.cursor.textPartId
+                pos = self.cursor.icon.cursorPos if self.cursor.icon.canEditText else \
+                    self.cursor.protoTextPos
+                sel.selectSingleIconText(self.cursor.icon, partId, pos, pos)
+                for ic in self.cursor.icon.traverse(includeSelf=False):
+                    sel.textSel[ic] = None
+            else:
+                return
+        # If this is a replacement within a single editable icon, let the icon handle it
+        if sel.leftIc is sel.rightIc and sel.leftIc.canEditText:
+            left = sel.leftPos
+            right = sel.rightPos
+            ic = sel.leftIc
+            sel.clearSelection()
+            ic.replaceText(text, left, right)
+            self.cursor.setToText(ic, left + len(text))
+            self.refreshDirty(addUndoBoundary=True)
+            return
+        # Extract the text of the selection and annotations for indices for start and
+        # end of the underlined portion and pending arg candidates.
+        selText, underlineStartIdx, underlineEndIdx, pendingArgIdx, \
+            pendingArgIcons = sel.getSelectionText()
+        if selText is None:
+            return  # Should happen only on error
+        # If the replacement spans editable icons, we may be able
+        # to merge in a way that better preserves the existing structure.
+        allPartsUnderlined = all(sel.isTextSelected(i, p)[1]
+            for i in sel.textSel.keys() for p in i.activePartIds())
+        if sel.leftIc.canEditText and sel.rightIc.canEditText:
+            if allPartsUnderlined and isinstance(sel.leftIc, (commenticon.CommentIcon,
+                    stringicon.StringIcon)):
+                # Selection starts in a comment or string and none of the intervening
+                # icons drags in non-underlined parts: we can make it all into a string
+                # or comment
+                if isinstance(sel.rightIc, stringicon.StringIcon):
+                    rightText = stringicon.convertStringQuoteType(
+                        sel.rightIc.string[sel.rightPos:], sel.rightIc.quote, None)
+                elif isinstance(sel.rightIc, entryicon.EntryIcon):
+                    rightText = sel.rightIc.text
+                else:  # Comment icon
+                    rightText = sel.rightIc.string[sel.rightPos:]
+                if isinstance(sel.leftIc, stringicon.StringIcon):
+                    text = stringicon.convertStringQuoteType(text, None,
+                        sel.leftIc.quote)
+                    rightText = stringicon.convertStringQuoteType(rightText, None,
+                        sel.leftIc.quote)
+                sel.leftIc.replaceText(text + rightText, sel.leftPos,
+                    len(sel.leftIc.string))
+                iconsToRemove = expredit.createSelectionSet(sel.textSel.keys())
+                iconsToRemove.remove(sel.leftIc)
+                self.removeIcons(iconsToRemove)
+                self.cursor.setToText(sel.leftIc, sel.leftPos + len(text))
+                sel.clearSelection()
+                self.refreshDirty(addUndoBoundary=True)
+                return
+            if isinstance(sel.leftIc, entryicon.EntryIcon) and isinstance(sel.rightIc,
+                    entryicon.EntryIcon) and underlineStartIdx == 0 and \
+                    (pendingArgIdx is None or all(ic.parent() == self.sel.rightIc
+                        for ic in pendingArgIcons)):
+                # If the selection straddles two entry icons and the pending icons of
+                # the selection are all its children of the right entry icon, we can
+                # keep its entire structure intact by just moving the text from the
+                # left icon into it.
+                insText = sel.leftIc.text[:sel.leftPos:]
+                entryIc = sel.rightIc
+                entryIc.replaceText(insText, 0, sel.rightPos)
+                iconsToRemove = expredit.createSelectionSet(sel.textSel.keys())
+                iconsToRemove -= expredit.createHierSel(entryIc)
+                sel.clearSelection()
+                self.removeIcons(iconsToRemove)
+                if not leaveEntryOpen and entryIc.topLevelParent() in self.topIcons:
+                    entryIc.focusOut()
+                self.refreshDirty(addUndoBoundary=True)
+                return
+        # If the selection starts in an editable icon and does not involve non-underlined
+        # parts, delete all but the editable icon and stuff the inserted text and non-
+        # underlined parts into its text.  I originally also did this for selections
+        # *ending* in a comment or string, but for some reason even for strings (where
+        # the operation is symmetrical), the default behavior of creating an entry icon
+        # feels more appropriate than pulling the non-underlined parts into the left side
+        # of the string.
+        if allPartsUnderlined and sel.leftIc.canEditText and not sel.rightIc.canEditText:
+            rightText = sel.rightIc.getTextSelMetrics(sel.rightPartId)[0][sel.rightPos:]
+            sel.leftIc.replaceText(text + rightText, sel.leftPos, 'end')
+            iconsToRemove = expredit.createSelectionSet(sel.textSel.keys())
+            iconsToRemove.remove(sel.leftIc)
+            self.cursor.setToText(sel.leftIc, sel.leftPos + len(text))
+            sel.clearSelection()
+            self.removeIcons(iconsToRemove)
+            self.refreshDirty(addUndoBoundary=True)
+            return
+        # Build an entry icon with the new text substituted in to the underlined part of
+        # the selected text.  Some of the selected icons right of the underlined part may
+        # be saved from conversion to text, provided that they don't precede any icon
+        # parts that belong to icons that have other parts within the underline (icons
+        # that have parts within the underline have non-zero values in the textSel
+        # dictionary).  These were (awkwardly) calculated in the getSelectionText call,
+        # above, which handles the harder text scanning.  If save text gets its expected
+        # annotation for search, it would be clearer to do it here.
+        if pendingArgIdx is None:
+            entryText = selText[:underlineStartIdx] + text + selText[underlineEndIdx:]
+        else:
+            entryText = selText[:underlineStartIdx] + text + selText[underlineEndIdx:
+                pendingArgIdx]
+        # getSelectedText can include trailing inter-icon spaces for the text outside of
+        # the underlined region, which we don't want to transfer to the entry icon
+        entryText = entryText.rstrip(' ')
+        # Ensure that entry icon survives to be able to place cursor and/or give it
+        # out pending arguments
+        entryText = '&&&' + entryText
+        entryIc = entryicon.EntryIcon(entryText, self)
+        # Replace the icons involved in the selection with the entry icon.  Note that
+        # replaceSelectedIcons takes a selection set as an argument, so we also need to
+        # convert the plain icon list or set into proper selection set form by adding
+        # entries for empty series sites.  Also note that replaceSelectedIcons can fail
+        # and return None, but the failures are driven by the inserted content, and an
+        # entry icon can safely be inserted anywhere, so we don't bother checking that.
+        iconEquivSel = expredit.createSelectionSet(sel.textSel.keys())
+        cursorIc, cursorSite = self.replaceSelectedIcons(iconEquivSel, [[entryIc]])
+        if pendingArgIdx is not None:
+            # Note that we depend, here, on replaceSelectedIcons having not unlinked the
+            # icons in the tree(s) below pendingArgIcons.  Technically, we need to
+            # prepend the pending arguments, but I don't think there's a case where the
+            # entry icon ends up with pending args after the replace operation.
+            if entryIc.hasPendingArgs():
+                print("replaceSelectedText: Bad assumption about pending args")
+            topPendingArgs = findTopIcons(pendingArgIcons)
+            for arg in topPendingArgs:
+                # icons in the pendingArgs list may still be linked to deleted icons, and
+                # we need to un-link them for undo to work correctly.
+                argParent = arg.parent()
+                if argParent is not None:
+                    argParent.replaceChild(None, argParent.siteOf(arg))
+            entryIc.appendPendingArgs(findTopIcons(topPendingArgs))
+        entryIc.text = entryIc.text.replace('&&&', '')
+        sel.clearSelection()
+        if entryIc.parent() is None and entryIc not in self.topIcons:
+            print("replaceSelectedText: replaceSelectedIcons deleted our entryIc, why?")
+            if cursorSite is None:
+                self.cursor.setToText(cursorIc)
+            else:
+                self.cursor.setToIconSite(cursorIc, cursorSite)
+        else:
+            self.cursor.setToText(entryIc, underlineStartIdx + len(text))
+            if not leaveEntryOpen or (closeEmptyEntry and entryIc.text == '' and
+                    not entryIc.hasPendingArgs()):
+                entryIc.focusOut()
+        self.refreshDirty(addUndoBoundary=True)
+
     def findFirstContiguousSelection(self, selectedSet):
         """Find the first (top left) icon(s) in the window in selectedSet.  Returns:
         1) The top-level statement icon containing the start of the selection
@@ -5244,15 +5587,16 @@ class Window:
         for stmt in icon.traverseSeq(firstSelectedStmt, includeStartingIcon=False):
             # If we haven't yet determined if the selection spans the first statement
             # boundary, explicitly check that the selection crosses the first icon
-            if isinstance(stmt, icon.BlockEnd):
+            if isinstance(stmt, icon.BlockEnd) and stmt.primary not in selectedSet:
                 # It's normal to have unselected block-ends within the selected range, as
-                # they reflect the selection status of the block owner, but if the
-                # selection ends immediately after one, the block end is appropriate as
-                # the first unselec
+                # they are supposed to reflect the selection status of the block owner,
+                # but if the selection ends immediately after one, the block end is
+                # appropriate as the first unselected icon
                 unselBlockEnd = stmt
                 continue
             for i, (ic, partId) in enumerate(expredit.lexicalTraverse(stmt)):
-                if ic not in selectedSet:
+                if not (ic in selectedSet or isinstance(stmt, icon.BlockEnd) and
+                        stmt.primary in selectedSet):
                     if i == 0:
                         # The selection ends at the start of this statement
                         icAfterSel = stmt if unselBlockEnd is None else unselBlockEnd
@@ -5487,7 +5831,7 @@ class Window:
                     if any((c not in selectedSet for c in ic.traverse())) or \
                             stmtComment is not None and stmtComment not in selectedSet:
                         prunedIc = _makePrunedCopy(ic, selectedSet, not isSingleStmt)
-                        if hasattr(ic, 'blockEnd') and ic not in self.selectedSet:
+                        if hasattr(ic, 'blockEnd') and ic not in self.sel.selSet:
                             pruneBlockEnds.add(ic.blockEnd)
                     else:
                         prunedIc = None
@@ -5547,10 +5891,10 @@ class Window:
     def immediateCopy(self, sel):
         """Make a copy of the icons in selection set, sel, and paste them either at the
         cursor or to replace the (first fragment of) the primary selection."""
-        self._pruneSelectedIcons()
+        self.sel.pruneSelectedIcons()
         pastedSeqs = self.duplicateSelectedIcons(sel, relativeOffsets=True)
-        if len(self.selectedSet) > 0:
-            cursorIcon, cursorSite = self.replaceSelectedIcons(self.selectedSet,
+        if len(self.sel.selSet) > 0:
+            cursorIcon, cursorSite = self.replaceSelectedIcons(self.sel.selSet,
                 pastedSeqs)
             if cursorIcon is None and cursorSite is None:
                 self.displayTypingError("Can't copy code containing top-level "
@@ -5726,6 +6070,9 @@ class Window:
         is undone."""
         self.undo.registerRemoveFromTopLevel(ic, lastOfSeq)
         page = self.topIcons.get(ic)
+        if page is None:
+            print("Attempting to remove top icon %s not in topIcons" % ic.dumpName())
+            return
         page.layoutDirty = True
         page.iconCount -= 1
         if page.iconCount == 0:
@@ -6273,7 +6620,7 @@ class Window:
     def contentToImageRect(self, contentRect):
         return comn.offsetRect(contentRect, -self.scrollOrigin[0], -self.scrollOrigin[1])
 
-    def resetBlinkTimer(self, holdTime=CURSOR_BLINK_RATE):
+    def resetBlinkTimer(self, holdTime=comn.CURSOR_BLINK_RATE):
         """Stop pending cursor blink event and reschedule it for holdTime milliseconds in
         the future."""
         appData.resetBlinkTimer(holdTime=holdTime)
@@ -6542,7 +6889,7 @@ class App:
 
     def mainLoop(self):
         # self.root.after(2000, self.animate)
-        self.blinkCancelId = self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
+        self.blinkCancelId = self.root.after(comn.CURSOR_BLINK_RATE, self._blinkCursor)
         self.root.mainloop()
 
     def animate(self):
@@ -6577,7 +6924,7 @@ class App:
         self.settingsDialog.top.destroy()
         self.settingsDialog = None
 
-    def resetBlinkTimer(self, holdTime=CURSOR_BLINK_RATE):
+    def resetBlinkTimer(self, holdTime=comn.CURSOR_BLINK_RATE):
         """Cancel the next cursor blink and reschedule it for holdTime milliseconds in
         the future."""
         if self.blinkCancelId is not None:
@@ -6590,7 +6937,7 @@ class App:
             if focusWidget in (window.top, window.imgFrame):
                 window.cursor.blink()
                 break
-        self.blinkCancelId = self.root.after(CURSOR_BLINK_RATE, self._blinkCursor)
+        self.blinkCancelId = self.root.after(comn.CURSOR_BLINK_RATE, self._blinkCursor)
 
     def findWindowWithFile(self, filename):
         for window in self.windows:

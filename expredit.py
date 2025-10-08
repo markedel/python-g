@@ -3,6 +3,7 @@ import icon
 import iconsites
 import listicons
 import entryicon
+import nameicons
 import parenicon
 import opicons
 import assignicons
@@ -187,17 +188,17 @@ def insertAtSite(atIcon, atSite, topInsertedIcon, cursorLeft=False):
     addToUnclosedSeries = None
     if relocatedTree is None:
         cursorIcon, cursorSite = insRightIc, insRightSite
+    elif isinstance(insRightIc, entryicon.EntryIcon):
+        # The inserted tree has an entry icon on the right.  We can attach anything,
+        # but it must be as a pending argument.
+        insRightIc.appendPendingArgs((relocatedTree,))
+        cursorIcon, cursorSite = insRightIc, insRightSite
     elif icon.validateCompatibleChild(relocatedTree, insRightIc, insRightSite):
-        if isinstance(insRightIc, entryicon.EntryIcon):
-            # The inserted tree has an entry icon on the right.  We can attach anything,
-            # but it must be as a pending argument.
-            insRightIc.appendPendingArgs((relocatedTree,))
-        else:
-            insRightIc.replaceChild(relocatedTree, insRightSite)
-            if isinstance(relocatedTree, entryicon.EntryIcon) and \
-                    len(relocatedTree.text) == 0:
-                # If we just inserted before a placeholder icon, try to strip it out
-                relocatedTree.remove()
+        insRightIc.replaceChild(relocatedTree, insRightSite)
+        if isinstance(relocatedTree, entryicon.EntryIcon) and \
+                len(relocatedTree.text) == 0:
+            # If we just inserted before a placeholder icon, try to strip it out
+            relocatedTree.remove()
         if insRightIc.typeOf(insRightSite) == 'input':
             checkReorder(insRightIc, needReorder)
         cursorIcon, cursorSite = insRightIc, insRightSite
@@ -246,6 +247,8 @@ def appendAtSite(atIc, atSite, topInsertedIcon, needReorder):
             topInsertedIcon = arg1
     # If the inserted code is directly compatible with the requested site: just attach
     if icon.validateCompatibleChild(topInsertedIcon, atIc, atSite):
+        if atIc.typeOf(atSite) == 'cprhIn':
+            atIc, atSite = listicons.proxyForCprhSite(atIc, atSite)
         atIc.replaceChild(topInsertedIcon, atSite)
         if atIc.typeOf(atSite) == 'input':
             checkReorder(topInsertedIcon, needReorder)
@@ -852,6 +855,14 @@ class LexTrav:
                 if self.started and not self.stopped:
                     yield node, 4
                 yield from self.traverse(node, 'attrIcon')
+        elif isinstance(node, subscripticon.SubscriptIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            for site in node.sites.argIcons:
+                yield from self.traverse(node, site.name)
+            if self.started and not self.stopped:
+                yield node, 2
+            yield from self.traverse(node, 'attrIcon')
         elif isinstance(node, subscripticon.SliceIcon):
             yield from self.traverse(node, 'indexIcon')
             if self.started and not self.stopped:
@@ -929,6 +940,30 @@ class LexTrav:
                     yield node, 3
             if node.hasSite('returnType') and node.childAt('returnType') is not None:
                 yield from self.traverse(node, 'returnType')
+        elif isinstance(node, blockicons.LambdaIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            for site in node.sites.argIcons:
+                yield from self.traverse(node, site.name)
+            if self.started and not self.stopped:
+                yield node, 2
+            yield from self.traverse(node, 'exprIcon')
+        elif isinstance(node, nameicons.ImportFromIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            yield from self.traverse(node, 'moduleIcon')
+            if self.started and not self.stopped:
+                yield node, 2
+            for site in node.sites.importsIcons:
+                yield from self.traverse(node, site.name)
+        elif isinstance(node, nameicons.RaiseIcon):
+            if self.started and not self.stopped:
+                yield node, 1
+            yield from self.traverse(node, 'exceptIcon')
+            if node.hasFrom:
+                if self.started and not self.stopped:
+                    yield node, 2
+                yield from self.traverse(node, 'causeIcon')
         else:
             if self.started and not self.stopped:
                 yield node, 1
@@ -943,14 +978,14 @@ class LexTrav:
             if stmtComment and self.started and not self.stopped:
                 yield stmtComment, 1
 
-def iconPartBeforePointer(stmt, x, y):
+def iconPartBeforePointer(stmt, x, y, includeEmptySites=True):
     """Return the icon, partId, and a flag indicating whether x,y touches it, for the
     icon within the hierarchy under stmt, lexically 'before' point x,y.  It is assumed
     that the caller has determined that y is within the y range of stmt.  The function
-    may also return an empty-site tuple (ic, site) instead of the icon, for a selectable
-    empty site, or None if the pointer is left-of the first icon in the statement or in
-    the unusual case where no icon in the statement is vertically adjacent to the
-    pointer."""
+    may also return an empty-site tuple (ic, site) instead of the icon, if a selectable
+    empty site is nearest and includeEmptySites is True, or None if the pointer is
+    left-of the first icon in the statement or in the unusual case where no icon in the
+    statement is vertically adjacent to the pointer."""
     # Note that because the current representation has icons packed top to bottom, there
     # should be no (non-error) cases where there is no vertically adjacent icon to a
     # y value within the statement rectangle (.hierRect()) y range, except at either the
@@ -965,7 +1000,8 @@ def iconPartBeforePointer(stmt, x, y):
     prevIcOrSite = None
     prevIconPart = None
     icOrSite = partId = None
-    for icOrSite, partId in lexicalTraverse(stmt, includeStmtComment=True):
+    for icOrSite, partId in lexicalTraverse(stmt, includeStmtComment=True,
+            yieldEmptySites=includeEmptySites):
         if isinstance(icOrSite, icon.Icon):
             ic = icOrSite
             distToLeftIc = ic.partIsLeftOfPoint(partId, x, y)
@@ -1026,68 +1062,22 @@ def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y, fwdOnly=Fals
     ignoring the returned cursor recommendation, so no effort has been expended on
     calculating an appropriate cursor site for that case."""
     anchorStmt = topLevelParentOfSelEntry(anchorIc)
-    _, anchorMinY, _, anchorMaxY = anchorStmt.hierRect(inclStmtComment=True)
-    # Figure out which statement in the same sequence as anchorStmt y falls within
-    if  anchorMinY <= y < anchorMaxY:
-        # Pointer is within the y range of the anchor stmt
-        pointerStmt = anchorStmt
-        pointerDirection = 0
-    elif y >= anchorMaxY:
-        # Pointer is below anchor stmt
-        pointerDirection = 1
-        lastStmt = anchorStmt
-        for stmt in icon.traverseSeq(anchorStmt, includeStartingIcon=False):
-            nextStmt = stmt.nextInSeq()
-            if nextStmt is not None and nextStmt.rect[1] < y:
-                # Safe to skip testing this statement if the next one starts above y
-                continue
-            _, minY, _, maxY = stmt.hierRect()
-            if y < minY:
-                # Pointer is between the previous statement and this one, which shouldn't
-                # be possible, but handle it, just in case this somehow becomes possible.
-                # ... setting a flag would save work, but since this shouldn't happen,
-                # the simplest response is to just pass stmt on to iconPartBeforePointer,
-                # which will match no icons and return the same as for a pointer left of
-                # the starting icon.
-                pointerStmt = stmt
-                break
-            if y < maxY:
-                pointerStmt = stmt
-                break
-            lastStmt = stmt
+    pointerStmt, pointerDirection, withinSeq = stmtAdjacentToPointer(anchorStmt, x, y,
+        fwdOnly)
+    if not withinSeq:
+        if pointerDirection == -1:
+            # Pointer is before the start of the sequence
+            if anchorSite is None:
+                anchorIc, anchorSite = siteRightOfPart(anchorIc, anchorPartId)
+            newSel = iconsInLexicalRangeBySite(pointerStmt, 'seqIn', anchorIc, anchorSite)
+            return newSel, pointerStmt, 'seqIn'
         else:
             # Pointer is beyond the end of the sequence
             if anchorSite is None:
                 anchorIc, anchorSite = siteLeftOfPart(anchorIc, anchorPartId)
-            newSel = iconsInLexicalRangeBySite(anchorIc, anchorSite, lastStmt, 'seqOut')
-            return newSel, lastStmt, 'seqOut'
-    else:
-        # Pointer is above anchor stmt
-        if fwdOnly:
-            return {anchorIc}, None, None
-        pointerDirection = -1
-        lastStmt = anchorStmt
-        for stmt in icon.traverseSeq(anchorStmt, includeStartingIcon=False, reverse=True):
-            prevStmt = stmt.prevInSeq()
-            if prevStmt is not None and prevStmt.rect[3] >= y:
-                # Safe to skip testing this statement if the previous one ends below y
-                continue
-            _, minY, _, maxY = stmt.hierRect()
-            if y >= maxY:
-                # Pointer is between the next statement and this one, which shouldn't
-                # be possible, but handle it, just in case this somehow becomes possible
-                pointerStmt = stmt.nextInSeq()
-                break
-            if y >= minY:
-                pointerStmt = stmt
-                break
-            lastStmt = stmt
-        else:
-            # Pointer is before the start of the sequence
-            if anchorSite is None:
-                anchorIc, anchorSite = siteRightOfPart(anchorIc, anchorPartId)
-            newSel = iconsInLexicalRangeBySite(lastStmt, 'seqIn', anchorIc, anchorSite)
-            return newSel, lastStmt, 'seqIn'
+            newSel = iconsInLexicalRangeBySite(anchorIc, anchorSite, pointerStmt,
+                'seqOut')
+            return newSel, pointerStmt, 'seqOut'
     # We know the statement that the pointer lines up with in y and can now localize
     # it to a particular icon part within that statement.
     icOrSite, pointerPartId, onIcon = iconPartBeforePointer(pointerStmt, x, y)
@@ -1170,6 +1160,184 @@ def extendSelectToPointer(anchorIc, anchorSite, anchorPartId, x, y, fwdOnly=Fals
         newSel = iconsInLexicalRangeBySite(pointerIc, pointerSite, anchorIc, anchorSite,
             preOrdered=True)
     return newSel, pointerIc, pointerSite
+
+def stmtAdjacentToPointer(anchorStmt, x, y, fwdOnly=False):
+    """Figure out which statement in the same sequence as anchorStmt y falls within"""
+    _, anchorMinY, _, anchorMaxY = anchorStmt.hierRect(inclStmtComment=True)
+    if anchorMinY <= y < anchorMaxY:
+        # Pointer is within the y range of the anchor stmt
+        return anchorStmt, 0, True
+    elif y >= anchorMaxY:
+        # Pointer is below anchor stmt
+        lastStmt = anchorStmt
+        for stmt in icon.traverseSeq(anchorStmt, includeStartingIcon=False):
+            nextStmt = stmt.nextInSeq()
+            if nextStmt is not None and nextStmt.rect[1] < y:
+                # Safe to skip testing this statement if the next one starts above y
+                continue
+            _, minY, _, maxY = stmt.hierRect()
+            if y < minY:
+                # Pointer is between the previous statement and this one, which shouldn't
+                # be possible, but handle it, just in case this somehow becomes possible.
+                # ... setting a flag would save work, but since this shouldn't happen,
+                # the simplest response is to just pass stmt on to iconPartBeforePointer,
+                # which will match no icons and return the same as for a pointer left of
+                # the starting icon.
+                pointerStmt = stmt
+                break
+            if y < maxY:
+                pointerStmt = stmt
+                break
+            lastStmt = stmt
+        else:
+            # Pointer is beyond the end of the sequence
+            return lastStmt, 1, False
+        return pointerStmt, 1, True
+    else:
+        # Pointer is above anchor stmt
+        if fwdOnly:
+            return None, -1, False
+        lastStmt = anchorStmt
+        for stmt in icon.traverseSeq(anchorStmt, includeStartingIcon=False, reverse=True):
+            prevStmt = stmt.prevInSeq()
+            if prevStmt is not None and prevStmt.rect[3] >= y:
+                # Safe to skip testing this statement if the previous one ends below y
+                continue
+            _, minY, _, maxY = stmt.hierRect()
+            if y >= maxY:
+                # Pointer is between the next statement and this one, which shouldn't
+                # be possible, but handle it, just in case this somehow becomes possible
+                pointerStmt = stmt.nextInSeq()
+                break
+            if y >= minY:
+                pointerStmt = stmt
+                break
+            lastStmt = stmt
+        else:
+            # Pointer is before the start of the sequence
+            return lastStmt, -1, False
+        return pointerStmt, -1, True
+
+def extendTextSelectToPointerFromAnchor(anchorIc, anchorPartId, anchorPos, x, y,
+        confineToAnchor=False):
+    """Extend a text selection from the given text position (anchorIc, anchorPartId,
+    anchorPos) toward the window position x, y.  Unlike extendSelectToPointer, this
+    actually makes and redraws the requested selection.  If confineToAnchor is specified
+    as True, limit the selection to anchorIc (which must be a text-editable icon)."""
+    # If there is currently no selection, establish an empty text selection at the anchor
+    # position
+    if not anchorIc.window.sel.isText():
+        anchorIc.window.sel.selectSingleIconText(anchorIc, anchorPartId, anchorPos,
+            anchorPos, anchorDir='Left')
+    extendTextSelectToPointer(anchorIc.window, x, y, confineToAnchor=confineToAnchor)
+
+def extendTextSelectToPointer(window, x, y, confineToAnchor=False):
+    """Extend a text selection from the current selection or cursor in window, toward the
+    window content position x, y.  Unlike extendSelectToPointer, this actually makes and
+    redraws the requested selection.  If confineToAnchor is specified as True, limit the
+    selection to the icon containing the cursor or text selection (which must be
+    contained within a single text-editable icon).  Caller must clear existing selection
+    before calling."""
+    # Even though selectToTextPos (which will be doing most of the work) will determine
+    # the anchor on its own, we still need an anchor icon to figure out what text
+    # position to give it (must be in same sequence)... why else?
+    if window.sel.isText():
+        if window.sel.anchorDirection == 'Right':
+            anchorIc = window.sel.rightIc
+        else:
+            anchorIc = window.sel.leftIc
+    elif window.cursor.type in ('text', 'icon'):
+        anchorIc = window.cursor.icon
+    else:
+        return
+    # Find the closest (vertically) statement of the sequence containing the anchor icon,
+    # to the pointer position.  If the pointer is not in the anchor-containing statement,
+    # we can handle the confined-to-anchor case since we now know the direction to the
+    # pointer (the same-statement case is handled later on)
+    anchorStmt = anchorIc.topLevelParent(inclStmtComment=True)
+    pointerStmt, pointerDirection, withinSeq = stmtAdjacentToPointer(anchorStmt, x, y)
+    if confineToAnchor:
+        if not anchorIc.canEditText:
+            print('extendTextSelectToPointer cannot confine selection for non-text icon')
+            return
+        if window.sel.isText() and not window.sel.leftIc is window.sel.rightIc:
+            print('extendTextSelectToPointer cannot confine multi icon text selection')
+            return
+        if pointerStmt is not anchorStmt:
+            toPos = 0 if pointerDirection == -1 else anchorIc.textCursorRange(1)[1]
+            anchorIc.window.cursor.selectToTextPos(anchorIc, 1, toPos)
+            return
+    # If the pointer is before the start or beyond the end of the sequence containing the
+    # anchor, select the first or last text position of the sequence
+    if not withinSeq:
+        if pointerDirection == -1:  # Pointer is before sequence
+            toIc, toPart = next(lexicalTraverse(pointerStmt))
+            toPos = 0
+        else:  # Pointer is beyond sequence
+            if isinstance(pointerStmt, icon.BlockEnd):
+                # Block ends do not have a text site, so back up to the last statement
+                # that has one, giving up if we hit anchorIc (because you can't select
+                # between two block-ends with no text sites in between)
+                prevStmt = pointerStmt.prevInSeq()
+                while isinstance(prevStmt, icon.BlockEnd):
+                    if prevStmt is anchorStmt:
+                        return
+                    prevStmt = prevStmt.prevInSeq()
+                toIc, toPart, toPos = cursors.prevTextPos(prevStmt, siteId='seqOut')
+            else:
+                for toIc, toPart in lexicalTraverse(pointerStmt, includeStmtComment=True):
+                    pass
+                _, toPos = toIc.textCursorRange(toPart)
+        window.cursor.selectToTextPos(toIc, toPart, toPos)
+        return
+    # We know the statement that the pointer lines up with in y and can now localize
+    # it to a particular icon part within that statement.
+    pointerIc, pointerPartId, onIcon = iconPartBeforePointer(pointerStmt, x, y,
+        includeEmptySites=False)
+    # Even if we don't know the direction, the end of the selection will be determined
+    # by the nearest text site of the icon part lexically to the left of the pointer
+    if pointerIc is None:
+        # x,y is Lexically left of pointerStmt.  Use the first site on the statement
+        # unless we're confining the selection to the anchor icon or the anchor is on
+        # a prior statement (where we don't select the right edge of the statement).
+        toIc, toPart = next(lexicalTraverse(pointerStmt))
+        if confineToAnchor and (toIc is not anchorIc):
+            window.cursor.selectToTextPos(anchorIc, 1, 0)
+        else:
+            if pointerDirection == 1:
+                window.cursor.selectToTextPos(*cursors.prevTextPos(toIc, 0, 1))
+            else:
+                window.cursor.selectToTextPos(toIc, 1, 0)
+        return
+    # User is pointing within or right-of icon pointerIc.  Find the appropriate text
+    # position (nearest the requested point), unless we're confining the selection to the
+    # anchor icon, in which case, figure out the lexical direction and select to the
+    # appropriate end of that.
+    if not confineToAnchor or pointerIc is anchorIc:
+        pos, _ = pointerIc.nearestTextCursorPos(pointerPartId, x, y, followWrap=True)
+        if pos is None:
+            if isinstance(pointerStmt, (icon.BlockEnd, commenticon.VerticalBlankIcon)):
+                if pointerDirection == 1:
+                    ic, partId, pos = cursors.nextTextPos(pointerStmt, siteId='seqOut')
+                else:
+                    ic, partId, pos = cursors.prevTextPos(pointerStmt, siteId='seqIn')
+                anchorIc.window.cursor.selectToTextPos(ic, partId, pos)
+            else:
+                print("extendTextSelectToPointer encountered icon with no text positions"
+                        " (not block-end or vb)", pointerIc.dumpName())
+        else:
+            anchorIc.window.cursor.selectToTextPos(pointerIc, pointerPartId, pos)
+        return
+    for ic, part in lexicalTraverse(pointerStmt, includeStmtComment=True):
+        if ic is anchorIc:  # Anchor found before pointer
+            _, toPos = anchorIc.textCursorRange(1)
+            break
+        elif ic is pointerIc and part is pointerPartId:  # PointerIc found before anchor
+            toPos = 0
+            break
+    else:  # Shouldn't happen (found neither pointerIc nor anchorIc)
+        toPos = 0
+    anchorIc.window.cursor.selectToTextPos(anchorIc, 1, toPos)
 
 def extendDragTargetStructural(fromIcon, step):
     """Uses step value (integer 0-n) to figure out what icons to highlight as a drag
@@ -1525,7 +1693,7 @@ def searchFwdForSelected(fromIc, fromSite):
     icons) traversed.  This is an *infinite* iterator, with the intent that it be zipped
     with searchRevForSelection and that the calling function will stop the iteration only
     when the nearest icon is found or *both* iterators are exhausted."""
-    selectedSet = fromIc.window.selectedSet
+    selectedSet = fromIc.window.sel.selSet
     topIconOfFromIc = fromIc.topLevelParent()
     dist = 0
     for seqIc in icon.traverseSeq(topIconOfFromIc, inclStmtComments=True):
@@ -1546,7 +1714,7 @@ def searchRevForSelected(fromIc, fromSite):
     icons) traversed.  This is an *infinite* iterator, with the intent that it be zipped
     with searchFwdForSelection and that the calling function will stop the iteration only
     when the nearest icon is found or *both* iterators are exhausted."""
-    selectedSet = fromIc.window.selectedSet
+    selectedSet = fromIc.window.sel.selSet
     topIconOfFromIc = fromIc.topLevelParent()
     dist = 0
     for seqIc in icon.traverseSeq(topIconOfFromIc, reverse=True):
@@ -1577,7 +1745,7 @@ def searchFwdForUnselected(fromIc, fromSite=None):
     # at the beginning of the statement, and 'started' is only set to true once fromIc
     # is seen in the traversal.
     topIconOfFromIc = commenticon.topParentInclComment(fromIc)
-    selectedSet = fromIc.window.selectedSet
+    selectedSet = fromIc.window.sel.selSet
     dist = 0
     lastSiteMarker = (fromSite, fromIc)
     for seqIc in icon.traverseSeq(topIconOfFromIc):
@@ -1607,7 +1775,7 @@ def searchRevForUnselected(fromIc, fromSite=None):
     """Find the start of the selection ending at either fromIc, or (if fromSite is
     specified) from fromSite of fromIc.  Returns icon, site, and number of intervening
     selected icons and (selected empty series sites if any)."""
-    selectedSet = fromIc.window.selectedSet
+    selectedSet = fromIc.window.sel.selSet
     topIconOfFromIc = commenticon.topParentInclComment(fromIc)
     cnt = 0
     inUnSel = False
@@ -1684,6 +1852,9 @@ def createBlockSel(blockIcon, inclStmtComment=True):
     return blockSel
 
 def createHierSel(topIcon, inclStmtComment=True):
+    """Create a selection set for all of the icons under topIcon.  A selection set is an
+    icon set that requires additional entries for empty series sites even if their parent
+    is selected (their *absence* implies that they are not selected)."""
     hierSel = set()
     addHierToSel(hierSel, topIcon, inclStmtComment=inclStmtComment)
     return hierSel
@@ -1695,11 +1866,24 @@ def addHierToSel(selectionSet, topIcon, inclStmtComment=True):
     they are not selected)."""
     for ic in topIcon.traverse(inclStmtComment=inclStmtComment):
         selectionSet.add(ic)
-        for siteOrSeries in ic.sites.allSites(expandSeries=False):
-            if isinstance(siteOrSeries, iconsites.IconSiteSeries):
-                for site in siteOrSeries:
-                    if site.att is None:
-                        selectionSet.add((ic, site.name))
+        addEmptySitesToSel(selectionSet, ic)
+
+def addEmptySitesToSel(selectionSet, ic):
+    for siteOrSeries in ic.sites.allSites(expandSeries=False):
+        if isinstance(siteOrSeries, iconsites.IconSiteSeries):
+            for site in siteOrSeries:
+                if site.att is None:
+                    selectionSet.add((ic, site.name))
+
+def createSelectionSet(icons):
+    """Create a selection set for all of the icons contained in 'icons'.  A selection set
+    is an icon set that requires additional entries for empty series sites even if their
+    parent is selected (their *absence* implies that they are not selected)."""
+    selectionSet = set()
+    for ic in icons:
+        selectionSet.add(ic)
+        addEmptySitesToSel(selectionSet, ic)
+    return selectionSet
 
 def removeHierFromSel(selectionSet, topIcon, inclStmtComment=True):
     """Remove all of the icons under topIcon from a set (selectionSet) representing a

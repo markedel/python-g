@@ -65,6 +65,7 @@ equalImage = comn.asciiToImage( (
  "o                  o",
  "o                  o",
  "oooooooooooooooooooo"))
+ASSIGN_TEXT_MARGIN = 4  # pixels between border and "text"
 
 class AssignIcon(icon.Icon):
     def __init__(self, numTargets=1, window=None, location=None):
@@ -365,6 +366,31 @@ class AssignIcon(icon.Icon):
             if site.att is not None:
                 site.att.highlightErrors(None)
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter is not None:
+                if siteAfter[:7] == 'targets':
+                    targetIdxString = siteAfter[7:]
+                    if targetIdxString.isdigit() and targetIdxString != '0':
+                        partId = int(targetIdxString) * 3
+                elif siteAfter[:6] == 'values':
+                    partId = len(self.tgtLists) * 3
+        if partId is None or partId % 3 > 0 or partId == 0 or \
+                partId // 3 > len(self.tgtLists):
+            return None, None, None, None, None, None, None, None
+        if siteAfter is None:
+            siteAfter = self.siteRightOfPart(partId)
+        siteObj = self.sites.lookup(siteAfter)
+        rightSide = siteObj.xOffset + icon.OUTPUT_SITE_DEPTH
+        rightText = rightSide - ASSIGN_TEXT_MARGIN
+        top = self.sites.seqInsert.yOffset - equalImage.height // 2
+        topText = top + 1 + icon.TEXT_MARGIN
+        bottomText = top + equalImage.height - icon.TEXT_MARGIN
+        leftSide = rightSide - equalImage.width
+        leftText = leftSide + ASSIGN_TEXT_MARGIN + 2
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return '=', None, leftText, topText, rightText, bottomText, partId, True
+
     def textRepr(self):
         text = ""
         for tgtList in self.tgtLists:
@@ -431,6 +457,8 @@ class AssignIcon(icon.Icon):
         # Give consistent partIds to '=' (3,6,9,12...) regardless of whether spines and
         # connectors (1,2, 4,5, 7,8) are drawn.  Commas, per partId convention, always
         # return 0, as they have a visual presence, but are not used for picking.
+        # Simple spines are given non-zero part-ids, allowing users to pick up the
+        # icon by a spine.
         if self.drawList[idx][1] is icon.commaImage:
             return 0
         partId = 0
@@ -443,6 +471,12 @@ class AssignIcon(icon.Icon):
             else:
                 partId += 1  # Spine
         return partId
+
+    def activePartIds(self):
+        # Note that activePartIds is currently used only to determine inclusion in
+        # lexical traversal, so even though we may have displayed spines with non-zero
+        # partIds, we return only those of the '='s
+        return [i * 3 for i in range(1, len(self.tgtLists) + 1)]
 
     def siteRightOfPart(self, partId):
         clause = (partId - 1) // 3
@@ -469,6 +503,7 @@ class AssignIcon(icon.Icon):
         return docRefs
 
 class AugmentedAssignIcon(icon.Icon):
+    partIdList = (2,)
     pythonDocRef = [("Augmented Assign Stmts",
         "reference/simple_stmts.html#augmented-assignment-statements")]
 
@@ -727,6 +762,20 @@ class AugmentedAssignIcon(icon.Icon):
         if partId == 1:
             return 'targetIcon'
         return 'values_0'
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId != 2 and siteAfter != 'values_0':
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        bodyOffset = icon.dragSeqImage.width - 1 + self.targetWidth - 1
+        bodyTopY = self.sites.seqIn.yOffset
+        textLeft = bodyOffset + 1 + icon.TEXT_MARGIN
+        textRight = bodyOffset + bodyWidth - icon.TEXT_MARGIN
+        textTop = bodyTopY + 1 + icon.TEXT_MARGIN
+        textBottom = bodyTopY + bodyHeight - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.op + '=', icon.globalFont, textLeft, textTop, textRight, textBottom,\
+            1, True
 
 def insertAssignIcon(atIcon, atSite, insertedAssign):
     if isinstance(atIcon, AssignIcon):

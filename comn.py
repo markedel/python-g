@@ -5,6 +5,16 @@ from PIL import Image
 # Number of pixels to indent a code block
 BLOCK_INDENT = 24
 
+# Tkinter event modifiers
+SHIFT_MASK = 0x001
+CTRL_MASK = 0x004
+ALT_MASK = 0x20000
+LEFT_MOUSE_MASK = 0x100
+RIGHT_MOUSE_MASK = 0x400
+
+# Milliseconds of on/off time for cursor drawing.
+CURSOR_BLINK_RATE = 500
+
 # Outline color is currently set to white with a minimal non-zero alpha to allow
 # a rendering trick to make outlines appear on demand.  This is sub-optimal because it
 # does not allow any sort of variable coloring or shading in outlines.
@@ -52,13 +62,7 @@ def rectsTouch(rect1, rect2):
     """Returns true if rectangles rect1 and rect2 overlap"""
     l1, t1, r1, b1 = rect1
     l2, t2, r2, b2 = rect2
-    # One is to the right side of the other
-    if l1 > r2 or l2 > r1:
-        return False
-    # One is above the other
-    if t1 > b2 or t2 > b1:
-        return False
-    return True
+    return not (l1 > r2 or l2 > r1 or t1 > b2 or t2 > b1)
 
 def offsetRect(rect, xOff, yOff):
     l, t, r, b = rect

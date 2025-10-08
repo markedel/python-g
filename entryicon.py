@@ -1,5 +1,5 @@
 # Copyright Mark Edel  All rights reserved
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import re
 import ast
 import numbers
@@ -21,6 +21,10 @@ import cursors
 import reorderexpr
 import filefmt
 
+ENTRY_FONT = icon.globalFont
+# There are some advantages to have a more cursor-friendly fixed font in the entry icon,
+# but the effect (particularly of the larger font, below) is also a little jarring.
+# ENTRY_FONT = ImageFont.truetype('c:/Windows/fonts/consola.ttf', 14)
 PLAIN_BG_COLOR = (255, 255, 255, 255)
 FOCUS_BG_COLOR = (255, 242, 242, 255)
 OUTLINE_COLOR = (230, 230, 230, 255)
@@ -32,6 +36,9 @@ PEN_MARGIN = 6
 
 # Maximum number of characters for a single paste operation into an entry icon
 MAX_ENTRY_PASTE = 80
+
+# Consider capital letters as word boundaries within identifiers
+CAMEL_CASE_WORD_BOUNDARIES = True
 
 compareOperators = {'<', '>', '<=', '>=', '==', '!='}
 binaryOperators = {'+', '-', '*', '**', '/', '//', '%', '@', '<<', '>>', '&', '|', '^'}
@@ -53,7 +60,7 @@ attrPattern = re.compile('^\\.[a-zA-Z_][a-zA-Z_\\d]*$')
 # Characters that can legally follow a binary operator
 opDelimPattern = re.compile('[a-zA-Z#\\d_.\\(\\[\\{\\s+-~"\']')
 stringPattern = re.compile("^(f|fr|rf|b|br|rb|u|r)?['\"]$", re.IGNORECASE)
-textCursorHeight = sum(icon.globalFont.getmetrics()) + 2
+textCursorHeight = sum(ENTRY_FONT.getmetrics()) + 2
 textCursorImage = Image.new('RGBA', (1, textCursorHeight), color=(0, 0, 0, 255))
 
 # The EntryCreationTracker is a context manager that allows the caller to find all of the
@@ -92,13 +99,15 @@ attrPenImage = comn.asciiToImage((
 dimAttrPenImage = attrPenImage.point(lambda p: p + 200)
 
 class EntryIcon(icon.Icon):
+    canEditText = True
+
     def __init__(self, initialString="", window=None, willOwnBlock=False,
      location=None):
         icon.Icon.__init__(self, window)
         self.text = initialString
-        ascent, descent = icon.globalFont.getmetrics()
+        ascent, descent = ENTRY_FONT.getmetrics()
         self.height = ascent + descent + 2 * icon.TEXT_MARGIN + 1
-        self.initTxtWidth = icon.globalFont.getsize("i")[0]
+        self.initTxtWidth = ENTRY_FONT.getsize("i")[0]
         self.txtWidthIncr = self.initTxtWidth
         x, y = location if location is not None else (0, 0)
         outSiteY = self.height // 2
@@ -128,6 +137,7 @@ class EntryIcon(icon.Icon):
         if hasattr(self, 'blockEnd'):
             return
         self.blockEnd = icon.BlockEnd(self, self.window)
+        self.sites.seqOut.xOffset = self.sites.seqIn.xOffset + comn.BLOCK_INDENT
         self.sites.seqOut.attach(self, self.blockEnd)
         self.window.undo.registerCallback(self.addCodeBlock)
 
@@ -139,8 +149,10 @@ class EntryIcon(icon.Icon):
         nextIc = self.nextInSeq()
         if nextIc is not None and nextIc is not self.blockEnd:
             print('Removing non-empty code block from entry icon!')
+        self.sites.seqOut.xOffset = self.sites.seqIn.xOffset
         if nextIc is not None:
             self.replaceChild(None, 'seqOut')
+        del self.blockEnd
         self.window.undo.registerCallback(self.addCodeBlock)
 
     def restoreForUndo(self, text):
@@ -151,7 +163,7 @@ class EntryIcon(icon.Icon):
         self.markLayoutDirty()
 
     def _width(self, boxOnly=False):
-        textWidth = icon.globalFont.getsize(self.text)[0]
+        textWidth = ENTRY_FONT.getsize(self.text)[0]
         if textWidth > self.initTxtWidth:
             nIncrements = (textWidth - self.initTxtWidth) // self.initTxtWidth + 1
         else:
@@ -170,8 +182,8 @@ class EntryIcon(icon.Icon):
             draw = ImageDraw.Draw(img)
             draw.rectangle((self.penOffset(), 0, self.penOffset() - 1 + boxWidth - 1,
                 self.height-1), fill=bgColor, outline=OUTLINE_COLOR)
-            draw.text((self.textOffset, icon.TEXT_MARGIN), self.text,
-                font=icon.globalFont, fill=(0, 0, 0, 255))
+            draw.text((self.textOffset, icon.TEXT_MARGIN+1), self.text,
+                font=ENTRY_FONT, fill=(0, 0, 0, 255))
             if self.attachedToAttribute():
                 nibTop = self.sites.attrOut.yOffset - attrPenImage.height + 2
                 img.paste(attrPenImage if self.hasFocus else dimAttrPenImage,
@@ -191,10 +203,52 @@ class EntryIcon(icon.Icon):
             self.focusChanged = False
         self._drawFromDrawList(toDragImage, location, clip, style)
 
+    def highlightTextSelection(self, img, partId=1):
+        """tint the draw-list-image (produced by draw() method) to highlight the current
+        text selection in the icon."""
+        sel = self.window.sel
+        if not sel.isText() or self not in sel.textSel:
+            return
+        left = self.textOffset
+        right = left + ENTRY_FONT.getsize(self.text)[0]
+        bottom = self.height - icon.TEXT_MARGIN - 1
+        if self is sel.leftIc and partId == sel.leftPartId:
+            if sel.leftPos == 0:
+                startX = left
+            elif self.text is None or sel.leftPos >= len(self.text):
+                startX = right
+            else:
+                startX = left + ENTRY_FONT.getsize(self.text[:sel.leftPos])[0]
+        else:
+            startX = 0
+        if self is sel.rightIc and partId == sel.rightPartId:
+            if sel.rightPos == 0:
+                endX = left
+            elif self.text is None or ENTRY_FONT is None or \
+                    sel.rightPos >= len(self.text):
+                endX = right
+            else:
+                endX = left + ENTRY_FONT.getsize(self.text[:sel.rightPos])[0]
+        else:
+            endX = img.width
+        divY = bottom + icon.TEXT_MARGIN - 1 - icon.TEXT_SEL_UNDERLINE_THICKNESS
+        icon.tintImageRect(img, icon.TEXT_SEL_LIGHT_TINT, (startX, 0, endX, divY))
+        icon.tintImageRect(img, icon.TEXT_SEL_DARK_TINT, (startX, divY, endX, bottom))
+        if startX != 0 and not (self is sel.leftIc and self is sel.rightIc):
+            icon.tintImageRect(img, icon.TEXT_SEL_LIGHT_TINT, (0, 0, startX, img.height))
+        if endX != img.width and not (self is sel.leftIc and self is sel.rightIc):
+            icon.tintImageRect(img, icon.TEXT_SEL_LIGHT_TINT,
+                (endX, 0, img.width, img.height))
+        if bottom < img.height:
+            icon.tintImageRect(img, icon.TEXT_SEL_LIGHT_TINT, (startX, bottom, endX,
+                img.height))
+        return img
+
     def focusIn(self):
         if not self.hasFocus:
             self.focusChanged = True
             self.hasFocus = True
+            self.updateErrStatusForFocus()
             self.markLayoutDirty()
 
     def focusOut(self, removeIfPossible=True, removeIfNotFocused=False):
@@ -220,6 +274,7 @@ class EntryIcon(icon.Icon):
             return not removeIfPossible
         self.focusChanged = True
         self.hasFocus = False
+        self.updateErrStatusForFocus()
         self.markLayoutDirty()
         # If both text and arguments can be placed, do so.  Note that this is a bit
         # hairy, because focus out is invoked via cursor movement calls, which are
@@ -955,56 +1010,92 @@ class EntryIcon(icon.Icon):
                 self.remove()
             cursor.setToText(entryIc)
 
-    def arrowAction(self, direction):
+    def replaceText(self, text, fromPos, toPos, moveCursorTo=None):
+        self.window.requestRedraw(self.topLevelParent().hierRect())
+        self.markLayoutDirty()
+        if toPos == 'end': toPos = len(self.text)
+        removedText = self.text[fromPos:toPos]
+        self.text = self.text[:fromPos] + text + self.text[toPos:]
+        if moveCursorTo is not None:
+            movedCursorFrom = self.cursorPos
+            self.setCursorPos(moveCursorTo)
+        else:
+            movedCursorFrom = None
+        self.window.undo.registerCallback(self.replaceText, removedText, fromPos,
+            fromPos + len(text), movedCursorFrom)
+
+    def arrowAction(self, direction, evt):
         cursor = self.window.cursor
         cursor.erase()
         if direction == "Left":
             if self.cursorPos == 0:
-                # Move the cursor out of the entry icon.
-                if self.attachedIcon() is None:
-                    # If we're at the top level, use focusOut, which will leave the
-                    # cursor somewhere on the icon structure, or if it was completely
-                    # empty, at a proper window position.
-                    if self.focusOut():
-                        if cursor.type == 'icon':
-                            topIcon = cursor.icon.topLevelParent()
-                            topSite = cursors.topSite(topIcon, seqDown=False)
-                            cursor.setToIconSite(topIcon, topSite)
-                    else:
-                        # focusOut failed to place
-                        cursor.setToIconSite(self, "output")
+                # Move the cursor out of the entry icon, to either the parent site, or
+                # to the lexically-previous text cursor position
+                if evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK:
+                    # Move to lexically-previous text-cursor position
+                    leftIc, _, leftPos = cursors.prevTextPos(self, self.cursorPos)
+                    if evt.state & 0x001 and leftIc is not None:
+                        self.window.cursor.selectToTextPos(leftIc, 1, leftPos)
                 else:
-                    cursorIcon = self.attachedIcon()
-                    cursorSite = self.attachedSite()
-                    # For 99.99% of cases, set the cursor position to the attached site
-                    # but if the parent icon is an entry icon, and focusing out resulted
-                    # in merging the content, leave the cursor where focusOut put it.
-                    if self.focusOut() != 'merged':
-                        self.window.cursor.setToIconSite(cursorIcon, cursorSite)
-                self.window.refreshDirty(minimizePendingArgs=False)
+                    # traverse to parent site
+                    if self.attachedIcon() is None:
+                        # If we're at the top level, use focusOut, which will leave the
+                        # cursor somewhere on the icon structure, or if it was completely
+                        # empty, at a proper window position.
+                        if self.focusOut():
+                            if cursor.type == 'icon':
+                                topIcon = cursor.icon.topLevelParent()
+                                topSite = cursors.topSite(topIcon, seqDown=False)
+                                cursor.setToIconSite(topIcon, topSite)
+                        else:
+                            # focusOut failed to place
+                            cursor.setToIconSite(self, "output")
+                    else:
+                        cursorIcon = self.attachedIcon()
+                        cursorSite = self.attachedSite()
+                        # For 99.99% of cases, set the cursor position to the attached site
+                        # but if the parent icon is an entry icon, and focusing out resulted
+                        # in merging the content, leave the cursor where focusOut put it.
+                        if self.focusOut() != 'merged':
+                            self.window.cursor.setToIconSite(cursorIcon, cursorSite)
+                    self.window.refreshDirty(minimizePendingArgs=False)
             else:
-                self.setCursorPos(self.cursorPos - 1)
+                self.moveCursorPos(self.cursorPos - 1, evt)
         elif direction == "Right":
             if self.cursorPos == len(self.text):
-                # Move cursor out of entry icon.  For right cursor movement, use the
-                # focusOut because it leaves the cursor after the new icon(s)
-                parent = self.parent()
-                focusOutResult = self.focusOut()
-                if focusOutResult == False:
-                    # We failed to place, cursor is still in icon
-                    cursor.setToIconSite(self, self.sites.firstCursorSite())
-                elif focusOutResult == "merged":
-                    # Focusing out merged the entry icon into its parent entry icon.  Put
-                    # the cursor after that, instead
-                    cursor.setToIconSite(parent, parent.sites.firstCursorSite())
-                self.window.refreshDirty(minimizePendingArgs=False)
+                # Move cursor out of entry icon.
+                if evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK:
+                    # Move to lexically-next text-cursor position, extending the
+                    # (necessarily text) selection if shift is held
+                    rightIc, rightPart, rightPos = cursors.nextTextPos(self,
+                        self.cursorPos, partId=1)
+                    if evt.state & comn.SHIFT_MASK and rightIc is not None:
+                        self.window.cursor.selectToTextPos(rightIc, rightPart, rightPos)
+                else:
+                    # Move to icon site right of entry icon (which may change as we
+                    # focus out).  Here we can use the focusOut method, which leaves the
+                    # cursor after the icons generated from the text
+                    parent = self.parent()
+                    focusOutResult = self.focusOut()
+                    if focusOutResult == False:
+                        # We failed to place, cursor is still in icon
+                        cursor.setToIconSite(self, self.sites.firstCursorSite())
+                    elif focusOutResult == "merged":
+                        # Focusing out merged the entry icon into its parent entry icon.
+                        # Put the cursor after that, instead
+                        cursor.setToIconSite(parent, parent.sites.firstCursorSite())
+                    self.window.refreshDirty(minimizePendingArgs=False)
             else:
-                self.setCursorPos(self.cursorPos + 1)
+                self.moveCursorPos(self.cursorPos + 1, evt)
         elif direction in ('Up', 'Down'):
             x, y = self.cursorWindowPos()
             self.window.cursor.erase()
-            cursorType, ic, site, pos = cursors.geometricTraverseFromPos(x, y,
-                direction, self.window, self)
+            # If the shift key is pressed, we assume that we're starting or extending a
+            # text selection, as it should not be possible to have a text cursor with
+            # an icon-selection, otherwise do a general geometric traversal.
+            toTextPos = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
+            cursorType, ic, site, pos, partId = cursors.geometricTraverseFromPos(x, y,
+                direction, self.window, self, onlyTextFields=toTextPos)
             if cursorType == 'window':
                 cursorType = 'icon'
                 site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
@@ -1024,7 +1115,7 @@ class EntryIcon(icon.Icon):
                     else:
                         ic = self.window.cursor.icon
                         site = self.window.cursor.site
-            self.window.cursor.setTo(cursorType, ic, site, pos)
+            self.window.cursor.setTo(cursorType, ic, site, pos, partId)
         cursor.draw()
 
     def remove(self, forceDelete=False, makePlaceholder=False):
@@ -1629,6 +1720,11 @@ class EntryIcon(icon.Icon):
         self.cursorPos = 0
         self._setText(remainingText, len(remainingText))
         return None
+
+    def textCursorRange(self, partId=None):
+        """Common method between text-editing-capable icons for getting the range of
+        text-cursor traversable positions."""
+        return 0, len(self.text)
 
     def canPlaceEntryText(self, requireArgPlacement=False):
         # Parse the existing text and in the entry icon as if it had a delimiter (space)
@@ -2566,7 +2662,7 @@ class EntryIcon(icon.Icon):
         if not self.pointInTextArea(x, y):
             return False
         self.window.cursor.erase()
-        self.cursorPos = comn.findTextOffset(icon.globalFont, self.text,
+        self.cursorPos = comn.findTextOffset(ENTRY_FONT, self.text,
             x - self.rect[0] - self.textOffset)
         self.window.cursor.setToText(self, drawNew=False)
         return True
@@ -2582,7 +2678,7 @@ class EntryIcon(icon.Icon):
         right -= 2
         return left < x < right and top < y < bottom
 
-    def nearestCursorPos(self, x, y):
+    def nearestCursorPos(self, x, y, followWrap=False):
         """Returns cursor index and x, y position (tuple) of the cursor position nearest
         text cursor position to the given x,y coordinate."""
         textLeft = self.rect[0] + self.textOffset
@@ -2592,9 +2688,25 @@ class EntryIcon(icon.Icon):
             return 0, (textLeft, textCenter)
         if x >= textRight:
             return len(self.text), (textRight, textCenter)
-        cursorPos = comn.findTextOffset(icon.globalFont, self.text,
+        cursorPos = comn.findTextOffset(ENTRY_FONT, self.text,
             x - self.rect[0] - self.textOffset)
-        return cursorPos, self.cursorWindowPos()
+        return cursorPos, self.cursorWindowPos(forCursorPos=cursorPos)
+
+    def cursorInText(self, clickPos, nearestToClick=True):
+        """Determine if a given window x,y position (clickPos) is within the text area
+        of the icon.  If so, return the (cursor) position within the text closest to
+        clickPos, and the x,y window coordinate location for that cursor (y center).  If
+        the clickpos is not within the clickable area, return (None, None).  In order to
+        have a single cursor location associated with ends of lines, the cursor position
+        to the right of the line (which often follows a space when lines are word
+        wrapped) actually belongs to the start of the next line, so the nearest cursor
+        position to a wrapped line end is one character left of the wrap.  This behavior
+        can be changed by specifying nearestToClick as False."""
+        textBox = (self.rect[0] + self.textOffset - icon.TEXT_MARGIN, 0, self.rect[2],
+            self.height)
+        if not (icon.pointInRect(clickPos, textBox) or nearestToClick):
+            return None, None
+        return self.nearestCursorPos(*clickPos)
 
     @staticmethod
     def _snapFn(ic, siteId):
@@ -2748,6 +2860,36 @@ class EntryIcon(icon.Icon):
 
     def createSaveText(self, parentBreakLevel=0, contNeeded=True, export=False):
         brkLvl = parentBreakLevel + 1
+        if export:
+            # For export, the entry icon's pink color implies that the user is accepting
+            # a syntax error, which frees us from trying to write something that Python
+            # can parse.  We just write everything, starting with the string as a quoted
+            # string (originally just left it unquoted, but I think this makes it more
+            # likely that Python could parse, and also, selfishly, because it will pass
+            # the tokenizer better in our temporary text selection matching code).
+            text = filefmt.SegmentedText()
+            quoteReadyText = stringicon.convertStringQuoteType(self.text, None, '"')
+            text.addQuotedString(brkLvl, '', '"', quoteReadyText, False, contNeeded,
+                brkLvl + 1)
+            text.add(None, ' ')
+            pendingArgs = self.listPendingArgs()
+            if len(pendingArgs) == 0:
+                return text
+            for argIdx, arg in enumerate(pendingArgs):
+                if isinstance(arg, (list, tuple)):
+                    for i, argIcon in enumerate(arg):
+                        if argIcon is None:
+                            text.add(brkLvl, ' ', needsContinue=contNeeded)
+                        else:
+                            text.concat(brkLvl, argIcon.createSaveText(brkLvl + 1,
+                                contNeeded=contNeeded, export=export))
+                        if i != len(arg) - 1:
+                            text.add(None, ', ', needsContinue=False)
+                elif arg is not None:
+                    text.concat(brkLvl, arg.createSaveText(brkLvl, contNeeded, export),
+                        contNeeded)
+                text.add(brkLvl, ' ', needsContinue=contNeeded)
+            return text
         text = filefmt.SegmentedText('$Entry')
         macroArgs = '' if self.text == '' else repr(self.text)
         if self.attachedToAttribute():
@@ -2820,7 +2962,24 @@ class EntryIcon(icon.Icon):
 
     def highlightErrors(self, errHighlight):
         self.errHighlight = errHighlight
-        if errHighlight is None and not self.hasFocus:
+        if errHighlight is None:
+            self.updateErrStatusForFocus()
+            errHighlight = icon.ErrorHighlight(
+                "Icon is disconnected from surrounding code")
+        for ic in self.children():
+            ic.highlightErrors(errHighlight)
+        if hasattr(self, 'blockEnd'):
+            blockicons.checkPseudoBlockHighlights(self)
+
+    def updateErrStatusForFocus(self):
+        """Syntax error highlighting is done at layout time for all other icons, but we
+        only want to color unfocused entry icons (code entry is not an error).  This
+        function is called both from the highlight code *and* from the focus code to
+        establish the highlighting for the entry icon itself (and not its pending
+        arguments)."""
+        if self.hasFocus:
+            self.errHighlight = None
+        else:
             if self.hasPendingArgs() and self.text != "":
                 err = "holding incomplete (unparsed) text and unprocessed argument code"
             elif self.hasPendingArgs():
@@ -2831,18 +2990,15 @@ class EntryIcon(icon.Icon):
             else:
                 err = "pending text entry: type backspace to remove"
             self.errHighlight = icon.ErrorHighlight("This is an entry icon " + err)
-        if errHighlight is None:
-            errHighlight = icon.ErrorHighlight(
-                "Icon is disconnected from surrounding code")
-        for ic in self.children():
-            ic.highlightErrors(errHighlight)
-        if hasattr(self, 'blockEnd'):
-            blockicons.checkPseudoBlockHighlights(self)
 
-    def cursorWindowPos(self):
+    def cursorWindowPos(self, posOfImg=False, forCursorPos=None):
         x, y = self.rect[:2]
-        x += self.textOffset + icon.globalFont.getsize(self.text[:self.cursorPos])[0]
+        if forCursorPos is None:
+            forCursorPos = self.cursorPos
+        x += self.textOffset + ENTRY_FONT.getsize(self.text[:forCursorPos])[0]
         y += self.sites.output.yOffset
+        if posOfImg:
+            y -= textCursorImage.height // 2
         return x, y
 
     def setCursorPos(self, pos):
@@ -2852,6 +3008,76 @@ class EntryIcon(icon.Icon):
             self.cursorPos = max(0, min(len(self.text), pos))
         if self.window.cursor.type == 'text' and self.window.cursor.icon is self:
             self.window.requestScroll('cursor')
+
+    def moveCursorPos(self, pos, evt):
+        if evt.state & comn.SHIFT_MASK:
+            self.window.cursor.selectToTextPos(self, 1, pos)
+        else:
+            self.setCursorPos(pos)
+
+    def doubleClickAction(self, clickPos):
+        cursorTextIdx, cursorWindowPos = self.cursorInText(clickPos)
+        if cursorTextIdx is None:
+            return None, None
+        sel = self.window.sel
+        sel.unselectAll()
+        self.window.cursor.removeCursor(placeEntryText=False)
+        clickX, _ = clickPos
+        nearestCursorX, _ = cursorWindowPos
+        clickedCharIdx = max(0, cursorTextIdx - 1) if clickX < nearestCursorX else \
+            min(cursorTextIdx, len(self.text) - 1)
+        clickedChar = self.text[clickedCharIdx]
+        if clickedChar.isspace():
+            # User clicked on a whitespace character, select surrounding space (usually
+            # there won't be much whitespace in an entry icon, but eventually we want to
+            # fully handle arbitrary text paste.
+            startIdx = clickedCharIdx
+            for i in range(clickedCharIdx-1, -1, -1):
+                if not self.text[i].isspace():
+                    break
+                startIdx = i
+            endIdx = clickedCharIdx + 1
+            for i in range(clickedCharIdx + 1, len(self.text)):
+                if not self.text[i].isspace():
+                    break
+                endIdx = i + 1
+        else:
+            # User clicked on a non-whitespace character, select surrounding word.  Here
+            # we use a very different definition of "word", since we are dealing mostly
+            # with identifiers, we consider word boundaries anything that's not alpha
+            # or numeric (treating underscores within identifiers as word boundaries),
+            # and CamelCase (if CAMEL_CASE_WORD_BOUNDARIES is True) as boundaries
+            clickedCharIsAlpha = clickedChar.isalpha()
+            startIdx = clickedCharIdx
+            for i in range(clickedCharIdx-1, -1, -1):
+                c = self.text[i]
+                if c.isspace():
+                    break
+                if clickedCharIsAlpha:
+                    if not c.isalpha():
+                        break
+                    if CAMEL_CASE_WORD_BOUNDARIES and self.text[i + 1].isupper():
+                        break
+                else:
+                    if c.isalpha():
+                        break
+                startIdx = i
+            endIdx = clickedCharIdx + 1
+            for i in range(clickedCharIdx + 1, len(self.text)):
+                c = self.text[i]
+                if c.isspace():
+                    break
+                if clickedCharIsAlpha:
+                    if not c.isalpha():
+                        break
+                    if CAMEL_CASE_WORD_BOUNDARIES and c.isupper():
+                        break
+                else:
+                    if c.isalpha():
+                        break
+                endIdx = i + 1
+        sel.selectTextBetween(self, 1, startIdx, self, 1, endIdx)
+        self.window.requestRedraw(self.rect)
 
     def textCursorImage(self):
         return textCursorImage

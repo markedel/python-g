@@ -227,6 +227,18 @@ class TextIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, self.text, 'attrIcon')
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'attrIcon'):
+            return None, None, None, None, None, None, None, None
+        width, height = self.bodySize
+        top = self.sites.output.yOffset - height // 2 + 1
+        bottom = top + height - 1
+        left = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.text, icon.globalFont, left + icon.TEXT_MARGIN, top + \
+            icon.TEXT_MARGIN, right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
+
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
         TextIcon.__init__(self, name, window, location)
@@ -500,6 +512,18 @@ class AttrIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, '.' + self.name, 'attrIcon')
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'attrIcon'):
+            return None, None, None, None, None, None, None, None
+        width, height = self.bodySize
+        top = self.sites.attrOut.yOffset - icon.ATTR_SITE_OFFSET - height // 2 + 1
+        bottom = top + height - 1
+        left = self.sites.attrOut.xOffset + icon.ATTR_SITE_DEPTH
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.name, icon.globalFont, left + icon.TEXT_MARGIN, top + \
+            icon.TEXT_MARGIN, right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
+
     def getPythonDocRef(self):
         if self.name in pythonSpecialMethods:
             return [(self.name + ' Method', specialMethodRef % self.name)]
@@ -600,6 +624,18 @@ class NoArgStmtIcon(icon.Icon):
             return self.window.replaceIconWithEntry(self, self.stmt, 'attrIcon')
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'attrIcon'):
+            return None, None, None, None, None, None, None, None
+        width, height = self.bodySize
+        top = 0
+        bottom = top + height - 1
+        left = self.sites.seqInsert.xOffset + icon.dragSeqImage.width - 1
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.stmt, icon.boldFont, left + icon.TEXT_MARGIN, top + \
+            icon.TEXT_MARGIN, right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
+
 class PassIcon(NoArgStmtIcon):
     pythonDocRef = [("pass Statement", "reference/simple_stmts.html#the-pass-statement")]
 
@@ -695,8 +731,6 @@ class SeriesStmtIcon(icon.Icon):
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=self.requireArg,
             allowTrailingComma=self.allowTrailingComma)
-        if temporaryDragSite:
-            self.drawList = None
 
     def snapLists(self, forCursor=False):
         # Add snap sites for insertion
@@ -769,6 +803,28 @@ class SeriesStmtIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'values_0':
             return seriesStmtToEntryIcon(self, self.stmt)
         return None
+
+    def drawListIdxToPartId(self, idx):
+        if idx == 0:
+            return 1
+        if self.valueList.simpleSpineWillDraw():
+            if idx == 1:
+                return 2
+            if idx == 2:
+                return 3
+        return 0
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'values_0'):
+            return None, None, None, None, None, None, None, None
+        width, height = self.bodySize
+        top = 0
+        bottom = top + height
+        left = self.sites.seqInsert.xOffset + icon.dragSeqImage.width - 1
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return self.stmt, icon.boldFont, left + icon.TEXT_MARGIN, top + \
+            icon.TEXT_MARGIN, right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
 
     def siteRightOfPart(self, partId):
         return 'values_0'
@@ -1234,6 +1290,7 @@ class ImportIcon(SeriesStmtIcon):
 
 class ImportFromIcon(icon.Icon):
     hasTypeover = True
+    partIdList = 1, 2
     relDelimPattern = re.compile('[a-zA-Z ]')
     pythonDocRef = [("The Import System", "reference/import.html#the-import-system"),
         ("import Statement", "reference/simple_stmts.html#the-import-statement")]
@@ -1712,6 +1769,33 @@ class ImportFromIcon(icon.Icon):
             return self._becomeEntryIcon()
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'moduleIcon':
+                partId = 1
+            elif siteAfter == 'importsIcons_0':
+                partId = 2
+        if partId not in (1, 2):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        if partId == 1:
+            leftSide = icon.dragSeqImage.width - 1
+            rightSide = leftSide + bodyWidth - 1
+            textCtr = self.sites.seqInsert.yOffset
+            text = 'from'
+        else:
+            rightSide = self.sites.importsIcons[0].xOffset + icon.OUTPUT_SITE_DEPTH
+            leftSide = rightSide - inWidth + 1
+            textCtr = self.sites.importsIcons[0].yOffset
+            text = 'import'
+        left = leftSide + icon.TEXT_MARGIN
+        topSide = textCtr - bodyHeight // 2
+        top = topSide + icon.TEXT_MARGIN
+        right = rightSide - icon.TEXT_MARGIN
+        bottom = topSide + bodyHeight - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, icon.boldFont, left, top, right, bottom, partId, True
+
     def siteRightOfPart(self, partId):
         if partId == 1:
             return 'moduleIcon'
@@ -1941,6 +2025,28 @@ class YieldIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'values_0':
             return seriesStmtToEntryIcon(self, 'yield')
         return None
+
+    def drawListIdxToPartId(self, idx):
+        if idx == 0:
+            return 1
+        if self.valueList.simpleSpineWillDraw():
+            if idx == 1:
+                return 2
+            if idx == 2:
+                return 3
+        return 0
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'values_0'):
+            return None, None, None, None, None, None, None, None
+        width, height = self.bodySize
+        top = self.sites.output.yOffset - height // 2
+        bottom = top + height
+        left = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'yield', icon.boldFont, left + icon.TEXT_MARGIN, top + icon.TEXT_MARGIN, \
+            right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
 
     def siteRightOfPart(self, partId):
         return 'values_0'
@@ -2193,7 +2299,7 @@ class RaiseIcon(icon.Icon):
             if self.childAt('causeIcon') is not None:
                 for ic in causeIcon.traverse():
                     self.window.requestRedraw(ic.rect)
-                    self.window.select(ic)
+                    self.window.sel.select(ic)
             else:
                 self.removeFrom()
                 rightmostIc, rightmostSite = icon.rightmostFromSite(self, 'exceptIcon')
@@ -2289,8 +2395,37 @@ class RaiseIcon(icon.Icon):
             return self._becomeEntryIcon()
         return None
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'exceptIcon':
+                partId = 1
+            elif siteAfter == 'causeIcon':
+                partId = 2
+        if partId not in (1, 2):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight, fromWidth = self.bodySize
+        if partId == 1:
+            leftSide = icon.dragSeqImage.width - 1
+            rightSide = leftSide + bodyWidth - 1
+            textCtr = self.sites.seqInsert.yOffset
+            text = 'raise'
+        else:
+            rightSide = self.sites.causeIcon.xOffset + icon.OUTPUT_SITE_DEPTH
+            leftSide = rightSide - fromWidth + 1
+            textCtr = self.sites.exceptIcon.yOffset
+            text = 'from'
+        left = leftSide + icon.TEXT_MARGIN
+        topSide = textCtr - bodyHeight // 2
+        top = topSide + icon.TEXT_MARGIN
+        right = rightSide - icon.TEXT_MARGIN
+        bottom = topSide + bodyHeight - icon.TEXT_MARGIN
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, icon.boldFont, left, top, right, bottom, partId, True
+
     def siteRightOfPart(self, partId):
-        return 'exceptIcon'
+        if partId == 1 or not self.hasFrom:
+            return 'exceptIcon'
+        return 'causeIcon'
 
 class DecoratorIcon(icon.Icon):
     # The decorator iccon is just "@" sign part of the decorator, with an input site for
@@ -2525,6 +2660,19 @@ class DecoratorIcon(icon.Icon):
         if siteAfter is None or siteAfter == 'argIcon':
             return self.window.replaceIconWithEntry(self, '@', 'argIcon')
         return None
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'argIcon'):
+            return None, None, None, None, None, None, None, None
+        width, height = self.bodySize
+        top = 0
+        bottom = top + height
+        left = self.sites.seqInsert.xOffset + icon.dragSeqImage.width - 1
+        right = left + width - 1
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return '@', icon.globalFont, left + icon.TEXT_MARGIN, top + \
+            icon.TEXT_MARGIN, right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
+
 
 def backspaceSeriesStmt(ic, site, evt, text):
     siteName, index = iconsites.splitSeriesSiteId(site)

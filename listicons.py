@@ -439,6 +439,7 @@ colonImage = comn.asciiToImage((
 
 class ListTypeIcon(icon.Icon):
     hasTypeover = True
+    partIdList = (1, 2)
 
     def __init__(self, leftText, rightText, window, leftImgFn=None,
             rightImgFn=None, closed=True, typeover=False, obj=None, location=None):
@@ -706,6 +707,33 @@ class ListTypeIcon(icon.Icon):
 
     def backspace(self, siteId, evt):
         backspaceListIcon(self, siteId, evt)
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        # For multi-row lists, this provides text boxes corresponding to the first
+        # argument site (near the top) on the left paren and to the last argument (near
+        # the bottom) on the right paren, so that underlines appear to continue from the
+        # adjacent argument (purely aesthetic choice, and centering might be better).
+        if partId == 1 or siteAfter == 'argIcons_0':
+            leftSide = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH
+            rightSide = self.sites.argIcons[0].xOffset + icon.OUTPUT_SITE_DEPTH
+            text = self.leftText
+            textCtr = self.sites.argIcons[0].yOffset
+            partId = 1
+        elif partId == 2 or siteAfter == 'attrIcon':
+            leftSide = self.sites.cprhIcons[-1].xOffset
+            # I'm not sure why the +1 fudge is needed below
+            rightSide = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH + 1
+            textCtr = self.sites.argIcons[-1].yOffset
+            text = self.rightText
+            partId = 2
+        else:
+            return None, None, None, None, None, None, None, None
+        textLeft = leftSide + icon.TEXT_MARGIN + 1
+        textRight = rightSide - icon.TEXT_MARGIN - 1
+        textTop = textCtr - icon.minTxtHgt // 2
+        textBottom = textTop + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, None, textLeft, textTop, textRight, textBottom, partId, True
 
     def textEntryHandler(self, entryIc, text, onAttr):
         # Typeover for lists, tuples, and dicts is mostly handled by hard-coded parsing
@@ -1278,6 +1306,11 @@ class TupleIcon(ListTypeIcon):
             img = tupleRParenImage
         return icon.yStretchImage(img, tupleRParenExtendDupRows, desiredHeight)
 
+    def activePartIds(self):
+        if self.noParens:
+            return ()
+        return 1, 2
+
     def dumpName(self):
         if self.noParens:
             return "(naked tuple)"
@@ -1595,6 +1628,7 @@ class DictIcon(ListTypeIcon):
 class CallIcon(icon.Icon):
     pythonDocRef = [("Calls", "reference/expressions.html#calls")]
     hasTypeover = True
+    partIdList = (1, 2)
     # Property to tell wrapping layout and save-text generators not to allow wrap
     # at the attribute site (as most attributes normally can).
     sticksToAttr = True
@@ -1908,6 +1942,32 @@ class CallIcon(icon.Icon):
             return False
         return True
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        # For multi-row lists, this provides text boxes corresponding to the first
+        # argument site (near the top) on the left paren and to the last argument (near
+        # the bottom) on the right paren, so that underlines appear to continue from the
+        # adjacent argument (purely aesthetic choice, and centering might be better).
+        if partId == 1 or siteAfter == 'argIcons_0':
+            leftSide = self.sites.attrOut.xOffset + icon.ATTR_SITE_DEPTH
+            rightSide = self.sites.argIcons[0].xOffset + icon.OUTPUT_SITE_DEPTH
+            text = '('
+            textCtr = self.sites.argIcons[0].yOffset
+            partId = 1
+        elif partId == 2 or siteAfter == 'attrIcon':
+            rightSide = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH
+            leftSide = rightSide - fnRParenImage.width + 2
+            textCtr = self.sites.argIcons[-1].yOffset
+            text = ')'
+            partId = 2
+        else:
+            return None, None, None, None, None, None, None, None
+        textLeft = leftSide + icon.TEXT_MARGIN
+        textRight = rightSide - icon.TEXT_MARGIN
+        boxTop = textCtr - icon.minTxtHgt // 2
+        boxBottom = boxTop + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, None, textLeft, boxTop, textRight, boxBottom, partId, True
+
     def siteRightOfPart(self, partId):
         if partId == 1:
             # Left paren
@@ -2049,6 +2109,19 @@ class CprhIfIcon(icon.Icon):
                 "'for' clause")
         icon.Icon.highlightErrors(self, errHighlight)
 
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if not (partId == 1 or siteAfter == 'testIcon'):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight = self.bodySize
+        leftSide = self.sites.cprhOut.xOffset
+        # Text box for cprh icons is generated from string with leading space
+        left = leftSide + icon.TEXT_MARGIN + icon.boldFont.getsize(' ')[0]
+        top = self.sites.testIcon.yOffset - icon.minTxtHgt // 2
+        right = leftSide + bodyWidth - icon.TEXT_MARGIN
+        bottom = top + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return 'if', icon.boldFont, left, top, right, bottom, 1, True
+
     def _detectBadOrder(self):
         parent = self.parent()
         if parent is None or not isinstance(parent, ListTypeIcon):
@@ -2072,6 +2145,8 @@ class CprhIfIcon(icon.Icon):
         return [cprhDocRef, genDocRef]
 
 class CprhForIcon(icon.Icon):
+    partIdList = 1, 2
+
     def __init__(self, isAsync=False, typeover=False, window=None, location=None):
         icon.Icon.__init__(self, window)
         if typeover:
@@ -2369,6 +2444,33 @@ class CprhForIcon(icon.Icon):
 
     def dumpName(self):
         return "for (cprh)"
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        if partId is None:
+            if siteAfter == 'targets_0':
+                partId = 1
+            elif siteAfter == 'iterIcon':
+                partId = 2
+        if partId not in (1, 2):
+            return None, None, None, None, None, None, None, None
+        bodyWidth, bodyHeight, inWidth = self.bodySize
+        if partId == 1:
+            leftSide = self.sites.cprhOut.xOffset
+            rightSide = leftSide + bodyWidth
+            text = 'for'
+            textCtr = self.sites.targets[0].yOffset
+        else:
+            rightSide = self.sites.iterIcon.xOffset + icon.OUTPUT_SITE_DEPTH
+            leftSide = rightSide - inWidth
+            text = 'in'
+            textCtr = self.sites.iterIcon.yOffset
+        # The icon is drawn using a text box drawn around text with leading space added
+        left = leftSide + icon.TEXT_MARGIN + icon.boldFont.getsize(' ')[0]
+        top = textCtr - icon.minTxtHgt // 2
+        right = rightSide - icon.TEXT_MARGIN
+        bottom = top + icon.minTxtHgt
+        # text, font, left, top, right, bottom, partId, partIsEditable
+        return text, icon.boldFont, left, top, right, bottom, partId, True
 
     def siteRightOfPart(self, partId):
         if partId == 1:
