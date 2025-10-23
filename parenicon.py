@@ -1,5 +1,6 @@
 # Copyright Mark Edel  All rights reserved
 from PIL import Image, ImageDraw
+import tkinter as tk
 import ast
 import comn
 import iconlayout
@@ -353,6 +354,26 @@ class CursorParenIcon(icon.Icon):
         # text, font, left, top, right, bottom, partId, partIsEditable
         return text, icon.globalFont, textLeft, textTop, textRight, textBottom, partId, \
             True
+
+    def contextPopup(self, popup):
+        popup.add_separator()
+        cascadeMenu = tk.Menu(self.window.imgFrame, tearoff=0)
+        cascadeMenu.add_command(label="List", command=self._chgListCb)
+        cascadeMenu.add_command(label="Set",command=self._chgSetCb)
+        cascadeMenu.add_command(label="Tuple", command=self._chgTupleCb)
+        popup.add_cascade(label="Change To", menu=cascadeMenu)
+
+    def _chgListCb(self):
+        listicons.changeListType(self, listicons.ListIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgSetCb(self):
+        listicons.changeListType(self, listicons.DictIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgTupleCb(self):
+        listicons.changeListType(self, listicons.TupleIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
 
 def createCursorParenFromFakeAst(astNode, window, skipArgCreate=False):
     if hasattr(astNode, 'macroAnnotations'):

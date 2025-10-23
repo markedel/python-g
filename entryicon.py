@@ -2991,14 +2991,12 @@ class EntryIcon(icon.Icon):
                 err = "pending text entry: type backspace to remove"
             self.errHighlight = icon.ErrorHighlight("This is an entry icon " + err)
 
-    def cursorWindowPos(self, posOfImg=False, forCursorPos=None):
+    def cursorWindowPos(self, forCursorPos=None):
         x, y = self.rect[:2]
         if forCursorPos is None:
             forCursorPos = self.cursorPos
         x += self.textOffset + ENTRY_FONT.getsize(self.text[:forCursorPos])[0]
         y += self.sites.output.yOffset
-        if posOfImg:
-            y -= textCursorImage.height // 2
         return x, y
 
     def setCursorPos(self, pos):

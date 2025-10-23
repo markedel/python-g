@@ -1,5 +1,5 @@
 # Copyright Mark Edel  All rights reserved
-from PIL import Image
+from PIL import Image, ImageFont
 import ast
 import numbers
 import inspect
@@ -60,6 +60,10 @@ ellipsisImage = comn.asciiToImage((
 
 namedConsts = {'True':True, 'False':False, 'None':None, 'NotImplemented':NotImplemented,
     '__debug__':__debug__}
+
+# Font not-actually-used for ellipsis, it just provides equivalent spacing to the bitmap
+# it uses, as a hack for not really supporting multi-character drawn icons.
+fakeEllipsisFont = ImageFont.truetype('c:/Windows/fonts/arial.ttf', 16)
 
 # Documentation references for Python's built-in functions and special methods
 pythonBuiltInFns = {'abs', 'delattr', 'hash', 'memoryview', 'set', 'all', 'dict', 'help',
@@ -235,9 +239,10 @@ class TextIcon(icon.Icon):
         bottom = top + height - 1
         left = self.sites.output.xOffset + icon.OUTPUT_SITE_DEPTH
         right = left + width - 1
+        font = icon.globalFont if self.useImage is None else None
         # text, font, left, top, right, bottom, partId, partIsEditable
-        return self.text, icon.globalFont, left + icon.TEXT_MARGIN, top + \
-            icon.TEXT_MARGIN, right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
+        return self.text, font, left + icon.TEXT_MARGIN, top +  icon.TEXT_MARGIN, \
+            right - icon.TEXT_MARGIN, bottom - icon.TEXT_MARGIN, 1, True
 
 class IdentifierIcon(TextIcon):
     def __init__(self, name, window=None, location=None):
@@ -402,6 +407,17 @@ class EllipsisIcon(TextIcon):
         ic = EllipsisIcon(window=self.window)
         self._duplicateChildren(ic, linkToOriginal=linkToOriginal)
         return ic
+
+    def getTextSelMetrics(self, partId=None, siteAfter=None):
+        # This is a hack: ellipsis is the only icon with a multi-character image-drawn
+        # icon, and instead of properly supporting such a thing, we're returning a fake
+        # font with spacing equivalent to the image to give callers the intermediate
+        # character positions.
+        text, font, left, top, right, bottom, partId, partIsEditable = \
+            super().getTextSelMetrics(partId, siteAfter)
+        if text is not None:
+            font = fakeEllipsisFont
+        return text, font, left, top, right, bottom, partId, partIsEditable
 
 class AttrIcon(icon.Icon):
     def __init__(self, name, window=None, location=None):

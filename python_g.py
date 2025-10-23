@@ -432,19 +432,6 @@ class Window:
         panes.pack(fill=tk.BOTH, expand=1)
         outerFrame.pack(fill=tk.BOTH, expand=1)
 
-        self.listPopup = tk.Menu(self.imgFrame, tearoff=0)
-        self.listPopupVal = tk.StringVar()
-        self.listPopup.add_radiobutton(label="Tuple", variable=self.listPopupVal,
-         command=self._listPopupCb, value="(")
-        self.listPopup.add_radiobutton(label="List", variable=self.listPopupVal,
-         command=self._listPopupCb, value="[")
-        self.listPopup.add_radiobutton(label="Set", variable=self.listPopupVal,
-         command=self._listPopupCb, value="{")
-        self.listPopup.add_radiobutton(label="Params", variable=self.listPopupVal,
-         command=self._listPopupCb, value="p")
-        self.listPopup.entryconfig("Set", state=tk.DISABLED)
-        self.listPopup.entryconfig("Params", state=tk.DISABLED)
-
         self.buttonDownTime = None
         self.buttonDownLoc = None
         self.buttonDownState = None
@@ -721,11 +708,7 @@ class Window:
         popup.add_command(label="Join", command=self._joinCb, accelerator="Ctrl+J")
         # Add context-sensitive items
         if self.popupIcon is not None:
-            if isinstance(self.popupIcon, listicons.ListTypeIcon):
-                self.listPopupVal.set('(' if isinstance(self.popupIcon,
-                        listicons.TupleIcon) else '[')
-                popup.add_separator()
-                popup.add_cascade(label="Change To", menu=self.listPopup)
+            self.popupIcon.contextPopup(popup)
             if self.popupIcon.errHighlight is not None:
                 popup.add_command(label="Why Highlighted...", command=self._showSyntaxErr)
             docRefs = self.popupIcon.getPythonDocRef()
@@ -739,6 +722,7 @@ class Window:
             popup.tk_popup(evt.x_root, evt.y_root, 0)
         finally:
             popup.grab_release()
+            popup.destroy()
 
     def _newCb(self, evt=None):
         appData.newWindow()
@@ -1047,6 +1031,15 @@ class Window:
         # text cursor return a reject-reason string on failure and None on success.
         if len(self.sel.selSet) != 0:
             self.sel.pruneSelectedIcons()
+        if char in "[{()}]" and len(self.sel.selSet) == 1:
+            # Support text-editor idiom of changing paren type via selection
+            selIc = tuple(self.sel.selSet)[0]
+            toIcClass = listicons.canChangeListType(selIc, char)
+            if toIcClass is not None:
+                listicons.changeListType(selIc, toIcClass)
+                self.sel.clearSelection()
+                self.refreshDirty(addUndoBoundary=True)
+                return
         if len(self.sel.selSet) != 0:
             # Icon selection:  Replace the selection (or first contiguous range of it)
             # with an entry icon, and pass the character on to that entry icon to
@@ -1074,7 +1067,14 @@ class Window:
             self.replaceSelectedText(char)
             return
         elif self.cursor.type == "text":
-            if self.cursor.icon.canEditText:
+            if isinstance(self.cursor.icon, tuple):
+                # Empty-site text cursor
+                entryIc = entryicon.EntryIcon(window=self)
+                parentIc, parentSite = self.cursor.icon
+                parentIc.replaceChild(entryIc, parentSite)
+                self.cursor.setToText(entryIc)
+                rejectReason = entryIc.addText(char)
+            elif self.cursor.icon.canEditText:
                 # If it's an active entry icon, string, or comment, feed it the character
                 self.requestRedraw(self.cursor.icon.topLevelParent().hierRect())
                 rejectReason = self.cursor.icon.addText(char)
@@ -1340,7 +1340,7 @@ class Window:
         #... Original "ic = self.findIconAt(btnX, btnY)" must be expired code (predating
         #    self.buttonDownIcon), since  chaos would ensue if it differed from ic
         ic = self.buttonDownIcon
-        siteIcon, site = self.siteAt(self.buttonDownLoc)
+        siteIcon, site = self.siteNear(self.buttonDownLoc)
         if leftMouse and ic is None and not (siteIcon is not None and shiftPressed):
             # If nothing was clicked, start a rectangular selection
             seqSiteIc = self._leftOfSeq(*self.imageToContentCoord(evt.x, evt.y))
@@ -1355,6 +1355,11 @@ class Window:
             # text selection drag
             self._startTextDrag(self.buttonDownIcon, self.buttonDownIcPart,
                 self.buttonDownLoc, evt)
+        elif leftMouse and shiftPressed and altPressed:
+            icOrSite, partId, textPos = self.textSiteNear(btnX, btnY)
+            if icOrSite is None:
+                return
+            self._startTextDrag(icOrSite, partId, self.buttonDownLoc, evt)
         elif leftMouse and shiftPressed and not ctrlPressed:
             # Shift is pressed, start a lexical drag
             if siteIcon is not None:
@@ -1601,14 +1606,15 @@ class Window:
         if self.buttonDownTime is None:
             return
         self.buttonDownTime = None
-        if self.buttonDownState & comn.SHIFT_MASK:
+        altPressed = self.buttonDownState & comn.ALT_MASK
+        shiftPressed = self.buttonDownState & comn.SHIFT_MASK
+        if shiftPressed:
             # Extend or create selection
-            if self.buttonDownState & comn.ALT_MASK or self.sel.isText() or \
-                    self.cursor.type == 'text':
+            if altPressed or self.sel.isText() or self.cursor.type == 'text':
                 # Extend or create a text selection.  If the user is not holding Alt and
                 # the anchor is a cursor or starting selection confined to a single
                 # text-editable icon, limit the selection to that icon.
-                if self.buttonDownState & comn.ALT_MASK:
+                if altPressed:
                     confineToAnchor = False
                 elif self.sel.isText():
                     confineToAnchor = self.sel.leftIc is self.sel.rightIc and \
@@ -1625,13 +1631,26 @@ class Window:
         if self.buttonDownIcon is None:
             # Clicked on window background, move cursor
             x, y = self.buttonDownLoc
+            if altPressed:
+                # Alt key is pressed, so look for a nearby text cursor location to move
+                # to.  If none are found, do nothing
+                icOrSite, partId, pos = self.textSiteNear(x, y)
+                if icOrSite is None:
+                    return
+                self.cursor.setToText(icOrSite, pos, partId=partId)
+                self.refreshDirty()
+                return
+            # If the user clicked beyond the left edge of the adjacent statement, select
+            # the statement
             ic = self._leftOfSeq(x, y)
             if ic is not None and ic.posOfSite('seqOut')[1] >= y:
                 self._select(ic, op="hier")
                 return
-            siteIcon, site = self.siteAt(self.buttonDownLoc)
+            # Look for a nearby icon site to move or select to.  If none are found,
+            # place a window background cursor
+            siteIcon, site = self.siteNear(self.buttonDownLoc)
             if siteIcon:
-                if self.buttonDownState & comn.SHIFT_MASK:
+                if shiftPressed:
                     self.cursor.selectToSiteOrPart(siteIcon, site)
                 else:
                     self.cursor.setToIconSite(siteIcon, site)
@@ -1653,7 +1672,7 @@ class Window:
                     #... I'm not sure what this is supposed to accomplish that setting
                     #    a new cursor position wouldn't also do, but I'm leaving it in
                     #    (but not for proto-text cursors)
-                    if self.cursor.icon.canEditText:
+                    if cursors.isIconAndCanEditText(self.cursor.icon):
                         self.cursor.icon.focusOut()
             self.sel.unselectAll()
             pos = self.buttonDownIcon.nearestTextCursorPos(self.buttonDownIcPart,
@@ -1661,6 +1680,7 @@ class Window:
             if pos is not None:
                 self.cursor.setToText(self.buttonDownIcon, pos,
                     partId=self.buttonDownIcPart)
+                self.cursor.drawAndHold()
             return
         elif self.buttonDownState & comn.CTRL_MASK:
             self._select(self.buttonDownIcon, 'toggle')
@@ -1677,7 +1697,7 @@ class Window:
         action = self._nextProgressiveClickAction(self.buttonDownIcon, self.buttonDownLoc)
         if action == "moveCursor":
             self.sel.unselectAll()
-            siteIcon, site = self.siteAt(self.buttonDownLoc)
+            siteIcon, site = self.siteNear(self.buttonDownLoc)
             if siteIcon is not None:
                 self.cursor.setToIconSite(siteIcon, site)
                 self.refreshDirty()
@@ -1694,7 +1714,7 @@ class Window:
         compatible with the self._select function: 'select': select just the icon,
         'hier': select the icon and its arguments, and 'left': select the expression of
         which the icon is the leftmost argument."""
-        siteIcon, site = self.siteAt(btnDownLoc)
+        siteIcon, site = self.siteNear(btnDownLoc)
         siteSelected = self.cursor.type == "icon" and self.cursor.icon is siteIcon
         currentSel = set(self.sel.selectedIcons())
         singleSel = {clickedIcon}
@@ -2046,7 +2066,13 @@ class Window:
                     self.cursor.icon.setCursorPos(0)
             self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == 'text':
-            if self.cursor.icon.canEditText:
+            if isinstance(self.cursor.icon, tuple):
+                # Empty-site text cursor
+                ic, site = self.cursor.icon
+                nextSite = iconsites.nextSeriesSiteId(site)
+                if ic.hasSite(nextSite):
+                    ic.backspace(nextSite, evt)
+            elif self.cursor.icon.canEditText:
                 self.cursor.icon.forwardDelete(evt)
             elif isinstance(self.cursor.icon, commenticon.VerticalBlankIcon):
                 self.removeIcons([self.cursor.icon], setCursor=True)
@@ -2295,7 +2321,11 @@ class Window:
             self.replaceSelectedText('', closeEmptyEntry=True)
             return
         if self.cursor.type == "text":
-            if self.cursor.icon.canEditText:
+            if isinstance(self.cursor.icon, tuple):
+                # Empty-site text cursor
+                ic, site = self.cursor.icon
+                ic.backspace(site, evt)
+            elif self.cursor.icon.canEditText:
                 self.cursor.icon.backspaceInText(evt)
             elif isinstance(self.cursor.icon, commenticon.VerticalBlankIcon):
                 self.removeIcons([self.cursor.icon], setCursor=True)
@@ -2390,28 +2420,6 @@ class Window:
                 ic.replaceChild(None, pendingArgSite)
                 entryIcon.appendPendingArgs([child])
         return entryIcon
-
-    def _listPopupCb(self):
-        char = self.listPopupVal.get()
-        fromIcon = self.popupIcon
-        if char == "[" and not isinstance(fromIcon, listicons.ListIcon):
-            ic = listicons.ListIcon(fromIcon.window)
-        elif char == "(" and not isinstance(fromIcon, listicons.TupleIcon):
-            ic = listicons.TupleIcon(fromIcon.window)
-        else:
-            return
-        topIcon = fromIcon.topLevelParent()
-        self.requestRedraw(topIcon.hierRect(), filterRedundantParens=True)
-        argIcons = fromIcon.argIcons()
-        for i, arg in enumerate(argIcons):
-            fromIcon.replaceChild(None, fromIcon.siteOf(arg))
-            ic.insertChild(arg, "argIcons", i)
-        attrIcon = fromIcon.sites.attrIcon.att
-        fromIcon.replaceChild(None, 'attrIcon')
-        ic.replaceChild(attrIcon, 'attrIcon')
-        fromIcon.replaceWith(ic)
-        self.cursor.setToIconSite(ic, self.cursor.site)
-        self.refreshDirty(addUndoBoundary=True)
 
     def _arrowCb(self, evt):
         if self.cursor.type is None:
@@ -3283,8 +3291,8 @@ class Window:
             elif not newSelect and ic in curSel:
                 eraseSet.add(ic)
                 redrawRegion.add(ic.rect)
-            affectedEmptySites = emptySitesInRect(ic, combinedRegion)
-            selectedEmptySites = emptySitesInRect(ic, newRect)
+            affectedEmptySites = icon.emptySitesInRect(ic, combinedRegion)
+            selectedEmptySites = icon.emptySitesInRect(ic, newRect)
             if affectedEmptySites is not None:
                 selectedEmptySites = set() if selectedEmptySites is None else \
                     set(selectedEmptySites)
@@ -3666,18 +3674,20 @@ class Window:
     def _startTextDrag(self, anchorIc, anchorPartId, anchorLoc, evt):
         """Begin a text-selection drag anchored at the given text-site (anchorIc,
         anchorPartId, anchorLoc)."""
-        anchorPos = anchorIc.nearestTextCursorPos(anchorPartId, *anchorLoc)[0]
+        if isinstance(anchorIc, tuple):
+            anchorPos = icon.emptySiteNearestTextCursorPos(anchorIc, *anchorLoc)[0]
+        else:
+            anchorPos = anchorIc.nearestTextCursorPos(anchorPartId, *anchorLoc)[0]
         if anchorPos is None:
-            # The given icon part has no text site and can't be used as a text selection
-            # anchor.  It would be nice to use a neighboring icon instead of just doing
-            # nothing, but users are probably not expecting this to work, as you can only
-            # start a selection on an icon, and block-end icons are not visible.
+            # The given icon part has no text site near anchorLoc, and therefore can't be
+            # used as a text selection anchor.
             return
         self.sel.unselectAll()
         self.textDragAnchorIc = anchorIc
         self.textDragAnchorPartId = anchorPartId
         self.textDragAnchorPos = anchorPos
-        self.textDragConfined = anchorIc.canEditText and not evt.state & comn.ALT_MASK
+        self.textDragConfined = cursors.isIconAndCanEditText(anchorIc) and \
+            not evt.state & comn.ALT_MASK
         self.inTextSelDrag = True
         self._updateTextSelDrag()
 
@@ -4101,7 +4111,10 @@ class Window:
         elif self.cursor.type == "icon":
             print(f"Icon: {self.cursor.icon.dumpName()}, Site: {self.cursor.site}")
         elif self.cursor.type == "text":
-            if isinstance(self.cursor.icon, entryicon.EntryIcon):
+            if isinstance(self.cursor.icon, tuple):
+                ic, site = self.cursor.icon
+                print(f"empty site {ic.dumpName()}, {site}, {self.cursor.protoTextPos}")
+            elif isinstance(self.cursor.icon, entryicon.EntryIcon):
                 print(f"Entry Icon {repr(self.cursor.icon.text)},"
                       f"{self.cursor.icon.cursorPos}")
             elif self.cursor.icon.canEditText:
@@ -4114,10 +4127,20 @@ class Window:
         if len(self.sel.selSet) > 0:
             print(f"Icon Selection {len(self.sel.selSet)} icons selected")
         elif self.sel.isText():
-            print(f"Text Selection: from {self.sel.leftIc.dumpName()}, partId "
-                f"{self.sel.leftPartId}, pos {self.sel.leftPos} to "
-                f"{self.sel.rightIc.dumpName()}, partId "
+            if isinstance(self.sel.leftIc, tuple):
+                ic, siteId = self.sel.leftIc
+                leftIcName = f"empty site {siteId} of {ic.dumpName()}"
+            else:
+                leftIcName = self.sel.leftIc.dumpName()
+            if isinstance(self.sel.rightIc, tuple):
+                ic, siteId = self.sel.rightIc
+                rightIcName = f"empty site {siteId} of {ic.dumpName()}"
+            else:
+                rightIcName = self.sel.rightIc.dumpName()
+            print(f"Text Selection: from {leftIcName}, partId {self.sel.leftPartId}, "
+                f"pos {self.sel.leftPos} to {rightIcName}, partId "
                 f"{self.sel.rightPartId}, pos {self.sel.rightPos}")
+
     def _debugLayoutCb(self, evt):
         topIcons = findTopIcons(self.sel.selectedIcons(excludeEmptySites=True))
         for ic in topIcons:
@@ -4784,24 +4807,21 @@ class Window:
                     insertSiteIcon = firstStmtOfSelection.childAt('seqIn')
                     insertSite = 'seqOut'
             else:
-                # The selection starts on a stmt boundary but does not end on one.  Here,
-                # the only thing we can attach to is the output of first icon after the
-                # selection.  ...That is, unless it is a direct element of a naked tuple,
-                # in which case we can make insertSite the first argument site of the
-                # tuple, which preserveSite will then preserve across remove icons.  This
-                # will keep the replacement code as separate list element(s) if possible,
-                # as opposed to merging on to the left of iconAfterFirstSelection.
-                recalcInsertSite = iconAfterFirstSelection
-                if isinstance(iconAfterFirstSelection, icon.Icon):
-                    topTuple = iconAfterFirstSelection.topLevelParent()
-                    if isinstance(topTuple, listicons.TupleIcon) and topTuple.noParens:
-                        tupleSite = topTuple.siteOf(iconAfterFirstSelection,
-                            recursive=True)
-                        if iconsites.isSeriesSiteId(tupleSite) and \
-                                firstStmtOfSelection.childAt(tupleSite) is \
-                                iconsites.highestCoincidentIcon(iconAfterFirstSelection):
-                            insertSiteIcon = topTuple
-                            insertSite = 'argIcons_0'
+                # The selection starts on a stmt boundary but does not end on one.  If
+                # we're lucky, there's a left input site of an icon that's not part of
+                # the selection.   Otherwise, we can use the first icon after the
+                # selection as a marker to find what's left of the original statement
+                # and prepend or insert the replacement left of that.
+                for parent in firstIconOfSelection.parentage(includeSelf=False):
+                    if parent not in selectedSet and not (isinstance(parent,
+                            listicons.TupleIcon) and parent.noParens):
+                        leftSite = parent.hasCoincidentSite()
+                        if leftSite is not None:
+                            insertSiteIcon = parent
+                            insertSite = leftSite
+                            break
+                else:
+                    recalcInsertSite = iconAfterFirstSelection
         else:
             # Selection starts in the middle of the statement
             if isinstance(firstIconOfSelection, tuple):
@@ -4930,6 +4950,7 @@ class Window:
                     print("*** replaceSelectedIcons: need support for this substitution")
         # removeIcons might also have added an entry icon or naked tuple on top of the
         # first icon after the selection.  If so, redirect the insert site, there.
+        prepend = False
         if recalcInsertSite:
             topIcon = recalcInsertSite.topLevelParent()
             insertSiteIcon = topIcon
@@ -4943,6 +4964,10 @@ class Window:
                 coincSite = insertSiteIcon.hasCoincidentSite()
                 if coincSite is not None:
                     insertSite = coincSite
+                else:
+                    prepend = True
+                    insertSiteIcon = topIcon
+                    insertSite = 'seqIn'
         # Insert (all) the new icons where the first selection section was removed
         asSeries = insertSiteIcon is not None and iconsites.isSeriesSiteId(insertSite)
         if asSeries and insertSiteIcon.childAt(insertSite) is None:
@@ -4963,7 +4988,7 @@ class Window:
         # one, join it to the last inserted statement.
         # ... (and I think it's what they well expect on a delete command, but we're
         #     not doing yet)
-        if spansStmtBoundaries and not endsOnStmtBoundary:
+        if prepend:
             lastInsertedStmt = cursorIc.topLevelParent()
             if not (lastInsertedStmt is None or isinstance(lastInsertedStmt,
                     (commenticon.CommentIcon, commenticon.VerticalBlankIcon))):
@@ -5356,16 +5381,22 @@ class Window:
                 # Note that we need to include the icon's children as (non-underlined)
                 # parts of the selection.
                 sel = cursors.Selection(self)
-                partId = 1 if self.cursor.icon.canEditText else self.cursor.textPartId
-                pos = self.cursor.icon.cursorPos if self.cursor.icon.canEditText else \
-                    self.cursor.protoTextPos
+                if isinstance(self.cursor.icon, tuple):
+                    partId = 1
+                    pos = self.cursor.protoTextPos
+                elif self.cursor.icon.canEditText:
+                    partId = 1
+                    pos = self.cursor.icon.cursorPos
+                else:
+                    partId = self.cursor.textPartId
+                    pos = self.cursor.protoTextPos
                 sel.selectSingleIconText(self.cursor.icon, partId, pos, pos)
                 for ic in self.cursor.icon.traverse(includeSelf=False):
                     sel.textSel[ic] = None
             else:
                 return
         # If this is a replacement within a single editable icon, let the icon handle it
-        if sel.leftIc is sel.rightIc and sel.leftIc.canEditText:
+        if cursors.isIconAndCanEditText(sel.leftIc) and sel.leftIc is sel.rightIc:
             left = sel.leftPos
             right = sel.rightPos
             ic = sel.leftIc
@@ -5383,8 +5414,10 @@ class Window:
         # If the replacement spans editable icons, we may be able
         # to merge in a way that better preserves the existing structure.
         allPartsUnderlined = all(sel.isTextSelected(i, p)[1]
-            for i in sel.textSel.keys() for p in i.activePartIds())
-        if sel.leftIc.canEditText and sel.rightIc.canEditText:
+            for i in sel.textSel.keys() if not isinstance(i, tuple)
+            for p in i.activePartIds())
+        if cursors.isIconAndCanEditText(sel.leftIc) and \
+                cursors.isIconAndCanEditText(sel.rightIc):
             if allPartsUnderlined and isinstance(sel.leftIc, (commenticon.CommentIcon,
                     stringicon.StringIcon)):
                 # Selection starts in a comment or string and none of the intervening
@@ -5404,7 +5437,7 @@ class Window:
                         sel.leftIc.quote)
                 sel.leftIc.replaceText(text + rightText, sel.leftPos,
                     len(sel.leftIc.string))
-                iconsToRemove = expredit.createSelectionSet(sel.textSel.keys())
+                iconsToRemove = set(sel.textSel.keys())
                 iconsToRemove.remove(sel.leftIc)
                 self.removeIcons(iconsToRemove)
                 self.cursor.setToText(sel.leftIc, sel.leftPos + len(text))
@@ -5422,7 +5455,7 @@ class Window:
                 insText = sel.leftIc.text[:sel.leftPos:]
                 entryIc = sel.rightIc
                 entryIc.replaceText(insText, 0, sel.rightPos)
-                iconsToRemove = expredit.createSelectionSet(sel.textSel.keys())
+                iconsToRemove = set(sel.textSel.keys())
                 iconsToRemove -= expredit.createHierSel(entryIc)
                 sel.clearSelection()
                 self.removeIcons(iconsToRemove)
@@ -5437,10 +5470,15 @@ class Window:
         # the operation is symmetrical), the default behavior of creating an entry icon
         # feels more appropriate than pulling the non-underlined parts into the left side
         # of the string.
-        if allPartsUnderlined and sel.leftIc.canEditText and not sel.rightIc.canEditText:
-            rightText = sel.rightIc.getTextSelMetrics(sel.rightPartId)[0][sel.rightPos:]
+        if allPartsUnderlined and cursors.isIconAndCanEditText(sel.leftIc) and \
+                not cursors.isIconAndCanEditText(sel.rightIc):
+            if isinstance(sel.rightIc, tuple):
+                rightText = '' if sel.rightPos == 0 else ' '
+            else:
+                rightText = sel.rightIc.getTextSelMetrics(sel.rightPartId)[0]
+                rightText = rightText[sel.rightPos:]
             sel.leftIc.replaceText(text + rightText, sel.leftPos, 'end')
-            iconsToRemove = expredit.createSelectionSet(sel.textSel.keys())
+            iconsToRemove = set(sel.textSel.keys())
             iconsToRemove.remove(sel.leftIc)
             self.cursor.setToText(sel.leftIc, sel.leftPos + len(text))
             sel.clearSelection()
@@ -5469,11 +5507,11 @@ class Window:
         entryIc = entryicon.EntryIcon(entryText, self)
         # Replace the icons involved in the selection with the entry icon.  Note that
         # replaceSelectedIcons takes a selection set as an argument, so we also need to
-        # convert the plain icon list or set into proper selection set form by adding
-        # entries for empty series sites.  Also note that replaceSelectedIcons can fail
-        # and return None, but the failures are driven by the inserted content, and an
-        # entry icon can safely be inserted anywhere, so we don't bother checking that.
-        iconEquivSel = expredit.createSelectionSet(sel.textSel.keys())
+        # convert the textSel dictionary keys into its icon-selection equivalent.  Also
+        # note that replaceSelectedIcons can fail and return None, but the failures are
+        # driven by the inserted content, and an entry icon can safely be inserted
+        # anywhere, so we don't bother checking that.
+        iconEquivSel = set(sel.textSel.keys())
         cursorIc, cursorSite = self.replaceSelectedIcons(iconEquivSel, [[entryIc]])
         if pendingArgIdx is not None:
             # Note that we depend, here, on replaceSelectedIcons having not unlinked the
@@ -6531,7 +6569,7 @@ class Window:
             x = seqIc.posOfSite('seqOut')[0]
         return redrawRegion.get(), y, x
 
-    def siteAt(self, buttonLoc):
+    def siteNear(self, buttonLoc):
         """Return icon and site if content coordinate, buttonLoc, is near a cursor site.
         Otherwise, returns (None, None)."""
         btnX, btnY = buttonLoc
@@ -6572,6 +6610,52 @@ class Window:
         if minDist < SITE_SELECT_DIST + 1:
             return minSite[0], minSite[1]
         return None, None
+
+    def textSiteNear(self, btnX, btnY):
+        """Return icon (or icon site pair for empty site), partId, and text position
+        to text site (either editable text or proto-text) nearest the given content
+        coordinate (btnX, btnY), if that site is within SITE_SELECT_DIST of (btnX, btnY).
+        Otherwise, returns (None, None, None)."""
+        left = btnX - SITE_SELECT_DIST
+        right = btnX + SITE_SELECT_DIST
+        top = btnY - SITE_SELECT_DIST
+        bottom = btnY + SITE_SELECT_DIST
+        cursorSites = []
+        for ic in self.findIconsInRegion((left, top, right, bottom), order='pick'):
+            if ic.canEditText:
+                # Editable text fields
+                cursorPos, (x, y) = ic.nearestCursorPos(btnX, btnY)
+                cursorSites.append((x, y, ic, 1, cursorPos))
+            elif not isinstance(ic, icon.BlockEnd):
+                # Proto-text fields for all icons
+                for partId in ic.activePartIds():
+                    cursorPos, pos = ic.nearestTextCursorPos(partId, btnX, btnY)
+                    if pos is not None:
+                        cursorSites.append((*pos, ic, partId, cursorPos))
+                # Empty series sites get proto-text sites (regardless of highlighting),
+                # because they allow users to selectively include the commas that
+                # separate them within a text selection.  The rightmost (icon) site of
+                # the series, however, gets none as it has no comma to represent.
+                for siteSeries in ic.sites.childSites(expandSeries=False):
+                    if isinstance(siteSeries, iconsites.IconSiteSeries):
+                        for i, site in enumerate(siteSeries):
+                            if site.att is not None or i - 1 >= len(siteSeries):
+                                continue
+                            cursorIc = (ic, site.name)
+                            x, y = icon.emptySiteTextCursorPos(cursorIc, 0)
+                            cursorSites.append((x, y, cursorIc, 1, 0))
+                            x, y = icon.emptySiteTextCursorPos(cursorIc, 1)
+                            cursorSites.append((x, y, cursorIc, 1, 1))
+        minDist = SITE_SELECT_DIST + 1
+        minSite = (None, None, None)
+        for x, y, cursorIc, partId, pos in cursorSites:
+            dist = (abs(btnX - x) + abs(btnY - y))
+            if dist < minDist:
+                minDist = dist
+                minSite = cursorIc, partId, pos
+        if minDist < SITE_SELECT_DIST + 1:
+            return minSite
+        return None, None, None
 
     def filterRedundantParens(self, ic, parentIcon=None, parentSite=None):
         """Remove parentheses whose arguments are BinOpIcons that would deploy their own
@@ -7369,29 +7453,6 @@ def sortSeqsForDrag(sequences, buttonDownIcon):
         x, y = seq[0].pos()
         return y, x
     sequences.sort(key=sortKey)
-
-def emptySitesInRect(ic, rect):
-    """Return any empty series sites that ic has in rect as ic+site pairs (the form
-    used to represent them in selections)."""
-    if not comn.rectsTouch(rect, ic.rect):
-        return None
-    rVal = None
-    for siteOrSeries in ic.sites.allSites(expandSeries=False):
-        if isinstance(siteOrSeries, iconsites.IconSiteSeries) and \
-                siteOrSeries.type == 'input':
-            for site in siteOrSeries:
-                if site.att is None:
-                    icX, icY = ic.rect[:2]
-                    left = icX + site.xOffset + icon.inSiteImage.width
-                    height = icon.minTxtIconHgt - 2
-                    top = icY + site.yOffset - height // 2
-                    right = left + icon.LIST_EMPTY_ARG_WIDTH
-                    bottom = top + height
-                    if comn.rectsTouch(rect, (left, top, right, bottom)):
-                        if rVal is None:
-                            rVal = []
-                        rVal.append((ic, site.name))
-    return rVal
 
 def dragPtrSitePos(topDragIcon, dragImgPosX, dragImgPosY):
     """In a drag operation, there is now a single icon site whose position determines

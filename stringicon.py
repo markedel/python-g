@@ -780,7 +780,7 @@ class StringIcon(icon.Icon):
             outline=(0, 0, 0, 255), fill=(0, 0, 0, 0))
         return self.strTypeCursor
 
-    def cursorWindowPos(self, posOfImg=False):
+    def cursorWindowPos(self):
         x, y = self.rect[:2]
         x += icon.outSiteImage.width - 1 + icon.TEXT_MARGIN
         if self.cursorPos < 0:
@@ -805,8 +805,7 @@ class StringIcon(icon.Icon):
                 charCount += len(line)
             x += int((charsInLine + 1) * charWidth)
             y += lineCount * lineSpacing
-        if not posOfImg:
-            y += charHeight // 2
+        y += charHeight // 2
         return x, y
 
     def setCursorPos(self, pos):

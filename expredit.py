@@ -520,7 +520,8 @@ def joinStmts(firstStmt):
     if isStmtLevelOnly(nextStmt):
         return None, None
     rightmostIcon, rightmostSite = icon.rightmostSite(firstStmt)
-    if rightmostIcon.isCursorOnlySite(rightmostSite) or rightmostSite == 'seqOut':
+    if (rightmostIcon.isCursorOnlySite(rightmostSite) or rightmostSite == 'seqOut') and \
+            not isinstance(rightmostIcon, entryicon.EntryIcon):
         return None, None
     firstStmt.window.requestRedraw(firstStmt.hierRect())
     firstStmtComment = firstStmt.hasStmtComment()
@@ -580,6 +581,10 @@ def joinStmts(firstStmt):
         # icons, which can join directly to the last argument).
         cursorIc, cursorSite = insertListAtSite(firstStmtSeriesIc, firstStmtSeriesSite,
             [nextStmt], cursorLeft=True)
+    elif isinstance(rightmostIcon, entryicon.EntryIcon):
+        rightmostIcon.appendPendingArgs([nextStmt])
+        cursorIc = rightmostIcon
+        cursorSite = rightmostIcon.siteOf(nextStmt)
     else:
         # We've vetted the next statement to be adaptable, go ahead and append
         cursorIc, cursorSite = appendAtSite(rightmostIcon, rightmostSite, nextStmt,
@@ -1019,7 +1024,7 @@ def iconPartBeforePointer(stmt, x, y, includeEmptySites=True):
                     minDistToLeftIc = distToLeftIc
                     icOnLeft = ic
                     leftIcPart = partId
-        else:
+        else:  # Empty site
             ic, site = icOrSite
             distToLeftIc = emptySiteIsLeftOfPoint(ic, site, x, y)
             if distToLeftIc is None:
@@ -1035,7 +1040,7 @@ def iconPartBeforePointer(stmt, x, y, includeEmptySites=True):
                         distToLeftIc < minDistToLeftIc:
                     minDistToLeftIc = distToLeftIc
                     icOnLeft = icOrSite
-                    leftIcPart = None
+                    leftIcPart = 1  # empty-site partId from lexicalTraverse is 0
         prevIcOrSite = icOrSite
         prevIconPart = partId
     if icOnLeft:
@@ -1226,10 +1231,14 @@ def extendTextSelectToPointerFromAnchor(anchorIc, anchorPartId, anchorPos, x, y,
     as True, limit the selection to anchorIc (which must be a text-editable icon)."""
     # If there is currently no selection, establish an empty text selection at the anchor
     # position
-    if not anchorIc.window.sel.isText():
-        anchorIc.window.sel.selectSingleIconText(anchorIc, anchorPartId, anchorPos,
-            anchorPos, anchorDir='Left')
-    extendTextSelectToPointer(anchorIc.window, x, y, confineToAnchor=confineToAnchor)
+    if isinstance(anchorIc, tuple):
+        window = anchorIc[0].window
+    else:
+        window = anchorIc.window
+    if not window.sel.isText():
+        window.sel.selectSingleIconText(anchorIc, anchorPartId, anchorPos,  anchorPos,
+            anchorDir='Left')
+    extendTextSelectToPointer(window, x, y, confineToAnchor=confineToAnchor)
 
 def extendTextSelectToPointer(window, x, y, confineToAnchor=False):
     """Extend a text selection from the current selection or cursor in window, toward the
@@ -1254,10 +1263,10 @@ def extendTextSelectToPointer(window, x, y, confineToAnchor=False):
     # to the pointer position.  If the pointer is not in the anchor-containing statement,
     # we can handle the confined-to-anchor case since we now know the direction to the
     # pointer (the same-statement case is handled later on)
-    anchorStmt = anchorIc.topLevelParent(inclStmtComment=True)
+    anchorStmt = cursors.topLevelParentOfIcOrEmptySite(anchorIc, inclStmtComment=True)
     pointerStmt, pointerDirection, withinSeq = stmtAdjacentToPointer(anchorStmt, x, y)
     if confineToAnchor:
-        if not anchorIc.canEditText:
+        if not cursors.isIconAndCanEditText(anchorIc):
             print('extendTextSelectToPointer cannot confine selection for non-text icon')
             return
         if window.sel.isText() and not window.sel.leftIc is window.sel.rightIc:
@@ -1265,7 +1274,7 @@ def extendTextSelectToPointer(window, x, y, confineToAnchor=False):
             return
         if pointerStmt is not anchorStmt:
             toPos = 0 if pointerDirection == -1 else anchorIc.textCursorRange(1)[1]
-            anchorIc.window.cursor.selectToTextPos(anchorIc, 1, toPos)
+            window.cursor.selectToTextPos(anchorIc, 1, toPos)
             return
     # If the pointer is before the start or beyond the end of the sequence containing the
     # anchor, select the first or last text position of the sequence
@@ -1287,13 +1296,16 @@ def extendTextSelectToPointer(window, x, y, confineToAnchor=False):
             else:
                 for toIc, toPart in lexicalTraverse(pointerStmt, includeStmtComment=True):
                     pass
-                _, toPos = toIc.textCursorRange(toPart)
+                if isinstance(toIc, tuple):
+                    _, toPos = icon.emptySiteTextCursorRange()
+                else:
+                    _, toPos = toIc.textCursorRange(toPart)
         window.cursor.selectToTextPos(toIc, toPart, toPos)
         return
     # We know the statement that the pointer lines up with in y and can now localize
     # it to a particular icon part within that statement.
     pointerIc, pointerPartId, onIcon = iconPartBeforePointer(pointerStmt, x, y,
-        includeEmptySites=False)
+        includeEmptySites=True)
     # Even if we don't know the direction, the end of the selection will be determined
     # by the nearest text site of the icon part lexically to the left of the pointer
     if pointerIc is None:
@@ -1314,30 +1326,36 @@ def extendTextSelectToPointer(window, x, y, confineToAnchor=False):
     # anchor icon, in which case, figure out the lexical direction and select to the
     # appropriate end of that.
     if not confineToAnchor or pointerIc is anchorIc:
-        pos, _ = pointerIc.nearestTextCursorPos(pointerPartId, x, y, followWrap=True)
+        if isinstance(pointerIc, tuple):
+            pos, _ = icon.emptySiteNearestTextCursorPos(pointerIc, x, y)
+        else:
+            pos, _ = pointerIc.nearestTextCursorPos(pointerPartId, x, y, followWrap=True)
         if pos is None:
             if isinstance(pointerStmt, (icon.BlockEnd, commenticon.VerticalBlankIcon)):
                 if pointerDirection == 1:
                     ic, partId, pos = cursors.nextTextPos(pointerStmt, siteId='seqOut')
                 else:
                     ic, partId, pos = cursors.prevTextPos(pointerStmt, siteId='seqIn')
-                anchorIc.window.cursor.selectToTextPos(ic, partId, pos)
+                window.cursor.selectToTextPos(ic, partId, pos)
             else:
                 print("extendTextSelectToPointer encountered icon with no text positions"
                         " (not block-end or vb)", pointerIc.dumpName())
         else:
-            anchorIc.window.cursor.selectToTextPos(pointerIc, pointerPartId, pos)
+            window.cursor.selectToTextPos(pointerIc, pointerPartId, pos)
         return
-    for ic, part in lexicalTraverse(pointerStmt, includeStmtComment=True):
-        if ic is anchorIc:  # Anchor found before pointer
+    # We're confining the text cursor to the anchor icon (which we presume is a
+    # single-part text-editable icon), and the cursor is outside of that icon
+    for ic, part in lexicalTraverse(pointerStmt, includeStmtComment=True,
+            yieldEmptySites=True):
+        if ic is anchorIc:  # Anchor icon found before pointer
             _, toPos = anchorIc.textCursorRange(1)
             break
-        elif ic is pointerIc and part is pointerPartId:  # PointerIc found before anchor
+        elif ic == pointerIc and part == pointerPartId:  # PointerIc found before anchor
             toPos = 0
             break
     else:  # Shouldn't happen (found neither pointerIc nor anchorIc)
         toPos = 0
-    anchorIc.window.cursor.selectToTextPos(anchorIc, 1, toPos)
+    window.cursor.selectToTextPos(anchorIc, 1, toPos)
 
 def extendDragTargetStructural(fromIcon, step):
     """Uses step value (integer 0-n) to figure out what icons to highlight as a drag

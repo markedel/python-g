@@ -163,7 +163,7 @@ class Cursor:
         redraw the cursor, as the convention is to move the cursor before making layout
         calls to rearrange the icon structure, and then calling drawAndHold() to give
         the user immediate feedback as to where the cursor landed after an operation."""
-        if self.type == "text" and self.icon.canEditText or \
+        if self.type == "text" and isIconAndCanEditText(self.icon) or \
                 self.type == "typeover" and hasattr(self.icon, 'focusOut'):
             self.icon.focusOut(placeEntryText)
         if self.type is not None and eraseOld:
@@ -190,7 +190,7 @@ class Cursor:
         the cursor before making layout calls to rearrange the icon structure, and then
         calling drawAndHold() to give the user immediate feedback as to where the cursor
         landed after an operation."""
-        if self.type == "text" and self.icon.canEditText or \
+        if self.type == "text" and isIconAndCanEditText(self.icon) or \
                 self.type == "typeover" and hasattr(self.icon, 'focusOut'):
             self.icon.focusOut(placeEntryText)
         if self.type is not None and eraseOld:
@@ -212,8 +212,10 @@ class Cursor:
 
     def setToText(self, ic, pos=None, eraseOld=True, drawNew=False, placeEntryText=True,
              partId=1):
-        """Place the cursor within a text-edit-capable icon (ic), such as an entry
-        icon, text icon or comment icon.  Note that the cursor position within the text
+        """Place the cursor within a text-edit-capable icon (entry, comment or string) or
+        a proto-text cursor position on a non-text-edit-capabable one.  ic can also be
+        passed as a tuple of an icon and and icon site to place a proto-text cursor on
+        an empty series site.  Note that the cursor position within  text-editable icons
         is not held by the cursor object, but by ic.  Also be aware that this can cause
         rearrangement of icons by virtue of taking focus from an entry icon, which will
         then try to place its text content and pending arguments.  You must therefore
@@ -225,15 +227,15 @@ class Cursor:
         the cursor before making layout calls to rearrange the icon structure, and then
         calling drawAndHold() to give the user immediate feedback as to where the cursor
         landed after an operation."""
-        if self.icon != ic and (self.type == "text" and self.icon.canEditText or
-                self.type == "typeover" and hasattr(self.icon, 'focusOut')):
+        if self.icon != ic and (self.type == "text" and isIconAndCanEditText(self.icon)
+                or self.type == "typeover" and hasattr(self.icon, 'focusOut')):
             self.icon.focusOut(placeEntryText)
         if self.type is not None and eraseOld:
             self.erase()
         self.type = "text"
         self.icon = ic
         self.window.updateTypeoverStates()
-        if ic.canEditText:
+        if isIconAndCanEditText(self.icon):
             ic.focusIn()
             if pos is not None:
                 ic.setCursorPos(pos)
@@ -527,7 +529,7 @@ class Cursor:
             # (we know that the original cursor position is the anchor and the new
             # position is the active end).
             anchorIc = self.icon
-            if anchorIc.canEditText:
+            if isIconAndCanEditText(anchorIc):
                 anchorPartId = 1
                 anchorPos = anchorIc.cursorPos
             else:
@@ -546,12 +548,15 @@ class Cursor:
         else:
             # No usable anchor (give up)
             return
-        if anchorIc is newIc and anchorPartId == newPartId and anchorPos == newPos:
+        if anchorIc == newIc and anchorPartId == newPartId and anchorPos == newPos:
             # If both ends of the new selection point to the same character position, we
             # now have a 0-length selection and should remove it.
             redrawRect = comn.AccumRects()
             for i in origSel.keys():
-                redrawRect.add(i.rect)
+                if isinstance(i, tuple):
+                    icon.rectOfEmptySite(i[0], i[1])
+                else:
+                    redrawRect.add(i.rect)
             sel.clearSelection()
             if redrawRect.get() is not None:
                 self.window.refresh(redrawRect.get(), redraw=True)
@@ -589,7 +594,10 @@ class Cursor:
         changedIcons.add(sel.rightIc)
         redrawRect = comn.AccumRects()
         for i in changedIcons:
-            redrawRect.add(i.rect)
+            if isinstance(i, tuple):
+                redrawRect.add(icon.rectOfEmptySite(i[0], i[1]))
+            else:
+                redrawRect.add(i.rect)
         if redrawRect.get() is not None:
             self.window.refresh(redrawRect.get(), redraw=True)
         # We have established the selection anchor (by virtue of being asked to select
@@ -625,7 +633,7 @@ class Cursor:
         place its text content and pending arguments (so 1. don't call this where such
         rearrangement would cause trouble and 2. be sure to check for dirty icon layouts
         after calling)."""
-        if self.type == "text" and self.icon.canEditText:
+        if self.type == "text" and isIconAndCanEditText(self.icon):
             self.icon.focusOut(placeEntryText)
         if self.type is not None and eraseOld:
             self.erase()
@@ -684,16 +692,21 @@ class Cursor:
             else:
                 return None, 0, 0
         elif self.type == "text":
-            eIcon = self.icon
-            if eIcon is None:
+            if self.icon is None:
                 return None, 0, 0
+            elif isinstance(self.icon, tuple):
+                eIcon = self.icon[0]
+            else:
+                eIcon = self.icon
             cursorImg = eIcon.textCursorImage()
-            if eIcon.canEditText:
-                x, y = eIcon.cursorWindowPos(posOfImg=True)
+            if isinstance(self.icon, tuple):
+                x, y = icon.emptySiteTextCursorPos(self.icon, self.protoTextPos)
+            elif eIcon.canEditText:
+                x, y = eIcon.cursorWindowPos()
             else:
                 x, y = eIcon.textCursorWindowPos(self.textPartId, self.protoTextPos)
-                x -= cursorImg.width // 2
-                y -= cursorImg.height // 2
+            x -= cursorImg.width // 2
+            y -= cursorImg.height // 2
         elif self.type == "typeover":
             if self.icon is None:
                 return None, 0, 0
@@ -717,7 +730,7 @@ class Cursor:
         if self.type is None:
             return
         elif self.type == "text":
-            if self.icon.canEditText:
+            if isIconAndCanEditText(self.icon):
                 self.icon.arrowAction(direction, evt)
             else:
                 self.protoTextArrowAction(direction, self.textPartId, evt)
@@ -796,38 +809,56 @@ class Cursor:
 
     def protoTextArrowAction(self, direction, partId, evt):
         """Move cursor from a proto-text position in the given arrow direction"""
-        #... I'm not sure the code below is correct in moving to the icon site when
-        #    extending a text selection, but not sure it's wrong, either.  It's not
-        #    helpful to the user to stop on the site with alt held, but if alt is not
-        #    held, we do want to move off, and might want the behavior to match?
+        # ...It sometimes feels like we abandon proto-text cursors too easily (user moves
+        # the cursor without holding Alt).  It might be worth considering staying within
+        # the text and adding some other exit mechanism.
         if direction == 'Left':
             if evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK:
                 newIc, newPartId, newPos = prevTextPos(self.icon, pos=self.protoTextPos,
                     partId=self.textPartId, direction='Left')
             else:
-                # Move cursor out of text if alt or shift is not pressed (... consider
-                # staying within text, but cursor will be "locked out" if it leaves)
-                parent = self.icon.parent()
-                if parent is None:
-                    ic, site = expredit.siteLeftOfPart(self.icon, partId)
-                    self.setToIconSite(ic, site)
+                # Move cursor out of text if alt or shift is not pressed
+                if isinstance(self.icon, tuple):  # Empty site
+                    self.setToIconSite(self.icon[0], self.icon[1])
                 else:
-                    self.setToIconSite(parent, parent.siteOf(self.icon))
+                    parent = self.icon.parent()
+                    if parent is None:
+                        ic, site = expredit.siteLeftOfPart(self.icon, partId)
+                        self.setToIconSite(ic, site)
+                    else:
+                        self.setToIconSite(parent, parent.siteOf(self.icon))
                 return
         elif direction == 'Right':
             if evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK:
                 newIc, newPartId, newPos = nextTextPos(self.icon, pos=self.protoTextPos,
                     partId=self.textPartId, direction='Right')
             else:
-                self.setToIconSite(self.icon, self.icon.siteRightOfPart(partId))
+                # Move cursor out of text if alt or shift is not pressed
+                if isinstance(self.icon, tuple):  # Empty site
+                    ic, siteId = self.icon
+                    siteId = iconsites.nextSeriesSiteId(siteId)
+                    if not ic.hasSite(siteId):
+                        # If this actually happens, write some code for it...
+                        print("protoTextArrowAction: moving cursor from non-existant"
+                            "empty-icon-site text site")
+                        return
+                    self.setToIconSite(ic, siteId)
+                else:
+                    self.setToIconSite(self.icon, self.icon.siteRightOfPart(partId))
                 return
         else:
             # direction is up or down, do a geometric traverse
-            cursorX, cursorY = self.icon.textCursorWindowPos(self.textPartId,
-                self.protoTextPos)
+            if isinstance(self.icon, tuple):  # Empty site
+                cursorX, cursorY = icon.emptySiteTextCursorPos(self.icon,
+                    self.protoTextPos)
+                stmtOfCursor = self.icon[0].topLevelParent()
+            else:
+                cursorX, cursorY = self.icon.textCursorWindowPos(self.textPartId,
+                    self.protoTextPos)
+                stmtOfCursor = self.icon.topLevelParent()
             onlyTextFields = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
-            cursorType, ic, site, pos, partId = geometricTraverseFromPos(cursorX, cursorY,
-                direction, self.window, limitAdjacentStmt=self.icon,
+            cursorType, ic, site, pos, partId = geometricTraverseFromPos(cursorX,
+                cursorY, direction, self.window, limitAdjacentStmt=stmtOfCursor,
                 limitDist=(HORIZ_ARROW_MAX_DIST, VERT_ARROW_MAX_DIST),
                 editableTextFields=True, onlyTextFields=onlyTextFields)
             if onlyTextFields:
@@ -901,10 +932,12 @@ class Selection:
         self.selSet = set()
         # Text selections use a dictionary, rather than a set, because a text selection
         # cuts across icons and can involve some icon parts and not others.  textSel is
-        # a dictionary that maps icons to a list of their involved parts.  The part list
-        # is an integer whose bits represent parts as a one shifted by the partId.  The
-        # starting and ending icon(s) are also explicitly recorded, as they can contain
-        # partially-selected text.
+        # a dictionary that maps icons and empty series sites to a list of their involved
+        # parts.  The part list is an integer whose bits represent parts as a one shifted
+        # by the partId.  The starting and ending icon(s) are also explicitly recorded,
+        # as they can contain partially-selected text.  The textSel dictionary keys are
+        # of the same form as selSet icon selections: a mixture of icons and tuple pairs
+        # denoting selected empty series sites.
         self.textSel = None
         self.leftIc = None
         self.rightIc = None
@@ -961,7 +994,10 @@ class Selection:
         refreshRegion = comn.AccumRects()
         if self.isText():
             for ic in self.textSel.keys():
-                refreshRegion.add(ic.rect)
+                if isinstance(ic, tuple):
+                    refreshRegion.add(icon.rectOfEmptySite(ic[0], ic[1]))
+                else:
+                    refreshRegion.add(ic.rect)
         else:
             self.pruneSelectedIcons()
             if len(self.selSet) == 0:
@@ -1016,7 +1052,7 @@ class Selection:
         removeSet = set()
         if self.isText():
             for ic in self.textSel.keys():
-                topParent = ic.topLevelParent(inclStmtComment=True)
+                topParent = topLevelParentOfIcOrEmptySite(ic, inclStmtComment=True)
                 if topParent is None or topParent not in self.window.topIcons:
                     print("Removing deleted icon from text selection: did something not"
                         " clear?")
@@ -1051,7 +1087,7 @@ class Selection:
         self.rightPartId = partId
         self.rightPos = toPos
         self.textSel = {ic:1 << partId}
-        self.anchorDir = anchorDir
+        self.anchorDirection = anchorDir
 
     def selectTextBetween(self, fromIc, fromPartId, fromPos, toIc, toPartId, toPos,
             preOrdered=False):
@@ -1060,12 +1096,12 @@ class Selection:
         False if the icons are not in the same sequence (or preOrdered was specified
         inappropriately).  Note that this does not set or clear the existing (icon)
         selection, nor does it set anchorDirection."""
-        # If we don't yet know if fromSite and toSite are in the same sequence and correct
-        # order, call stmtOrder to pre-scan the top-level icons. Note that order-independence
-        # within a range that is confined to a single statement is not handled, here, but in
-        # the lexicalTraverse call.
-        toIcTopIcon = toIc.topLevelParent(inclStmtComment=True)
-        fromIcTopIcon = fromIc.topLevelParent(inclStmtComment=True)
+        # If we don't yet know if fromSite and toSite are in the same sequence and
+        # correct order, call stmtOrder to pre-scan the top-level icons. Note that
+        # order-independence within a range that is confined to a single statement is
+        # not handled, here, but in the lexicalTraverse call.
+        toIcTopIcon = topLevelParentOfIcOrEmptySite(toIc, inclStmtComment=True)
+        fromIcTopIcon = topLevelParentOfIcOrEmptySite(fromIc, inclStmtComment=True)
         if not preOrdered:
             order = expredit.stmtOrder(fromIcTopIcon, toIcTopIcon)
             if order is None:
@@ -1091,17 +1127,20 @@ class Selection:
                 continue
             # Traverse all statatements in the range, lexically, recording all icon parts
             # that appear between fromIc, fromPartId and toIc, toPartId inclusive.
-            for ic, partId in expredit.lexicalTraverse(topIc, yieldNakedTuples=True):
-                if ic is toIc and partId is toPartId and not started:
+            for ic, partId in expredit.lexicalTraverse(topIc, yieldNakedTuples=True,
+                    yieldEmptySites=True):
+                if (ic is toIc and partId == toPartId or isinstance(ic, tuple) and
+                        ic == toIc) and not started:
                     # toIc may be before fromIc in the statement.  If so, reverse them
-                    if fromIc is toIc and fromPartId == toPartId:
+                    if fromIc == toIc and fromPartId == toPartId:
                         if fromPos > toPos:
                             toPos, fromPos = fromPos, toPos
                     else:
                         toIc, fromIc = fromIc, toIc
                         toPartId, fromPartId = fromPartId, toPartId
                         toPos, fromPos = fromPos, toPos
-                if ic is fromIc and partId == fromPartId:
+                if ic is fromIc and partId == fromPartId or isinstance(ic, tuple) and \
+                        ic == fromIc:
                     started = True
                 if started:
                     if isinstance(ic, listicons.TupleIcon) and ic.noParens:
@@ -1113,17 +1152,23 @@ class Selection:
                         else:
                             iconsInRange[ic] = 0
                     else:
+                        if isinstance(ic, tuple):
+                            # For empty sites, lexicalTraverse returns partId of 0, but
+                            # to indicate underline, we need a nonzero value.
+                            partId = 1
                         if ic in iconsInRange:
                             iconsInRange[ic] |= 1 << partId
                         else:
                             iconsInRange[ic] = 1 << partId
-                        for i in ic.traverse():
+                        if not isinstance(ic, tuple):
                             # We include the hierarchy under the icon to give us either
                             # a single hierarchy or a series, as well as a contiguous
                             # lexical range, allowing the result to be reparsed as a unit
-                            if i not in iconsInRange:
-                                iconsInRange[i] = 0
-                if ic is toIc and partId is toPartId:
+                            for i in expredit.createHierSel(ic, inclStmtComment=False):
+                                if i not in iconsInRange:
+                                    iconsInRange[i] = 0
+                if ic is toIc and partId == toPartId or isinstance(ic, tuple) and \
+                        ic == toIc:
                     break
             if topIc is toIcTopIcon:
                 self.leftIc = fromIc
@@ -1153,10 +1198,9 @@ class Selection:
         # and part IDs (probably needed for search).
         if not self.isText():
             return None, None, None, None, None
-        stmtOfLeftIc = self.leftIc.topLevelParent()
-        stmtOfRightIc = self.rightIc.topLevelParent()
-        if self.leftIc is self.rightIc and isinstance(self.leftIc,
-                stringicon.StringIcon):
+        stmtOfLeftIc = topLevelParentOfIcOrEmptySite(self.leftIc)
+        stmtOfRightIc = topLevelParentOfIcOrEmptySite(self.rightIc)
+        if self.leftIc is self.rightIc and isinstance(self.leftIc, stringicon.StringIcon):
             # For a selection contained within a single string icon, the general code
             # can produce undesirable results, since the string may be split across
             # lines with intervening quote and line continuation characters (when the
@@ -1233,10 +1277,43 @@ class Selection:
         # generated from the save text
         startSelIdx = startUnderlineIdx = endSelIdx = endUnderlineIdx = pendingIdx = None
         pendingIcons = None
-        skipIcs = set()
-        for ic, partId in expredit.lexicalTraverse(stmt, yieldEmptySites=False):
+        for ic, partId in expredit.lexicalTraverse(stmt, yieldEmptySites=True):
             leftPrefixOffset = rightPrefixOffset = 0
-            if ic in skipIcs:
+            if isinstance(ic, tuple):
+                # Empty sites: When processing icons, the main loop of this function
+                # skips over whitespace and commas before looking for matching text.
+                # When we're looking for an empty site, we need to pay attention to
+                # commas and skip just the right number (0 for site _0 and 1 for all
+                # others) of them, and label the following whitespace (for which
+                # tokenize does not actually produce a token).
+                _, siteIdx = iconsites.splitSeriesSiteId(ic[1])
+                if siteIdx == 0:
+                    # We're' already advanced to the next token
+                    startIdx = 0 if tokenIdx == 0 else (tokens[tokenIdx-1].end[1])
+                else:
+                    # Advance to the token holding the series-site comma
+                    while tokens[tokenIdx].type in (tokenize.NL, tokenize.INDENT,
+                            tokenize.DEDENT):
+                        tokenIdx += 1
+                    if tokens[tokenIdx].string != ',':
+                        print(f"getAnnotatedText: failed match because expected comma "
+                            f"before empty site {ic[0].dumpName()}, {ic[1]}")
+                        return None, None, None, None, None, None
+                    startIdx = tokens[tokenIdx].end[1]
+                    tokenIdx += 1
+                # We duplicate the match==True processing, here and then recycle the loop
+                # to keep the rest of the code free of the complications of having no
+                # associated token and ic not being an icon.
+                if ic in self.textSel:
+                    if startSelIdx is None:
+                        startSelIdx = startIdx
+                    if ic == self.leftIc:
+                        startUnderlineIdx = startIdx + self.leftPos
+                    if ic == self.rightIc:
+                        endUnderlineIdx = startIdx + self.rightPos
+                else:
+                    if startSelIdx is not None and endSelIdx is None:
+                        endSelIdx = startIdx
                 continue
             elif isinstance(ic, stringicon.StringIcon):
                 partText = ic.strType + ic.quote + ic.string + ic.quote
@@ -1444,10 +1521,20 @@ def nextTextPosInStmt(ic, pos=None, partId=None, siteId=None, direction=None):
     startAtSite = None
     started = False
     if pos is not None:
-        if ic.canEditText:
+        if isIconAndCanEditText(ic):
             minPos, maxPos = ic.textCursorRange()
             textLen = maxPos - minPos
             editable = True
+        elif isinstance(ic, tuple):
+            if pos == 0:
+                return ic, 1, 1
+            else:
+                startAtSite = lexicalTraverse(ic[0], ic[1], 'Right',
+                    traverseStmtComment=True)
+                started = True
+                textLen = 1
+                editable = False
+                ic = ic[0]
         else:
             text, font, _, _, _, _, _, editable = ic.getTextSelMetrics(partId)
             textLen = 1 if font is None else len(text)
@@ -1501,44 +1588,55 @@ def nextTextPos(ic, pos=None, partId=None, siteId=None, direction=None):
 def prevTextPosInStmt(ic, pos=None, partId=None, siteId=None, direction=None):
     """Return icon, partId, and cursorPosition for the first text-site (including
     proto-text) to the left of either the text position represented by (ic, pos, partId)
-    or the site represented by (ic, siteId).  direction can be specified as 'Left' or
-    'Right' (direction from anchor site) to skip the initial site of non-editable icon
+    or the icon site represented by (ic, siteId).  direction can be specified as 'Left'
+    or 'Right' (direction from anchor site) to skip the initial site of non-editable icon
     parts such as end parens and inline-else.  Returns None for icon if the specified
     partId or site is at the left edge of the statement containing ic (note that this is
     different from prevTextPos(), which returns the starting position)."""
     if pos is not None:
-        if ic.canEditText:
+        stopAtSite = False
+        if isIconAndCanEditText(ic):
             editable = True
             partId = 1
+        elif isinstance(ic, tuple):
+            editable = False
+            if pos == 1:
+                return ic, 1, 0
+            stopAtSite = True
+            partId = None
+            ic, siteId = ic
         else:
             _, _, _, _, _, _, _, editable = ic.getTextSelMetrics(partId)
         if pos > 0 and (editable or direction == 'Left'):
             return ic, partId, pos - 1
-        stopAtSite = False
     else:
         stopAtSite = True
     lastIc = lastPartId = None
-    for travIc, travPart in expredit.lexicalTraverse(
-            ic.topLevelParent(inclStmtComment=True), yieldAllSites=stopAtSite):
+    for travIc, travPart in expredit.lexicalTraverse(ic.topLevelParent(
+            inclStmtComment=True), yieldAllSites=stopAtSite, yieldEmptySites=True):
         if stopAtSite and isinstance(travIc, tuple) and isinstance(travIc[0], str) and \
                 travIc[0] == siteId and travIc[1] == ic:
             break
         elif travIc is ic and travPart == partId:
             break
-        elif not isinstance(travIc, tuple):
+        elif not isinstance(travIc, tuple) or isinstance(travIc[0], icon.Icon):
             lastIc = travIc
             lastPartId = travPart
     if lastIc is None:
         # Stop condition was not found, assume we're at the start of the statement
         return None, None, None
-    if lastIc.canEditText:
+    if isIconAndCanEditText(lastIc):
         return lastIc, 1, lastIc.textCursorRange(1)[1]
-    text, font, _, _, _, _, _, editable = lastIc.getTextSelMetrics(lastPartId)
-    textLen = 1 if font is None else len(text)
-    if editable or direction == 'Left':
-        return lastIc, lastPartId, textLen
+    elif isinstance(lastIc, tuple):
+        # lastIc is an empty site: return the rightmost text position
+        return lastIc, 1, 1
     else:
-        return lastIc, lastPartId, textLen - 1
+        text, font, _, _, _, _, _, editable = lastIc.getTextSelMetrics(lastPartId)
+        textLen = 1 if font is None else len(text)
+        if editable or direction == 'Left':
+            return lastIc, lastPartId, textLen
+        else:
+            return lastIc, lastPartId, textLen - 1
 
 def prevTextPos(ic, pos=None, partId=None, siteId=None, direction=None):
     """Return icon, partId, and cursorPosition for the first text-site (including
@@ -1564,7 +1662,7 @@ def prevTextPos(ic, pos=None, partId=None, siteId=None, direction=None):
     prevIc, prevPart, prevPos = prevTextPosInStmt(ic, pos, partId, siteId, direction)
     if prevIc is not None:
         return prevIc, prevPart, prevPos
-    prevStmt = ic.topLevelParent().childAt('seqIn')
+    prevStmt = topLevelParentOfIcOrEmptySite(ic).childAt('seqIn')
     while isinstance(prevStmt, (icon.BlockEnd, commenticon.VerticalBlankIcon)):
         prevStmt = prevStmt.prevInSeq()
     if prevStmt is None:
@@ -1794,6 +1892,20 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
                     if pos is not None:
                         cursorSites.append((*pos, 'text', winIcon, None, cursorPos,
                             partId))
+                # Empty series sites get proto-text sites (regardless of highlighting),
+                # because they allow users to selectively include the commas that
+                # separate them within a text selection.  The rightmost (icon) site of
+                # the series, however, gets none as it has no comma to represent.
+                for siteSeries in winIcon.sites.childSites(expandSeries=False):
+                    if isinstance(siteSeries, iconsites.IconSiteSeries):
+                        for i, site in enumerate(siteSeries):
+                            if site.att is not None or i - 1 >= len(siteSeries):
+                                continue
+                            cursorIc = (winIcon, site.name)
+                            x, y = icon.emptySiteTextCursorPos(cursorIc, 0)
+                            cursorSites.append((x, y, 'text', cursorIc, None, 0, 1))
+                            x, y = icon.emptySiteTextCursorPos(cursorIc, 1)
+                            cursorSites.append((x, y, 'text', cursorIc, None, 1, 1))
     # Rank the destination positions by nearness to the current cursor position
     # in the cursor movement direction, and cull those in the wrong direction
     choices = []
@@ -1850,6 +1962,16 @@ def protoTextToEntryPos(ic, partId, pos):
     if isinstance(ic, nameicons.AttrIcon):
         return pos + 1
     return pos
+
+def isIconAndCanEditText(icOrSite):
+    if isinstance(icOrSite, tuple):
+        return False
+    return icOrSite.canEditText
+
+def topLevelParentOfIcOrEmptySite(icOrSite, inclStmtComment=False):
+    if isinstance(icOrSite, tuple):
+        return icOrSite[0].topLevelParent(inclStmtComment=inclStmtComment)
+    return icOrSite.topLevelParent(inclStmtComment=inclStmtComment)
 
 def topSite(ic, seqDown=True):
     """Return the attachment site (and therefore leftmost cursor site) for an icon at

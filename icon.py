@@ -1275,6 +1275,13 @@ class Icon:
         rectangle that specify the origin (y center) for the text cursor."""
         pass
 
+    def contextPopup(self, popup):
+        """Icons can define this to add items to the context-sensitive (tkinter) pop-up
+        menu (passed as popup) that appears when the right mouse button is pressed on an
+        icon.  By convention, added items should start with a separator.  This menu is
+        destroyed after use and gets re-created from-scratch on right-mouse press."""
+        return
+
     def _drawFromDrawList(self, toDragImage, location, clip, style):
         if location is None:
             location = self.rect[:2]
@@ -1430,6 +1437,11 @@ class Icon:
             color = EMPTY_ARG_COLOR
             # Per selection rules, we color non-series sites to match the *icon*, but for
             # series sites, the selection/highlight must be explicitly list the *site*.
+            if isSeriesSite:
+                icOrSite = (self, site.name)
+                textSelected, drawUnderline = self.window.sel.isTextSelected(icOrSite, 1)
+            else:
+                textSelected = drawUnderline = False
             icOrSite = (self, site.name) if isSeriesSite else self
             if self.window.highlightedForReplace is not None and \
                     icOrSite in self.window.highlightedForReplace:
@@ -1439,6 +1451,8 @@ class Icon:
                 color = IMMEDIATE_COPY_TINT
             elif icOrSite in self.window.sel.selSet:
                 color = SELECT_TINT
+            elif textSelected:
+                color = TEXT_SEL_LIGHT_TINT
             alpha = color[3] / 255.0
             width = (LIST_EMPTY_ARG_WIDTH if isSeriesSite else EMPTY_ARG_WIDTH) - 2
             x = iconX + site.xOffset + inSiteImage.width
@@ -1455,6 +1469,29 @@ class Icon:
                     contentImg = outImg.crop((l, t, r, b))
                     compositeImg = Image.blend(contentImg, tintImg, alpha)
                     outImg.paste(compositeImg, (l, t))
+            if drawUnderline:
+                sel = self.window.sel
+                ulBottom = y + height
+                ulTop = ulBottom - TEXT_SEL_UNDERLINE_THICKNESS
+                ulLeft = x
+                if icOrSite == sel.leftIc:
+                    ulLeft += TEXT_MARGIN if sel.leftPos == 0 else width - TEXT_MARGIN
+                ulRight = x + width
+                if icOrSite == sel.rightIc:
+                    ulRight -= (width - TEXT_MARGIN) if sel.rightPos == 0 else TEXT_MARGIN
+                l = max(ulLeft, clipLeft)
+                r = min(ulRight, clipRight)
+                t = max(ulTop, clipTop)
+                b = min(ulBottom, clipBottom)
+                if r - l > 0 and b - t > 0:
+                    if toDragImage:
+                        draw.rectangle((l, t, r-1, b-1), fill=TEXT_SEL_DARK_TINT)
+                    else:
+                        alpha = TEXT_SEL_DARK_TINT[3] / 255.0
+                        tintImg = Image.new('RGB', (r-l, b-t), TEXT_SEL_DARK_TINT)
+                        contentImg = outImg.crop((l, t, r, b))
+                        compositeImg = Image.blend(contentImg, tintImg, alpha)
+                        outImg.paste(compositeImg, (l, t))
 
     def _serialize(self, offset, iconsToCopy, **args):
         currentSeries = None
@@ -2539,6 +2576,70 @@ def yStretchImage(img, stretchPts, desiredHeight):
     copyImg = img.crop((0, oldY, img.width, img.height + 1))
     newImg.paste(copyImg, (0, newY, img.width, newImg.height+1))
     return newImg
+
+def emptySiteTextCursorPos(icSitePair, cursorPos):
+    """Returns the location (center x, center y in content coordinate) at which to
+    draw the proto-text cursor for a given empty site (icSitePair) presented in the
+    form of a two-element tuple of icon and site and a text position (cursorPos) of
+    either 0 or 1"""
+    ic, site = icSitePair
+    x, y = ic.posOfSite(site)
+    x += OUTPUT_SITE_DEPTH
+    if cursorPos == 0:
+        x += TEXT_MARGIN
+    else:
+        x += LIST_EMPTY_ARG_WIDTH - TEXT_MARGIN
+    return x, y
+
+def emptySiteNearestTextCursorPos(icSitePair, x, y):
+    """Equivalent of nearestTextCursorPos icon method for empty site text cursor
+    positions"""
+    ic, siteId = icSitePair
+    l, t, r, b = rectOfEmptySite(ic, siteId)
+    if x < l + (r - l) // 2:
+        cursorPos = 0
+        cursorX = l + TEXT_MARGIN
+    else:
+        cursorPos = 1
+        cursorX = r - TEXT_MARGIN
+    cursorY = t + (b - t) // 2
+    return cursorPos, (cursorX, cursorY)
+
+def rectOfEmptySite(ic, siteId):
+    """Return left, top, right, bottom for the area of an empty site to select
+    or highlight or redraw."""
+    site = ic.sites.lookup(siteId)
+    isSeriesSite = iconsites.isSeriesSiteId(siteId)
+    icX, icY = ic.rect[:2]
+    left = icX + site.xOffset + inSiteImage.width
+    height = minTxtIconHgt - 2
+    top = icY + site.yOffset - height // 2
+    right = left + (LIST_EMPTY_ARG_WIDTH if isSeriesSite else EMPTY_ARG_WIDTH)
+    bottom = top + height
+    return left, top, right, bottom
+
+def emptySitesInRect(ic, rect):
+    """Return any empty series sites that ic has in rect as ic+site pairs (the form
+    used to represent them in selections)."""
+    if not comn.rectsTouch(rect, ic.rect):
+        return None
+    rVal = None
+    for siteOrSeries in ic.sites.allSites(expandSeries=False):
+        if isinstance(siteOrSeries, iconsites.IconSiteSeries) and \
+                siteOrSeries.type == 'input':
+            for site in siteOrSeries:
+                if site.att is None:
+                    left, top, right, bottom = rectOfEmptySite(ic, site.name)
+                    if comn.rectsTouch(rect, (left, top, right, bottom)):
+                        if rVal is None:
+                            rVal = []
+                        rVal.append((ic, site.name))
+    return rVal
+
+def emptySiteTextCursorRange():
+    """Return the minimum and maximum text cursor position within an empty site
+    (not very interesting, but for parallelism with textCursorRange icon method."""
+    return 0, 1
 
 def createAstDataRef(ic, value=None):
     """Icons representing data objects which need their execution to return a particular

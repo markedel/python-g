@@ -1,6 +1,7 @@
 # Copyright Mark Edel  All rights reserved
 from PIL import Image, ImageDraw
 import ast
+import tkinter as tk
 import comn
 import icon
 import filefmt
@@ -1064,6 +1065,30 @@ class ListIcon(ListTypeIcon):
         return [("Lists", "library/stdtypes.html#lists"),
             ("Mutable Sequences", "reference/datamodel.html#index-22")]
 
+    def contextPopup(self, popup):
+        popup.add_separator()
+        cascadeMenu = tk.Menu(self.window.imgFrame, tearoff=0)
+        cascadeMenu.add_command(label="Tuple", command=self._chgTupleCb)
+        cascadeMenu.add_command(label="Set",command=self._chgSetCb)
+        cascadeMenu.add_command(label="Paren", command=self._chgParenCb)
+        if len(self.sites.argIcons) > 1:
+            cascadeMenu.entryconfig("Paren", state=tk.DISABLED)
+        else:
+            cascadeMenu.entryconfig("Paren", state=tk.NORMAL)
+        popup.add_cascade(label="Change To", menu=cascadeMenu)
+
+    def _chgTupleCb(self):
+        changeListType(self, TupleIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgSetCb(self):
+        changeListType(self, DictIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgParenCb(self):
+        changeListType(self, parenicon.CursorParenIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
 class TupleIcon(ListTypeIcon):
     """Tuple icons have a bunch of special cases worth mentioning:
         1) We retain the python text-syntax for a single element tuple containing a
@@ -1322,6 +1347,30 @@ class TupleIcon(ListTypeIcon):
                 "reference/expressions.html#generator-expressions")]
         return [("Tuples", "library/stdtypes.html#tuples"),
         ("Immututable Sequences", "reference/datamodel.html#index-17")]
+
+    def contextPopup(self, popup):
+        popup.add_separator()
+        cascadeMenu = tk.Menu(self.window.imgFrame, tearoff=0)
+        cascadeMenu.add_command(label="List", command=self._chgListCb)
+        cascadeMenu.add_command(label="Set",command=self._chgSetCb)
+        cascadeMenu.add_command(label="Paren", command=self._chgParenCb)
+        if len(self.sites.argIcons) > 2 or self.childAt('argIcons_1') is not None:
+            cascadeMenu.entryconfig("Paren", state=tk.DISABLED)
+        else:
+            cascadeMenu.entryconfig("Paren", state=tk.NORMAL)
+        popup.add_cascade(label="Change To", menu=cascadeMenu)
+
+    def _chgListCb(self):
+        changeListType(self, ListIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgSetCb(self):
+        changeListType(self, DictIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgParenCb(self):
+        changeListType(self, parenicon.CursorParenIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
 
 class DictIcon(ListTypeIcon):
     def __init__(self, window, closed=True, obj=None, typeover=False, location=None):
@@ -1624,6 +1673,30 @@ class DictIcon(ListTypeIcon):
             docRefs.insert(0, ("Comprehensions",
                 "reference/expressions.html#comprehensions"))
         return docRefs
+
+    def contextPopup(self, popup):
+        popup.add_separator()
+        cascadeMenu = tk.Menu(self.window.imgFrame, tearoff=0)
+        cascadeMenu.add_command(label="List", command=self._chgListCb)
+        cascadeMenu.add_command(label="Tuple",command=self._chgTupleCb)
+        cascadeMenu.add_command(label="Paren", command=self._chgParenCb)
+        if len(self.sites.argIcons) > 1:
+            cascadeMenu.entryconfig("Paren", state=tk.DISABLED)
+        else:
+            cascadeMenu.entryconfig("Paren", state=tk.NORMAL)
+        popup.add_cascade(label="Change To", menu=cascadeMenu)
+
+    def _chgListCb(self):
+        changeListType(self, ListIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgTupleCb(self):
+        changeListType(self, TupleIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
+
+    def _chgParenCb(self):
+        changeListType(self, parenicon.CursorParenIcon)
+        self.window.refreshDirty(addUndoBoundary=True)
 
 class CallIcon(icon.Icon):
     pythonDocRef = [("Calls", "reference/expressions.html#calls")]
@@ -3754,6 +3827,85 @@ def  subsCanonicalInterchangeIcon(ic):
         if ic.isSelected():
             subsIc.select(True)
     return subsIc
+
+def canChangeListType(ic, toType):
+    """Given either a paren open or close character (one of '([{}])') or an icon class,
+    determines if the given icon, ic, can be substituted via the changeListType call.
+    If it can, returns the icon class corresponding to the requested paren type (or just
+    the icon class requested if toType is a class).  Otherwise, returns None."""
+    if isinstance(ic, parenicon.CursorParenIcon):
+        if isinstance(toType, ListIcon) or toType in '[]':
+            return ListIcon
+        elif isinstance(toType, DictIcon) or toType in '{}':
+            return DictIcon
+        elif isinstance(toType, TupleIcon) or toType in '()':
+            return TupleIcon
+    elif isinstance(ic, TupleIcon):
+        if isinstance(toType, ListIcon) or toType in '[]':
+            return ListIcon
+        elif isinstance(toType, DictIcon) or toType in '{}':
+            return DictIcon
+        elif (isinstance(toType, parenicon.CursorParenIcon) or toType in '()') and \
+                len(ic.sites.argIcons) == 2 and ic.childAt('argIcons_1') is None:
+            return parenicon.CursorParenIcon
+    elif isinstance(ic, ListIcon):
+        if (isinstance(toType, parenicon.CursorParenIcon) or toType in '()') and \
+                len(ic.sites.argIcons) == 1:
+            return parenicon.CursorParenIcon
+        elif isinstance(toType, TupleIcon) or toType in '()':
+            return TupleIcon
+        elif isinstance(toType, DictIcon) or toType in '{}':
+            return DictIcon
+    elif isinstance(ic, DictIcon):
+        if (isinstance(toType, parenicon.CursorParenIcon) or toType in '()') and \
+                len(ic.sites.argIcons) == 1:
+            return parenicon.CursorParenIcon
+        elif isinstance(toType, TupleIcon) or toType in '()':
+            return TupleIcon
+        elif isinstance(toType, ListIcon) or toType in '[]':
+            return ListIcon
+    elif isinstance(ic, CallIcon):
+        if isinstance(toType, subscripticon.SubscriptIcon) or toType in '[]':
+            return subscripticon.SubscriptIcon
+    elif isinstance(ic, subscripticon.SubscriptIcon):
+        if isinstance(toType, CallIcon) or toType in '()':
+            return CallIcon
+    return None
+
+def changeListType(ic, toClass):
+    """Replace paren/bracket/brace-type icon, ic, with an icon of the given class.
+    Note that this function does not check for validity of arguments, and caller must
+    first vet ic and toClass with canChangeListType (or use the class it returns for a
+    given paren type) before calling."""
+    # Extract arguments from ic
+    ic.window.requestRedraw(ic.topLevelParent().hierRect())
+    if isinstance(ic, (ListTypeIcon, CallIcon, subscripticon.SubscriptIcon)):
+        args = ic.argIcons()
+        if isinstance(ic, TupleIcon) and len(args) == 2 and args[1] is None:
+            del args[1]
+        for _ in range(len(args)):
+            ic.replaceChild(None, 'argIcons_0')
+    elif isinstance(ic, parenicon.CursorParenIcon):
+        args = [ic.childAt('argIcon')]
+        ic.replaceChild(None, 'argIcon')
+    else:
+        return
+    attr = ic.childAt('attrIcon')
+    if attr is not None:
+        ic.replaceChild(None, 'attrIcon')
+    # Create icon of appropriate type and populate it with args and attributes from ic
+    newIc = toClass(window=ic.window, closed=True)
+    if isinstance(newIc, parenicon.CursorParenIcon):
+        newIc.replaceChild(args[0], 'argIcon')
+        cursorSite = 'argIcon'
+    else:
+        newIc.insertChildren(args, 'argIcons', 0)
+        cursorSite = 'argIcons_0'
+    if attr is not None:
+        newIc.replaceChild(attr, 'attrIcon')
+    # Replace ic with the newly created icon
+    ic.replaceWith(newIc)
+    newIc.window.cursor.setToIconSite(newIc, cursorSite)
 
 def composeAttrAstIf(ic, icAst, skipAttr):
     """Wrapper for icon.composeAttrAst, giving it a disable flag (skipAttr), to simplify

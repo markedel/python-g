@@ -537,7 +537,7 @@ class CommentIcon(icon.Icon):
     def textCursorImage(self):
         return textCursorImage
 
-    def cursorWindowPos(self, posOfImg=False):
+    def cursorWindowPos(self):
         x, y = self.rect[:2]
         x += icon.dragSeqImage.width - 1 + icon.TEXT_MARGIN + poundImage.width
         y += icon.TEXT_MARGIN + (STMT_COMMENT_V_TEXT_OFFSET if
@@ -558,8 +558,7 @@ class CommentIcon(icon.Icon):
             charCount += len(line)
         x += int(charsInLine * charWidth)
         y += lineCount * lineSpacing
-        if not posOfImg:
-            y += charHeight // 2
+        y += charHeight // 2
         return x, y
 
     def setCursorPos(self, pos):
