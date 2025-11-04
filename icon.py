@@ -73,7 +73,8 @@ TYPE_ANN_TINT = (255, 255, 255, 128)
 PENDING_REMOVE_TINT = (255, 10, 10, 100)
 IMMEDIATE_COPY_TINT = (0, 180, 255, 40)
 BLACK = (0, 0, 0, 255)
-SEQ_RULE_COLOR = (165, 180, 165, 255)
+SEQ_RULE_COLOR = (218, 224, 218, 255)
+SEQ_RULE_LOOP_COLOR = (200, 200, 200, 255)
 SEQ_CONNECT_COLOR = (220, 220, 220, 255)
 EMPTY_ARG_COLOR = (255, 0, 0, 30)
 
@@ -125,6 +126,10 @@ BLOCK_SEQ_MARGIN = 2
 # Text selections have a dark (underline) part and a light (upper) part, and are confined
 # to text and text-margin parts of an icon.  Width of the underline part in pixels.
 TEXT_SEL_UNDERLINE_THICKNESS = 3
+
+# Number of pixels of whitespace to leave on each side of sequence rules for lines that
+# cross sequence rules (loop hoops and return arrows)
+SEQ_RULE_INTERSECT_SPACE = 4
 
 outSiteImage = comn.asciiToImage((
  "..o",
@@ -270,6 +275,38 @@ branchFootImage = comn.asciiToImage((
  "ooo                     ooo",
  "ooooooooooooooooooooooooooo"))
 
+loopFootImage = comn.asciiToImage((
+ "oooo5158oooooooooooo8515ooo",
+ "ooooo952%%%%%%%%%%%%248oooo",
+ "ooooooooooooooooooooooooooo"), tint=SEQ_RULE_LOOP_COLOR)
+
+loopReturnHoop = comn.asciiToImage((
+ "9......",
+ "7......",
+ "5......",
+ "19.....",
+ "53.....",
+ ".339...",
+ "..5158.",
+ "...952%"), tint=SEQ_RULE_LOOP_COLOR)
+
+loopExitHoop = comn.asciiToImage((
+ "...952%",
+ "..5158.",
+ ".339...",
+ "53.....",
+ "19.....",
+ "5......",
+ "7......",
+ "9......"), tint=SEQ_RULE_LOOP_COLOR)
+
+returnArrow = comn.asciiToImage((
+ "..%5.",
+ ".%5..",
+ "%%%%%",
+ ".%5..",
+ "..%5.",), tint=SEQ_RULE_LOOP_COLOR)
+
 seqOutBumpImage = comn.asciiToImage((
  "o  o  o",
  "o ooo o",
@@ -411,6 +448,10 @@ class Icon:
     # Icons with dynamically appearing parts, such as optional parens, should override
     # the activePartIds method itself to provide this information.
     partIdList = None
+
+    # True if the icon is a loop type, and should be decorated with darker sequence lines
+    # and control-flow indicators
+    isLoop = False
 
     def __init__(self, window=None, canProcessCtx=False):
         self.window = window
@@ -1862,7 +1903,8 @@ class BlockEnd(Icon):
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
-            self.drawList = [((0, 0), branchFootImage)]
+            footImage = loopFootImage if self.primary.isLoop else branchFootImage
+            self.drawList = [((0, 0), footImage)]
         self._drawFromDrawList(toDragImage, location, clip, style)
 
     def select(self, select=True, selectPrimary=False):
@@ -2072,7 +2114,7 @@ def drawSeqSites(ic, img, imgX, imgY, blockIndent=False, boxRightEdge=None):
         img.putpixel((siteX + 1, siteY - 1), comn.OUTLINE_COLOR)
         img.putpixel((siteX,     siteY - 2), comn.OUTLINE_COLOR)
 
-def drawSeqSiteConnection(fromIcon, image=None, clip=None):
+def drawSeqSiteConnection(fromIcon, image=None, clip=None, drawSiteDots=True):
     """Draw connection line between fromIcon's seqIn site and whatever it connects to.
     Draws to either the window (from toIcon) or to the specified image.  If clip is
     specified, clips drawing to the given rectangle."""
@@ -2106,41 +2148,49 @@ def drawSeqSiteConnection(fromIcon, image=None, clip=None):
     # distance we're filling (ignoring clipping)
     if fromY == toY:
         return
-    topDot = fromY + 1
-    bottomDot = None if toY - fromY < 2 else toY - 1
     lineTop = fromY + 1
     lineBottom = toY - 1
-    dotLeft = x - 1
-    dotRight = x + 1
+    if drawSiteDots:
+        topDot = fromY + 1
+        bottomDot = None if toY - fromY < 2 else toY - 1
+        dotLeft = x - 1
+        dotRight = x + 1
+    else:
+        if toY - fromY < 3:
+            # If we're not drawing connectors, tiny lines are just visual clutter
+            return
+        topDot = bottomDot = None
     # Apply additional clipping based upon the specified clip rectangle
     if clip is not None:
         l, t, r, b = clip
-        if dotRight < l or dotLeft > r or lineBottom < t or lineTop > b:
-            return
-        if dotLeft < l:
-            dotLeft = None
-        if dotRight > r:
-            dotRight = None
         if x < l or x > r:
             lineTop = None
         else:
             lineTop = max(t, lineTop)
             lineBottom = min(b, lineBottom)
-        if topDot < t or topDot >= b:
-            topDot = None
-        if bottomDot is not None and (bottomDot < t or bottomDot >= b):
-            bottomDot = None
+        if drawSiteDots:
+            if dotRight < l or dotLeft > r or lineBottom < t or lineTop > b:
+                return
+            if dotLeft < l:
+                dotLeft = None
+            if dotRight > r:
+                dotRight = None
+            if topDot < t or topDot >= b:
+                topDot = None
+            if bottomDot is not None and (bottomDot < t or bottomDot >= b):
+                bottomDot = None
     # Draw whatever was not clipped out
-    if topDot is not None:
-        if  dotLeft is not None:
-            img.putpixel((dotLeft, topDot), SEQ_CONNECT_COLOR)
-        if dotRight is not None:
-            img.putpixel((dotRight, topDot), SEQ_CONNECT_COLOR)
-    if bottomDot is not None:
-        if  dotLeft is not None:
-            img.putpixel((dotLeft, bottomDot), SEQ_CONNECT_COLOR)
-        if dotRight is not None:
-            img.putpixel((dotRight, bottomDot), SEQ_CONNECT_COLOR)
+    if drawSiteDots:
+        if topDot is not None:
+            if  dotLeft is not None:
+                img.putpixel((dotLeft, topDot), SEQ_CONNECT_COLOR)
+            if dotRight is not None:
+                img.putpixel((dotRight, topDot), SEQ_CONNECT_COLOR)
+        if bottomDot is not None:
+            if  dotLeft is not None:
+                img.putpixel((dotLeft, bottomDot), SEQ_CONNECT_COLOR)
+            if dotRight is not None:
+                img.putpixel((dotRight, bottomDot), SEQ_CONNECT_COLOR)
     if lineTop is not None:
         draw.line((x, lineTop, x, lineBottom), SEQ_CONNECT_COLOR)
 
@@ -2183,11 +2233,16 @@ def drawSeqRule(ic, clip=None, image=None):
     x, toY = ic.blockEnd.posOfSite('seqOut')
     toY -= BLOCK_SEQ_MARGIN
     fromY = ic.posOfSite('seqOut')[1] - 1
+    if ic.isLoop:
+        loopX = x + 1
+        loopY = toY - loopReturnHoop.height + 2
     if clip is not None:
         # Clip the line to within the clip rectangle (rules are always vertical and
         # drawn downward and rectangles are ordered left, top, right, bottom).
         l, t, r, b = clip
         if x < l or x > r:
+            # If line is horizontally out of clip, don't draw anything (even if loop
+            # hoop is within clip, it is mostly drawn by BlockEnd).
             return
         if fromY < t:
             if toY < t:
@@ -2201,9 +2256,60 @@ def drawSeqRule(ic, clip=None, image=None):
         draw = ic.window.draw
         _x, fromY = ic.window.contentToImageCoord(x, fromY)
         x, toY = ic.window.contentToImageCoord(x, toY)
+        if ic.isLoop:
+            loopX, loopY = ic.window.contentToImageCoord(loopX, loopY)
     else:
         draw = ImageDraw.Draw(image)
-    draw.line((x, fromY, x, toY), SEQ_RULE_COLOR)
+    color = SEQ_RULE_LOOP_COLOR if ic.isLoop else SEQ_RULE_COLOR
+    draw.line((x, fromY, x, toY), color)
+    if ic.isLoop:
+        img = ic.window.image if image is None else image
+        img.paste(loopReturnHoop, (loopX, loopY), mask=loopReturnHoop)
+
+def drawLoopExitHoop(window, image, loopSeqX, hoopLineY, iconEndX):
+    if image is None:
+        draw = window.draw
+        image = window.image
+        loopSeqX, hoopLineY = window.contentToImageCoord(loopSeqX, hoopLineY)
+        iconEndX, _ = window.contentToImageCoord(iconEndX, 0)
+    else:
+        draw = ImageDraw.Draw(image)
+    image.paste(loopExitHoop, (loopSeqX + 1, hoopLineY), mask=loopExitHoop)
+    _drawLoopHoopLine(draw, loopSeqX, loopSeqX + loopReturnHoop.width, hoopLineY,
+        iconEndX)
+
+def drawLoopReturnHoop(window, image, loopSeqX, hoopLineY, iconEndX):
+    if image is None:
+        draw = window.draw
+        image = window.image
+        loopSeqX, hoopLineY = window.contentToImageCoord(loopSeqX, hoopLineY)
+        iconEndX, _ = window.contentToImageCoord(iconEndX, 0)
+    else:
+        draw = ImageDraw.Draw(image)
+    image.paste(loopReturnHoop, (loopSeqX + 1, hoopLineY - loopReturnHoop.height + 1),
+        mask=loopReturnHoop)
+    _drawLoopHoopLine(draw, loopSeqX, loopSeqX + loopReturnHoop.width, hoopLineY,
+        iconEndX)
+
+def drawReturnArrow(window, image, defSeqX, lineY, iconEndX):
+    if image is None:
+        draw = window.draw
+        image = window.image
+        defSeqX, lineY = window.contentToImageCoord(defSeqX, lineY)
+        iconEndX, _ = window.contentToImageCoord(iconEndX, 0)
+    else:
+        draw = ImageDraw.Draw(image)
+    arrowX = defSeqX +  comn.BLOCK_INDENT // 2
+    arrowY = lineY - returnArrow.height // 2
+    image.paste(returnArrow, (arrowX, arrowY), mask=returnArrow)
+    _drawLoopHoopLine(draw, defSeqX, arrowX + returnArrow.width, lineY,  iconEndX)
+
+def _drawLoopHoopLine(draw, startSeqX, startX, lineY, toX):
+    """Draw aesthetically pleasing line that skips over sequence rules at crossings."""
+    for seqRuleX in range(startSeqX, toX, comn.BLOCK_INDENT):
+        leftX = max(startX, seqRuleX + SEQ_RULE_INTERSECT_SPACE)
+        rightX = min(toX, seqRuleX + comn.BLOCK_INDENT - SEQ_RULE_INTERSECT_SPACE)
+        draw.line((leftX, lineY, rightX, lineY), SEQ_RULE_LOOP_COLOR)
 
 def findSeqStart(ic, toStartOfBlock=False):
     """Find the first icon of a sequence, either the very start (where it attaches to the

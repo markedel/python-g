@@ -58,6 +58,11 @@ ellipsisImage = comn.asciiToImage((
  "o               o",
  "ooooooooooooooooo"))
 
+# Pixel offset from left of icon box to loop "hoop" line (curved lines added between
+# continue and break icons and the sequence rule associated with the loop to which they
+# belong, added to highlight control flow)
+LOOP_HOOP_OFFSET = 0
+
 namedConsts = {'True':True, 'False':False, 'None':None, 'NotImplemented':NotImplemented,
     '__debug__':__debug__}
 
@@ -667,13 +672,28 @@ class ContinueIcon(NoArgStmtIcon):
 
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "continue", window, location)
+        # In addition to the icon itself, we're responsible for drawing the "loop hoop"
+        # connecting the icon to the sequence rule of its associated loop.  Since we need
+        # to determine this for error highlighting, we save it in highlightErrors and
+        # re-use it in the draw method.
+        self.loopIc = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
+        super().draw(toDragImage, location, clip, style)
+        if self.loopIc is not None:
+            loopSeqRuleX = self.loopIc.rect[0] + self.loopIc.sites.seqIn.xOffset
+            iconEndX = self.rect[0] - LOOP_HOOP_OFFSET
+            hoopLineY = self.rect[1] + self.sites.seqInsert.yOffset
+            icon.drawLoopReturnHoop(self.window, toDragImage, loopSeqRuleX, hoopLineY,
+                iconEndX)
 
     def createAst(self):
         return ast.Continue(lineno=self.id, col_offset=0)
 
     def highlightErrors(self, errHighlight):
-        if errHighlight is None and isOutsideOfLoop(self):
-            errHighlight = "continue statement outside of loop"
+        self.loopIc = insideOfLoop(self)
+        if errHighlight is None and self.loopIc is None:
+            errHighlight = icon.ErrorHighlight("continue statement outside of loop")
         icon.Icon.highlightErrors(self, errHighlight)
 
 class BreakIcon(NoArgStmtIcon):
@@ -682,13 +702,28 @@ class BreakIcon(NoArgStmtIcon):
 
     def __init__(self, window, location=None):
         NoArgStmtIcon.__init__(self, "break", window, location)
+        # In addition to the icon itself, we're responsible for drawing the "loop hoop"
+        # connecting the icon to the sequence rule of its associated loop.  Since we need
+        # to determine this for error highlighting, we save it in highlightErrors and
+        # re-use it in the draw method.
+        self.loopIc = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
+        super().draw(toDragImage, location, clip, style)
+        if self.loopIc is not None:
+            loopSeqRuleX = self.loopIc.rect[0] + self.loopIc.sites.seqIn.xOffset
+            iconEndX = self.rect[0] - LOOP_HOOP_OFFSET
+            hoopLineY = self.rect[1] + self.sites.seqInsert.yOffset
+            icon.drawLoopExitHoop(self.window, toDragImage, loopSeqRuleX, hoopLineY,
+                iconEndX)
 
     def createAst(self):
         return ast.Break(lineno=self.id, col_offset=0)
 
     def highlightErrors(self, errHighlight):
-        if errHighlight is None and isOutsideOfLoop(self):
-            errHighlight = "break statement outside of loop"
+        self.loopIc = insideOfLoop(self)
+        if errHighlight is None and self.loopIc is None:
+            errHighlight = icon.ErrorHighlight("break statement outside of loop")
         icon.Icon.highlightErrors(self, errHighlight)
 
 class SeriesStmtIcon(icon.Icon):
@@ -852,6 +887,19 @@ class ReturnIcon(SeriesStmtIcon):
     def __init__(self, window=None, location=None):
         SeriesStmtIcon.__init__(self, "return", window, allowTrailingComma=True,
             location=location)
+        self.defIcon = None
+
+    def draw(self, toDragImage=None, location=None, clip=None, style=0):
+        super().draw(toDragImage, location, clip, style)
+        if self.defIcon is None:
+            return
+        nextIc = self.nextInSeq()
+        if isinstance(nextIc, icon.BlockEnd) and nextIc.primary is self.defIcon:
+            return
+        defSeqRuleX = self.defIcon.rect[0] + self.defIcon.sites.seqIn.xOffset
+        iconEndX = self.rect[0] - LOOP_HOOP_OFFSET
+        lineY = self.rect[1] + self.sites.seqInsert.yOffset
+        icon.drawReturnArrow(self.window, toDragImage, defSeqRuleX, lineY, iconEndX)
 
     def createAst(self):
         if len(self.sites.values) == 1 and self.sites.values[0].att is None:
@@ -884,7 +932,8 @@ class ReturnIcon(SeriesStmtIcon):
         return text
 
     def highlightErrors(self, errHighlight):
-        if errHighlight is None and isOutsideOfDef(self):
+        self.defIcon = insideOfDef(self)
+        if errHighlight is None and self.defIcon is None:
             errHighlight = icon.ErrorHighlight("return statement outside of def")
         icon.Icon.highlightErrors(self, errHighlight)
 
@@ -2020,7 +2069,7 @@ class YieldIcon(icon.Icon):
         return None
 
     def highlightErrors(self, errHighlight):
-        if errHighlight is None and isOutsideOfDef(self.topLevelParent()):
+        if errHighlight is None and insideOfDef(self.topLevelParent()) is None:
             errHighlight = icon.ErrorHighlight("yield statement outside of def")
         icon.Icon.highlightErrors(self, errHighlight)
 
@@ -2080,7 +2129,7 @@ class YieldFromIcon(opicons.UnaryOpIcon):
         return self._serialize(offset, iconsToCopy)
 
     def highlightErrors(self, errHighlight):
-        if errHighlight is None and isOutsideOfDef(self.topLevelParent()):
+        if errHighlight is None and insideOfDef(self.topLevelParent()) is None:
             errHighlight = icon.ErrorHighlight("'yield from' outside of def")
         icon.Icon.highlightErrors(self, errHighlight)
 
@@ -2815,23 +2864,23 @@ def createNameFieldSaveText(brkLvl, site, needsCont, export, allowTypeAnn=False)
 # that the dependencies can resolve.
 import blockicons, commenticon
 
-def isOutsideOfDef(iconToTest):
+def insideOfDef(iconToTest):
     for ic in icon.traverseSeq(iconToTest, includeStartingIcon=False, reverse=True,
             skipInnerBlocks=True):
         if isinstance(ic, blockicons.ClassDefIcon):
-            return True
+            return None
         if isinstance(ic, blockicons.DefIcon):
-            return False
-    return True
+            return ic
+    return None
 
-def isOutsideOfLoop(iconToTest):
+def insideOfLoop(iconToTest):
     for ic in icon.traverseSeq(iconToTest, includeStartingIcon=False, reverse=True,
             skipInnerBlocks=True):
         if isinstance(ic, (blockicons.ClassDefIcon, blockicons.DefIcon)):
-            return True
+            return None
         if isinstance(ic, (blockicons.ForIcon, blockicons.WhileIcon)):
-            return False
-    return True
+            return ic
+    return None
 
 def isFollowedByDefOrClass(iconToTest):
     for seqIc in icon.traverseSeq(iconToTest, includeStartingIcon=False):

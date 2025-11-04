@@ -423,9 +423,9 @@ class WithIcon(icon.Icon):
                 "reference/compound_stmts.html#the-with-statement")]
 
 class WhileIcon(icon.Icon):
+    isLoop = True
     pythonDocRef = [("while Statement",
         "reference/compound_stmts.html#the-while-statement")]
-
 
     def __init__(self, createBlockEnd=True, window=None, location=None):
         icon.Icon.__init__(self, window)
@@ -579,6 +579,7 @@ class WhileIcon(icon.Icon):
 
 class ForIcon(icon.Icon):
     hasTypeover = True
+    isLoop = True
     partIdList = 1, 2
 
     def __init__(self, isAsync=False, createBlockEnd=True, typeover=False,

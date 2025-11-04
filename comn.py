@@ -23,6 +23,23 @@ OUTLINE_COLOR = (255, 255, 255, 1)
 ICON_BG_COLOR = (255, 255, 255, 255)
 
 def asciiToImage(asciiPixmap, tint=None):
+    """Translate a character-drawn image into a pixmap (PIL) image. Takes a map in the
+    form of a list of strings (one-per-row) containing the following characters:
+
+        .       transparent
+        o       nearly transparent white (255, 255, 255, 1) used for icon outlines
+        (space) white
+        %       black
+        R       red
+        r       lighter red
+        1-9     gray in even steps of brightness from 25/255 through 229/255
+
+    Tinting/dimming can be applied using the tint parameter.  tint takes an RGBA color
+    (0-255 range components) and scales each component such that the component from
+    'tint' becomes the minimum component value (which would be considered brightening
+    against a black background or, in our case, dimming against a white background).
+    Therefore, for example '%' produces a pixel using the exact value of 'tint', and
+    space (white) is unchanged."""
     if asciiToImage.asciiMap is None:
         asciiToImage.asciiMap = {'.':(0, 0, 0, 0), 'o': OUTLINE_COLOR,
                 ' ': ICON_BG_COLOR, '%':(0, 0, 0, 255), 'R':(255, 0, 0, 255),

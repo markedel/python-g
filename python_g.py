@@ -58,14 +58,15 @@ SNAP_DIST = 8
 NON_MATING_SNAP_PENALTY = 1.8
 
 # Distance to search around icons to find appropriate cursor sites
-SITE_SELECT_DIST = 8
+SITE_SELECT_DIST = 12
 
 # Extension to SITE_SELECT_DIST for empty sites to allow clicking anywhere in the
 # highlighted area
 EMPTY_SITE_EXT_DIST = 7
 
-# How far to the left of an icon does the statement select/drag band extend
-SEQ_SELECT_WIDTH = 15
+# How far to the left of the left sequence rule of a seauence can the user press to start
+# a statement drag selection
+MIN_SEQ_SELECT_WIDTH = 9
 
 # How far to the right of icons to deposit the result of executing them
 RESULT_X_OFFSET = 5
@@ -1640,12 +1641,6 @@ class Window:
                 self.cursor.setToText(icOrSite, pos, partId=partId)
                 self.refreshDirty()
                 return
-            # If the user clicked beyond the left edge of the adjacent statement, select
-            # the statement
-            ic = self._leftOfSeq(x, y)
-            if ic is not None and ic.posOfSite('seqOut')[1] >= y:
-                self._select(ic, op="hier")
-                return
             # Look for a nearby icon site to move or select to.  If none are found,
             # place a window background cursor
             siteIcon, site = self.siteNear(self.buttonDownLoc)
@@ -1655,6 +1650,12 @@ class Window:
                 else:
                     self.cursor.setToIconSite(siteIcon, site)
             else:
+                # If the user clicked beyond the left edge of the adjacent statement,
+                # select the statement
+                ic = self._leftOfSeq(x, y)
+                if ic is not None and ic.posOfSite('seqOut')[1] >= y:
+                    self._select(ic, op="hier")
+                    return
                 self.sel.unselectAll()
                 self.cursor.setToWindowPos((x, y))
             self.refreshDirty()
@@ -4086,12 +4087,8 @@ class Window:
         drawStyle = icon.STYLE_OUTLINE if showOutlines else 0
         for ic in self.findIconsInRegion(region, inclSeqRules=True, inclModSeqIcon=True):
             ic.draw(clip=region, style=drawStyle)
-            # Since sequenced icons are usually close together, drawing lines along the
-            # innermost scope probably adds more "chart junk" than it contributes to
-            # clarity, so we limit it to outline-mode, where it guides the user to where
-            # snapping will occur.
-            if showOutlines and ic.parent() is None:
-                icon.drawSeqSiteConnection(ic, clip=region)
+            if ic.parent() is None:
+                icon.drawSeqSiteConnection(ic, clip=region, drawSiteDots=showOutlines)
             if icon.seqRuleTouches(ic, region):
                 icon.drawSeqRule(ic, clip=region)
 
@@ -4342,25 +4339,30 @@ class Window:
         """Return top level icon near x,y if x,y is in the appropriate zone to start a
         statement-selection"""
         for seqStartPage in self.sequences:
+            seqStartIc = seqStartPage.startIcon
+            if seqStartIc.hasSite('seqIn'):
+                seqRuleOffset = seqStartIc.sites.seqIn.xOffset
+            elif seqStartIc.hasSite('seqOut'):
+                seqRuleOffset = seqStartIc.sites.seqOut.xOffset
+            else:
+                continue  # icon w/o sequence such as background image
+            leftBound = seqRuleOffset + seqStartIc.rect[0] - MIN_SEQ_SELECT_WIDTH
             for page in seqStartPage.traversePages():
                 if page.bottomY >= y >= page.topY:
                     page.applyOffset()
                     for ic in page.traverseSeq():
-                        if ic.hasSite('seqIn'):
-                            seqInX, seqInY = ic.posOfSite('seqIn')
-                            seqOutX, seqOutY = ic.posOfSite('seqOut')
-                            if y < seqInY:
-                                continue
-                            if seqInY <= y <= seqOutY and \
-                             seqInX - SEQ_SELECT_WIDTH <= x <= seqInX:
-                                return ic  # Point is adjacent to icon body
-                            nextIc = ic.nextInSeq()
-                            if nextIc is None:
-                                continue
-                            nextSeqInX, nextSeqInY = nextIc.posOfSite('seqIn')
-                            if seqOutY <= y < nextSeqInY and \
-                             seqOutX-SEQ_SELECT_WIDTH <= x <= seqOutX:
-                                return ic  # Point is adjacent to connector to next icon
+                        seqInX, seqInY = ic.posOfSite('seqIn')
+                        seqOutX, seqOutY = ic.posOfSite('seqOut')
+                        if y < seqInY:
+                            continue
+                        if seqInY <= y <= seqOutY and leftBound <= x <= seqInX:
+                            return ic  # Point is adjacent to icon body
+                        nextIc = ic.nextInSeq()
+                        if nextIc is None:
+                            continue
+                        nextSeqInX, nextSeqInY = nextIc.posOfSite('seqIn')
+                        if seqOutY <= y < nextSeqInY and leftBound <= x <= seqOutX:
+                            return ic  # Point is adjacent to connector to next icon
         return None
 
     def removeIcons(self, icons, assembleDeleted=False, watchSubs=None,
@@ -6604,7 +6606,7 @@ class Window:
                         dist = min(dist, abs(btnX - x - EMPTY_SITE_EXT_DIST) +
                             abs(btnY - y))
                     if dist < minDist or (dist == minDist and
-                     minSite[2] in ("attrOut", "output")):  # Prefer inputs, for now
+                     minSite[2] in ("attrOut", "output", "seqIn")):  # Preferred sites
                         minDist = dist
                         minSite = siteIcon, siteName, siteType
         if minDist < SITE_SELECT_DIST + 1:
