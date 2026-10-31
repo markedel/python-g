@@ -458,7 +458,7 @@ class ListTypeIcon(icon.Icon):
         leftWidth, height = leftImgFn(0).size
         self.sites.add('output', 'output', 0, height // 2)
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', leftWidth-1, height//2,
-            allowsTrailingComma=True)
+            allowsTrailingComma=True, layoutType='defaultInline')
         self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)],
             cursorSkip=True)
         width = self.sites.cprhIcons[-1].xOffset + rightImgFn(0).width
@@ -475,17 +475,17 @@ class ListTypeIcon(icon.Icon):
         if isinstance(self, TupleIcon) and self.noParens:
             # Use 'referred' sequence sites drawn by icon in first argument slot
             needSeqSites = False
+        spineHeight = self.argList.spineHeight if self.argList.inlineLayout() else 0
         if self.drawList is None:
             # Left paren/bracket/brace
-            leftImg = self.leftImgFn(self.argList.spineHeight)
+            leftImg = self.leftImgFn(spineHeight)
             leftImgX = min(icon.outSiteImage.width - 1, leftImg.width - 3)
             if needSeqSites:
                 icon.drawSeqSites(self, leftImg, 0, 0)
             # Output site
             if needOutSite:
-                outSiteX = self.sites.output.xOffset
-                outSiteY = self.sites.output.yOffset - icon.outSiteImage.height // 2
-                leftImg.paste(icon.outSiteImage, (outSiteX, outSiteY))
+                outSiteY = self.argList.spineTop - icon.outSiteImage.height // 2
+                leftImg.paste(icon.outSiteImage, (0, outSiteY))
             # Body input site(s)
             self.argList.drawBodySites(leftImg)
             # Unclosed icons need to be dimmed and crossed out
@@ -495,21 +495,28 @@ class ListTypeIcon(icon.Icon):
                 draw = ImageDraw.Draw(leftImg)
                 draw.line((leftImgX+1, cntrY, inSiteX, cntrY),
                         fill=comn.ICON_BG_COLOR, width=3)
-            self.drawList = [((0, 0), leftImg)]
+            self.drawList = [((self.sites.output.xOffset, 0), leftImg)]
             # Commas
-            self.drawList += self.argList.drawListCommas(inSiteX,
-                    self.sites.output.yOffset, typeoverIdx=self.commaTypeover)
+            self.drawList += self.argList.drawListCommas(typeoverIdx=self.commaTypeover)
             # End paren/brace/bracket
             if self.closed:
-                rightImg = self.rightImgFn(self.argList.spineHeight)
+                rightImg = self.rightImgFn(spineHeight)
+                if self.argList.inlineLayout():
+                    spineAttrOff = self.argList.spineTop
+                else:
+                    spineAttrOff = rightImg.height // 2
                 if self.acceptsComprehension():
-                    cphYOff = self.sites.output.yOffset - cphSiteImage.height // 2
-                    rightImg.paste(cphSiteImage, (0, cphYOff))
+                    rightImg.paste(cphSiteImage, (0, spineAttrOff - \
+                        cphSiteImage.height // 2))
                 attrInXOff = rightImg.width - icon.attrInImage.width
-                attrInYOff = self.sites.attrIcon.yOffset
+                attrInYOff = spineAttrOff + icon.ATTR_SITE_OFFSET
                 rightImg.paste(icon.attrInImage, (attrInXOff, attrInYOff))
-                parenX = self.sites.cprhIcons[-1].xOffset
-                self.drawList.append(((parenX, 0), rightImg))
+                parenX = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH + 1 - \
+                    rightImg.width
+                parenY = self.sites.attrIcon.yOffset - icon.ATTR_SITE_OFFSET - \
+                    spineAttrOff
+                self.drawList.append(((parenX, parenY), rightImg))
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, allowTrailingComma=True,
             hilightEmptySeries=self.isComprehension())
@@ -592,23 +599,96 @@ class ListTypeIcon(icon.Icon):
     def doLayout(self, outSiteX, outSiteY, layout):
         if self.object is not None and hasattr(self, 'mutableModified'):
             self.mutableModified = not self.compareData(self.object, compareContent=True)
-        self.argList.doLayout(layout)
-        self.sites.output.yOffset = self.argList.spineTop
-        self.sites.seqOut.yOffset = self.argList.spineHeight - 1
-        layout.updateSiteOffsets(self.sites.output)
-        layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-        if self.closed:
-            width = self.sites.cprhIcons[-1].xOffset + self.rightImgFn(0).width
+        if self.argList.inlineLayout() and not (self.closed and self.childAt('attrIcon')):
+            #... I think this can now be simplified with updateIconSites
+            self.argList.doLayout(layout)
+            self.sites.output.xOffset = 0
+            self.sites.output.yOffset = self.argList.spineTop
+            layout.updateSiteOffsets(self.sites.output)
+            layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
+            if self.closed:
+                width = self.sites.cprhIcons[-1].xOffset + self.rightImgFn(0).width
+            else:
+                width = self.sites.cprhIcons[-1].xOffset
+            x = outSiteX
+            y = outSiteY - self.argList.spineTop
+            self.rect = (x, y, x + width, y + self.argList.spineHeight)
         else:
-            width = self.sites.cprhIcons[-1].xOffset
-        x = outSiteX
-        y = outSiteY - self.argList.spineTop
-        self.rect = (x, y, x + width, y + self.argList.spineHeight)
+            self.rect = layout.calcIconRect(outSiteX, outSiteY)
+            layout.updateIconSites()
+            layout.doSubLayouts()
+        # Correct seqIn/Out site positions, to top and bottom of spine (our inline method
+        # never sets them, and our expression method sets them wrong because it uses a
+        # placeholder for the left paren expression part with 0 height)
+        spineHeight = self.rightImgFn(0).height if self.argList.spineHeight == 0 else \
+            self.argList.spineHeight
+        self.sites.seqIn.yOffset = 0
+        self.sites.seqOut.yOffset = spineHeight - 1
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
-        argListLayouts = self.argList.calcLayouts(argRequired=self.isComprehension())
+    def calcLayouts(self, marginLimit=999999999):
+        # By default we use inline layouts for lists, (non-naked) tuples, and dicts/sets,
+        # but user can override in via Settings dialog.  Comprehensions are forced to
+        # expression wrapping, since they clearly look better that way (and there was
+        # never code to inline-wrap them in the first place).
+        if self.isComprehension():
+            self.argList.layoutType = 'alwaysExpr'
+        else:
+            self.argList.layoutType = 'alwaysExpr' if isinstance(self, TupleIcon) and \
+                self.noParens else 'defaultInline'
+        # We use the original inline layout code for inline wrapping unless the list
+        # has an attribute attached.  In the attribute case, we may need to wrap between
+        # the list and the attribute, or within the attribute chain, and the expression
+        # code can handle inline wrapping just as well.  The reason for avoiding
+        # expression wrapping in the general case, is that expressions currently force
+        # maximal width when embedded in inline-wrapped icons, and that may rule out some
+        # better layout choices
+        if self.argList.inlineLayout() and not (self.closed and self.childAt('attrIcon')):
+            return self._calcLayoutsInline(marginLimit)
+        return self._calcLayoutsWrapped(marginLimit)
+
+    def _calcLayoutsWrapped(self, marginLimit):
+        """Calculate expression-wrapped version of layout for the icon"""
+        leftWidth, minHeight = self.leftImgFn(0).size
+        leftWidth -= icon.OUTPUT_SITE_DEPTH
+        rightWidth, _ = self.rightImgFn(0).size
+        layouts = iconlayout.ExprLayout(self, siteName='argIcons_0', width=leftWidth,
+            height=minHeight, yOffset=minHeight // 2, siteYOffset=0)
+        if self.isComprehension():
+            # It feels slightly dangerous to leave the list manager uninitialized (by
+            # virtue of not using it in the comprehension case), but that's what the
+            # original code did, and (unlike the inline wrapped code used by the
+            # original) I know that the drawing methods for the expression-wrapped
+            # version are independent of list manager data.
+            layouts.appendArgLayout(None, self, 'argIcons_0')
+            for site in self.sites.cprhIcons:
+                layouts.appendPart(None, self, site.name, 0, icon.minTxtIconHgt,
+                    icon.minTxtIconHgt // 2, 0)
+                if site.att is not None:
+                    cprhLayouts = site.att.calcLayouts()
+                    layouts.appendLayout(0, cprhLayouts)
+        else:
+            self.argList.appendToExprLayout(layouts, brkLvl=None, argRequired=False)
+            if self.acceptsComprehension():
+                layouts.appendPart(None, self, 'cprhIcons_0', 1,
+                    icon.minTxtIconHgt, icon.minTxtIconHgt // 2, 0)
+        if self.closed:
+            layouts.appendPart(None, self, 'attrIcon', rightWidth, minHeight,
+                minHeight // 2, icon.ATTR_SITE_OFFSET)
+            attrIcon = self.sites.attrIcon.att
+            if self.sites.attrIcon.att is not None:
+                attrLayouts = attrIcon.calcLayouts(marginLimit -
+                    iconlayout.CONTINUATION_INDENT)
+                layouts.appendLayout(iconlayout.ATTR_BRK_LVL, attrLayouts)
+        return self.debugLayoutFilter(layouts)
+
+    def _calcLayoutsInline(self, marginLimit):
+        leftWidth, minHeight = self.leftImgFn(0).size
+        leftWidth -= icon.OUTPUT_SITE_DEPTH
+        rightWidth, _ = self.rightImgFn(0).size
+        argListLayouts = self.argList.calcLayouts(argRequired=self.isComprehension(),
+            marginLimit=marginLimit-leftWidth-rightWidth+2)  # +2 for icon overlap
         cprhLayoutLists = [(None,) if site.att is None else site.att.calcLayouts()
                 for site in self.sites.cprhIcons]
         if not self.closed or self.sites.attrIcon.att is None:
@@ -618,8 +698,6 @@ class ListTypeIcon(icon.Icon):
         layouts = []
         for argListLayout, attrLayout, *cprhLayouts in iconlayout.allCombinations(
                 (argListLayouts, attrLayouts, *cprhLayoutLists)):
-            leftWidth, minHeight = self.leftImgFn(0).size
-            leftWidth -= icon.OUTPUT_SITE_DEPTH
             layout = iconlayout.Layout(self, leftWidth, minHeight, minHeight // 2)
             argListLayout.mergeInto(layout, leftWidth - 1, 0)
             cprhWidth = 0
@@ -631,9 +709,9 @@ class ListTypeIcon(icon.Icon):
                 cprhWidth += 0 if cprhLayout is None else cprhLayout.width - 1
             if self.closed:
                 layout.width = leftWidth - 1 + argListLayout.width - 1 + cprhWidth + \
-                        self.rightImgFn(0).width
+                    self.rightImgFn(0).width
                 layout.addSubLayout(attrLayout, 'attrIcon', layout.width-1,
-                        icon.ATTR_SITE_OFFSET)
+                    icon.ATTR_SITE_OFFSET)
             else:
                 layout.width = leftWidth - 1 + argListLayout.width + cprhWidth
             layouts.append(layout)
@@ -1110,6 +1188,7 @@ class TupleIcon(ListTypeIcon):
         ListTypeIcon.__init__(self, '(', ')', window, closed=closed, obj=obj,
                 location=location, leftImgFn=self._stretchedLTupleImage,
                 rightImgFn=self._stretchedRTupleImage, typeover=typeover)
+        self.argList.layoutType = 'defaultExpr' if noParens else'defaultInline'
         self.canProcessCtx = True
 
     def argIcons(self):
@@ -1135,6 +1214,7 @@ class TupleIcon(ListTypeIcon):
             self.close(typeover=typeover)
         self.drawList = None
         self.coincidentSite = None
+        self.argList.layoutType = 'defaultInline'
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.removeParens)
 
@@ -1145,6 +1225,7 @@ class TupleIcon(ListTypeIcon):
         self.noParens = True
         self.drawList = None
         self.coincidentSite = None if self.argList.isMultiRow() else 'argIcons_0'
+        self.argList.layoutType = 'defaultExpr'
         self.markLayoutDirty()
         self.window.undo.registerCallback(self.restoreParens)
 
@@ -1170,10 +1251,12 @@ class TupleIcon(ListTypeIcon):
         if self.noParens:
             self.coincidentSite = None if self.argList.isMultiRow() else 'argIcons_0'
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         # If a naked tuple is no longer at the top level and needs its parens restored,
         # do so before calculating the layout (would be better to do this elsewhere).
-        # Exception is EntryIcon, which can hold a naked tuple
+        # Exception is EntryIcon, which can hold a naked tuple (... I don't think this is
+        # still true, but I'm leaving this test in just in case there's some weird
+        # transient situation where this can actually happen)
         parent = self.parent()
         if self.noParens and parent is not None:
             if not isinstance(parent, entryicon.EntryIcon):
@@ -1199,7 +1282,7 @@ class TupleIcon(ListTypeIcon):
             if not (curs.type == "icon" and curs.icon is self and
                     curs.site == 'argIcons_1'):
                 self.sites.argIcons.removeSite(self, 1)
-        return ListTypeIcon.calcLayouts(self)
+        return ListTypeIcon.calcLayouts(self, marginLimit)
 
     def execute(self):
         if self.isComprehension():
@@ -1732,33 +1815,17 @@ class CallIcon(icon.Icon):
 
     def draw(self, toDragImage=None, location=None, clip=None, style=0):
         if self.drawList is None:
-            # Left paren/bracket/brace
             lParenImg = fnLParenImage if self.closed else fnLParenOpenImage
-            lParenImg = icon.yStretchImage(lParenImg, fnLParenExtendDupRows,
-                    self.argList.spineHeight)
-            # Output site
-            outSiteX = self.sites.attrOut.xOffset
-            outSiteY = self.sites.attrOut.yOffset - icon.attrOutImage.height // 2
-            lParenImg.paste(icon.dimAttrOutImage, (outSiteX, outSiteY),
-                    mask=icon.attrOutImage)
-            # Body input site(s)
-            self.argList.drawBodySites(lParenImg)
-            self.drawList = [((0, 0), lParenImg)]
-            # Commas
-            self.drawList += self.argList.drawListCommas(lParenImg.width -
-                    icon.OUTPUT_SITE_DEPTH - 1,
-                    self.sites.attrOut.yOffset - icon.ATTR_SITE_OFFSET)
-            # End paren/brace/bracket
             if self.closed:
-                parenX = lParenImg.width + self.argList.width - icon.ATTR_SITE_DEPTH - 1
-                rParenSrcImg = fnRParenTypeoverImage if self.endParenTypeover else \
+                rParenImg = fnRParenTypeoverImage if self.endParenTypeover else \
                     fnRParenImage
-                rParenImg = icon.yStretchImage(rParenSrcImg, fnRParenExtendDupRows,
-                    self.argList.spineHeight)
-                attrInXOff = rParenImg.width - icon.attrInImage.width
-                attrInYOff = self.sites.attrIcon.yOffset
-                rParenImg.paste(icon.attrInImage, (attrInXOff, attrInYOff))
-                self.drawList.append(((parenX, 0), rParenImg))
+            else:
+                rParenImg = None
+            self.drawList = self.argList.drawParens(lParenImg, fnLParenExtendDupRows,
+                rParenImg, fnRParenExtendDupRows,  drawOutputSite='attrOut',
+                drawInputSite='attrIcon')
+            self.drawList += self.argList.drawListCommas()
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, allowTrailingComma=True)
 
@@ -1780,39 +1847,25 @@ class CallIcon(icon.Icon):
         return siteSnapLists
 
     def doLayout(self, attrSiteX, attrSiteY, layout):
-        self.argList.doLayout(layout)
-        self.sites.attrOut.yOffset = self.argList.spineTop + icon.ATTR_SITE_OFFSET
-        layout.updateSiteOffsets(self.sites.attrOut)
-        layout.doSubLayouts(self.sites.attrOut, attrSiteX, attrSiteY)
-        width, height = self._size()
-        x = attrSiteX
-        y = attrSiteY - self.argList.spineTop - icon.ATTR_SITE_OFFSET
-        self.rect = (x, y, x + width, y + self.argList.spineHeight)
+        self.rect = layout.calcIconRect(attrSiteX, attrSiteY)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = fnLParenImage.size
         bodyWidth -= icon.ATTR_SITE_DEPTH
-        argListLayouts = self.argList.calcLayouts()
-        if self.closed and self.sites.attrIcon.att is not None:
-            attrLayouts = self.sites.attrIcon.att.calcLayouts()
-        else:
-            attrLayouts = [None]
-        layouts = []
-        for argLayout, attrLayout in iconlayout.allCombinations(
-                (argListLayouts, attrLayouts)):
-            layout = iconlayout.Layout(self, bodyWidth, bodyHeight,
-                    bodyHeight // 2 + icon.ATTR_SITE_OFFSET)
-            argLayout.mergeInto(layout, bodyWidth - 1, -icon.ATTR_SITE_OFFSET)
-            argWidth = argLayout.width
-            # layout now incorporates argument layout sizes, but not end paren
-            if self.closed:
-                layout.width = fnLParenImage.width-1 + argWidth-1 + fnRParenImage.width-1
-                layout.addSubLayout(attrLayout, 'attrIcon', layout.width-1, 0,)
-            else:
-                layout.width = fnLParenImage.width-1 + argWidth-1
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='argIcons_0', width=bodyWidth,
+            height=bodyHeight, yOffset=bodyHeight // 2 + icon.ATTR_SITE_OFFSET,
+            siteYOffset = - icon.ATTR_SITE_OFFSET)
+        self.argList.appendToExprLayout(layouts, brkLvl=None, argRequired=False,
+            allowTrailingComma=True)  # Oddly, Python allows trailing comma in arg list
+        if self.closed:
+            layouts.appendPart(None, self, 'attrIcon', fnRParenImage.width,
+                fnRParenImage.height, fnRParenImage.height//2 + icon.ATTR_SITE_OFFSET, 0)
+            layouts.appendArgLayout(iconlayout.ATTR_BRK_LVL, self, 'attrIcon',
+                argRequired=False)
         return self.debugLayoutFilter(layouts)
 
     def close(self, typeover=False):
@@ -2081,31 +2134,24 @@ class CprhIfIcon(icon.Icon):
             img.paste(cphSiteImage, (0, cphYOff))
             inImageY = self.sites.testIcon.yOffset - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (self.sites.testIcon.xOffset, inImageY))
-            self.drawList = [((0, 0), img)]
+            x = self.sites.cprhOut.xOffset
+            y = self.sites.cprhOut.yOffset - bodyHeight // 2
+            self.drawList = [((x, y), img)]
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
 
     def doLayout(self, cprhX, cprhY, layout):
-        width, height = self.bodySize
-        top = cprhY - height // 2
-        self.rect = (cprhX, top, cprhX + width + icon.EMPTY_ARG_WIDTH, top + height)
-        layout.doSubLayouts(self.sites.cprhOut, cprhX, cprhY)
+        self.rect = layout.calcIconRect(cprhX, cprhY)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
-        if self.sites.testIcon.att is None:
-            testIconLayouts = (None,)
-        else:
-            testIconLayouts = self.sites.testIcon.att.calcLayouts()
-        layouts = []
-        for testIconLayout in testIconLayouts:
-            layout = iconlayout.Layout(self, width, height, height // 2)
-            layout.addSubLayout(testIconLayout, 'testIcon', width-1, 0)
-            testWidth = icon.EMPTY_ARG_WIDTH if testIconLayout is None else \
-                testIconLayout.width
-            layout.width = width + testWidth - 1
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='testIcon', width=width,
+            height=height, yOffset=height // 2, siteYOffset=0)
+        layouts.appendArgLayout(None, self, 'testIcon')
         return self.debugLayoutFilter(layouts)
 
     def backspace(self, siteId, evt):
@@ -2236,7 +2282,7 @@ class CprhForIcon(icon.Icon):
         siteYOffset = bodyHeight // 2
         targetXOffset = bodyWidth - icon.OUTPUT_SITE_DEPTH
         self.tgtList = iconlayout.ListLayoutMgr(self, 'targets', targetXOffset,
-                siteYOffset, simpleSpine=True)
+                siteYOffset, simpleSpine=True, layoutType='defaultExpr')
         self.sites.add('cprhOut', 'cprhOut', 0, siteYOffset)
         iterX = bodyWidth-1 + self.tgtList.width-1 + inWidth-1
         self.sites.add('iterIcon', 'input', iterX, siteYOffset)
@@ -2256,24 +2302,24 @@ class CprhForIcon(icon.Icon):
             inImgX = bodyWidth - 1 - icon.inSiteImage.width
             inImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inImgX, inImageY))
-            cntrSiteY = self.tgtList.spineTop
-            bodyTopY = cntrSiteY - bodyHeight // 2
-            self.drawList = [((0, bodyTopY), img)]
-            # Minimal spines (if list has multi-row layout)
-            tgtListOffset = bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
-            self.drawList += self.tgtList.drawSimpleSpine(tgtListOffset, cntrSiteY)
-            # Target list commas
-            self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
+            bodyLeftX = self.sites.cprhOut.xOffset
+            bodyTopY = self.sites.cprhOut.yOffset - bodyHeight // 2
+            self.drawList = [((bodyLeftX, bodyTopY), img)]
+            # Minimal spines (if list has multi-row layout) and commas
+            self.drawList += self.tgtList.drawSimpleSpine()
+            self.drawList += self.tgtList.drawListCommas()
             # "in"
             txtImg = icon.iconBoxedText("in", icon.boldFont, icon.KEYWORD_COLOR,
                 typeover=self.typeoverIdx)
             img = Image.new('RGBA', (txtImg.width, bodyHeight), color=(0, 0, 0, 0))
             img.paste(txtImg, (0, 0))
             inImgX = txtImg.width - icon.inSiteImage.width
-            inImageY = cntrSiteY - icon.inSiteImage.height // 2
-            img.paste(icon.inSiteImage, (inImgX, inImageY))
-            inOffset = bodyWidth - 1 + self.tgtList.width - 1
-            self.drawList.append(((inOffset, bodyTopY), img))
+            inImgY = bodyHeight // 2 - icon.inSiteImage.height // 2
+            img.paste(icon.inSiteImage, (inImgX, inImgY))
+            inX = self.sites.iterIcon.xOffset + icon.OUTPUT_SITE_DEPTH - img.width + 1
+            inY = self.sites.iterIcon.yOffset - img.height // 2
+            self.drawList.append(((inX, inY), img))
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
 
@@ -2284,42 +2330,19 @@ class CprhForIcon(icon.Icon):
         return siteSnapLists
 
     def doLayout(self, cprhX, cprhY, layout):
-        self.tgtList.doLayout(layout)
-        bodyWidth, bodyHeight, inWidth = self.bodySize
-        width = bodyWidth-1 + self.tgtList.width-1 + inWidth + icon.EMPTY_ARG_WIDTH
-        heightAbove = bodyHeight // 2
-        heightBelow = bodyHeight - heightAbove
-        if self.tgtList.simpleSpineWillDraw():
-            heightAbove = max(heightAbove, self.tgtList.spineTop)
-            heightBelow = max(heightBelow, self.tgtList.spineHeight -
-                    self.tgtList.spineTop)
-        self.sites.cprhOut.yOffset = heightAbove
-        left = cprhX
-        top = cprhY - heightAbove
-        self.rect = (left, top, left + width, top + heightAbove + heightBelow)
-        layout.updateSiteOffsets(self.sites.cprhOut)
-        layout.doSubLayouts(self.sites.cprhOut, cprhX, cprhY)
+        self.rect = layout.calcIconRect(cprhX, cprhY)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
-        tgtListLayouts = self.tgtList.calcLayouts(argRequired=True)
-        if self.sites.iterIcon.att is None:
-            iterLayouts = (None,)
-        else:
-            iterLayouts = self.sites.iterIcon.att.calcLayouts()
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight, inWidth = self.bodySize
-        tgtXOff = bodyWidth - 1
-        layouts = []
-        for tgtListLayout, iterLayout in iconlayout.allCombinations(
-                (tgtListLayouts, iterLayouts)):
-            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
-            tgtListLayout.mergeInto(layout, tgtXOff, 0)
-            iterXOff = bodyWidth - 1 + tgtListLayout.width - 1 + inWidth - 1
-            layout.addSubLayout(iterLayout, 'iterIcon', iterXOff, 0)
-            iterWidth = icon.EMPTY_ARG_WIDTH if iterLayout is None else iterLayout.width
-            layout.width = iterXOff + iterWidth
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='targets_0', width=bodyWidth,
+            height=bodyHeight, yOffset=bodyHeight // 2, siteYOffset=0)
+        self.tgtList.appendToExprLayout(layouts, brkLvl=None, argRequired=True)
+        layouts.appendPart(0, self, 'iterIcon', inWidth, bodyHeight, bodyHeight // 2, 0)
+        layouts.appendArgLayout(None, self, 'iterIcon')
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
@@ -2740,7 +2763,6 @@ class ArgAssignIcon(infixicon.InfixIcon):
         return [("Keyword Arguments", "reference/expressions.html#calls")]
 
 class StarIcon(opicons.UnaryOpIcon):
-    individualAllowedParents = (CallIcon, blockicons.DefIcon, ListIcon, TupleIcon)
 
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '*', window, location)
@@ -2776,7 +2798,7 @@ class StarIcon(opicons.UnaryOpIcon):
             del self.sites.argIcon.cursorOnly
         return opicons.UnaryOpIcon.doLayout(self, outSiteX, outSiteY, layout)
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         # suppressEmptyArgHighlight is an ugly mechanism to dynamically control empty
         # argument highlighting, made even uglier, here by doing so inside of the layout
         # calculation.  It's done here because the context in which the star icon appears
@@ -2836,7 +2858,8 @@ class StarIcon(opicons.UnaryOpIcon):
                     siteName, siteIdx = iconsites.splitSeriesSiteId(parentSiteId)
                     parentSiteSeries = getattr(parent.sites, siteName)
                     if len(parentSiteSeries) == 1:
-                        if not isinstance(parent, self.individualAllowedParents):
+                        if not isinstance(parent,  (CallIcon, blockicons.DefIcon,
+                                ListIcon, TupleIcon)):
                             errHighlight = icon.ErrorHighlight("Can only use starred "
                             "expression here in the context of a list")
                 else:
@@ -2869,7 +2892,6 @@ class StarIcon(opicons.UnaryOpIcon):
         return [("* Iterable Unpacking", "reference/expressions.html#expression-lists")]
 
 class StarStarIcon(opicons.UnaryOpIcon):
-    allowedParents = (CallIcon, blockicons.DefOrClassIcon, DictIcon)
 
     def __init__(self, window=None, location=None):
         opicons.UnaryOpIcon.__init__(self, '**', window, location)
@@ -2910,7 +2932,7 @@ class StarStarIcon(opicons.UnaryOpIcon):
                 if self.sites.seqIn.att is not None or self.sites.seqOut.att is not None:
                     errHighlight = icon.ErrorHighlight(
                         "** by itself is not legal as a statement")
-            elif not isinstance(parent, self.allowedParents):
+            elif not isinstance(parent, (CallIcon, blockicons.DefOrClassIcon, DictIcon)):
                 errHighlight = icon.ErrorHighlight(
                     "Can't use dictionary expansion ('**') in this context")
         icon.Icon.highlightErrors(self, errHighlight)
@@ -3068,7 +3090,7 @@ def backspaceListIcon(ic, site, evt):
                         cursorSite = 'seqIn'
                     else:
                         cursorIc = None
-                        pos = ic.pos
+                        pos = ic.pos()
                 if cursorIc is None:
                     win.cursor.setToWindowPos(pos)
                 else:

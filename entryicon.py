@@ -193,14 +193,13 @@ class EntryIcon(icon.Icon):
                 img.paste(penImage if self.hasFocus else dimPenImage, box=(0, nibTop),
                     mask=penImage)
             self.drawList = [((0, 0), img)]
-            cntrSiteY = self.sites.output.yOffset
             for siteOrSeries in self.iteratePendingSiteList():
                 if isinstance(siteOrSeries, iconsites.IconSiteSeries):
-                    listOffset = siteOrSeries[0].xOffset
                     layoutMgr = self.pendingArgListMgrs[siteOrSeries.name]
-                    self.drawList += layoutMgr.drawListCommas(listOffset, cntrSiteY)
-                    self.drawList += layoutMgr.drawSimpleSpine(listOffset, cntrSiteY)
+                    self.drawList += layoutMgr.drawListCommas()
+                    self.drawList += layoutMgr.drawSimpleSpine()
             self.focusChanged = False
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
 
     def highlightTextSelection(self, img, partId=1):
@@ -772,8 +771,9 @@ class EntryIcon(icon.Icon):
             newText = self.text + ' '
             self._setText(newText, len(newText))
             if cursor.type == 'icon':
-                ic, site = cursors.lexicalTraverse(cursor.icon, cursor.site, 'Left')
-                cursor.setToIconSite(ic, site)
+                ic, site, toWrap = cursors.lexicalTraverse(cursor.icon, cursor.site,
+                    'Left')
+                cursor.setToIconSite(ic, site, toWrap=toWrap)
             return
         highestIcon = iconsites.highestCoincidentIcon(self)
         parent = highestIcon.parent()
@@ -952,7 +952,7 @@ class EntryIcon(icon.Icon):
         # Text cursor is at the right edge of the text field.  Find the next icon (which
         # may or may not be a pending argument) and call its becomeEntryIcon method.
         cursor = self.window.cursor
-        rightIcon, rightSite = cursors.lexicalTraverse(cursor.icon,
+        rightIcon, rightSite, toWrap = cursors.lexicalTraverse(cursor.icon,
             self.sites.firstCursorSite(), 'Right')
         if rightIcon is None:
             return
@@ -1094,8 +1094,8 @@ class EntryIcon(icon.Icon):
             # text selection, as it should not be possible to have a text cursor with
             # an icon-selection, otherwise do a general geometric traversal.
             toTextPos = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
-            cursorType, ic, site, pos, partId = cursors.geometricTraverseFromPos(x, y,
-                direction, self.window, self, onlyTextFields=toTextPos)
+            cursorType, ic, site, pos, partId, toWrap = cursors.geometricTraverseFromPos(
+                x, y, direction, self.window, self, onlyTextFields=toTextPos)
             if cursorType == 'window':
                 cursorType = 'icon'
                 site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
@@ -1115,7 +1115,7 @@ class EntryIcon(icon.Icon):
                     else:
                         ic = self.window.cursor.icon
                         site = self.window.cursor.site
-            self.window.cursor.setTo(cursorType, ic, site, pos, partId)
+            self.window.cursor.setTo(cursorType, ic, site, pos, partId, toWrap=toWrap)
         cursor.draw()
 
     def remove(self, forceDelete=False, makePlaceholder=False):
@@ -2764,7 +2764,7 @@ class EntryIcon(icon.Icon):
         self.layoutDirty = False
         self.drawList = None
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         argLayoutGroups = []
         argNames = []
         argYOffs = []
@@ -2790,7 +2790,9 @@ class EntryIcon(icon.Icon):
             # the left side of a binary operator and the user edits the operator).
             forCursorArg = self.childAt('forCursor')
             if forCursorArg is None:
-                layouts = [iconlayout.Layout(self, baseWidth, self.height, siteOffset)]
+                layout = iconlayout.Layout(self, baseWidth, self.height, siteOffset)
+                layout.addSubLayout(None, 'forCursor', baseWidth-icon.ATTR_SITE_DEPTH, 0)
+                layouts = [layout]
             else:
                 for forCursorLayout in forCursorArg.calcLayouts():
                     layout = iconlayout.Layout(self, baseWidth, self.height, siteOffset)

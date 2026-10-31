@@ -326,7 +326,7 @@ class Window:
         menu.add_separator()
         menu.add_command(label="Close", command=self.close)
         menu.add_separator()
-        menu.add_command(label="Settings...", command=self.settings)
+        menu.add_command(label="Settings...", command=self.settingsCb)
         menu = tk.Menu(self.menubar, tearoff=0)
         self.menubar.add_cascade(label="Edit", menu=menu, underline=0)
         menu.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
@@ -391,6 +391,7 @@ class Window:
         self.top.bind("<Right>", self._arrowCb)
         self.top.bind("<Key>", self._keyCb)
         self.top.bind("<Control-d>", self._dumpCb)
+        self.top.bind("<Control-r>", self._showIconRectCb)
         self.top.bind("<Control-l>", self._debugLayoutCb)
         self.top.bind("<Alt-l>", self._undebugLayoutCb)
         self.top.bind("<KeyPress-Alt_L>", self._altPressCb)
@@ -433,6 +434,13 @@ class Window:
         panes.pack(fill=tk.BOTH, expand=1)
         outerFrame.pack(fill=tk.BOTH, expand=1)
 
+        self.bgPopupMenu = tk.Menu(self.imgFrame, tearoff=0)  # Populated dynamically
+
+        # Margin for module sequence layouts
+        self.margin = 800
+        # Margin for shell code and loose icons (incl execution results)
+        self.looseSeqMargin = 200  #... 400
+
         self.buttonDownTime = None
         self.buttonDownLoc = None
         self.buttonDownState = None
@@ -441,6 +449,7 @@ class Window:
         self.doubleClickFlag = False
         self.dragging = None
         self.dragIcon = None
+        self.dragMargin = self.looseSeqMargin
         self.dragTagetModePtrOffset = None
         self.dragImageOffset = None
         self.dragImage = None
@@ -472,8 +481,6 @@ class Window:
 
         self.popupIcon = None
         self.typingErrCancelId = None
-
-        self.margin = 800
 
         # .sequences holds the first Page structure for each sequence in the window.  The
         # ordering the list controls which icons are drawn on top when sequences overlap.
@@ -529,7 +536,9 @@ class Window:
         # needs to be clearly visible.
         with self.pauseUndoRecording():
             self.modSeqIcon = ModuleAnchorIcon(self)
-        page = Page(forModSeq=self.modSeqIcon)
+        # Start window with application default settings
+        self.settings = Settings()
+        page = Page(forModSeq=self.modSeqIcon, margin=self.margin)
         self.sequences.append(page)
         self.topIcons[self.modSeqIcon] = page
         self.cursor = cursors.Cursor(self, 'icon', ic=self.modSeqIcon, site='seqOut')
@@ -560,6 +569,19 @@ class Window:
         self.refresh(redrawRect, clear=False, redraw=False)
         self.undo.addBoundary()
         return True
+
+    def recalculateAllLayouts(self, updateSettings=None):
+        if updateSettings:
+            self.settings = updateSettings
+        for topIc in self.topIcons:
+            topIc.markLayoutDirty()
+        print('start layout', time.monotonic())
+        self.layoutDirtyIcons(filterRedundantParens=False)
+        print('finish layout', time.monotonic())
+        print('start draw', time.monotonic())
+        self.redraw(None)
+        print('finish draw', time.monotonic())
+        self.refresh(None, clear=False, redraw=False)
 
     def close(self):
         self.top.destroy()
@@ -696,8 +718,14 @@ class Window:
             self.buttonDownTime = None
             return
         self.buttonDownTime = None
-        # Create context-sensitive pop-up menu
-        popup = tk.Menu(self.imgFrame, tearoff=0)
+        # Create context-sensitive pop-up menu.  Note that tkinter does not tolerate
+        # deletion of items (or destruction of the menu) within the callback that popped
+        # it up, so we keep the menu around and delete the old items at the start of the
+        # creation process.  Deleting items on pop-down resulted in the command callbacks
+        # being ignored for all subsequent pop-ups (I have no idea what's going on
+        # inside Tkinter to provoke such strange behavior).
+        popup = self.bgPopupMenu
+        popup.delete(0, 'end')
         popup.add_command(label="Undo", command=self._undoCb, accelerator="Ctrl+Z")
         popup.add_command(label="Redo", command=self._redoCb, accelerator="Ctrl+Y")
         popup.add_separator()
@@ -723,7 +751,6 @@ class Window:
             popup.tk_popup(evt.x_root, evt.y_root, 0)
         finally:
             popup.grab_release()
-            popup.destroy()
 
     def _newCb(self, evt=None):
         appData.newWindow()
@@ -1334,7 +1361,7 @@ class Window:
             self._updateImmediateSelDrag()
             return
         # Not currently dragging, but button is down
-        btnX, btnY = self.buttonDownLoc
+        btnX, btnY = self.contentToImageCoord(*self.buttonDownLoc)
         if abs(evt.x - btnX) + abs(evt.y - btnY) <= DRAG_THRESHOLD:
             return  # Mouse has not moved sufficiently to start a drag
         # Start a drag
@@ -1351,13 +1378,13 @@ class Window:
                 self._startRectSelect(evt, immediate=False)
         elif leftMouse and ic is not None and (altPressed or ic.canEditText and
                 not self.sel.isSelected(ic, onlyAsIcon=True) and
-                ic.pointInTextArea(btnX, btnY)):
+                ic.pointInTextArea(*self.buttonDownLoc)):
             # Dragging in a text icon or with Alt pressed on a non-text icon: Start a
             # text selection drag
             self._startTextDrag(self.buttonDownIcon, self.buttonDownIcPart,
                 self.buttonDownLoc, evt)
         elif leftMouse and shiftPressed and altPressed:
-            icOrSite, partId, textPos = self.textSiteNear(btnX, btnY)
+            icOrSite, partId, textPos = self.textSiteNear(*self.buttonDownLoc)
             if icOrSite is None:
                 return
             self._startTextDrag(icOrSite, partId, self.buttonDownLoc, evt)
@@ -2042,9 +2069,11 @@ class Window:
             self.sel.clearSelection()
             self.refreshDirty(addUndoBoundary=True)
         elif self.cursor.type == "icon":
-            # Edit or remove the icon to the right of the cursor
-            rightIcon, rightSite = cursors.lexicalTraverse(self.cursor.icon,
-                self.cursor.site, 'Right')
+            # Edit or remove the icon to the right of the cursor.  Note that we set
+            # fromWrap=True in lexicalTraverse, simply to stop it from possibly
+            # returning the wrapped version of the same site.
+            rightIcon, rightSite, toWrap = cursors.lexicalTraverse(self.cursor.icon,
+                self.cursor.site, 'Right', fromWrap=True)
             if rightIcon is None:
                 cursors.beep()
                 return
@@ -2619,8 +2648,8 @@ class Window:
             return self.cursor.icon.focusOut()
         return True
 
-    def settings(self):
-        appData.displaySettingsDialog()
+    def settingsCb(self):
+        appData.displaySettingsDialog(self)
 
     def _startDrag(self, evt, icons, dragACopy=False):
         btnDownIcPartPos = icon.addPoints(self.buttonDownIcon.rect[:2],
@@ -2630,6 +2659,9 @@ class Window:
         # restore the pre-drag state, and we need to guarantee that cancelling a drag
         # will not overstep and affect an operation unrelated to the drag.
         self.undo.addBoundary()
+        # For layout of dragging icons, use the margin of the sequence from which the
+        # user is pulling the icons.
+        self.dragMargin = self.topIcons[self.buttonDownIcon.topLevelParent()].margin
         # Remove or duplicate the requested icons as indicated by dragACopy
         subsIcs = {self.buttonDownIcon:None}
         if dragACopy:
@@ -2697,6 +2729,8 @@ class Window:
         self.layoutDirtyIcons()
         self.refresh(redraw=True, showOutlines=True)
         self.refreshRequests.clear()
+        for ic in topDraggingIcons:
+            ic.markLayoutDirty()
         self.layoutDirtyIcons(topDraggingIcons, filterRedundantParens=False)
         # For top performance, make a separate image containing the moving icons against
         # a transparent background, which can be redrawn with imaging calls, only.
@@ -2892,7 +2926,7 @@ class Window:
         # releasing it returns to normal dragging.  If replace-sites are turned OFF,
         # holding the shift key enters replacement mode, and releasing it when icons
         # are highlighted for replacement starts target selection mode
-        if appData.settings.createReplaceSites:
+        if appData.defaultSettings.createReplaceSites:
             if self.dragTagetModePtrOffset is not None and not self.dragModeModifierState:
                 self.dragTagetModePtrOffset = None
             inReplaceMode = False
@@ -2942,7 +2976,7 @@ class Window:
             self.snapped = None
             nearest = SNAP_DIST + 1
             for sx, sy, sHgt, sIcon, movIcon, siteType, siteName, mated in self.snapList:
-                if not appData.settings.createReplaceSites and siteType in \
+                if not appData.defaultSettings.createReplaceSites and siteType in \
                         ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc',
                         'replaceStmtIc', 'replaceStmt'):
                     continue
@@ -2988,7 +3022,7 @@ class Window:
             if siteType == 'replaceStmt':
                 highlightedIcons = expredit.extendDragTargetByStmt(sIcon, pointerX,
                     pointerY)
-            elif appData.settings.dualMethodImmedSelect and \
+            elif appData.defaultSettings.dualMethodImmedSelect and \
                     pointerX <= snapSiteX and pointerY <= snapSiteY:
                 step = int(math.sqrt((snapSiteX - pointerX)**2 + \
                     (snapSiteY - pointerY)**2) / HIER_SELECT_STEP_DIST)
@@ -2998,7 +3032,7 @@ class Window:
             else:
                 highlightedIcons, _, _ = expredit.extendSelectToPointer(sIcon, None,
                     partId, pointerX, pointerY,
-                    fwdOnly=appData.settings.dualMethodImmedSelect)
+                    fwdOnly=appData.defaultSettings.dualMethodImmedSelect)
         else:
             snappedToReplaceSite = self.snapped is not None and (self.snapped[2] in
                 ('replaceExprIc', 'replaceAttrIc', 'replaceCprhIc', 'replaceStmtIc',
@@ -3617,7 +3651,7 @@ class Window:
         pointerY = min(pointerY, self.scrollOrigin[1] + self.image.height)
         # Find the new set of selected icons
         startX, startY = self.buttonDownLoc
-        if appData.settings.dualMethodImmedSelect and \
+        if appData.defaultSettings.dualMethodImmedSelect and \
                 pointerX <= startX and pointerY <= startY:
             step = int(math.sqrt((startX - pointerX)**2 + \
                 (startY - pointerY)**2) / HIER_SELECT_STEP_DIST)
@@ -3625,7 +3659,7 @@ class Window:
         else:
             newSel, _, _ = expredit.extendSelectToPointer(self.immediateDragAnchorIc,
                 None, self.immediateDragAnchorPartId, pointerX, pointerY,
-                fwdOnly=appData.settings.dualMethodImmedSelect)
+                fwdOnly=appData.defaultSettings.dualMethodImmedSelect)
         # Refresh the modified area of the window
         oldSel = self.immediateDragHighlight
         erase = oldSel.difference(newSel)
@@ -4106,7 +4140,8 @@ class Window:
         elif self.cursor.type == "typeover":
             print(f"Icon: {self.cursor.icon.dumpName()}")
         elif self.cursor.type == "icon":
-            print(f"Icon: {self.cursor.icon.dumpName()}, Site: {self.cursor.site}")
+            print(f"Icon: {self.cursor.icon.dumpName()}, Site: {self.cursor.site}"
+                f"{' (wrapped)' if self.cursor.toWrap else ''}")
         elif self.cursor.type == "text":
             if isinstance(self.cursor.icon, tuple):
                 ic, site = self.cursor.icon
@@ -4137,6 +4172,22 @@ class Window:
             print(f"Text Selection: from {leftIcName}, partId {self.sel.leftPartId}, "
                 f"pos {self.sel.leftPos} to {rightIcName}, partId "
                 f"{self.sel.rightPartId}, pos {self.sel.rightPos}")
+
+    def _showIconRectCb(self, evt=None):
+        selIcons = self.sel.selectedIcons()
+        if len(selIcons) == 0:
+            self.displayTypingError("Select the icons whose rectangles you want to show")
+            return
+        for ic in selIcons:
+            l, t, r, b = self.contentToImageRect(ic.rect)
+            r -= 1  # draw inside of rect
+            b -= 1
+            hLineImg = Image.new('RGB', (r - l, 1), color=icon.BLACK)
+            vLineImg = Image.new('RGB', (1, b - t), color=icon.BLACK)
+            self.drawImage(hLineImg, (l, t))
+            self.drawImage(hLineImg, (l, b))
+            self.drawImage(vLineImg, (l, t))
+            self.drawImage(vLineImg, (r, t))
 
     def _debugLayoutCb(self, evt):
         topIcons = findTopIcons(self.sel.selectedIcons(excludeEmptySites=True))
@@ -6345,6 +6396,7 @@ class Window:
                 page.topY = pageRect[1]
                 page.bottomY = pageRect[3]
                 page.iconCount = 0
+                page.margin = self.looseSeqMargin
                 self.sequences.append(page)
             else:
                 page = self.topIcons.get(nextIcon)
@@ -6567,7 +6619,19 @@ class Window:
                     ic.rect = comn.offsetRect(ic.rect, xOffset, yOffset)
                 seqIcNewRect = seqIc.hierRect()
                 redrawRegion.add(seqIcNewRect)
-            y = seqIcNewRect[3] - 1  # Minimal line spacing (overlap icon borders)
+            # Figure out spacing of next stmt incorporating overlap of icon borders and
+            # block-sequence margin (vertical space after block owners).  The sequence
+            # margin needs to account for the fact that block owners have a sequence-bump
+            # that already adds the block margin, but when other parts of the statement
+            # extend below it, the margin has to be added below them (the code below
+            # will do for now, but gets this wrong for the 2-pixel window where args
+            # extend beyond the statement icon body but not below the bump).
+            y = seqIcNewRect[3] - 1
+            if seqIcNewRect[3] > seqIc.rect[3]:
+                if blockicons.isBlockOwnerIc(seqIc):
+                    y += icon.BLOCK_SEQ_MARGIN
+                elif blockicons.isPseudoBlockIc(seqIc):
+                    y += icon.PSEUDO_BLOCK_SEQ_MARGIN
             x = seqIc.posOfSite('seqOut')[0]
         return redrawRegion.get(), y, x
 
@@ -6754,11 +6818,12 @@ class Page:
     traversing the entire tree.  The initialization for a window object can pass
     its module sequence anchor icon in forModSeq to create the module sequence start page
     (which persists for the life of the window)."""
-    def __init__(self, forModSeq=None):
+    def __init__(self, forModSeq=None, margin=None):
         self.unappliedOffset = 0
         self.layoutDirty = False
         self.topY = 0
         self.bottomY = 0
+        self.margin = margin
         self.iconCount = 1 if forModSeq else 0
         self.startIcon = forModSeq if forModSeq else None
         self.nextPage = None
@@ -6793,6 +6858,7 @@ class Page:
                 newPage.layoutDirty = page.layoutDirty
                 newPage.topY = page.bottomY
                 newPage.startIcon = ic
+                newPage.margin = page.margin
                 page = newPage
                 pageStmtCnt = 1
             if page is not self:
@@ -6869,7 +6935,7 @@ class ModuleAnchorIcon(icon.Icon):
         # Never moves or changes
         pass
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         print('something is trying to call calcLayouts on module anchor')
         return [iconlayout.Layout(self, anchorImage.width, anchorImage.height, 0)]
 
@@ -6969,7 +7035,7 @@ class App:
         self.newWindow()
         self.frameCount = 0
         self.blinkCancelId = None
-        self.settings = Settings()
+        self.defaultSettings = Settings()
         self.settingsDialog = None
         #self.animate()
 
@@ -7000,9 +7066,13 @@ class App:
         else:
             window.close()
 
-    def displaySettingsDialog(self):
+    def displaySettingsDialog(self, focusWindow):
         if self.settingsDialog is None:
-            self.settingsDialog = SettingsDialog(self.root, self.settings)
+            # Since we close by destroying and setting settingsDialog to None, this will
+            # always refresh the dialog to the application defaults settings (even if
+            # the user had window-specific settings)
+            self.settingsDialog = SettingsDialog(self.root, self.defaultSettings,
+                focusWindow)
         self.settingsDialog.top.lift()
         self.settingsDialog.top.focus_force()
 
@@ -7031,17 +7101,23 @@ class App:
                 return window
         return None
 
+    def recalculateAllLayouts(self, settings=None):
+        for window in self.windows:
+            window.recalculateAllLayouts(settings)
+
 class SettingsDialog:
-    def __init__(self, master, settings):
+    def __init__(self, master, settings, focusWindow):
         self.top = tk.Toplevel(master)
-        self.settings = settings
+        self.focusWindow = focusWindow
         self.top.title('Settings')
         # outerFrame = tk.Frame(self.top)
-        rsFrame = tk.Frame(self.top)
+        self.top.bind("<Destroy>", self._destroyCb)
+
+        rsFrame = tk.Frame(self.top, bd=4)
         rsFrame.grid(row=0, column=0, sticky=tk.W)
         label = tk.Label(rsFrame, text="Add sites for drag-replace:")
         label.grid(row=0, column=0, columnspan=2, sticky=tk.W)
-        self.rsType = tk.StringVar(self.top, 'sites' if self.settings.createReplaceSites
+        self.rsType = tk.StringVar(self.top, 'sites' if settings.createReplaceSites
             else 'shift')
         btn = tk.Radiobutton(rsFrame, text="Use Shift key", variable=self.rsType,
             value='shift')
@@ -7051,12 +7127,13 @@ class SettingsDialog:
         btn.grid(row=1, column=1, sticky=tk.W)
         rsFrame.columnconfigure(0, weight=0)
         rsFrame.columnconfigure(0, weight=1)
-        isFrame = tk.Frame(self.top)
+
+        isFrame = tk.Frame(self.top, bd=4)
         isFrame.grid(row=1, column=0, sticky=tk.W)
         label = tk.Label(isFrame, text="Immediate/drag-target selection method:")
         label.grid(row=0, column=0, columnspan=2)
         self.immedSel = tk.StringVar(self.top, 'dual' if
-            self.settings.dualMethodImmedSelect else 'lexical')
+            settings.dualMethodImmedSelect else 'lexical')
         btn = tk.Radiobutton(isFrame, text="Split lexical/structural",
             variable=self.immedSel, value='dual')
         btn.grid(row=1, column=0, sticky=tk.W)
@@ -7065,27 +7142,101 @@ class SettingsDialog:
         btn.grid(row=1, column=1, sticky=tk.W)
         isFrame.columnconfigure(0, weight=1)
         isFrame.columnconfigure(0, weight=0)
+
+        wrapFrame = tk.Frame(self.top, bd=4)
+        wrapFrame.grid(row=2, column=0, sticky=tk.W)
+        label = tk.Label(wrapFrame, text="Inline wrapping of comma-separated lists:")
+        label.grid(row=0, column=0, columnspan=3)
+        self.inlineWrap = tk.StringVar(self.top, 'all' if
+            settings.inlineWrapAllLists else
+             ('none' if settings.noInlineWrap else 'default'))
+        btn = tk.Radiobutton(wrapFrame, text="All",
+            variable=self.inlineWrap, value='all')
+        btn.grid(row=1, column=0, sticky=tk.W)
+        btn = tk.Radiobutton(wrapFrame, text="Dict/Tuple/List", variable=self.inlineWrap,
+            value='default')
+        btn.grid(row=1, column=1, sticky=tk.W)
+        btn = tk.Radiobutton(wrapFrame, text="None", variable=self.inlineWrap,
+            value='none')
+        btn.grid(row=1, column=2, sticky=tk.W)
+        wrapFrame.columnconfigure(0, weight=1)
+        wrapFrame.columnconfigure(0, weight=0)
+
+        indentFrame = tk.Frame(self.top, bd=4)
+        indentFrame.grid(row=3, column=0, sticky=tk.W)
+        label = tk.Label(indentFrame, text="Continuation indent style:")
+        label.grid(row=0, column=0, columnspan=3, sticky=tk.W)
+        self.indentStyle = tk.StringVar(self.top, settings.indentStyle)
+        btn = tk.Radiobutton(indentFrame, text="Minimal", variable=self.indentStyle,
+            value='min')
+        btn.grid(row=1, column=0, sticky=tk.W)
+        btn = tk.Radiobutton(indentFrame, text="Single", variable=self.indentStyle,
+            value='single')
+        btn.grid(row=1, column=1, sticky=tk.W)
+        btn = tk.Radiobutton(indentFrame, text="Block Double", variable=self.indentStyle,
+            value='blkDbl')
+        btn.grid(row=1, column=2, sticky=tk.W)
+        indentFrame.columnconfigure(0, weight=1)
+        indentFrame.columnconfigure(0, weight=0)
+
         btnFrame = tk.Frame(self.top)
-        btnFrame.grid(row=2, column=0)
-        cancelBtn = tk.Button(btnFrame, text='Cancel', command=self.cancel)
+        btnFrame.grid(row=4, column=0)
+        cancelBtn = tk.Button(btnFrame, text='Cancel', command=self.cancelCb)
         cancelBtn.grid(row=0, column=0)
-        acceptBtn = tk.Button(btnFrame, text='Accept', command=self.accept)
-        acceptBtn.grid(row=0, column=1)
-        self.top.bind("<Escape>", self.cancel)
-        self.top.bind("<Return>", self.accept)
+        windowBtn = tk.Button(btnFrame, text='Window', command=self.windowCb)
+        windowBtn.grid(row=0, column=1)
+        defaultsBtn = tk.Button(btnFrame, text='Defaults Only', command=self.defaultsCb)
+        defaultsBtn.grid(row=0, column=2)
+        allBtn = tk.Button(btnFrame, text='All', default="active", command=self.allCb)
+        allBtn.grid(row=0, column=3)
+        self.top.bind("<Escape>", self.cancelCb)
+        self.top.bind("<Return>", self.allCb)
 
-    def cancel(self, evt=None):
+    def _destroyCb(self, evt=None):
+        appData.settingsDialog = None
+
+    def cancelCb(self, evt=None):
         appData.closeSettingsDialog()
 
-    def accept(self, evt=None):
-        self.settings.createReplaceSites = self.rsType.get() == 'sites'
-        self.settings.dualMethodImmedSelect = self.immedSel.get() == 'dual'
+    def windowCb(self, evt=None):
+        changed = self.updateSettings(self.focusWindow.settings)
+        if changed:
+            self.focusWindow.recalculateAllLayouts()
         appData.closeSettingsDialog()
+
+    def allCb(self, evt=None):
+        self.updateSettings(appData.defaultSettings)
+        appData.recalculateAllLayouts(appData.defaultSettings)
+        appData.closeSettingsDialog()
+
+    def defaultsCb(self, evt=None):
+        self.updateSettings(appData.defaultSettings)
+        appData.closeSettingsDialog()
+
+    def updateSettings(self, settings):
+        """Update settings object from the button settings in the dialog and return True
+        if anything was changed from the original."""
+        settings.createReplaceSites = self.rsType.get() == 'sites'
+        settings.dualMethodImmedSelect = self.immedSel.get() == 'dual'
+        inlineWrapAll = self.inlineWrap.get() == 'all'
+        inlineWrapNone = self.inlineWrap.get() == 'none'
+        indentStyle = self.indentStyle.get()
+        changed = settings.inlineWrapAllLists != inlineWrapAll or \
+                settings.noInlineWrap != inlineWrapNone or \
+                settings.indentStyle != indentStyle
+        if changed:
+            settings.inlineWrapAllLists = inlineWrapAll
+            settings.noInlineWrap = inlineWrapNone
+            settings.indentStyle = indentStyle
+        return changed
 
 class Settings:
     def __init__(self):
         self.createReplaceSites = False
         self.dualMethodImmedSelect = True
+        self.inlineWrapAllLists = False
+        self.noInlineWrap = False
+        self.indentStyle = 'min'
 
 def isStmtComment(ic):
     return isinstance(ic, commenticon.CommentIcon) and ic.attachedToStmt is not None

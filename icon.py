@@ -77,6 +77,7 @@ SEQ_RULE_COLOR = (218, 224, 218, 255)
 SEQ_RULE_LOOP_COLOR = (200, 200, 200, 255)
 SEQ_CONNECT_COLOR = (220, 220, 220, 255)
 EMPTY_ARG_COLOR = (255, 0, 0, 30)
+WRAP_ARROW_COLOR = (0, 0, 255, 255)
 
 EMPTY_ARG_WIDTH = 11
 LIST_EMPTY_ARG_WIDTH = 8
@@ -123,6 +124,12 @@ STMT_COMMENT_OFFSET = 4
 # the seqOut site above the bottom of the space allocated for the statement.
 BLOCK_SEQ_MARGIN = 2
 
+# Number of pixels of additional vertical space left above and below a pseudo-block icon
+# (else, elif, except, finally) and vertically adjacent icons it borders.  This is
+# usually filled by bumps on the icon itself, but may be empty when the statement
+# arguments take up more vertical space than the statement icon.
+PSEUDO_BLOCK_SEQ_MARGIN = 1
+
 # Text selections have a dark (underline) part and a light (upper) part, and are confined
 # to text and text-margin parts of an icon.  Width of the underline part in pixels.
 TEXT_SEL_UNDERLINE_THICKNESS = 3
@@ -130,6 +137,9 @@ TEXT_SEL_UNDERLINE_THICKNESS = 3
 # Number of pixels of whitespace to leave on each side of sequence rules for lines that
 # cross sequence rules (loop hoops and return arrows)
 SEQ_RULE_INTERSECT_SPACE = 4
+
+siteOffsets = {'input':0, 'output':0, 'attrOut':ATTR_SITE_OFFSET,
+    'attrIn':ATTR_SITE_OFFSET, 'seqInsert':0, 'cprhIn':0, 'cprhOut':0}
 
 outSiteImage = comn.asciiToImage((
  "..o",
@@ -332,6 +342,98 @@ protoTextCursorImage = comn.asciiToImage((
  ".5%5.",
  "%%%%%"))
 
+noSiteWrapFromImage = comn.asciiToImage((
+ "oooooo....",
+ "o     oo..",
+ "o77779  o.",
+ "o   879 o.",
+ "o    87  o",
+ "o    87  o",
+ "o  7879  o",
+ "o  778  o.",
+ "o  7778 o.",
+ "o     oo..",
+ "oooooo...."), tint=WRAP_ARROW_COLOR)
+NO_SITE_FROM_WRAP_ARROW_OFFSET = -2
+
+noSiteWrapToImage = comn.asciiToImage((
+ "....oooooo",
+ "..oo     o",
+ ".o   8   o",
+ ".o 878   o",
+ "o 87     o",
+ "o 7      o",
+ "o 7  8   o",
+ "o 87 78  o",
+ "o  87778 o",
+ ".o   78  o",
+ ".o   8   o",
+ "..oo     o",
+ "....oooooo"), tint=WRAP_ARROW_COLOR)
+NO_SITE_TO_WRAP_ARROW_OFFSET = -9
+
+inputWrapFromImage = comn.asciiToImage((
+ "..oooooo....",
+ ".o      oo..",
+ "o  77779  o.",
+ ".o    879 o.",
+ "..o    87  o",
+ "..o    87  o",
+ "..o  7879  o",
+ "..o  778  o.",
+ "..o  7778 o.",
+ "..o     oo..",
+ "..oooooo...."), tint=WRAP_ARROW_COLOR)
+INPUT_FROM_WRAP_ARROW_OFFSET = -2
+
+inputWrapToImage = comn.asciiToImage((
+ "....oooooo",
+ "..oo     o",
+ ".o   8   o",
+ ".o 878   o",
+ "o 87     o",
+ "o 7      o",
+ "o 7  8   o",
+ "o 87 78  o",
+ "o  87778o ",
+ ".o   78o  ",
+ ".o   8  o ",
+ "..oo     o",
+ "....oooooo"), tint=WRAP_ARROW_COLOR)
+INPUT_TO_WRAP_ARROW_OFFSET = -9
+
+attrWrapFromImage = comn.asciiToImage((
+ ".oooooo....",
+ ".o     oo..",
+ ".o77779  o.",
+ ".o   879 o.",
+ ".o    87  o",
+ ".o    87  o",
+ "o   7879  o",
+ "o   778  o.",
+ ".o  7778 o.",
+ ".o     oo..",
+ ".oooooo...."), tint=WRAP_ARROW_COLOR)
+ATTR_FROM_WRAP_ARROW_OFFSET = -6
+
+attrWrapToImage = comn.asciiToImage((
+ "......oooo",
+ "...ooo   o",
+ ".oo  8   o",
+ "o  878   o",
+ "o 87     o",
+ "o 7      o",
+ "o 7  8   o",
+ "o 87 78  o",
+ "o  87778 o",
+ "o    78  o",
+ "o    8   o",
+ ".oo     oo",
+ "..oo    oo",
+ "....ooo  o",
+ ".......ooo"), tint=WRAP_ARROW_COLOR)
+ATTR_TO_WRAP_ARROW_OFFSET = -11
+
 renderCache = {}
 
 # Icon to insert when createIconFromAst fails (set by registerAstDecodeFallback())
@@ -453,6 +555,20 @@ class Icon:
     # and control-flow indicators
     isLoop = False
 
+    # If the icon has one or more sites which at which an expression-layout is wrapped,
+    # the .wraps field is set to '{site: ((fromX, fromY), (toX, toY), boundY}, exprIcon'.
+    # Coordinates are relative to icon origin, fromX,Y and toX,Y are at the wrap site
+    # position, boundY is the y coordinate across which the row is wrapped, and exprIcon
+    # is the root icon of the expression being wrapped (and can also be used to determine
+    # whether thw wrap is confined to an inline-wrapped parent versus a top-level stmt).
+    wraps = None
+
+    # If set, indicates that the icon is at the top-level of a wrapped-expression layout.
+    # It is set to the x, y coordinate pair representing the position (relative to the
+    # icon origin) of the end of the expression.  It is currently used only to detect
+    # expression wrapping within inline-wrapped lists.
+    wrappedExprData = None
+
     def __init__(self, window=None, canProcessCtx=False):
         self.window = window
         self.rect = None
@@ -470,7 +586,7 @@ class Icon:
          drawn can be optionally overridden by specifying image and/or location."""
         pass
 
-    def _anchorSite(self):
+    def anchorSite(self):
         """Return the name of the site that establishes the "official" position of the
         icon (as returned by .pos())"""
         for siteId in ['seqInsert', 'output', 'attrOut', 'cprhOut']:
@@ -489,7 +605,7 @@ class Icon:
         return the position of the seqIn site over the seqInsert site."""
         if preferSeqIn and hasattr(self.sites, 'seqIn'):
             return self.posOfSite('seqIn')
-        return self.posOfSite(self._anchorSite())
+        return self.posOfSite(self.anchorSite())
 
     def select(self, select=True):
         """Use this method to select (select=True) or unselect (select=False) an icon.
@@ -511,18 +627,32 @@ class Icon:
         (anchored on the specified siteId).  This should only be called on top-level
         icons."""
         if siteId is None:
-            siteId = self._anchorSite()
+            siteId = self.anchorSite()
         if location is None:
             if siteId is None:
                 location = self.rect[:2]
             else:
                 location = self.posOfSite(siteId)
-        # Calculate layout choices (... This would be a good place to add a hint when
-        # the layout is sequential for optimization)
-        layouts = self.calcLayouts()
+        # Calculate layout choices
+        if self in self.window.topIcons:
+            margin = self.window.topIcons[self].margin
+        else:
+            margin = self.window.dragMargin
+        layouts = self.calcLayouts(margin)
+        # If there is a statement comment, incorporate it statement comment into the
+        # layout choices.  If layouts is an expression list, this will also perform
+        # wrapping and produce a layout list.
         if hasattr(self, 'stmtComment'):
-            incorporateStmtCommentLayouts(layouts, self.stmtComment.calcLayouts(),
-                self.window.margin)
+            if isinstance(layouts, iconlayout.ExprLayout):
+                layouts = incorporateExprStmtCommentLayouts(layouts,
+                   self.stmtComment.calcLayouts(margin - STMT_COMMENT_OFFSET), margin)
+            else:
+                if hasattr(self, 'stmtComment'):
+                    incorporateStmtCommentLayouts(layouts, self.stmtComment.calcLayouts(
+                        margin - STMT_COMMENT_OFFSET), margin)
+        # If layouts is still in the form of an expression layout list, perform wrap
+        if isinstance(layouts, iconlayout.ExprLayout):
+            layouts = [layouts.wrap(margin)]  #... fill in correct margin
         # Determine the best of the calculated layouts based on size and "badness" rating
         # recorded in each of the layouts.  Incorporate size and margin exceeded penalties
         # directly in to the layout badness score
@@ -550,8 +680,9 @@ class Icon:
         # Arrange the icon and its children according to bestLayout.  Attempt to pick
         # appropriate x and y for doLayout for on the requested location using the site
         # offset of the current layout.  However, because the act of laying out the icon
-        # and its children can shift sites around within the icon rectangle, the
-        # resulting layout may still need to be shifted after the layout is completed.
+        # and its children can shift the position of the top-level site around, the
+        # resulting layout may still need to be shifted if we're trying to line up with
+        # a site.
         x, y = location
         if siteId is None:
             rectLeft, rectTop = location
@@ -559,6 +690,20 @@ class Icon:
             site = self.sites.lookup(siteId)
             rectLeft = x - site.xOffset
             rectTop = y - site.yOffset
+        # Traverse the hierarchy clearing wrap data
+        #... remove this once all icons call hew updateSiteOffsets variant
+        for ic in self.traverse():
+            if ic.wraps is not None:
+                del ic.wraps
+        # Call doLayout on the (top level) icon, which will recursively invoke it for the
+        # hierarchy beneath it.  The location passed to doLayout is straightforward for
+        # most icons, as the location of the site that anchors the layout (usually an
+        # output-type site).  However, for weird historical reasons, icons with sequence
+        # sites (and icons with no sites, but there is only one such icon) are positioned
+        # by the top left corner of their icon rectangle.  This is dumb and fragile and
+        # causes confusion to everyone who tries to understand this code, yet somehow
+        # persists even though these icons now have a seqInsert site that would work
+        # much better for this.
         for layoutAnchor in ['output', 'attrOut', 'cprhOut']:
             if hasattr(self.sites, layoutAnchor):
                 anchorSite = self.sites.lookup(layoutAnchor)
@@ -1047,7 +1192,20 @@ class Icon:
 
     def snapLists(self, forCursor=False):
         x, y = self.rect[:2]
-        return self.sites.makeSnapLists(self, x, y, forCursor=forCursor)
+        siteSnapList = self.sites.makeSnapLists(self, x, y, forCursor=forCursor)
+        if self.wraps is not None:
+            for siteName, (_, (toX, toY), _) in self.wraps[0].items():
+                if isinstance(siteName, int):
+                    continue  # non-site wrap
+                site = self.sites.lookup(siteName)
+                if site is None:
+                    continue  # Wrapped at non-site break
+                if iconsites.hasLowerCoincidentSite(self, siteName, ignoreWraps=True):
+                    # The additional wrap site may not be needed if there's already a
+                    # (lower) coincident site beyond the wrap
+                    continue
+                siteSnapList[site.type].append((self, (x + toX, y + toY), siteName))
+        return siteSnapList
 
     def replaceChild(self, newChild, siteId, leavePlace=False, childSite=None):
         """Replace the icon attached at a particular site.  Note that while the name
@@ -1259,9 +1417,52 @@ class Icon:
         return self.__class__.__name__
 
     def doLayout(self, outSiteX, outSiteY, layout):
+        """Icons need to define this to transfer the layout data (calculated by the
+        icon's calcLayouts method) to position information (such as site offsets) within
+        the icon itself.  The location passed to doLayout for most icons is simply the
+        location of the site that anchors the layout (usually an output-type site).
+        However, for weird historical reasons, icons with sequence sites (and icons with
+        no sites (currently only the background image icon)) are positioned by the top
+        left corner of their icon rectangle.  This is dumb and fragile and causes
+        confusion to everyone who tries to understand this code, yet somehow persists
+        even though these icons now have a seqInsert site that would work much better for
+        this.
+
+        All icons that don't have fixed layouts must set up their icon rectangle in this
+        method, but note that icons using expression-layout (ExprLayout) can use
+        Layout.calcIconRect to do it for them based on the parts they submitted.  More
+        importantly, while such icons can still use an alternative rectangle, they should
+        consult the returned one to determine if origin would change.  If the icon does
+        need to change its origin, it is then also responsible for 1) updating the from
+        and to positions in its .wrap list (if any) which are established earlier in the
+        layout process to the call to doLayout, and 2) not shrinking the rectangle
+        such that it no longer covers wrap arrows."""
         pass
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999): #, badLimit, marginLimit):
+        """Returns a layout or list of layout choices for the icon and those below it in
+        the icon hierarchy.  Layouts can be expressed in the following forms (classes
+        defined in iconlayout.py):
+            1. An individual Layout object
+            2. An individual ExprLayout object
+            3. A list of Layout objects (not ExprLayout or PartLayout) expressing
+               a choice of possible layouts
+        Parameters badLimit and marginLimit help constrain the possible combinatorial
+        explosion when there are too many possible arrangements. Both work in conjunction
+        with layout caching to slowly increase the number of candidate layouts that lower
+        level icons return for their parent icons to consider.  Layout data caching makes
+        both for quicker recalculation for dynamic margin changes (margin dragging), and
+        enables the "descent into badness" strategy of ignoring "ugly" arrangements
+        until it's clear that no nice ones are possible.  "Badness" is scored for each
+        icon's layout and generally processed as a straight sum each child layout
+        plus that of the icon itself.  marginLimit is used to constrain the width of
+        the returned layout to a given number of pixels, but can be exceeded once layouts
+        reach the point beyond which they can not be shrunk.  marginLimit has an
+        additional side-effect for layouts of very large (individual or composite) items,
+        designated "bulk" layouts.  For these items, such as long strings, comments,
+        large data structures, or just absurdly wide code; rather than returning a list
+        of choices of varying widths, calcLayouts will return just the single best
+        layout that fits within marginLimit."""
         pass
 
     def textEntryHandler(self, entryIc, text, onAttr):
@@ -1322,6 +1523,34 @@ class Icon:
         icon.  By convention, added items should start with a separator.  This menu is
         destroyed after use and gets re-created from-scratch on right-mouse press."""
         return
+
+    def drawWrapArrows(self):
+        """If the icon owns any wraps, return a pair of appropriate drawList entries for
+        drawing wrap arrows.  If not, returns an empty tuple.  The expression layout
+        process attaches wraps to icons whose sites are wrapped and, in some unusual
+        cases, where a wrap is needed across a boundary where either there is no site or
+        the wrap is not between the site and its attached icon.  Wrap arrows visually
+        indicate the 'from' and 'to' locations of the wrap"""
+        if self.wraps is None:
+            return ()
+        drawList = []
+        for siteId, ((fromX, fromY), (toX, toY), _) in self.wraps[0].items():
+            wrapFromImage, fromArrowYOffset, wrapToImage, toArrowYOffset = \
+                wrapArrowImagesForSite(self, siteId)
+            # Draw wrap-from arrow
+            x = fromX
+            y = fromY + fromArrowYOffset
+            drawList.append(((x, y), wrapFromImage))
+            # Draw wrap-to arrow
+            if isinstance(siteId, int):
+                siteDepth = 0
+            else:
+                site = self.sites.lookup(siteId)
+                siteDepth = 0 if site is None else siteDepths[site.type]
+            x = toX + siteDepth - wrapToImage.width + 1  # + 1 to overlap left icon
+            y = toY + toArrowYOffset
+            drawList.append(((x, y), wrapToImage))
+        return drawList
 
     def _drawFromDrawList(self, toDragImage, location, clip, style):
         if location is None:
@@ -1496,8 +1725,13 @@ class Icon:
                 color = TEXT_SEL_LIGHT_TINT
             alpha = color[3] / 255.0
             width = (LIST_EMPTY_ARG_WIDTH if isSeriesSite else EMPTY_ARG_WIDTH) - 2
-            x = iconX + site.xOffset + inSiteImage.width
-            y = iconY + site.yOffset - height // 2
+            if self.wraps is not None and site.name in self.wraps[0]:
+                (_, _), (siteX, siteY), _ = self.wraps[0][site.name]
+            else:
+                siteX = site.xOffset
+                siteY = site.yOffset
+            x = iconX + siteX + inSiteImage.width
+            y = iconY + siteY - height // 2
             l = max(x, clipLeft)
             r = min(x + width, clipRight)
             t = max(y, clipTop)
@@ -1892,6 +2126,20 @@ class Icon:
         else:
             return 1,
 
+    def siteIsWrapped(self, siteId):
+        """Returns True if there is an expression wrap at siteId of this icon.  Note that
+        this will not return True for a wrap at a coincident site, even though it appears
+        visually the same."""
+        return self.wraps is not None and siteId in self.wraps[0]
+
+    def siteIsWrappedTo(self, siteId):
+        """If siteId of icon is currently wrapped-at, returns global coordinates of of
+        the destination wrap site."""
+        if self.wraps is None or siteId not in self.wraps[0]:
+            return None, None
+        (_, _), (wrapToX, wrapToY), _ = self.wraps[0][siteId]
+        return self.rect[0] + wrapToX, self.rect[1] + wrapToY
+
 class BlockEnd(Icon):
     def __init__(self, primary, window=None, location=None):
         Icon.__init__(self, window)
@@ -1923,7 +2171,7 @@ class BlockEnd(Icon):
         self.rect = (left, top, left + width, top + height)
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = branchFootImage.size
         return [iconlayout.Layout(self, width, height, 1)]
 
@@ -1971,7 +2219,7 @@ class ImageIcon(Icon):
         self.rect = (x, bottom - self.image.height, x + self.image.width, bottom)
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         return [iconlayout.Layout(self, self.image.width, self.image.height, 0)]
 
     def execute(self):
@@ -2074,7 +2322,51 @@ def incorporateStmtCommentLayouts(layouts, commentLayouts, margin):
         layout.stmtCommentLayout = bestCommentLayout
     return layouts
 
-def drawSeqSites(ic, img, imgX, imgY, blockIndent=False, boxRightEdge=None):
+def incorporateExprStmtCommentLayouts(exprLayout, commentLayouts, margin):
+    layouts = []
+    # Stmt comment layout is supposed to give us a limited set of around 5 choices, and
+    # wrapping gives us just one (though computationally, it may be lengthy per
+    # calculation).  For now, just pair all comment choices with an appropriately wrapped
+    # statement and let the layout comparison code sort it out.
+    #... This will probably need to be revisited to improve efficiency (we can avoid
+    #    calling .wrap in at least half the cases, I think).
+    #... It also depends on statement comment wrapping to cull down to a small number of
+    #    choices so make sure it does so before accepting this method
+    for i, commentLayout in commentLayouts:
+        layout = exprLayout.wrap(margin - (commentLayout.width + STMT_COMMENT_OFFSET))
+        # Since the comment will only extend to the right of and (possibly) below, the
+        # existing layout, it will not affect any of the offsets, so just extend size
+        layout.width += commentLayout.width + STMT_COMMENT_OFFSET
+        layout.height = max(layout.height, commentLayout.height)
+        layout.stmtCommentLayout = commentLayout
+        layout.badness += commentLayout.badness
+        layouts.append(layout)
+    print(f'incorporated {len(layouts)} stmt comment layouts')
+    return layouts
+
+def wrapArrowImagesForSite(ic, siteId):
+    """Select the appropriate wrap arrow images for the type of the given site.  Returns
+    4 values: fromImage, fromImageYOffset, toImage, toImageYOffset.  Passing 'site' as
+    None will result in the function returning the wrap arrows with no site displayed."""
+    if isinstance(siteId, int):
+        return noSiteWrapFromImage, NO_SITE_FROM_WRAP_ARROW_OFFSET, noSiteWrapToImage, \
+            NO_SITE_TO_WRAP_ARROW_OFFSET
+    site = ic.sites.lookup(siteId)
+    if site is None or site.type == 'cprhIn':
+        return noSiteWrapFromImage,  NO_SITE_FROM_WRAP_ARROW_OFFSET, noSiteWrapToImage, \
+            NO_SITE_TO_WRAP_ARROW_OFFSET
+    if site.type == 'input':
+        return inputWrapFromImage, INPUT_FROM_WRAP_ARROW_OFFSET, inputWrapToImage, \
+            INPUT_TO_WRAP_ARROW_OFFSET
+    if site.type == 'attrIn':
+        return attrWrapFromImage, ATTR_FROM_WRAP_ARROW_OFFSET, attrWrapToImage, \
+            ATTR_TO_WRAP_ARROW_OFFSET
+    print('wrapArrowImagesForSite: unknown site type in .wraps')
+    return noSiteWrapFromImage, NO_SITE_FROM_WRAP_ARROW_OFFSET, noSiteWrapToImage, \
+        NO_SITE_TO_WRAP_ARROW_OFFSET
+
+def drawSeqSites(ic, img, imgX, imgY, blockIndent=False, pseudoBlockIndent=False,
+        boxRightEdge=None):
     """Draw sequence (in and out) sites on a rectangular boxed icon.  If blockIndent is
     set to true, also add an extension to the icon body downward by BLOCK_SEQ_MARGIN, and
     rightward (if necessary) from boxRightEdge to the seqOut site.  Note that
@@ -2083,9 +2375,19 @@ def drawSeqSites(ic, img, imgX, imgY, blockIndent=False, boxRightEdge=None):
     # Draw seqIn site (will always be on icon body)
     siteX = ic.sites.seqIn.xOffset - imgX
     siteY = ic.sites.seqIn.yOffset - imgY
-    img.putpixel((siteX - 1, siteY + 1),  comn.OUTLINE_COLOR)
-    img.putpixel((siteX, siteY + 1 ), comn.OUTLINE_COLOR)
-    img.putpixel((siteX + 1, siteY + 1), comn.OUTLINE_COLOR)
+    if pseudoBlockIndent:
+        # Site is on single-pixel bump for else, elif, etc.
+        img.putpixel((siteX - 2, siteY), comn.OUTLINE_COLOR)
+        img.putpixel((siteX - 1, siteY), comn.OUTLINE_COLOR)
+        img.putpixel((siteX, siteY), comn.OUTLINE_COLOR)
+        img.putpixel((siteX + 1, siteY), comn.OUTLINE_COLOR)
+        if siteX + 2 < img.width:
+            img.putpixel((siteX + 2, siteY), comn.OUTLINE_COLOR)
+    else:
+        # Normal site along top edge of icon
+        img.putpixel((siteX - 1, siteY + 1), comn.OUTLINE_COLOR)
+        img.putpixel((siteX, siteY + 1), comn.OUTLINE_COLOR)
+        img.putpixel((siteX + 1, siteY + 1), comn.OUTLINE_COLOR)
     img.putpixel((siteX, siteY + 2), comn.OUTLINE_COLOR)
     # Draw seqOut site.  Block-owners have either a bump or a connector holding the site.
     siteX = ic.sites.seqOut.xOffset - imgX
@@ -2108,10 +2410,19 @@ def drawSeqSites(ic, img, imgX, imgY, blockIndent=False, boxRightEdge=None):
             # Add just a bump
             img.paste(seqOutBumpImage, (siteX - 3, siteY - seqOutBumpImage.height + 1))
     else:
-        # Just draw the seqOut site with no extra doodads
-        img.putpixel((siteX - 1, siteY - 1), comn.OUTLINE_COLOR)
-        img.putpixel((siteX,     siteY - 1), comn.OUTLINE_COLOR)
-        img.putpixel((siteX + 1, siteY - 1), comn.OUTLINE_COLOR)
+        if pseudoBlockIndent:
+            # Site is on single-pixel bump for else, elif, etc.
+            img.putpixel((siteX - 2, siteY), comn.OUTLINE_COLOR)
+            img.putpixel((siteX - 1, siteY), comn.OUTLINE_COLOR)
+            img.putpixel((siteX, siteY), comn.OUTLINE_COLOR)
+            img.putpixel((siteX + 1, siteY), comn.OUTLINE_COLOR)
+            if siteX + 2 < img.width:
+                img.putpixel((siteX + 2, siteY), comn.OUTLINE_COLOR)
+        else:
+            # Just draw the seqOut site with no extra doodads
+            img.putpixel((siteX - 1, siteY - 1), comn.OUTLINE_COLOR)
+            img.putpixel((siteX,     siteY - 1), comn.OUTLINE_COLOR)
+            img.putpixel((siteX + 1, siteY - 1), comn.OUTLINE_COLOR)
         img.putpixel((siteX,     siteY - 2), comn.OUTLINE_COLOR)
 
 def drawSeqSiteConnection(fromIcon, image=None, clip=None, drawSiteDots=True):

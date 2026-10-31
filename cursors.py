@@ -6,6 +6,7 @@
 import winsound
 import tokenize
 import token
+import heapq
 from PIL import Image
 from operator import itemgetter
 from dataclasses import dataclass
@@ -15,13 +16,10 @@ import io
 import comn
 import iconsites
 import icon
-import opicons
 import blockicons
 import nameicons
 import listicons
 import stringicon
-import subscripticon
-import parenicon
 import entryicon
 import commenticon
 import expredit
@@ -136,16 +134,17 @@ class Cursor:
         self.anchorHint = None
         self.protoTextPos = None
         self.textPartId = None
+        self.toWrap = False
 
     def setTo(self, cursorType, ic=None, site=None, pos=None, eraseOld=True,
-            drawNew=False, placeEntryText=True, partId=1):
+            drawNew=False, placeEntryText=True, partId=1, toWrap=False):
         """Place the cursor of a given cursor type (cursorType).  See other setToXXX
         methods for details of each type."""
         if cursorType == 'window':
             self.setToWindowPos(pos, eraseOld, drawNew, placeEntryText)
         elif cursorType == 'icon':
             self.setToIconSite(ic, site, eraseOld=eraseOld, drawNew=drawNew,
-                placeEntryText=placeEntryText)
+                placeEntryText=placeEntryText, toWrap=toWrap)
         elif cursorType == 'text':
             self.setToText(ic, pos, eraseOld, drawNew, placeEntryText, partId)
         elif cursorType == 'typeover':
@@ -170,6 +169,7 @@ class Cursor:
             self.erase()
         self.type = "window"
         self.pos = pos
+        self.toWrap = False
         self.window.updateTypeoverStates()
         if drawNew:
             self.draw()
@@ -178,7 +178,7 @@ class Cursor:
         self.clearAnchorHint()
 
     def setToIconSite(self, ic, siteIdOrSeriesName, seriesIndex=None, eraseOld=True,
-            drawNew=False, placeEntryText=True, requestScroll=True):
+            drawNew=False, placeEntryText=True, requestScroll=True, toWrap=False):
         """Place the cursor on an icon site.  Be aware that this can cause
         rearrangement of icons by virtue of taking focus from an entry icon, which will
         then try to place its text content and pending arguments.  You must therefore
@@ -202,6 +202,7 @@ class Cursor:
         else:
             self.site = iconsites.makeSeriesSiteId(siteIdOrSeriesName, seriesIndex)
         self.siteType = ic.typeOf(self.site)
+        self.toWrap = toWrap
         self.window.updateTypeoverStates()
         if drawNew:
             self.draw()
@@ -234,6 +235,7 @@ class Cursor:
             self.erase()
         self.type = "text"
         self.icon = ic
+        self.toWrap = False
         self.window.updateTypeoverStates()
         if isIconAndCanEditText(self.icon):
             ic.focusIn()
@@ -263,6 +265,7 @@ class Cursor:
             self.erase()
         self.type = "typeover"
         self.icon = ic
+        self.toWrap= False
         self.window.updateTypeoverStates()
         if drawNew:
             self.draw()
@@ -290,7 +293,7 @@ class Cursor:
                     return
         self.anchorHint = None
 
-    def moveToIconSite(self, cursorType, ic, site, pos, evt):
+    def moveToIconSite(self, cursorType, ic, site, pos, evt, toWrap=False):
         """Place the cursor at an icon site, and possibly extend the selection to it (if
         the shift key was pressed in the event (evt) that triggered the movement)."""
         shiftPressed = evt.state & comn.SHIFT_MASK
@@ -298,9 +301,9 @@ class Cursor:
             if cursorType != 'icon':
                 print('moveToIconSite tried to select to a non-site destination')
                 return
-            self.selectToSiteOrPart(ic, site)
+            self.selectToSiteOrPart(ic, site, toWrap=toWrap)
         else:
-            self.setTo(cursorType, ic, site, pos)
+            self.setTo(cursorType, ic, site, pos, toWrap=toWrap)
 
     def moveToTextSite(self, ic, partId, pos, evt):
         """Place the cursor at a text site, and possibly extend the selection to it (if
@@ -334,7 +337,7 @@ class Cursor:
         self.setTo(state.cursorType, state.ic, state.site, state.pos, eraseOld=True,
             drawNew=False, placeEntryText=True)
 
-    def selectToSiteOrPart(self, ic, site=None, partId=None):
+    def selectToSiteOrPart(self, ic, site=None, partId=None, toWrap=False):
         """Extend or reduce the existing selection (or select from the existing cursor
         location) to site: (ic, site) if site is specified, or icon part (ic, partId) if
         partId is specified.  Also places the cursor at the requested site if site was
@@ -358,7 +361,7 @@ class Cursor:
                     self.window.sel.select(ic)
                     self.window.refresh(ic.rect)
                 else:
-                    self.setToIconSite(ic, site)
+                    self.setToIconSite(ic, site, toWrap=toWrap)
                 return
             # This is a new cursor-based selection
             anchorIc = self.icon
@@ -483,7 +486,7 @@ class Cursor:
         if redrawRect.get() is not None:
             self.window.refresh(redrawRect.get(), redraw=True)
         # Place the cursor at the requested location
-        self.setToIconSite(ic, site)
+        self.setToIconSite(ic, site, toWrap=toWrap)
 
     def selectToTextPos(self, newIc, newPartId, newPos):
         """Extend existing text selection or start new selection from cursor to new text
@@ -667,10 +670,13 @@ class Cursor:
             x, y = self.pos
             y -= inputSiteCursorOffset
         elif self.type == "icon":
-            sitePos = self.icon.posOfSite(self.site)
-            if sitePos is None:
-                return None, 0, 0  # fail softly if cursor moved before site fully exists
-            x, y = sitePos
+            if self.toWrap and self.icon.siteIsWrapped(self.site):
+                x, y = self.icon.siteIsWrappedTo(self.site)
+            else:
+                sitePos = self.icon.posOfSite(self.site)
+                if sitePos is None:
+                    return None, 0, 0  # fail softly if cursor moved before site fully exists
+                x, y = sitePos
             if self.siteType in ("input", "output"):
                 cursorImg = inputSiteCursorImage
                 y -= inputSiteCursorOffset
@@ -740,9 +746,10 @@ class Cursor:
             if direction in ("Up", "Down"):
                 fromIcon = self.icon
                 fromSite = fromIcon.sites.lastCursorSite()
-                cursorType, toIcon, toSite, toPos = geometricTraverse(fromIcon, fromSite,
-                    direction, enterTextFields=not evt.state & comn.SHIFT_MASK)
-                self.moveToIconSite(cursorType, toIcon, toSite, toPos, evt)
+                cursorType, toIcon, toSite, toPos, toWrap = geometricTraverse(fromIcon,
+                    fromSite, direction, enterTextFields=not evt.state & comn.SHIFT_MASK,
+                    fromWrap=self.toWrap)
+                self.moveToIconSite(cursorType, toIcon, toSite, toPos, evt, toWrap=toWrap)
             siteBefore, siteAfter, text, idx = self.icon.typeoverSites()
             if direction == 'Right':
                 # Move to site after (typeover will be automatically cancelled)
@@ -760,10 +767,10 @@ class Cursor:
                 self.moveToIconSite('icon', toIcon, toSite, None, evt)
             return
         if self.type == "window":
-            cursorType, ic, site, pos, partId = geometricTraverseFromPos(*self.pos,
-                direction, self.window, limitDist=(WINDOW_CURSOR_INCREMENT,
+            cursorType, ic, site, pos, partId, toWrap = geometricTraverseFromPos(
+                *self.pos, direction, self.window, limitDist=(WINDOW_CURSOR_INCREMENT,
                 WINDOW_CURSOR_INCREMENT), editableTextFields=False)
-            self.setTo(cursorType, ic, site, pos)
+            self.setTo(cursorType, ic, site, pos, toWrap=toWrap)
         elif self.type == "icon":
             self._processIconArrowKey(evt)
 
@@ -777,8 +784,11 @@ class Cursor:
             ic, partId, pos = nextTextPos(self.icon, siteId=self.site, direction='Right')
         else:
             # Up/down movement
-            cursorX, cursorY = self.icon.posOfSite(self.site)
-            cursorType, ic, site, pos, partId = geometricTraverseFromPos(cursorX,
+            if self.toWrap and self.icon.siteIsWrapped(self.site):
+                cursorX, cursorY = self.icon.siteIsWrappedTo(self.site)
+            else:
+                cursorX, cursorY = self.icon.posOfSite(self.site)
+            cursorType, ic, site, pos, partId, toWrap = geometricTraverseFromPos(cursorX,
                 cursorY, evt.keysym, self.window, limitAdjacentStmt=self.icon,
                 editableTextFields=True, onlyTextFields=True)
             if ic is None:
@@ -857,7 +867,7 @@ class Cursor:
                     self.protoTextPos)
                 stmtOfCursor = self.icon.topLevelParent()
             onlyTextFields = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
-            cursorType, ic, site, pos, partId = geometricTraverseFromPos(cursorX,
+            cursorType, ic, site, pos, partId, toWrap = geometricTraverseFromPos(cursorX,
                 cursorY, direction, self.window, limitAdjacentStmt=stmtOfCursor,
                 limitDist=(HORIZ_ARROW_MAX_DIST, VERT_ARROW_MAX_DIST),
                 editableTextFields=True, onlyTextFields=onlyTextFields)
@@ -868,7 +878,7 @@ class Cursor:
                     return
                 self.moveToTextSite(ic, partId, pos, evt)
             else:
-                self.moveToIconSite(cursorType, ic, site, pos, evt)
+                self.moveToIconSite(cursorType, ic, site, pos, evt, toWrap=toWrap)
             return
         if newIc is None:
             # No more text sites (start or end of sequence)
@@ -888,8 +898,8 @@ class Cursor:
                 self.setToText(self.icon)
                 return
             traverseToText = not (evt.state & comn.SHIFT_MASK)
-            ic, site = lexicalTraverse(self.icon, self.site, evt.keysym,
-                traverseStmtComment=traverseToText)
+            ic, site, toWrap = lexicalTraverse(self.icon, self.site, evt.keysym,
+                traverseStmtComment=traverseToText, fromWrap=self.toWrap)
             if evt.keysym == 'Right' and traverseToText:
                 if _isTextIcBodySite(ic, site):
                     ic.setCursorPos(0)
@@ -902,9 +912,10 @@ class Cursor:
             cursorType = 'icon'
             pos = None
         else:
-            cursorType, ic, site, pos = geometricTraverse(self.icon, self.site,
-                evt.keysym, enterTextFields=not evt.state & comn.SHIFT_MASK)
-        self.moveToIconSite(cursorType, ic, site, pos, evt)
+            cursorType, ic, site, pos, toWrap = geometricTraverse(self.icon, self.site,
+                evt.keysym, enterTextFields=not evt.state & comn.SHIFT_MASK,
+                fromWrap=self.toWrap)
+        self.moveToIconSite(cursorType, ic, site, pos, evt, toWrap=toWrap)
 
     def erase(self):
         if self.lastDrawRect is not None and self.window.dragging is None:
@@ -1530,7 +1541,7 @@ def nextTextPosInStmt(ic, pos=None, partId=None, siteId=None, direction=None):
                 return ic, 1, 1
             else:
                 startAtSite = lexicalTraverse(ic[0], ic[1], 'Right',
-                    traverseStmtComment=True)
+                    traverseStmtComment=True)[:2]
                 started = True
                 textLen = 1
                 editable = False
@@ -1676,19 +1687,22 @@ def prevTextPos(ic, pos=None, partId=None, siteId=None, direction=None):
         return ic, partId, pos
     return prevIc, prevPart, prevPos
 
-def lexicalTraverse(fromIcon, fromSite, direction, traverseStmtComment=False):
+def lexicalTraverse(fromIcon, fromSite, direction, traverseStmtComment=False,
+        fromWrap=False):
     """Return the cursor position (icon and siteId) to the left or right according
     to the "text-flow".  If travStmtComment is specified, will return the statement
     comment following the rightmost cursor position at the end of a statement, with
     a site of None (since statement comments are not attached to a site)."""
-    ic, site = _lexicalTraverse(fromIcon, fromSite, direction, traverseStmtComment)
+    ic, site, toWrap = _lexicalTraverse(fromIcon, fromSite, direction,
+        traverseStmtComment, fromWrap)
     while site is not None and ic.isCursorSkipSite(site):
         # lexical traversal includes comprehension sites, and we want the icon
         # that is on the comprehension site, so go around again.
-        ic, site = _lexicalTraverse(ic, site, direction, traverseStmtComment)
-    return ic, site
+        ic, site, toWrap = _lexicalTraverse(ic, site, direction, traverseStmtComment,
+            toWrap)
+    return ic, site, toWrap
 
-def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
+def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment, fromWrap):
     """Guts of lexicalTraverse, but will visit cursorSkipSites."""
     fromSiteType = fromIcon.typeOf(fromSite)
     if direction == 'Left':
@@ -1698,25 +1712,28 @@ def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
             # otherwise, traverse to the seqIn site.
             attachedIc = fromIcon.childAt(fromSite)
             if attachedIc is None:
-                return fromIcon, 'seqIn'
+                return fromIcon, 'seqIn', False
             attachedSite = attachedIc.siteOf(fromIcon)
-            return _lexicalTraverse(attachedIc, attachedSite, direction, travStmtComment)
+            return _lexicalTraverse(attachedIc, attachedSite, direction, travStmtComment,
+                False)
         elif fromSite == 'seqOut':
             if isinstance(fromIcon, icon.BlockEnd):
-                return fromIcon, "seqIn"
+                return fromIcon, "seqIn", False
             if fromIcon.sites.lastCursorSite() is None:
-                return fromIcon, "seqIn"
-            return icon.rightmostSite(fromIcon)
+                return fromIcon, "seqIn", False
+            return *icon.rightmostSite(fromIcon), False
         elif fromSite == 'seqIn':
             prevStmt = fromIcon.prevInSeq(includeModuleAnchor=True)
             if prevStmt is None:
-                return fromIcon, fromSite
+                return fromIcon, fromSite, False
             if isinstance(prevStmt, icon.BlockEnd):
-                return prevStmt, "seqIn"
+                return prevStmt, "seqIn", False
             if prevStmt.sites.lastCursorSite() is None:
-                return prevStmt, "seqIn"
-            return icon.rightmostSite(prevStmt)
+                return prevStmt, "seqIn", False
+            return *icon.rightmostSite(prevStmt), False
         # Cursor is on an input site of some sort (input, attrIn, cprhIn)
+        if fromWrap and fromIcon.siteIsWrapped(fromSite):
+            return fromIcon, fromSite, False
         prevSite = fromIcon.sites.prevCursorSite(fromSite)
         if prevSite is None:
             highestIc = iconsites.highestCoincidentIcon(fromIcon)
@@ -1726,33 +1743,40 @@ def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
                     toIc, toSite = iconsites.lowestCoincidentSite(highestIc,
                         highestIc.hasCoincidentSite())
                     if toIc == fromIcon and toSite == fromSite:
-                        return highestIc, 'seqIn'
-                    return toIc, toSite
-                return highestIc, topSite(highestIc, seqDown=False)
+                        return highestIc, 'seqIn', False
+                    return toIc, toSite, False
+                return highestIc, topSite(highestIc, seqDown=False), False
             parentSite = parent.siteOf(highestIc)
             if fromIcon.hasCoincidentSite():
-                return _lexicalTraverse(parent, parentSite, direction, travStmtComment)
-            return iconsites.lowestCoincidentSite(parent, parentSite)
-        iconAtPrevSite = fromIcon.childAt(prevSite)
-        if iconAtPrevSite is None:
-            return fromIcon, prevSite
-        return icon.rightmostSite(iconAtPrevSite)
+                return _lexicalTraverse(parent, parentSite, direction, travStmtComment,
+                    fromWrap)
+            ic, site = iconsites.lowestCoincidentSite(parent, parentSite)
+        else:
+            iconAtPrevSite = fromIcon.childAt(prevSite)
+            if iconAtPrevSite is None:
+                ic, site = fromIcon, prevSite
+            else:
+                ic, site = icon.rightmostSite(iconAtPrevSite)
+        return ic, site, ic.siteIsWrapped(site)
     else:  # 'Right'
+        if fromIcon.siteIsWrapped(fromSite) and not fromWrap:
+            return fromIcon, fromSite, True
         if fromSiteType in iconsites.parentSiteTypes or fromSiteType == 'seqIn':
             nextSite = fromIcon.sites.firstCursorSite()
             if nextSite is None:
-                return fromIcon, topSite(fromIcon, seqDown=True)
+                return fromIcon, topSite(fromIcon, seqDown=True), False
             if fromSite == 'output' and nextSite == fromIcon.hasCoincidentSite():
-                return _lexicalTraverse(fromIcon, nextSite, direction, travStmtComment)
-            return fromIcon, nextSite
+                return _lexicalTraverse(fromIcon, nextSite, direction, travStmtComment,
+                    False)
+            return fromIcon, nextSite, False
         if fromSite == 'seqOut':
             nextStmt = fromIcon.nextInSeq()
             if nextStmt is None:
-                return fromIcon, fromSite
+                return fromIcon, fromSite, False
             nextSite = nextStmt.sites.firstCursorSite()
             if nextSite is None:
-                return nextStmt, 'seqOut'
-            return nextStmt, nextSite
+                return nextStmt, 'seqOut', False
+            return nextStmt, nextSite, False
         # Start from the lowest coincident site at the cursor
         ic, site = iconsites.lowestCoincidentSite(fromIcon, fromSite)
         childIc = ic.childAt(site)
@@ -1760,7 +1784,7 @@ def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
             # There is an icon attached to it that can accept a cursor, go there
             firstChildSite = childIc.sites.firstCursorSite()
             if firstChildSite is not None:
-                return childIc, firstChildSite
+                return childIc, firstChildSite, False
         # There is no icon attached to the site that can accept a cursor.  Iterate up
         # the hierarchy to find an icon with a site to take one.  If none is found,
         # attach to the seqOut or output site of the top icon
@@ -1770,16 +1794,16 @@ def _lexicalTraverse(fromIcon, fromSite, direction, travStmtComment):
             parent = nextIcon.parent()
             if parent is None:
                 if travStmtComment and hasattr(nextIcon, 'stmtComment'):
-                    return nextIcon.stmtComment, None
+                    return nextIcon.stmtComment, None, False
                 else:
-                    return nextIcon, topSite(nextIcon, seqDown=True)
+                    return nextIcon, topSite(nextIcon, seqDown=True), False
             parentSite = parent.siteOf(nextIcon)
             nextSite = parent.sites.nextCursorSite(parentSite)
             nextIcon = parent
-        return nextIcon, nextSite
+        return nextIcon, nextSite, False
 
 def geometricTraverse(fromIcon, fromSite, direction, enterTextFields=True,
-        allowEscapeToWindow=False):
+        allowEscapeToWindow=False, fromWrap=False):
     """Return the next (icon) cursor position (icon and siteId) in a given direction
     (physically, not lexically) from the given (icon site) position (fromIcon, fromSite).
     """
@@ -1787,29 +1811,33 @@ def geometricTraverse(fromIcon, fromSite, direction, enterTextFields=True,
     # are not physically up and down from each other, but need to be visited as such
     if isinstance(fromIcon, icon.BlockEnd) and fromSite == 'seqIn' and \
             direction == 'Down':
-        return 'icon', fromIcon, 'seqOut', None
+        return 'icon', fromIcon, 'seqOut', None, False
     if isinstance(fromIcon.nextInSeq(), icon.BlockEnd) and fromSite == 'seqOut' and \
             direction == 'Down':
-        return 'icon', fromIcon.nextInSeq(), 'seqOut', None
+        return 'icon', fromIcon.nextInSeq(), 'seqOut', None, False
     if isinstance(fromIcon, icon.BlockEnd) and fromSite == 'seqOut' and \
             direction == 'Up':
-        return 'icon', fromIcon, 'seqIn', None
+        return 'icon', fromIcon, 'seqIn', None, False
     if isinstance(fromIcon.prevInSeq(), icon.BlockEnd) and fromSite == 'seqIn' and \
             direction == 'Up':
-        return 'icon', fromIcon.prevInSeq(includeModuleAnchor=True), 'seqIn', None
+        return 'icon', fromIcon.prevInSeq(includeModuleAnchor=True), 'seqIn', None, False
     # Build a list of possible destination cursor positions, normalizing attribute
     # site positions to the center of the cursor (in/out site position), and sequence
     # sites to be far enough left to find output and prefix-insert sites.
-    cursorX, cursorY = fromIcon.posOfSite(fromSite)
+    if fromWrap and fromIcon.siteIsWrapped(fromSite):
+        cursorX, cursorY = fromIcon.siteIsWrappedTo(fromSite)
+    else:
+        cursorX, cursorY = fromIcon.posOfSite(fromSite)
     if fromIcon.typeOf(fromSite) == "attrIn":
         cursorY -= icon.ATTR_SITE_OFFSET  # Normalize to input/output site y
     if fromSite in ('seqIn', 'seqOut'):
         cursorX -= icon.SEQ_SITE_OFFSET
-    cursorType, ic, site, pos, _ = geometricTraverseFromPos(cursorX, cursorY, direction,
-        fromIcon.window, limitAdjacentStmt=fromIcon, editableTextFields=enterTextFields)
+    cursorType, ic, site, pos, _, toWrap = geometricTraverseFromPos(cursorX, cursorY,
+        direction, fromIcon.window, limitAdjacentStmt=fromIcon,
+        editableTextFields=enterTextFields)
     if not allowEscapeToWindow and cursorType == 'window':
-        return 'icon', fromIcon, fromSite, None
-    return cursorType, ic, site, pos
+        return 'icon', fromIcon, fromSite, None, False
+    return cursorType, ic, site, pos, toWrap
 
 def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentStmt=None,
         limitDist=(HORIZ_ARROW_MAX_DIST, VERT_ARROW_MAX_DIST), editableTextFields=True,
@@ -1850,6 +1878,8 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
                 cursorNextIcon = cursorNextIcon.nextInSeq()
                 if cursorNextIcon is not None:
                     limitToStmts.append(cursorNextIcon)
+        topRowLimit, bottomRowLimit = _findAdjacentRowLimits(cursorTopIcon,
+            cursorPrevIcon, cursorNextIcon, cursorY)
     cursorSites = []
     for winIcon in window.findIconsInRegion(searchRect, inclModSeqIcon=True):
         if limitAdjacentStmt is not None:
@@ -1910,6 +1940,8 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
     # in the cursor movement direction, and cull those in the wrong direction
     choices = []
     for x, y, cursorType, ic, site, pos, partId in cursorSites:
+        if limitToStmts is not None and y < topRowLimit or y > bottomRowLimit:
+            continue
         if direction == "Left":
             dist = cursorX - x
         elif direction == "Right":
@@ -1921,7 +1953,8 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
         if dist > 0:
             choices.append((dist, x, y, cursorType, ic, site, pos, partId))
     if len(choices) == 0:
-        return "window", None, None, _windowCursorIncr(cursorX, cursorY, direction), None
+        return "window", None, None, _windowCursorIncr(cursorX, cursorY, direction),\
+            None, False
     choices.sort(key=itemgetter(0))
     if direction in ("Left", "Right"):
         # For horizontal movement, just use a simple vertical threshold to decide
@@ -1929,7 +1962,10 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
         for xDist, x, y, cursorType, ic, site, pos, partId in choices:
             if xDist > VERT_ARROW_X_JUMP_MIN:
                 if abs(y - cursorY) < HORIZ_ARROW_Y_JUMP_MAX:
-                    return cursorType, ic, site, pos, partId
+                    break
+        else:
+            return "window", None, None, _windowCursorIncr(cursorX, cursorY,
+                direction), None, False
     else:  # Up, Down
         # For vertical movement, do a second round of ranking.  This time add y
         # distance to weighted X distance (ranking x jumps as further away)
@@ -1938,11 +1974,11 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
             if yDist > VERT_ARROW_Y_JUMP_MIN or isinstance(ic, icon.BlockEnd):
                 rank = yDist + VERT_ARROW_X_WEIGHT*abs(x-cursorX)
                 if bestRank is None or rank < bestRank[0]:
-                    bestRank = (rank, cursorType, ic, site, pos, partId)
+                    bestRank = (rank, cursorType, ic, site, pos, partId, x, y)
         if bestRank is None:
             return "window", None, None, _windowCursorIncr(cursorX, cursorY, direction), \
-                None
-        rank, cursorType, ic, site, pos, partId = bestRank
+                None, False
+        rank, cursorType, ic, site, pos, partId, x, y = bestRank
         if site == 'seqIn' and direction == "Up":
             # Typing at a seqIn site is the same as typing at the connected seqOut
             # site, so save the user a keypress by going to the seqOut site above
@@ -1950,8 +1986,61 @@ def geometricTraverseFromPos(cursorX, cursorY, direction, window, limitAdjacentS
             if prevIcon:
                 ic = prevIcon
                 site = 'seqOut'
-        return cursorType, ic, site, pos, partId
-    return "window", None, None, _windowCursorIncr(cursorX, cursorY, direction), None
+    if ic.siteIsWrapped(site):
+        wrappedX, wrappedY = ic.siteIsWrappedTo(site)
+        toWrap = x == wrappedX and y == wrappedY
+    else:
+        toWrap = False
+    return cursorType, ic, site, pos, partId, toWrap
+
+def _findAdjacentRowLimits(cursorStmt, cursorPrevStmt, cursorNextStmt, cursorY):
+    """Return additional y limits to vertical cursor movement if any of the adjacent
+    statements include wraps."""
+    # Collect wrap information, which is attached to the icons owning the sites where
+    # wrapping occurs. This is already sorted per-icon but we may still need to integrate
+    # data from multiple icons (hence heqpq.merge).
+    wrapBoundaries = {}
+    for stmt in (cursorStmt, cursorPrevStmt, cursorNextStmt):
+        if stmt is None:
+            continue
+        for ic in stmt.traverse():
+            if ic.wraps is not None and ic.wraps[1] is stmt:
+                icBoundaries = [b + ic.rect[1] for _, _, b in ic.wraps[0].values()]
+                if stmt not in wrapBoundaries:
+                    wrapBoundaries[stmt] = icBoundaries
+                else:
+                    wrapBoundaries[stmt] = list(heapq.merge(wrapBoundaries[stmt],
+                        icBoundaries))
+    topRowLimit = -999999999
+    bottomRowLimit = 999999999
+    needBottomBoundary = needTopBoundary = True
+    if cursorStmt in wrapBoundaries:
+        # find starting row
+        startStmtBoundaries = wrapBoundaries[cursorStmt]
+        for row, boundaryY in enumerate(startStmtBoundaries):
+            if boundaryY > cursorY:
+                startRow = row
+                break
+        else:
+            startRow = len(startStmtBoundaries)
+        _, topY, _, bottomY = cursorStmt.hierRect(inclStmtComment=False)
+        if startRow > 2:
+            topRowLimit = startStmtBoundaries[startRow - 2]
+            needTopBoundary = False
+        elif startRow > 1:
+            topRowLimit = topY
+            needTopBoundary = False
+        if startRow + 1 < len(startStmtBoundaries):
+            bottomRowLimit = startStmtBoundaries[startRow + 1]
+            needBottomBoundary = False
+        elif startRow < len(startStmtBoundaries):
+            bottomRowLimit = bottomY
+            needBottomBoundary = False
+    if needTopBoundary and cursorPrevStmt in wrapBoundaries:
+        topRowLimit = wrapBoundaries[cursorPrevStmt][-1]
+    if needBottomBoundary and cursorNextStmt in wrapBoundaries:
+        bottomRowLimit = wrapBoundaries[cursorNextStmt][0]
+    return topRowLimit, bottomRowLimit
 
 def protoTextToEntryPos(ic, partId, pos):
     """Translate the given text cursor position in a non-text-editing icon into a text

@@ -114,20 +114,18 @@ class AssignIcon(icon.Icon):
             # Commas, spines and an = for each target group
             opWidth, opHeight = equalImage.size
             for i, tgtList in enumerate(self.tgtLists):
-                self.drawList += tgtList.drawListCommas(tgtSiteX, siteY)
-                spines = tgtList.drawSimpleSpine(tgtSiteX, siteY, drawOutputSite=False)
-                # We can no longer draw sequence sites on a simple spine, as they are now
-                # just beyond the spine edge.  Code below if this becomes possible again.
-                # if i == 0 and leftTgtHasSpine:
-                #     (leftSpineX, leftSpineY), leftSpineImg = spines[0]
-                #     icon.drawSeqSites(self, leftSpineImg, leftSpineX, leftSpineY)
-                self.drawList += spines
-                tgtSiteX += tgtList.width - 1
-                self.drawList.append(((tgtSiteX + icon.OUTPUT_SITE_DEPTH,
-                        siteY - opHeight // 2), equalImage))
-                tgtSiteX += opWidth - 1
-            self.drawList += self.valueList.drawListCommas(tgtSiteX, siteY)
-            self.drawList += self.valueList.drawSimpleSpine(tgtSiteX, siteY)
+                self.drawList += tgtList.drawListCommas()
+                self.drawList += tgtList.drawSimpleSpine(drawOutputSite=False)
+                eqBodyList = self.tgtLists[i+1] \
+                    if i < len(self.tgtLists) - 1 else self.valueList
+                x, y = eqBodyList.spineOutSiteOffset(preWrap=True)
+                # + 1 below seems wrong, but site is in correct spot
+                x += icon.OUTPUT_SITE_DEPTH - opWidth + 1
+                y -= opHeight // 2
+                self.drawList.append(((x, y), equalImage))
+            self.drawList += self.valueList.drawListCommas()
+            self.drawList += self.valueList.drawSimpleSpine()
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True,
             allowTrailingComma=True)
@@ -300,50 +298,31 @@ class AssignIcon(icon.Icon):
                 self.assignValues(t, v)
 
     def doLayout(self, left, top, layout):
-        for tgtList in self.tgtLists:
-            tgtList.doLayout(layout)
-        self.valueList.doLayout(layout)
-        opWidth, opHeight = self.opSize
-        heightAbove = opHeight // 2
-        heightBelow = opHeight - heightAbove
-        for tgtList in self.tgtLists:
-            heightAbove = max(heightAbove, tgtList.spineTop)
-            heightBelow = max(heightBelow, tgtList.spineHeight - tgtList.spineTop)
-        heightAbove = max(heightAbove, self.valueList.spineTop)
-        heightBelow = max(heightBelow, self.valueList.spineHeight-self.valueList.spineTop)
-        leftSpineTop = heightAbove - self.tgtLists[0].spineTop
-        self.sites.seqIn.yOffset = leftSpineTop
-        self.sites.seqOut.yOffset = leftSpineTop + self.tgtLists[0].spineHeight - 1
-        self.sites.seqInsert.yOffset = heightAbove
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
-        height = heightAbove + heightBelow
-        width = self.sites.seqIn.xOffset - 1 + layout.width
-        self.rect = (left, top, left + width, top + height)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        if self.tgtLists[0].simpleSpineWillDraw():
+            # Move the seqIn and seqOut sites to the ends of the left spine of simple
+            # spines will draw
+            leftSpineTop = self.sites.seqInsert.yOffset - self.tgtLists[0].spineTop
+            self.sites.seqIn.yOffset = leftSpineTop
+            self.sites.seqOut.yOffset = leftSpineTop + self.tgtLists[0].spineHeight - 1
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
-        opWidth, opHeight = self.opSize
-        tgtListsLayouts = [tgtList.calcLayouts(argRequired=True)
-            for tgtList in self.tgtLists]
-        valueLayouts = self.valueList.calcLayouts(argRequired=True)
-        layouts = []
-        for valueLayout, *tgtLayouts in iconlayout.allCombinations(
-                (valueLayouts, *tgtListsLayouts)):
-            layout = iconlayout.Layout(self, opWidth, opHeight, opHeight // 2)
-            # Calculate for assignment target lists (each clause of =)
-            if tgtLayouts[0] is not None and len(tgtLayouts[0].rowWidths) >= 2:
-                x = 0  # If first target group includes spine, don't offset
-            else:
-                x = inpSeqImage.width - 1
-            for i, tgtLayout in enumerate(tgtLayouts):
-                tgtLayout.mergeInto(layout, x, 0)
-                x += tgtLayout.width + opWidth - 2
-            # Calculate layout for assignment value(s)
-            layout.width = x + 1
-            valueLayout.mergeInto(layout, x, 0)
-            layouts.append(layout)
+    def calcLayouts(self, marginLimit=999999999):
+        layouts = iconlayout.ExprLayout(self, siteName='targets0_0',
+            width=inpSeqImage.width, height=inpSeqImage.height,
+            yOffset=inpSeqImage.height // 2, siteYOffset=0,
+            indentDepthAdj=inpSeqImage.width-1)
+        for i, tgtList in enumerate(self.tgtLists):
+            brkLvl = None if i == 0 else 0  # Can break after =, never after inpSeqImage
+            tgtList.appendToExprLayout(layouts, argRequired=True, brkLvl=brkLvl)
+            partSiteId = 'values_0' if i == len(self.tgtLists) - 1 else \
+                self.tgtLists[i+1].siteSeriesName + '_0'
+            layouts.appendPart(None, self, partSiteId, equalImage.width,
+                equalImage.height, equalImage.height // 2, 0)
+        self.valueList.appendToExprLayout(layouts, argRequired=True)
         return self.debugLayoutFilter(layouts)
 
     def clipboardRepr(self, offset, iconsToCopy):
@@ -550,21 +529,19 @@ class AugmentedAssignIcon(icon.Icon):
                 y = tgtSiteY - inpSeqImage.height // 2
                 self.drawList.append(((tgtSiteX, y), inpSeqImage))
             img = Image.new('RGBA', (bodyWidth, bodyHeight), color=(0, 0, 0, 0))
-            targetOffset = icon.dragSeqImage.width - 1
-            bodyOffset = targetOffset + self.targetWidth - 1
             txtImg = icon.iconBoxedText(self.op + '=')
             img.paste(txtImg, (0, 0))
             inImageX = bodyWidth - icon.inSiteImage.width
             inImageY = bodyHeight // 2 - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (inImageX, inImageY))
-            bodyTopY = self.sites.seqIn.yOffset
-            self.drawList.append(((bodyOffset, bodyTopY), img))
-            # Minimal spines (if list has multi-row layout)
-            argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
-            cntrSiteY = bodyTopY + bodyHeight // 2
-            self.drawList += self.valuesList.drawSimpleSpine(argsOffset, cntrSiteY)
-            # Commas
-            self.drawList += self.valuesList.drawListCommas(argsOffset, cntrSiteY)
+            x, y = self.valuesList.spineOutSiteOffset(preWrap=True)
+            x += icon.OUTPUT_SITE_DEPTH - img.width + 1
+            y -= img.height // 2
+            self.drawList.append(((x, y), img))
+            # Minimal spines (if list has multi-row layout) and commas
+            self.drawList += self.valuesList.drawSimpleSpine()
+            self.drawList += self.valuesList.drawListCommas()
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True,
             allowTrailingComma=True)
@@ -576,43 +553,22 @@ class AugmentedAssignIcon(icon.Icon):
         return siteSnapLists
 
     def doLayout(self, left, top, layout):
-        self.valuesList.doLayout(layout)
-        self.targetWidth = layout.targetWidth
-        bodyWidth, bodyHeight = self.bodySize
-        heightAbove = bodyHeight // 2
-        heightBelow = bodyHeight - heightAbove
-        width = icon.dragSeqImage.width - 1 + bodyWidth - 1 + self.targetWidth - 1 + \
-                self.valuesList.width - 1
-        if self.valuesList.simpleSpineWillDraw():
-            heightAbove = max(heightAbove, self.valuesList.spineTop)
-            heightBelow = max(heightBelow, self.valuesList.spineHeight -
-                    self.valuesList.spineTop)
-        self.sites.seqInsert.yOffset = heightAbove
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
-        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1
-        height = heightAbove + heightBelow
-        self.rect = (left, top, left + width, top + height)
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
-        valueListLayouts = self.valuesList.calcLayouts(argRequired=True)
-        targetIcon = self.sites.targetIcon.att
-        tgtLayouts = [None] if targetIcon is None else targetIcon.calcLayouts()
-        layouts = []
-        for valueListLayout, tgtLayout in iconlayout.allCombinations(
-                (valueListLayouts, tgtLayouts)):
-            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, 1)
-            layout.addSubLayout(tgtLayout, 'targetIcon', 0, 0)
-            tgtWidth = icon.EMPTY_ARG_WIDTH if tgtLayout is None else tgtLayout.width
-            valuesXOffset = tgtWidth - 1 + bodyWidth - 1
-            valueListLayout.mergeInto(layout, valuesXOffset, 0)
-            layout.width = valuesXOffset + valueListLayout.width - 1
-            layout.targetWidth = tgtWidth
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='targetIcon',
+            width=inpSeqImage.width, height=inpSeqImage.height,
+            yOffset=inpSeqImage.height // 2, siteYOffset=0,
+            indentDepthAdj=inpSeqImage.width-1)
+        layouts.appendArgLayout(None, self, 'targetIcon')
+        layouts.appendPart(None, self, 'values_0', bodyWidth, bodyHeight,
+            bodyHeight // 2, 0)
+        self.valuesList.appendToExprLayout(layouts, argRequired=True)
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):

@@ -560,8 +560,9 @@ class StringIcon(icon.Icon):
                 # cursor to a text position, and these are the only cases where we allow
                 # selection extension (Shift) or text-traversal (Alt) to another icon.
                 toTextPos = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
-                cursorType, ic, site, pos, partId = cursors.geometricTraverseFromPos(x, y,
-                    direction, self.window, self, onlyTextFields=toTextPos)
+                cursorType, ic, site, pos, partId, toWrap = \
+                    cursors.geometricTraverseFromPos(x, y, direction, self.window, self,
+                        onlyTextFields=toTextPos)
                 if toTextPos:
                     if (ic is self or evt.state & comn.ALT_MASK) and cursorType != \
                             'window':
@@ -571,7 +572,7 @@ class StringIcon(icon.Icon):
                     cursorType = 'icon'
                     site = {'Up': 'seqIn', 'Down': 'seqOut'}[direction]
                     ic = self.topLevelParent()
-                self.window.cursor.setTo(cursorType, ic, site, pos, partId)
+                self.window.cursor.setTo(cursorType, ic, site, pos, partId, toWrap=toWrap)
             else:
                 self.window.cursor.moveToTextSite(self, 1, cursorTextIdx, evt)
         self._updateTypeoverState()
@@ -630,7 +631,7 @@ class StringIcon(icon.Icon):
         self.drawList = None  # Draw or undraw sequence sites ... refine when sites added
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         if self.sites.attrIcon.att is None:
             attrLayouts = [None]
         else:

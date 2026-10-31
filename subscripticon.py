@@ -217,7 +217,7 @@ class SubscriptIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = subscriptLBktImage.size
         bodyWidth -= icon.ATTR_SITE_DEPTH
         argListLayouts = self.argList.calcLayouts()
@@ -594,7 +594,7 @@ class SliceIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         indexLayouts = stepLayouts = upperLayouts = [None]
         if self.sites.indexIcon.att is not None:
             indexLayouts = self.sites.indexIcon.att.calcLayouts()

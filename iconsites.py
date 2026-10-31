@@ -13,7 +13,7 @@ isSeriesRe = re.compile(".*_\\d*$")
 
 class IconSite:
     def __init__(self, siteName, siteType, xOffset=0, yOffset=0, cursorTravOrder=None,
-            cursorOnly=False, cursorSkip=False):
+            cursorOnly=False, cursorSkip=False, wrappedFrom=None):
         self.name = siteName
         self.type = siteType
         self.xOffset = xOffset
@@ -25,6 +25,8 @@ class IconSite:
             self.cursorOnly = True
         if cursorSkip:
             self.cursorSkip = True
+        if wrappedFrom:
+            self.wrappedFrom = wrappedFrom
 
     def attach(self, ownerIcon, fromIcon, fromSiteId=None):
         # Remove original link from attached site
@@ -127,7 +129,7 @@ class IconSiteList:
         return series[seriesIndex]
 
     def lookupSeries(self, seriesName):
-        series = getattr(self, self.siteIdWarn(seriesName))
+        series = getattr(self, self.siteIdWarn(seriesName), None)
         return series if isinstance(series, IconSiteSeries) else None
 
     def siteIdWarn(self, idOrTypeAndIdx):
@@ -546,9 +548,13 @@ def prevSeriesSiteId(siteId):
         return None
     return makeSeriesSiteId(name, idx-1)
 
-def hasLowerCoincidentSite(ic, siteId):
-    """Returns True if there is an icon lower in the hierarchy sharing this site of ic"""
+def hasLowerCoincidentSite(ic, siteId, ignoreWraps=False):
+    """Returns True if there is an icon lower in the hierarchy sharing this site of ic.
+    Note that this version (used only for determining snap sites) takes in to account
+    expression wrapping, and does NOT flag sites that are split across wraps."""
     if ic is None or ic.typeOf(siteId) != "input":
+        return False
+    if not ignoreWraps and ic.wraps is not None and siteId in ic.wraps[0]:
         return False
     attachedIcon = ic.childAt(siteId)
     if attachedIcon is None:

@@ -359,8 +359,9 @@ class CommentIcon(icon.Icon):
                 # cursor to a text position, and these are the only cases where we allow
                 # selection extension (Shift) or text-traversal (Alt) to another icon.
                 toTextPos = evt.state & comn.SHIFT_MASK or evt.state & comn.ALT_MASK
-                cursorType, ic, site, pos, partId = cursors.geometricTraverseFromPos(x, y,
-                    direction, self.window, stmt, onlyTextFields=toTextPos)
+                cursorType, ic, site, pos, partId, wrapTo = \
+                    cursors.geometricTraverseFromPos(x, y, direction, self.window, stmt,
+                        onlyTextFields=toTextPos)
                 if toTextPos:
                     if (ic is self or evt.state & comn.ALT_MASK) and cursorType !=\
                             'window':
@@ -370,7 +371,8 @@ class CommentIcon(icon.Icon):
                     ic = self if self.attachedToStmt is None else self.attachedToStmt
                     self.window.cursor.setToIconSite(ic, site)
                 else:
-                    self.window.cursor.setTo(cursorType, ic, site, pos, partId)
+                    self.window.cursor.setTo(cursorType, ic, site, pos, partId,
+                        toWrap=wrapTo)
             else:
                 self.window.cursor.moveToTextSite(self, 1, cursorTextIdx, evt)
         cursor.draw()
@@ -425,7 +427,7 @@ class CommentIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         layouts = self._enumerateStringLayouts()
         return self.debugLayoutFilter(layouts)
 
@@ -840,7 +842,7 @@ class VerticalBlankIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = verticalBlankImage.size
         return [iconlayout.Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)]
 

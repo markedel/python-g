@@ -10,6 +10,7 @@ import operator
 import comn
 import re
 
+# Number of pixels per nesting level to expand icon width
 DEPTH_EXPAND = 4
 
 isKwdPattern = re.compile('^[a-z ]*$')
@@ -228,7 +229,7 @@ class UnaryOpIcon(icon.Icon):
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         if self.sites.argIcon.att is None:
             argLayouts = (None,)
         else:
@@ -348,38 +349,30 @@ class BinOpIcon(icon.Icon):
             self.color = (0, 0, 0, 255)
         self.precedence = binOpPrecedence[op]
         self.hasParens = False  # Filled in by layout methods
-        self.leftArgWidth = icon.EMPTY_ARG_WIDTH
-        self.rightArgWidth = icon.EMPTY_ARG_WIDTH
+        leftArgWidth = icon.EMPTY_ARG_WIDTH
+        rightArgWidth = icon.EMPTY_ARG_WIDTH
         opWidth, opHeight = icon.getTextSize(self.operator, self.font)
         opHeight = max(opHeight + 2*icon.TEXT_MARGIN + 1, lParenImage.height)
-        opWidth += 2*icon.TEXT_MARGIN - 1
+        opWidth += 2 * (icon.TEXT_MARGIN + 1) - 1
         self.opSize = (opWidth, opHeight)
         self.depthWidth = 0
         x, y = (0, 0) if location is None else location
-        width, height = self._size()
-        self.rect = (x, y, x + width + icon.EMPTY_ARG_WIDTH, y + height)
+        width = opWidth + leftArgWidth + rightArgWidth
+        if self.hasParens:
+            width += lParenImage.width - 1 + rParenImage.width - 1
+        self.rect = (x, y, x + width + icon.EMPTY_ARG_WIDTH, y + opHeight)
         siteYOffset = opHeight // 2
         self.sites.add('output', 'output', 0, siteYOffset)
         self.sites.add('leftArg', 'input', 0, siteYOffset)
-        self.sites.add('rightArg', 'input', self.leftArgWidth + opWidth, siteYOffset)
+        self.sites.add('rightArg', 'input', leftArgWidth + opWidth, siteYOffset)
         # Note that the attrIcon site is only usable when parens are displayed
         self.sites.add("attrIcon", "attrIn",
-         self.leftArgWidth + opWidth - icon.ATTR_SITE_DEPTH, siteYOffset)
+            leftArgWidth + opWidth - icon.ATTR_SITE_DEPTH, siteYOffset)
         seqX = icon.outSiteImage.width - 1 + icon.SEQ_SITE_OFFSET
         self.sites.add('seqIn', 'seqIn', seqX, 0)
-        self.sites.add('seqOut', 'seqOut', seqX, height-1)
+        self.sites.add('seqOut', 'seqOut', seqX, opHeight-1)
         # Indicates that input site falls directly on top of output site
         self.coincidentSite = 'leftArg'
-
-    def _size(self):
-        opWidth, opHeight = self.opSize
-        opWidth += self.depthWidth
-        if self.hasParens:
-            parenWidth = lParenImage.width - 1 + rParenImage.width - 1
-        else:
-            parenWidth = 0
-        width = parenWidth + self.leftArgWidth + self.rightArgWidth + opWidth
-        return width, opHeight
 
     def leftArg(self):
         return self.sites.leftArg.att if self.sites.leftArg is not None else None
@@ -402,11 +395,9 @@ class BinOpIcon(icon.Icon):
             # Output part (connector or paren)
             outSiteX = self.sites.output.xOffset
             siteY = self.sites.output.yOffset
-            leftArgX = outSiteX + icon.outSiteImage.width - 1
             if self.hasParens:
                 outSiteY = siteY - lParenImage.height // 2
                 self.drawList.append(((outSiteX, outSiteY), lParenImage))
-                leftArgX = outSiteX + lParenImage.width - 1
             elif temporaryOutputSite:
                 outSiteY = siteY - binOutImage.height // 2
                 self.drawList.append(((outSiteX, outSiteY), binOutImage))
@@ -418,25 +409,29 @@ class BinOpIcon(icon.Icon):
             opWidth, opHeight = self.opSize
             opWidth = txtImg.width + self.depthWidth
             img = Image.new('RGBA', (opWidth, opHeight), color=(0, 0, 0, 0))
-            opX = leftArgX + self.leftArgWidth - 1
-            opY = siteY - txtImg.height // 2
             if self.depthWidth > 0:
                 draw = ImageDraw.Draw(img)
                 draw.rectangle((0, 0, opWidth - 1, txtImg.height - 1),
-                 outline=comn.OUTLINE_COLOR, fill=comn.ICON_BG_COLOR)
+                    outline=comn.OUTLINE_COLOR, fill=comn.ICON_BG_COLOR)
                 txtSubImg = txtImg.crop((1, 0, txtImg.width - 1, txtImg.height))
-                img.paste(txtSubImg, (self.depthWidth // 2 + 1, opY))
+                img.paste(txtSubImg, (self.depthWidth // 2 + 1, 0))
             else:
-                img.paste(txtImg, (self.depthWidth // 2, opY))
+                img.paste(txtImg, (0, 0))
             rInSiteX = opWidth - icon.inSiteImage.width
             rInSiteY = siteY - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (rInSiteX, rInSiteY))
-            self.drawList.append(((opX, 0), img))
+            opX = self.sites.rightArg.xOffset + icon.OUTPUT_SITE_DEPTH - opWidth + 1 #... why +1?
+            opY = self.sites.rightArg.yOffset - txtImg.height // 2
+            self.drawList.append(((opX, opY), img))
             # End paren
             if self.hasParens:
-                rParenX = opX + opWidth - 1 + self.rightArgWidth - 1
-                rParenY = siteY - rParenImage.height // 2
+                rParenX = self.sites.attrIcon.xOffset + icon.ATTR_SITE_DEPTH + 1 - \
+                    rParenImage.width
+                rParenY = self.sites.attrIcon.yOffset - icon.ATTR_SITE_OFFSET - \
+                    rParenImage.height // 2
                 self.drawList.append(((rParenX, rParenY), rParenImage))
+            # Expression wraps
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
 
@@ -475,54 +470,67 @@ class BinOpIcon(icon.Icon):
         return myDepth
 
     def doLayout(self, outSiteX, outSiteY, layout):
-        self.hasParens = layout.hasParens
         self.sites.attrIcon.order = 2 if self.hasParens else None
         self.coincidentSite = None if self.hasParens else "leftArg"
-        self.leftArgWidth = layout.lArgWidth
-        self.rightArgWidth = layout.rArgWidth
-        self.depthWidth = layout.depthWidth
-        layout.updateSiteOffsets(self.sites.output)
+        self.rect = layout.calcIconRect(outSiteX, outSiteY)
+        layout.updateIconSites()
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-        width, height = self._size()
-        x = outSiteX - self.sites.output.xOffset
-        y = outSiteY - self.sites.output.yOffset
-        self.rect = (x, y, x + width + icon.EMPTY_ARG_WIDTH, y + height)
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         hasParens = needsParens(self)
-        if hasParens:
-            lParenWidth = lParenImage.width - icon.OUTPUT_SITE_DEPTH - 1
-            rParenWidth = rParenImage.width - 1
-        else:
-            lParenWidth = rParenWidth = 0
         opWidth, opHeight = self.opSize
-        lArg = self.leftArg()
-        lArgLayouts = [None] if lArg is None else lArg.calcLayouts()
-        rArg = self.rightArg()
-        rArgLayouts = [None] if rArg is None else rArg.calcLayouts()
-        attrIcon = self.sites.attrIcon.att
-        attrLayouts = [None] if attrIcon is None else attrIcon.calcLayouts()
-        layouts = []
-        for lArgLayout, rArgLayout, attrLayout in iconlayout.allCombinations((lArgLayouts,
-                rArgLayouts, attrLayouts)):
-            layout = iconlayout.Layout(self, opWidth, opHeight, opHeight // 2)
-            layout.hasParens = hasParens
-            layout.addSubLayout(lArgLayout, "leftArg", lParenWidth, 0)
-            lArgWidth = icon.EMPTY_ARG_WIDTH if lArgLayout is None else lArgLayout.width
-            layout.lArgWidth = lArgWidth
-            depthWidth = self.depth() * DEPTH_EXPAND
-            layout.depthWidth = depthWidth
-            rArgSiteX = lParenWidth + lArgWidth + opWidth + depthWidth
-            layout.addSubLayout(rArgLayout, "rightArg", rArgSiteX, 0)
-            rArgWidth = icon.EMPTY_ARG_WIDTH if rArgLayout is None else rArgLayout.width
-            layout.rArgWidth = rArgWidth
-            layout.width = rArgSiteX + rArgWidth + rParenWidth
-            layout.addSubLayout(attrLayout, 'attrIcon',
-                    layout.width - icon.ATTR_SITE_DEPTH, icon.ATTR_SITE_OFFSET)
-            layouts.append(layout)
-        return self.debugLayoutFilter(layouts)
+        # calcLayouts code is not usually allowed to modify the icon directly.  Normally
+        # it should use the doLayoutsCallback mechanism (which has access to the winning
+        # layout tree).  However, because depthWidth and hasParens are set the same for
+        # all layouts, we can save needless complication by setting them here.
+        self.depthWidth = self.depth() * DEPTH_EXPAND
+        self.hasParens = hasParens
+        parent = self.parent()
+        indentDepthAdj = 0 if parent is None else binInSeqImage.width - 1
+        layout = iconlayout.ExprLayout(self, siteName='rightArg',
+            width=opWidth+self.depthWidth, height=opHeight, yOffset=opHeight//2,
+            siteYOffset=0, indentDepthAdj=indentDepthAdj)
+        # If we are part of an associative chain, don't demote the break levels of the
+        # chained argument.
+        demoteLeftBrkLvl = demoteRightBrkLvl = 1
+        if not hasParens:
+            if self.leftAssoc():
+                leftChild = self.leftArg()
+                if isinstance(leftChild, BinOpIcon):
+                    if self.precedence == leftChild.precedence:
+                        demoteLeftBrkLvl = 0
+            else:
+                rightChild = self.rightArg()
+                if isinstance(rightChild, BinOpIcon):
+                    if self.precedence == rightChild.precedence:
+                        demoteRightBrkLvl = 0
+        layout.prependArgLayout(self, 'leftArg', None, demoteArgBrkLvl=demoteLeftBrkLvl)
+        layout.appendArgLayout(0, self, 'rightArg', demoteArgBrkLvl=demoteRightBrkLvl)
+        if hasParens:
+            lParenWidth = lParenImage.width - icon.OUTPUT_SITE_DEPTH
+            rParenWidth = rParenImage.width
+            parenHeight = lParenImage.height
+            layout.prependPart(self, 'leftArg', lParenWidth, parenHeight,
+                parenHeight // 2, 0, None)
+            layout.appendPart(None, self, 'attrIcon', rParenWidth, parenHeight,
+                parenHeight // 2, icon.ATTR_SITE_OFFSET)
+            attrIcon = self.sites.attrIcon.att
+            if attrIcon is not None:
+                attrLayouts = attrIcon.calcLayouts(marginLimit -
+                    iconlayout.CONTINUATION_INDENT)
+                layout.appendLayout(iconlayout.ATTR_BRK_LVL, attrLayouts)
+        elif parent is None:
+            # If we're at the top level, include input site.  ...There's a bug, here,
+            # being swept under the rug, in that width should be binInSeqImage.width, but
+            # we're setting it to 1 due to un unexplained 2 pixel gap in the layout
+            layout.prependPart(self, 'leftArg', width=1, height=binInSeqImage.height,
+                yOffset=binInSeqImage.height // 2,  siteYOffset=0, brkLvl=None)
+        else:
+            # Phantom (0-size) part used for locating leftArg site
+            layout.prependPart(self, 'leftArg', 1, 0, 0, 0, None)
+        return self.debugLayoutFilter(layout)
 
     def snapLists(self, forCursor=False):
         # Make attribute site unavailable unless the icon has parens to hold it
@@ -731,10 +739,10 @@ class BinOpIcon(icon.Icon):
             font = None
         elif partId == 2:
             rightSide = self.sites.rightArg.xOffset + icon.OUTPUT_SITE_DEPTH
-            textRight = rightSide - icon.TEXT_MARGIN - self.depthWidth // 2
+            textRight = rightSide - icon.TEXT_MARGIN - 1 - self.depthWidth // 2
             opWidth, opHeight = self.opSize
             leftSide = rightSide - opWidth - self.depthWidth
-            textLeft = leftSide + icon.TEXT_MARGIN + self.depthWidth // 2
+            textLeft = leftSide + icon.TEXT_MARGIN + 1 + self.depthWidth // 2
             text = self.operator
             textCtr = self.sites.rightArg.yOffset
             font = icon.boldFont if self.operator[0].isalpha() else icon.globalFont
@@ -865,7 +873,7 @@ class DivideIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         topArg = self.sites.topArg.att
         tArgLayouts = [None] if topArg is None else topArg.calcLayouts()
         bottomArg = self.sites.bottomArg.att
@@ -1212,7 +1220,7 @@ class IfExpIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         hasParens = needsParens(self)
         if hasParens:
             lParenWidth = lParenImage.width - icon.OUTPUT_SITE_DEPTH - 1

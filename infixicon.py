@@ -106,7 +106,7 @@ class InfixIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         opWidth, opHeight = self.opImg.size
         lArg = self.leftArg()
         lArgLayouts = [None] if lArg is None else lArg.calcLayouts()

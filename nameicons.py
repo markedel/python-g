@@ -174,18 +174,40 @@ class TextIcon(icon.Icon):
                 attrY = self.sites.attrIcon.yOffset
                 img.paste(icon.attrInImage, (attrX, attrY))
             self.drawList = [((0, 0), img)]
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
+
+    # ... hold off on converting identifiers to expression form, as this will break
+    #     pretty much everything not converted for it.
+    # def doLayout(self, outSiteX, outSiteY, layout):
+    #     self.rect = layout.calcIconRect(outSiteX, outSiteY)
+    #     layout.updateIconSites()
+    #     layout.doSubLayouts()
+    #     self.drawList = None
+    #     self.layoutDirty = False
+    #     self.drawList = None  # Draw or undraw sequence sites ... refine when sites added
+    #     self.layoutDirty = False
+    #
+    # def calcLayouts(self, marginLimit=999999999):
+    #     width, height = self.bodySize
+    #     layouts = iconlayout.ExprLayout(self, siteName='attrIcon', width=width,
+    #         height=height, yOffset=height // 2, siteYOffset=icon.ATTR_SITE_OFFSET)
+    #     if self.sites.attrIcon.att is not None:
+    #         attrLayouts = self.sites.attrIcon.att.calcLayouts()
+    #         layouts.appendLayout(iconlayout.ATTR_BRK_LVL, attrLayouts)
+    #     return self.debugLayoutFilter(layouts)
 
     def doLayout(self, outSiteX, outSiteY, layout):
         width, height = self.bodySize
         width += icon.outSiteImage.width - 1
         top = outSiteY - height // 2
         self.rect = (outSiteX, top, outSiteX + width, top + height)
+        layout.updateSiteOffsets(self.sites.output)
         layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
         self.drawList = None  # Draw or undraw sequence sites ... refine when sites added
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         if self.sites.attrIcon.att is None:
             attrLayouts = [None]
         else:
@@ -456,7 +478,7 @@ class AttrIcon(icon.Icon):
             self.drawList = [((0, 0), img)]
         self._drawFromDrawList(toDragImage, location, clip, style)
 
-    def doLayout(self,  attrSiteX,  attrSiteY, layout):
+    def doLayout(self, attrSiteX, attrSiteY, layout):
         width, height = self.bodySize
         width += icon.attrOutImage.width - 1
         top = attrSiteY - (height // 2 + icon.ATTR_SITE_OFFSET)
@@ -465,7 +487,7 @@ class AttrIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
         layouts = []
         attrIcon = self.sites.attrIcon.att
@@ -611,7 +633,7 @@ class NoArgStmtIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
         return [iconlayout.Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)]
 
@@ -773,12 +795,9 @@ class SeriesStmtIcon(icon.Icon):
                 img.paste(icon.dragSeqImage, (0, bodyHeight // 2 -
                         icon.dragSeqImage.height // 2))
             self.drawList = [((0, bodyTopY), img)]
-            # Minimal spines (if list has multi-row layout)
-            argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
-            cntrSiteY = bodyTopY + bodyHeight // 2
-            self.drawList += self.valueList.drawSimpleSpine(argsOffset, cntrSiteY)
-            # Commas
-            self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
+            self.drawList += self.valueList.drawSimpleSpine(drawOutputSite=False)
+            self.drawList += self.valueList.drawListCommas()
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=self.requireArg,
             allowTrailingComma=self.allowTrailingComma)
@@ -790,36 +809,22 @@ class SeriesStmtIcon(icon.Icon):
         return siteSnapLists
 
     def doLayout(self, left, top, layout):
-        self.valueList.doLayout(layout)
-        bodyWidth, bodyHeight = self.bodySize
-        heightAbove = bodyHeight // 2
-        heightBelow = bodyHeight - heightAbove
-        width = icon.dragSeqImage.width - 1 + bodyWidth + self.valueList.width + 2
-        if self.requireArg:
-            width += icon.LIST_EMPTY_ARG_WIDTH
-        if self.valueList.simpleSpineWillDraw():
-            heightAbove = max(heightAbove, self.valueList.spineTop)
-            heightBelow = max(heightBelow, self.valueList.spineHeight -
-                    self.valueList.spineTop)
-        self.sites.seqInsert.yOffset = heightAbove
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
-        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1
-        height = heightAbove + heightBelow
-        left -= icon.dragSeqImage.width + icon.SEQ_SITE_OFFSET - 1
-        self.rect = left, top, left + width, top + height
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
-        valueListLayouts = self.valueList.calcLayouts(argRequired=self.requireArg)
-        layouts = []
-        for valueListLayout in valueListLayouts:
-            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, bodyHeight // 2)
-            valueListLayout.mergeInto(layout, bodyWidth - 1, 0)
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='values_0', width=bodyWidth,
+            height=bodyHeight, yOffset=bodyHeight // 2, siteYOffset=0)
+        # brkLvl is set to a high value or None (in the case of del) mainly for the
+        # inline-wrapped case, where wrapping is usually kind of odd looking, since
+        # these icons will always be short and at the start of a statement,
+        brkLvl = None if len(self.stmt) <= 4 else max(0, 10 - len(self.stmt))
+        self.valueList.appendToExprLayout(layouts, brkLvl=brkLvl,
+            argRequired=self.requireArg)
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
@@ -1448,7 +1453,7 @@ class ImportFromIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight, importWidth = self.bodySize
         cntrYOff = bodyHeight // 2
         moduleIcon = self.sites.moduleIcon.att
@@ -2015,7 +2020,7 @@ class YieldIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
         layouts = []
         for valueListLayout in self.valueList.calcLayouts():
@@ -2254,7 +2259,7 @@ class RaiseIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight, fromWidth = self.bodySize
         cntrYOff = bodyHeight // 2
         exceptIcon = self.sites.exceptIcon.att
@@ -2555,7 +2560,7 @@ class DecoratorIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         if self.sites.argIcon.att is None:
             argLayouts = [None]
         else:

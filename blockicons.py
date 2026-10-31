@@ -16,8 +16,12 @@ import expredit
 INCOMPLETE_TRY_IDENT = '___pyg_incomplete_try_stmt'
 UNUSED_DECORATOR_IDENT = '___pyg_unused_decorator'
 
-# Number of pixels to the left of sequence site to start else and elif icons
-ELSE_DEDENT = 21
+# Number of pixels to the left of sequence site to start else and elif icons.  The
+# current value imparts an aesthetic flair of noticeably indenting these icons and
+# helping the user associate components of the block.  It also masks a difficulty with
+# the else and elif icons, which would otherwise be short of the sequence connectors of
+# the inner block to which they are connected and no good way to attach a site.
+ELSE_DEDENT = 18
 
 blockStmts = {ast.If, ast.While, ast.For, ast.Try, ast.ExceptHandler, ast.With,
  ast.FunctionDef, ast.ClassDef, ast.AsyncFor, ast.AsyncWith, ast.AsyncFunctionDef}
@@ -64,45 +68,45 @@ defLParenTypeoverImage = comn.asciiToImage((
  "oooooooo"))
 
 defRParenImage = comn.asciiToImage((
- "oooooooo",
- "o      o",
- "o      o",
- "o      o",
- "o  82  o",
- "o   29 o",
- "o   38 o",
- "o   37 o",
- "o   37 o",
- "o   38 o",
- "o  829 o",
- "o  74  o",
- "o  38  o",
- "o 65   o",
- "o85    o",
- "o      o",
- "o      o",
- "oooooooo"))
+ "ooooooooo",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o  82   o",
+ "o   29  o",
+ "o   38  o",
+ "o   37  o",
+ "o   37  o",
+ "o   38  o",
+ "o  829  o",
+ "o  74   o",
+ "o  38   o",
+ "o 65    o",
+ "o85     o",
+ "o       o",
+ "o       o",
+ "ooooooooo"))
 defRParenExtendDupRows = 7,
 
 defRParenTypeoverImage = comn.asciiToImage( (
- "oooooooo",
- "o      o",
- "o      o",
- "o      o",
- "o   8  o",
- "o   8  o",
- "o   8  o",
- "o   99 o",
- "o   99 o",
- "o   99 o",
- "o   8  o",
- "o  99  o",
- "o  99  o",
- "o 99   o",
- "o99    o",
- "o      o",
- "o      o",
- "oooooooo"))
+ "ooooooooo",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o   8   o",
+ "o   8   o",
+ "o   8   o",
+ "o   99  o",
+ "o   99  o",
+ "o   99  o",
+ "o   8   o",
+ "o  99   o",
+ "o  99   o",
+ "o 99    o",
+ "o99     o",
+ "o       o",
+ "o       o",
+ "ooooooooo"))
 
 returnTypeSiteImage = comn.asciiToImage((
  "ooooooooooooooo",
@@ -207,12 +211,9 @@ class WithIcon(icon.Icon):
                 img.paste(icon.dragSeqImage, (0, bodyHeight // 2 -
                         icon.dragSeqImage.height // 2))
             self.drawList = [((0, bodyTopY), img)]
-            # Minimal spines (if list has multi-row layout)
-            argsOffset = bodyOffset + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
-            cntrSiteY = bodyTopY + bodyHeight // 2
-            self.drawList += self.valueList.drawSimpleSpine(argsOffset, cntrSiteY)
-            # Commas
-            self.drawList += self.valueList.drawListCommas(argsOffset, cntrSiteY)
+            self.drawList += self.valueList.drawSimpleSpine()
+            self.drawList += self.valueList.drawListCommas()
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True)
 
@@ -223,34 +224,23 @@ class WithIcon(icon.Icon):
         return siteSnapLists
 
     def doLayout(self, left, top, layout):
-        self.valueList.doLayout(layout)
-        bodyWidth, bodyHeight = self.bodySize
-        heightAbove = bodyHeight // 2
-        heightBelow = bodyHeight - heightAbove
-        width = icon.dragSeqImage.width - 1 + bodyWidth + self.valueList.width + 2
-        if self.valueList.simpleSpineWillDraw():
-            heightAbove = max(heightAbove, self.valueList.spineTop)
-            heightBelow = max(heightBelow, self.valueList.spineHeight -
-                    self.valueList.spineTop)
-        self.sites.seqInsert.yOffset = heightAbove
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
-        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1 + \
-            icon.BLOCK_SEQ_MARGIN
-        height = heightAbove + heightBelow
-        self.rect = left, top, left + width, top + height + icon.BLOCK_SEQ_MARGIN
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
-        valueListLayouts = self.valueList.calcLayouts(argRequired=True)
-        layouts = []
-        for valueListLayout in valueListLayouts:
-            layout = iconlayout.Layout(self, bodyWidth, bodyHeight+2, bodyHeight // 2)
-            valueListLayout.mergeInto(layout, bodyWidth - 1, 0)
-            layouts.append(layout)
+        # Note that bodySize does not include 'sequence-bumps' below icon, even though
+        # it is part of the icon.  The ExprLayout.wrap() function explicitly requests
+        # that block owners exclude this because it will nest wrapped rows to the right
+        # of it (rather than under it).  It will automatically add back the block-
+        # sequence-margin to both the layout height and the icon rectangle once
+        # expression wrapping is done.
+        layouts = iconlayout.ExprLayout(self, siteName='values_0', width=bodyWidth,
+            height=bodyHeight, yOffset=bodyHeight // 2, siteYOffset=0)
+        self.valueList.appendToExprLayout(layouts, brkLvl=None, argRequired=True)
         return self.debugLayoutFilter(layouts)
 
     def select(self, select=True):
@@ -475,6 +465,7 @@ class WhileIcon(icon.Icon):
                 img.paste(icon.dragSeqImage,
                         (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
         if temporaryDragSite:
@@ -485,23 +476,17 @@ class WhileIcon(icon.Icon):
         icon.Icon.select(self.blockEnd, select)
 
     def doLayout(self, left, top, layout):
-        width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1 + icon.EMPTY_ARG_WIDTH
-        self.rect = (left, top, left + width, top + height + icon.BLOCK_SEQ_MARGIN)
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        layout.doSubLayouts()
+        self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
-        condIcon = self.sites.condIcon.att
-        condLayouts = [None] if condIcon is None else condIcon.calcLayouts()
-        layouts = []
-        for condLayout in condLayouts:
-            layout = iconlayout.Layout(self, width, height+2, height // 2)
-            condXOff = width - 1
-            layout.addSubLayout(condLayout, 'condIcon', condXOff, 0)
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='condIcon', width=width,
+            height=height, yOffset=height // 2, siteYOffset=0)
+        layouts.appendArgLayout(None, self, 'condIcon')
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
@@ -636,9 +621,8 @@ class ForIcon(icon.Icon):
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset), img)]
             # Target list commas and possible list simple-spines
-            tgtListOffset = bodyWidth + bodyOffset - 1 - icon.OUTPUT_SITE_DEPTH
-            self.drawList += self.tgtList.drawListCommas(tgtListOffset, cntrSiteY)
-            self.drawList += self.tgtList.drawSimpleSpine(tgtListOffset, cntrSiteY)
+            self.drawList += self.tgtList.drawListCommas()
+            self.drawList += self.tgtList.drawSimpleSpine(drawOutputSite=False)
             # "in"
             txtImg = icon.iconBoxedText("in", icon.boldFont, icon.KEYWORD_COLOR,
                 typeover=self.typeoverIdx)
@@ -646,12 +630,14 @@ class ForIcon(icon.Icon):
             img.paste(txtImg, (0, 0))
             inImgX = txtImg.width - icon.inSiteImage.width
             img.paste(icon.inSiteImage, (inImgX, inImageY))
-            inOffset = bodyOffset + bodyWidth - 1 + self.tgtList.width - 1
-            self.drawList.append(((inOffset, self.sites.seqIn.yOffset), img))
+            inX, inY = self.iterList.spineOutSiteOffset()
+            inX += icon.OUTPUT_SITE_DEPTH - img.width + 1
+            inY -= img.height // 2
+            self.drawList.append(((inX, inY), img))
             # Commas and possible list simple-spines
-            iterOffset = inOffset + inWidth - 1 - icon.OUTPUT_SITE_DEPTH
-            self.drawList += self.iterList.drawListCommas(iterOffset, cntrSiteY)
-            self.drawList += self.iterList.drawSimpleSpine(iterOffset, cntrSiteY)
+            self.drawList += self.iterList.drawListCommas()
+            self.drawList += self.iterList.drawSimpleSpine()
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, hilightEmptySeries=True,
             allowTrailingComma=True)
@@ -687,40 +673,19 @@ class ForIcon(icon.Icon):
         icon.Icon.select(self.blockEnd, select)
 
     def doLayout(self, left, top, layout):
-        self.tgtList.doLayout(layout)
-        self.iterList.doLayout(layout)
-        bodyWidth, bodyHeight, inWidth = self.bodySize
-        width = icon.dragSeqImage.width-1 + bodyWidth-1 + self.tgtList.width-1 + \
-                inWidth-1 + self.iterList.width
-        heightAbove = max(bodyHeight // 2, self.tgtList.spineTop, self.iterList.spineTop)
-        heightBelow = max(bodyHeight - bodyHeight // 2, self.tgtList.spineHeight -
-                self.tgtList.spineTop, self.iterList.spineHeight - self.iterList.spineTop)
-        height = heightAbove + heightBelow
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
-        self.sites.seqOut.yOffset = heightAbove + bodyHeight // 2 - 1 + \
-            icon.BLOCK_SEQ_MARGIN
-        self.sites.seqInsert.yOffset = heightAbove
-        self.rect = (left, top, left + width, top + height + icon.BLOCK_SEQ_MARGIN)
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + heightAbove)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight, inWidth = self.bodySize
-        tgtListLayouts = self.tgtList.calcLayouts(argRequired=True)
-        iterListLayouts = self.iterList.calcLayouts(argRequired=True)
-        layouts = []
-        for tgtListLayout, iterListLayout in iconlayout.allCombinations((tgtListLayouts,
-                iterListLayouts)):
-            layout = iconlayout.Layout(self, bodyWidth, bodyHeight +
-                icon.BLOCK_SEQ_MARGIN, bodyHeight // 2)
-            tgtXOff = bodyWidth - 1
-            tgtListLayout.mergeInto(layout, tgtXOff, 0)
-            iterXOff = bodyWidth - 1 + tgtListLayout.width - 1 + inWidth - 1
-            iterListLayout.mergeInto(layout, iterXOff, 0)
-            layout.width = iterXOff + iterListLayout.width + defRParenImage.width - 2
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='targets_0', width=bodyWidth,
+            height=bodyHeight, yOffset=bodyHeight // 2, siteYOffset=0)
+        self.tgtList.appendToExprLayout(layouts, brkLvl=None, argRequired=True)
+        layouts.appendPart(0, self, 'iterIcons_0', inWidth, bodyHeight, bodyHeight // 2, 0)
+        self.iterList.appendToExprLayout(layouts, None, argRequired=True)
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
@@ -1036,10 +1001,11 @@ class IfIcon(icon.Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect) - icon.EMPTY_ARG_WIDTH,
-                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             boxLeft = icon.dragSeqImage.width - 1
             txtImg = icon.iconBoxedText("if", icon.boldFont, icon.KEYWORD_COLOR)
+            img = Image.new('RGBA', (
+                comn.BLOCK_INDENT + icon.SEQ_SITE_OFFSET + 3 + boxLeft,
+                txtImg.height + icon.BLOCK_SEQ_MARGIN), color=(0, 0, 0, 0))
             img.paste(txtImg, (boxLeft, 0))
             cntrSiteY = self.sites.condIcon.yOffset
             inImageY = cntrSiteY - icon.inSiteImage.height // 2
@@ -1050,6 +1016,7 @@ class IfIcon(icon.Icon):
                 img.paste(icon.dragSeqImage,
                         (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
         if temporaryDragSite:
@@ -1060,24 +1027,17 @@ class IfIcon(icon.Icon):
         icon.Icon.select(self.blockEnd, select)
 
     def doLayout(self, left, top, layout):
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        width, height = self.bodySize
-        width = max(comn.BLOCK_INDENT + icon.SEQ_SITE_OFFSET + 3, width) + \
-            icon.dragSeqImage.width - 1 + icon.EMPTY_ARG_WIDTH
-        self.rect = (left, top, left + width, top + height + icon.BLOCK_SEQ_MARGIN)
-        layout.doSubLayouts(self.sites.seqInsert, left, top + height // 2)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        layout.doSubLayouts()
+        self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
-        condIcon = self.sites.condIcon.att
-        condLayouts = [None] if condIcon is None else condIcon.calcLayouts()
-        layouts = []
-        for condLayout in condLayouts:
-            layout = iconlayout.Layout(self, width, height + icon.BLOCK_SEQ_MARGIN,
-                height // 2)
-            layout.addSubLayout(condLayout, 'condIcon', width - 1, 0)
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='condIcon', width=width,
+            height=height, yOffset=height // 2, siteYOffset=0)
+        layouts.appendArgLayout(None, self, 'condIcon')
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
@@ -1179,7 +1139,7 @@ class ElifIcon(icon.Icon):
 
     def __init__(self, window, location=None):
         icon.Icon.__init__(self, window)
-        bodyWidth, bodyHeight = icon.getTextSize("elif ", icon.boldFont)
+        bodyWidth, bodyHeight = icon.getTextSize("elif", icon.boldFont)
         bodyHeight = max(icon.minTxtHgt, bodyHeight)
         bodyWidth += 2 * icon.TEXT_MARGIN + 1
         bodyHeight += 2 * icon.TEXT_MARGIN + 1
@@ -1205,49 +1165,49 @@ class ElifIcon(icon.Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
-            txtImg = icon.iconBoxedText("elif ", icon.boldFont, icon.KEYWORD_COLOR)
+            txtImg = icon.iconBoxedText("elif", icon.boldFont, icon.KEYWORD_COLOR)
             boxLeft = icon.dragSeqImage.width - 1
-            img.paste(txtImg, (boxLeft, 0))
+            # We have 1-pixel sequence bumps both above and below
+            img = Image.new('RGBA', (txtImg.width + boxLeft,
+                txtImg.height + 2 * icon.PSEUDO_BLOCK_SEQ_MARGIN), color=(0, 0, 0, 0))
+            img.paste(txtImg, (boxLeft, 1))
             cntrSiteY = self.sites.condIcon.yOffset
             inImageY = cntrSiteY - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (self.sites.condIcon.xOffset, inImageY))
-            icon.drawSeqSites(self, img, 0, 0)
+            icon.drawSeqSites(self, img, 0, 0, pseudoBlockIndent=True)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip)
         if temporaryDragSite:
             self.drawList = None
 
     def doLayout(self, left, top, layout):
-        width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1 + icon.EMPTY_ARG_WIDTH
-        self.rect = (left, top, left + width, top + height)
-        dedentAdj = icon.dragSeqImage.width + ELSE_DEDENT
-        layout.updateSiteOffsets(self.sites.seqInsert, parentSiteDepthAdj=-dedentAdj)
-        layout.doSubLayouts(self.sites.seqInsert, left + dedentAdj, top + height // 2)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        # Move seq insert site so user can drop in dedented (pseudo-block) location
+        self.sites.seqInsert.xOffset = self.sites.seqIn.xOffset
+        layout.doSubLayouts()
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
-        condIcon = self.sites.condIcon.att
-        condLayouts = [None] if condIcon is None else condIcon.calcLayouts()
-        layouts = []
-        for condLayout in condLayouts:
-            layout = iconlayout.Layout(self, width, height, height // 2)
-            layout.addSubLayout(condLayout, 'condIcon', width - 1, 0)
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='condIcon', width=width,
+            height=height, yOffset=height // 2, siteYOffset=0,
+            indentDepthAdj=ELSE_DEDENT)
+        layouts.appendArgLayout(None, self, 'condIcon')
         return self.debugLayoutFilter(layouts)
 
     @staticmethod
     def _snapFn(ic, siteId):
         """Return True if siteId of ic is a sequence site within an if block (a suitable
         site for snapping an elif icon)"""
-        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
+        if siteId != 'seqOut':
             return False
+        if isinstance(ic, icon.BlockEnd):
+            ic = ic.primary
         if isinstance(ic, IfIcon):
             return True
         seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
@@ -1380,10 +1340,12 @@ class TryIcon(icon.Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             boxLeft = icon.dragSeqImage.width - 1
             txtImg = icon.iconBoxedText("try", icon.boldFont, icon.KEYWORD_COLOR)
+            width = icon.dragSeqImage.width - 1 + \
+                max(comn.BLOCK_INDENT + icon.SEQ_SITE_OFFSET + 3, txtImg.width)
+            height = txtImg.height + icon.BLOCK_SEQ_MARGIN
+            img = Image.new('RGBA', (width, height), color=(0, 0, 0, 0))
             img.paste(txtImg, (boxLeft, 0))
             cntrSiteY = self.sites.seqInsert.yOffset
             icon.drawSeqSites(self, img, 0, 0, blockIndent=True,
@@ -1392,24 +1354,22 @@ class TryIcon(icon.Icon):
                 img.paste(icon.dragSeqImage,
                         (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
     def doLayout(self, left, top, layout):
-        bodyWidth, bodyHeight = self.bodySize
-        width = icon.dragSeqImage.width - 1 + \
-            max(comn.BLOCK_INDENT + icon.SEQ_SITE_OFFSET + 3, bodyWidth)
-        self.rect = (left, top, left + width, top + bodyHeight + icon.BLOCK_SEQ_MARGIN)
-        layout.updateSiteOffsets(self.sites.seqInsert)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.layoutDirty = False
 
-    def calcLayouts(self):
-        bodyWidth, height = self.bodySize
-        width = icon.dragSeqImage.width + max(comn.BLOCK_INDENT + 2, bodyWidth - 1)
-        layout = iconlayout.Layout(self, width, height + icon.BLOCK_SEQ_MARGIN,
-            height // 2)
-        return [layout]
+    def calcLayouts(self, marginLimit=999999999):
+        width, height = self.bodySize
+        layouts = iconlayout.ExprLayout(self, siteName=None, width=width,
+            height=height, yOffset=height // 2, siteYOffset=0)
+        return self.debugLayoutFilter(layouts)
 
     def select(self, select=True):
         icon.Icon.select(self, select)
@@ -1511,48 +1471,47 @@ class ExceptIcon(icon.Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = icon.iconBoxedText("except", icon.boldFont, icon.KEYWORD_COLOR)
             boxLeft = icon.dragSeqImage.width - 1
-            img.paste(txtImg, (boxLeft, 0))
+            # We have 1-pixel sequence bumps both above and below
+            img = Image.new('RGBA', (txtImg.width + boxLeft,
+                txtImg.height + 2 * icon.PSEUDO_BLOCK_SEQ_MARGIN), color=(0, 0, 0, 0))
+            img.paste(txtImg, (boxLeft, 1))
             cntrSiteY = self.sites.typeIcon.yOffset
             inImageY = cntrSiteY - icon.inSiteImage.height // 2
             img.paste(icon.inSiteImage, (self.sites.typeIcon.xOffset, inImageY))
-            icon.drawSeqSites(self, img, 0, 0)
+            icon.drawSeqSites(self, img, 0, 0, pseudoBlockIndent=True)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage, (0, cntrSiteY - icon.dragSeqImage.height // 2))
             self.drawList = [((0, 0), img)]
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         if temporaryDragSite:
             self.drawList = None
 
     def doLayout(self, left, top, layout):
-        width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1
-        self.rect = (left, top, left + width, top + height)
-        dedentAdj = icon.dragSeqImage.width + ELSE_DEDENT
-        layout.updateSiteOffsets(self.sites.seqInsert, parentSiteDepthAdj=-dedentAdj)
-        layout.doSubLayouts(self.sites.seqInsert, left + dedentAdj, top + height // 2)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        self.sites.seqInsert.xOffset = self.sites.seqIn.xOffset
+        layout.doSubLayouts()
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
-        typeIcon = self.sites.typeIcon.att
-        condLayouts = [None] if typeIcon is None else typeIcon.calcLayouts()
-        layouts = []
-        for condLayout in condLayouts:
-            layout = iconlayout.Layout(self, width, height, height // 2)
-            layout.addSubLayout(condLayout, 'typeIcon', width - 1, 0)
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='typeIcon', width=width,
+            height=height, yOffset=height // 2, siteYOffset=0,
+            indentDepthAdj=ELSE_DEDENT)
+        layouts.appendArgLayout(None, self, 'typeIcon')
         return self.debugLayoutFilter(layouts)
 
     @staticmethod
     def _snapFn(ic, siteId):
         """Return True if sideId of ic is a sequence site within a try block (a suitable
         site for snapping an except icon)"""
-        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
+        if siteId != 'seqOut':
             return False
+        if isinstance(ic, icon.BlockEnd):
+            ic = ic.primary
         if isinstance(ic, TryIcon):
             return True
         seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
@@ -1750,12 +1709,15 @@ class FinallyIcon(icon.Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-                    comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = icon.iconBoxedText("finally", icon.boldFont, icon.KEYWORD_COLOR)
             boxLeft = icon.dragSeqImage.width - 1
-            img.paste(txtImg, (boxLeft, 0))
-            icon.drawSeqSites(self, img, 0, 0)
+            # img = Image.new('RGBA', (comn.rectWidth(self.rect),
+            #         comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
+            # img.paste(txtImg, (boxLeft, 0))
+            img = Image.new('RGBA', (txtImg.width + boxLeft,
+                txtImg.height + 2 * icon.PSEUDO_BLOCK_SEQ_MARGIN), color=(0, 0, 0, 0))
+            img.paste(txtImg, (boxLeft, 1))
+            icon.drawSeqSites(self, img, 0, 0, pseudoBlockIndent=True)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage,
                         (0, txtImg.height//2 - icon.dragSeqImage.height//2))
@@ -1765,16 +1727,19 @@ class FinallyIcon(icon.Icon):
             self.drawList = None
 
     def doLayout(self, left, top, layout):
-        width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1
-        self.rect = (left, top, left + width, top + height)
-        layout.updateSiteOffsets(self.sites.seqInsert)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        # Move seq insert site so user can drop in dedented (pseudo-block) location
+        self.sites.seqInsert.xOffset = self.sites.seqIn.xOffset
+        layout.doSubLayouts()
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
-        layout = iconlayout.Layout(self, width, height, height // 2)
-        return [layout]
+        layouts = iconlayout.ExprLayout(self, siteName=None, width=width,
+            height=height, yOffset=height // 2, siteYOffset=0,
+            indentDepthAdj=ELSE_DEDENT)
+        return self.debugLayoutFilter(layouts)
 
     def backspace(self, siteId, evt):
         markDependentStmts(self)
@@ -1875,12 +1840,12 @@ class ElseIcon(icon.Icon):
             self.drawList = None
             temporaryDragSite = self.prevInSeq() is None
         if self.drawList is None:
-            img = Image.new('RGBA', (comn.rectWidth(self.rect),
-            comn.rectHeight(self.rect)), color=(0, 0, 0, 0))
             txtImg = icon.iconBoxedText("else", icon.boldFont, icon.KEYWORD_COLOR)
             boxLeft = icon.dragSeqImage.width - 1
-            img.paste(txtImg, (boxLeft, 0))
-            icon.drawSeqSites(self, img, 0, 0)
+            img = Image.new('RGBA', (txtImg.width + boxLeft,
+                txtImg.height + 2 * icon.PSEUDO_BLOCK_SEQ_MARGIN), color=(0, 0, 0, 0))
+            img.paste(txtImg, (boxLeft, 1))
+            icon.drawSeqSites(self, img, 0, 0, pseudoBlockIndent=True)
             if temporaryDragSite:
                 img.paste(icon.dragSeqImage,
                     (0, txtImg.height // 2 - icon.dragSeqImage.height // 2))
@@ -1890,23 +1855,28 @@ class ElseIcon(icon.Icon):
             self.drawList = None
 
     def doLayout(self, left, top, layout):
-        width, height = self.bodySize
-        width += icon.dragSeqImage.width - 1
-        self.rect = (left, top, left + width, top + height)
-        layout.updateSiteOffsets(self.sites.seqInsert)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        # Move seq insert site so user can drop in dedented (pseudo-block) location
+        self.sites.seqInsert.xOffset = self.sites.seqIn.xOffset
+        layout.doSubLayouts()
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         width, height = self.bodySize
-        layout = iconlayout.Layout(self, width, height, height // 2)
-        return [layout]
+        layouts = iconlayout.ExprLayout(self, siteName=None, width=width,
+            height=height, yOffset=height // 2, siteYOffset=0,
+            indentDepthAdj=ELSE_DEDENT)
+        return self.debugLayoutFilter(layouts)
 
     @staticmethod
     def _snapFn(ic, siteId):
         """Return True if sideId of ic is a sequence site within an if, for, or try block
         (a site suitible for snapping an else icon"""
-        if siteId != 'seqOut' or isinstance(ic, icon.BlockEnd):
+        if siteId != 'seqOut':
             return False
+        if isinstance(ic, icon.BlockEnd):
+            ic = ic.primary
         if isinstance(ic, ElseIcon.allowedBlocks):
             return True
         seqStartIc = icon.findSeqStart(ic, toStartOfBlock=True)
@@ -2103,25 +2073,15 @@ class DefOrClassIcon(icon.Icon):
                         (0, bodyHeight // 2 - icon.dragSeqImage.height // 2))
             self.drawList = [((0, self.sites.seqIn.yOffset), img)]
             if self.hasArgs:
-                # Open Paren
-                lParenOffset = bodyOffset + bodyWidth - 1 + self.nameWidth - 1
-                lParenImg = defLParenTypeoverImage if self.lParenTypeover else \
-                    defLParenImage
-                lParenImg = icon.yStretchImage(lParenImg,
-                        defLParenExtendDupRows, self.argList.spineHeight)
-                # Open paren body sites
-                self.argList.drawBodySites(lParenImg)
-                self.drawList.append(((lParenOffset, 0), lParenImg))
-                # Commas
-                argsOffset = lParenOffset + defLParenImage.width - 1
-                self.drawList += self.argList.drawListCommas(
-                        argsOffset - icon.OUTPUT_SITE_DEPTH, self.argList.spineTop)
-                # End Paren
-                rParenOffset = argsOffset + self.argList.width - 1
-                rParenImg = defRParenTypeoverImage if self.rParenTypeover else \
-                    defRParenImage
-                rParenImg = icon.yStretchImage(rParenImg, defRParenExtendDupRows,
-                    self.argList.spineHeight)
+                # Compute parens with argList.drawParens, but doctor the right one to add
+                # the return type arrow if the site is populated (self.hasReturnType)
+                drawInputSite = 'returnType' if self.hasSite('returnType') and not \
+                    self.hasReturnType else None
+                lParenDrawData, (rParenOffset, rParenImg) = \
+                    self.argList.drawParens(defLParenImage, defLParenExtendDupRows,
+                        defRParenImage, defRParenExtendDupRows,
+                        drawInputSite=drawInputSite)
+                self.drawList.append(lParenDrawData)
                 if self.hasReturnType:
                     returnRpImg = Image.new('RGBA', (rParenImg.width +
                         returnTypeSiteImage.width - 1, rParenImg.height),
@@ -2130,7 +2090,10 @@ class DefOrClassIcon(icon.Icon):
                     returnRpImg.paste(returnTypeSiteImage, (rParenImg.width-1,
                         rParenImg.height // 2 - returnTypeSiteImage.height // 2))
                     rParenImg = returnRpImg
-                self.drawList.append(((rParenOffset, 0), rParenImg))
+                self.drawList.append((rParenOffset, rParenImg))
+                # Commas and wrap arrows
+                self.drawList += self.argList.drawListCommas()
+                self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
         self._drawEmptySites(toDragImage, clip, skip='returnType')
         self.dragSiteDrawn = needDragSite
@@ -2159,69 +2122,38 @@ class DefOrClassIcon(icon.Icon):
         icon.Icon.select(self.blockEnd, select)
 
     def doLayout(self, left, top, layout):
-        self.nameWidth = layout.nameWidth
-        bodyWidth, bodyHeight = self.bodySize
-        width = icon.dragSeqImage.width - 1 + bodyWidth - 1 + self.nameWidth
-        if not self.hasArgs:
-            height = bodyHeight
-            centerY = bodyHeight // 2
-        else:
-            self.argList.doLayout(layout)
-            width += defLParenImage.width - 1 + self.argList.width - 1 + \
-                    defRParenImage.width
-            height = self.argList.spineHeight
-            centerY = self.argList.spineTop
-            if self.hasSite('returnType'):
-                self.sites.returnType.xOffset = width - icon.OUTPUT_SITE_DEPTH
-                self.sites.returnType.yOffset = centerY
-                self.hasReturnType = self.childAt('returnType')
-            else:
-                self.sites.attrIcon.xOffset = width - icon.ATTR_SITE_DEPTH
-                self.sites.attrIcon.yOffset = centerY + icon.ATTR_SITE_OFFSET
-        if self.hasReturnType:
-            width += returnTypeSiteImage.width - 1
-        self.sites.seqInsert.yOffset = centerY
-        seqInY = centerY - bodyHeight // 2
-        self.sites.seqIn.yOffset = seqInY
-        self.sites.seqOut.yOffset = seqInY + bodyHeight + icon.BLOCK_SEQ_MARGIN - 1
-        self.rect = (left, top, left + width, top + height + icon.BLOCK_SEQ_MARGIN)
-        layout.updateSiteOffsets(self.sites.seqInsert)
-        # ... The parent site offsets need to be adjusted one pixel left and up, here, for
-        #     the child icons to draw in the right place, but I have no idea why.
-        layout.doSubLayouts(self.sites.seqInsert, left, top + centerY)
+        self.rect = layout.calcIconRectByLeftTop(left, top)
+        layout.updateIconSites()
+        self.hasReturnType = self.hasSite('returnType') and self.childAt('returnType')
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
-        argListLayouts = self.argList.calcLayouts() if self.hasArgs else [None]
-        nameIcon = self.sites.nameIcon.att
-        nameLayouts = [None] if nameIcon is None else nameIcon.calcLayouts()
-        nameXOff = bodyWidth - 1
-        cntrYOff = bodyHeight // 2
-        layouts = []
-        if self.hasSite('returnType') and self.childAt('returnType') is not None:
-            returnTypeLayouts = self.childAt('returnType').calcLayouts()
-            layoutsIn = nameLayouts, argListLayouts, returnTypeLayouts
-        else:
-            layoutsIn = nameLayouts, argListLayouts, [None]
-        for nameLayout, argListLayout, returnTypeLayout in \
-                iconlayout.allCombinations(layoutsIn):
-            layout = iconlayout.Layout(self, bodyWidth,
-                bodyHeight + icon.BLOCK_SEQ_MARGIN, cntrYOff)
-            layout.addSubLayout(nameLayout, 'nameIcon', nameXOff, 0)
-            nameWidth = icon.EMPTY_ARG_WIDTH if nameLayout is None else nameLayout.width
-            layout.nameWidth = nameWidth
-            if argListLayout is None:
-                layout.width += defRParenImage.width - 2
+        layouts = iconlayout.ExprLayout(self, siteName='nameIcon', width=bodyWidth,
+            height=bodyHeight, yOffset=bodyHeight // 2, siteYOffset=0)
+        layouts.appendArgLayout(None, self, 'nameIcon')
+        if self.hasArgs:
+            brkLvl = 5 if self.argList.inlineLayout() else None
+            layouts.appendPart(brkLvl, self, 'argIcons_0', defLParenImage.width,
+                defLParenImage.height, defLParenImage.height // 2, 0)
+            brkLvl = None if self.argList.inlineLayout() else 0
+            self.argList.appendToExprLayout(layouts, brkLvl=brkLvl, argRequired=False,
+                allowTrailingComma=True, marginLimit=None)
+            if self.hasSite('returnType'):
+                hasReturnType = self.childAt('returnType')
+                rParenWidth = defRParenImage.width
+                if hasReturnType:
+                    rParenWidth += returnTypeSiteImage.width - 1
+                layouts.appendPart(None, self, 'returnType', rParenWidth,
+                    defRParenImage.height, defRParenImage.height // 2, 0)
+                if hasReturnType:
+                    layouts.appendArgLayout(None, self, 'returnType')
             else:
-                argXOff = bodyWidth - 1 + nameWidth - 1 + defLParenImage.width
-                argListLayout.mergeInto(layout, argXOff - icon.OUTPUT_SITE_DEPTH + 1, 0)
-                layout.width = argXOff + argListLayout.width + defRParenImage.width - 2
-            if returnTypeLayout is not None:
-                layout.addSubLayout(returnTypeLayout, 'returnType', layout.width +
-                    returnTypeSiteImage.width - 2, 0)
-            layouts.append(layout)
+                layouts.appendPart(None, self, 'attrIcon', defRParenImage.width,
+                    defRParenImage.height, defRParenImage.height // 2,
+                    icon.ATTR_SITE_OFFSET)
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
@@ -2918,7 +2850,7 @@ class LambdaIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
         argListLayouts = self.argList.calcLayouts()
         exprIcon = self.sites.exprIcon.att
@@ -4177,7 +4109,7 @@ def isBlockOwnerIc(ic):
     return hasattr(ic, 'blockEnd')
 
 def isPseudoBlockIc(ic):
-    return isinstance(ic, (ElifIcon, ElseIcon,  ExceptIcon, FinallyIcon))
+    return isinstance(ic, (ElifIcon, ElseIcon, ExceptIcon, FinallyIcon))
 
 def looseElseMacroIconCreationFn(astNode, macroArgs, argAsts, window):
     return ElseIcon(window)

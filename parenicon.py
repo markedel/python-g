@@ -99,7 +99,7 @@ class CursorParenIcon(icon.Icon):
         self.drawList = None
         self.layoutDirty = False
 
-    def calcLayouts(self):
+    def calcLayouts(self, marginLimit=999999999):
         singleParenWidth, height = self.bodySize
         argIcon = self.sites.argIcon.att
         argLayouts = [None] if argIcon is None else argIcon.calcLayouts()
