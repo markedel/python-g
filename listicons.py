@@ -455,13 +455,13 @@ class ListTypeIcon(icon.Icon):
         self.leftImgFn = leftImgFn
         self.rightImgFn = rightImgFn
         self.object = obj
-        leftWidth, height = leftImgFn(0).size
+        leftWidth, height = leftImgFn(None).size
         self.sites.add('output', 'output', 0, height // 2)
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', leftWidth-1, height//2,
             allowsTrailingComma=True, layoutType='defaultInline')
         self.sites.addSeries('cprhIcons', 'cprhIn', 1, [(leftWidth-1, height//2)],
             cursorSkip=True)
-        width = self.sites.cprhIcons[-1].xOffset + rightImgFn(0).width
+        width = self.sites.cprhIcons[-1].xOffset + rightImgFn(None).width
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 0)
         self.sites.add('seqOut', 'seqOut', seqX, height-1)
@@ -474,28 +474,35 @@ class ListTypeIcon(icon.Icon):
         needSeqSites, needOutSite = icon.chooseOutSeqSites(self, toDragImage is not None)
         if isinstance(self, TupleIcon) and self.noParens:
             # Use 'referred' sequence sites drawn by icon in first argument slot
+            needParens = False
             needSeqSites = False
+        else:
+            needParens = True
         spineHeight = self.argList.spineHeight if self.argList.inlineLayout() else 0
         if self.drawList is None:
-            # Left paren/bracket/brace
-            leftImg = self.leftImgFn(spineHeight)
-            leftImgX = min(icon.outSiteImage.width - 1, leftImg.width - 3)
-            if needSeqSites:
-                icon.drawSeqSites(self, leftImg, 0, 0)
-            # Output site
-            if needOutSite:
-                outSiteY = self.argList.spineTop - icon.outSiteImage.height // 2
-                leftImg.paste(icon.outSiteImage, (0, outSiteY))
-            # Body input site(s)
-            self.argList.drawBodySites(leftImg)
-            # Unclosed icons need to be dimmed and crossed out
-            inSiteX = leftImg.width - icon.inSiteImage.width
-            if not self.closed and not (isinstance(self, TupleIcon) and self.noParens):
-                cntrY = self.sites.output.yOffset
-                draw = ImageDraw.Draw(leftImg)
-                draw.line((leftImgX+1, cntrY, inSiteX, cntrY),
-                        fill=comn.ICON_BG_COLOR, width=3)
-            self.drawList = [((self.sites.output.xOffset, 0), leftImg)]
+            self.drawList = []
+            if needParens:
+                # Left paren/bracket/brace
+                leftImg = self.leftImgFn(spineHeight)
+                leftImgX = min(icon.outSiteImage.width - 1, leftImg.width - 3)
+                if needSeqSites:
+                    icon.drawSeqSites(self, leftImg, 0, 0)
+                # Output site
+                if needOutSite:
+                    outSiteY = self.argList.spineTop - icon.outSiteImage.height // 2
+                    leftImg.paste(icon.outSiteImage, (0, outSiteY))
+                # Body input site(s)
+                self.argList.drawBodySites(leftImg)
+                # Unclosed icons are crossed out with background-colored line
+                inSiteX = leftImg.width - icon.inSiteImage.width
+                if not self.closed:
+                    cntrY = self.sites.output.yOffset
+                    draw = ImageDraw.Draw(leftImg)
+                    draw.line((leftImgX+1, cntrY, inSiteX, cntrY),
+                            fill=comn.ICON_BG_COLOR, width=3)
+                self.drawList += [((self.sites.output.xOffset, 0), leftImg)]
+            else:
+                self.drawList += self.argList.drawSimpleSpine()
             # Commas
             self.drawList += self.argList.drawListCommas(typeoverIdx=self.commaTypeover)
             # End paren/brace/bracket
@@ -590,9 +597,9 @@ class ListTypeIcon(icon.Icon):
             return False
         selLeft, selTop, selRight, selBottom = rect
         icLeft, icTop, icRight, icBottom = self.rect
-        if selLeft > icLeft + self.leftImgFn(0).width:
+        if selLeft > icLeft + self.leftImgFn(None).width:
             return False
-        if selRight < icRight - self.rightImgFn(0).width:
+        if selRight < icRight - self.rightImgFn(None).width:
             return False
         return True
 
@@ -600,14 +607,14 @@ class ListTypeIcon(icon.Icon):
         if self.object is not None and hasattr(self, 'mutableModified'):
             self.mutableModified = not self.compareData(self.object, compareContent=True)
         if self.argList.inlineLayout() and not (self.closed and self.childAt('attrIcon')):
-            #... I think this can now be simplified with updateIconSites
             self.argList.doLayout(layout)
             self.sites.output.xOffset = 0
             self.sites.output.yOffset = self.argList.spineTop
             layout.updateSiteOffsets(self.sites.output)
             layout.doSubLayouts(self.sites.output, outSiteX, outSiteY)
-            if self.closed:
-                width = self.sites.cprhIcons[-1].xOffset + self.rightImgFn(0).width
+            if self.closed or isinstance(self, TupleIcon) and self.noParens and \
+                    self.argList.isMultiRow():
+                width = self.sites.cprhIcons[-1].xOffset + self.rightImgFn(None).width
             else:
                 width = self.sites.cprhIcons[-1].xOffset
             x = outSiteX
@@ -620,7 +627,7 @@ class ListTypeIcon(icon.Icon):
         # Correct seqIn/Out site positions, to top and bottom of spine (our inline method
         # never sets them, and our expression method sets them wrong because it uses a
         # placeholder for the left paren expression part with 0 height)
-        spineHeight = self.rightImgFn(0).height if self.argList.spineHeight == 0 else \
+        spineHeight = icon.minTxtIconHgt if self.argList.spineHeight == 0 else \
             self.argList.spineHeight
         self.sites.seqIn.yOffset = 0
         self.sites.seqOut.yOffset = spineHeight - 1
@@ -635,7 +642,7 @@ class ListTypeIcon(icon.Icon):
         if self.isComprehension():
             self.argList.layoutType = 'alwaysExpr'
         else:
-            self.argList.layoutType = 'alwaysExpr' if isinstance(self, TupleIcon) and \
+            self.argList.layoutType = 'defaultExpr' if isinstance(self, TupleIcon) and \
                 self.noParens else 'defaultInline'
         # We use the original inline layout code for inline wrapping unless the list
         # has an attribute attached.  In the attribute case, we may need to wrap between
@@ -650,9 +657,9 @@ class ListTypeIcon(icon.Icon):
 
     def _calcLayoutsWrapped(self, marginLimit):
         """Calculate expression-wrapped version of layout for the icon"""
-        leftWidth, minHeight = self.leftImgFn(0).size
+        leftWidth, minHeight = self.leftImgFn(None).size
         leftWidth -= icon.OUTPUT_SITE_DEPTH
-        rightWidth, _ = self.rightImgFn(0).size
+        rightWidth, _ = self.rightImgFn(None).size
         layouts = iconlayout.ExprLayout(self, siteName='argIcons_0', width=leftWidth,
             height=minHeight, yOffset=minHeight // 2, siteYOffset=0)
         if self.isComprehension():
@@ -684,9 +691,9 @@ class ListTypeIcon(icon.Icon):
         return self.debugLayoutFilter(layouts)
 
     def _calcLayoutsInline(self, marginLimit):
-        leftWidth, minHeight = self.leftImgFn(0).size
+        leftWidth, minHeight = self.leftImgFn(None).size
         leftWidth -= icon.OUTPUT_SITE_DEPTH
-        rightWidth, _ = self.rightImgFn(0).size
+        rightWidth, _ = self.rightImgFn(None).size
         argListLayouts = self.argList.calcLayouts(argRequired=self.isComprehension(),
             marginLimit=marginLimit-leftWidth-rightWidth+2)  # +2 for icon overlap
         cprhLayoutLists = [(None,) if site.att is None else site.att.calcLayouts()
@@ -709,7 +716,7 @@ class ListTypeIcon(icon.Icon):
                 cprhWidth += 0 if cprhLayout is None else cprhLayout.width - 1
             if self.closed:
                 layout.width = leftWidth - 1 + argListLayout.width - 1 + cprhWidth + \
-                    self.rightImgFn(0).width
+                    self.rightImgFn(None).width
                 layout.addSubLayout(attrLayout, 'attrIcon', layout.width-1,
                     icon.ATTR_SITE_OFFSET)
             else:
@@ -1189,6 +1196,7 @@ class TupleIcon(ListTypeIcon):
                 location=location, leftImgFn=self._stretchedLTupleImage,
                 rightImgFn=self._stretchedRTupleImage, typeover=typeover)
         self.argList.layoutType = 'defaultExpr' if noParens else'defaultInline'
+        self.argList.simpleSpine = noParens
         self.canProcessCtx = True
 
     def argIcons(self):
@@ -1212,6 +1220,7 @@ class TupleIcon(ListTypeIcon):
         self.noParens = False
         if closed:
             self.close(typeover=typeover)
+        self.argList.simpleSpine = False
         self.drawList = None
         self.coincidentSite = None
         self.argList.layoutType = 'defaultInline'
@@ -1224,6 +1233,7 @@ class TupleIcon(ListTypeIcon):
         self.reopen()
         self.noParens = True
         self.drawList = None
+        self.argList.simpleSpine = True
         self.coincidentSite = None if self.argList.isMultiRow() else 'argIcons_0'
         self.argList.layoutType = 'defaultExpr'
         self.markLayoutDirty()

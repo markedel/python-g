@@ -2970,8 +2970,15 @@ def createStmtAst(ic):
     return ast.Expr(stmtAst, lineno=ic.id, col_offset=0)
 
 def yStretchImage(img, stretchPts, desiredHeight):
-    """Function used to stretch parens/brackets/braces over vertically wrapped list-type
-    content."""
+    """Stretch parens/brackets/braces over vertically wrapped list-type content.  When
+    desired height is <= the height of the source image, returns a copy of the source
+    image to allow icons that draw on top of the image to safely modify.  Caller can
+    get the original source image by passing desiredHeight as None.  (This supports the
+    convention used in icons that use this function-representation in place of a static
+    image, to allow them access the original for metrics or other cases where they don't
+    need a copy)."""
+    if desiredHeight is None:
+        return img
     if desiredHeight <= img.height:
         return img.copy()
     newImg = Image.new('RGBA', (img.width, desiredHeight))
@@ -3231,3 +3238,25 @@ def cursorInText(textOriginPos, clickPos, font, text, padLeft=0, padRight=0,
 def isEntryIcon(ic):
     """Hack for modularity issues preventing import of entryicon"""
     return ic.__class__.__name__ == 'EntryIcon'
+
+def expandIconRect(ic, addedRect):
+    """Expand the rectangle of ic to include addedRect, correcting origin-dependent
+    content (site positions and wraps)."""
+    # This is currently unused, but may be useful in the future: be sure to check that it
+    # is still up to date before using.
+    newRect = comn.combineRects(ic.rect, addedRect)
+    l, t, r, b = ic.rect
+    nL, nT, nR, nB = newRect
+    if nT < t or nL < l:
+        xOff = l - nL
+        yOff = t - nT
+        for site in ic.sites.allSites():
+            site.xOffset += xOff
+            site.yOffset += yOff
+        if ic.wraps is not None:
+            wrapDict, exprIc = ic.wraps
+            for siteName, ((fromX, fromY), (toX, toY), boundaryY) in wrapDict.items():
+                wrapDict[siteName] = (fromX + xOff, fromY + yOff), \
+                    (toX + xOff, toY + yOff), boundaryY + yOff
+            ic.wraps = wrapDict, exprIc
+    ic.rect = newRect

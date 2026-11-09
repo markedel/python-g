@@ -307,6 +307,7 @@ class AssignIcon(icon.Icon):
             self.sites.seqIn.yOffset = leftSpineTop
             self.sites.seqOut.yOffset = leftSpineTop + self.tgtLists[0].spineHeight - 1
         layout.doSubLayouts()
+        iconlayout.setSeqOffsetsToReferred(self)
         self.drawList = None
         self.layoutDirty = False
 

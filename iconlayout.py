@@ -39,6 +39,11 @@ class Layout:
     (normally invisible) input site that still allows the visible parts to left-align, or
     that shift a full indentation level (else, elif, except, etc.) left of the sequence
     line to which they actually attach."""
+    # Note that the concept of a "layout rectangle" has decayed with the introduction of
+    # wrapped expression layouts. Now that we have declared the layout origin to be fixed
+    # in X at the attachment site, there is no representation of how far left of the
+    # origin the layout extends.  This would be a one-line addition to addSubLayout to
+    # maintain, but so far nothing uses it so there's no reason to waste data on it.
 
     # Sparsely populated attributes that may appear in some layouts
     wraps = None
@@ -392,8 +397,7 @@ class Layout:
         includeSiteDepths is set to True, will subtract additional offset to convert
         from body position to site position."""
         newWrapList = {}
-        for i, (siteName, ((fromX, fromY), (toX, toY), boundaryY)) in\
-                enumerate(wrapList.items()):
+        for siteName, ((fromX, fromY), (toX, toY), boundaryY) in wrapList.items():
             if includeSiteDepth:
                 if isinstance(siteName, int):
                     siteDepth = 0
@@ -483,8 +487,6 @@ class ListLayoutMgr:
         else:
             siteSeries = self.icon.sites.getSeries(self.siteSeriesName)
             lastExprPart = exprLayout.partLayouts[-1]
-            if isinstance(lastExprPart, _JoinedPartLayouts):
-                lastExprPart = lastExprPart.partLayouts[-1]
             if not (isinstance(lastExprPart, _ExprPartLayout) and
                     lastExprPart.siteName == siteSeries[0].name):
                 print("appendToExprLayout called without initial series site")
@@ -1349,11 +1351,9 @@ class ExprLayout:
     automatically add this back both to the layout and to the icon rectangle for any
     block-owning icon (whether it has a sequence bump or not, but I believe all do)."""
 
-    # Format of self.partLayouts is a list of _JoinedPartLayouts and/or lists of Layout
+    # Format of self.partLayouts is a list of _ExprPartLayout and/or lists of Layout
     # objects separated by integer break-level values to indicate possible wrap points.
-    # These break values may also be None to indicate no break (though fixed-size
-    # layouts (incl. parts) are collected within _JoinedPartLayouts, to speed up and
-    # simplify the layout calculations).
+    # These break values may also be None to indicate no break.
 
     def __init__(self, topIcon, layouts=None, siteName=None, width=None, height=None,
             yOffset=None, siteYOffset=None, indentDepthAdj=0):
@@ -1411,30 +1411,16 @@ class ExprLayout:
         self.appendLayout(brkLvl, argLayouts)
 
     def _appendPartsOrLayouts(self, brkLvl, layouts):
-        """Append an _ExprPartLayout, _JoinedPartLayouts, individual Layout, or list of
-        Layouts; to the expression series.  If brkLvl is None AND layout is not a list of
-        Layout choices, will potentially merge layout into the adjacent _JoinedPartLayouts
-        object.  Otherwise, will add it individually following brkLvl to the series."""
+        """Append an _ExprPartLayout, individual Layout, or list of Layouts; to the
+        expression series, joined by the given brkLvl."""
         if isinstance(layouts, (list, tuple)) and len(layouts) == 1:
-            # A single layout choice is a fixed layout, which we indicate both in the top
-            # level partLayout list and in _JoinedPartLayouts as a Layout object w/o the
-            # enclosing list (CalcLayouts currently produces only list form).
+            # A single layout choice is a fixed layout, which we indicate as a Layout
+            # object w/o enclosing list (CalcLayouts currently produces only list form).
             layouts = layouts[0]
-        elif isinstance(layouts, _ExprPartLayout):
-            layouts = _JoinedPartLayouts(layouts)
         if self.partLayouts is None:
-            if isinstance(layouts, _ExprPartLayout):
-                layouts = _JoinedPartLayouts(layouts)
             self.partLayouts = [layouts]
-        elif brkLvl is None and not isinstance(layouts, (list, tuple, LazyLayout)) and \
-                not isinstance(self.partLayouts[-1], (list, tuple, LazyLayout)):
-            if not isinstance(self.partLayouts[-1], _JoinedPartLayouts):
-                self.partLayouts[-1] = _JoinedPartLayouts(self.partLayouts[-1])
-            self.partLayouts[-1].append(layouts)
         else:
             self.partLayouts.append(brkLvl)
-            if isinstance(layouts, _ExprPartLayout):
-                layouts = _JoinedPartLayouts(layouts)
             self.partLayouts.append(layouts)
 
     def appendExprLayout(self, brkLvl, exprLayout):
@@ -1446,10 +1432,6 @@ class ExprLayout:
             return
         elif self.partLayouts is None:
             self.partLayouts = exprLayout.copy()
-        elif brkLvl is None and isinstance(self.partLayouts[-1], _JoinedPartLayouts) and \
-                not isinstance(exprLayout.partLayouts[0], (list, tuple, LazyLayout)):
-            self.partLayouts[-1].append(exprLayout.partLayouts[0])
-            self.partLayouts.extend(exprLayout.partLayouts[1:])
         else:
             self.partLayouts.append(brkLvl)
             self.partLayouts.extend(exprLayout.partLayouts)
@@ -1494,19 +1476,10 @@ class ExprLayout:
         if isinstance(layouts, (list, tuple)) and len(layouts) == 1:
             # See _appendPartsOrLayouts
             layouts = layouts[0]
-        elif isinstance(layouts, _ExprPartLayout):
-            layouts = _JoinedPartLayouts(layouts)
         if self.partLayouts is None:
-            if isinstance(layouts, _ExprPartLayout):
-                layouts = _JoinedPartLayouts(layouts)
             self.partLayouts = [layouts]
-        elif brkLvl is None and not isinstance(layouts, (list, tuple, LazyLayout)) \
-                and not isinstance(self.partLayouts[0], (list, tuple, LazyLayout)):
-            self.partLayouts[0].prepend(layouts)
         else:
             self.partLayouts.insert(0, brkLvl)
-            if isinstance(layouts, _ExprPartLayout):
-                layouts = _JoinedPartLayouts(layouts)
             self.partLayouts.insert(0, layouts)
 
     def prependExprLayout(self, exprLayout, brkLvl):
@@ -1518,10 +1491,6 @@ class ExprLayout:
             return
         elif self.partLayouts is None:
             self.partLayouts = exprLayout.copy()
-        elif brkLvl is None and isinstance(self.partLayouts[0], _JoinedPartLayouts) and \
-                not isinstance(exprLayout.partLayouts[-1], (list, tuple, LazyLayout)):
-            self.partLayouts[0].prepend(exprLayout.partLayouts[-1])
-            self.partLayouts[:0] = exprLayout.partLayouts[:-1]
         else:
             self.partLayouts.insert(0, brkLvl)
             self.partLayouts[:0] = exprLayout.partLayouts
@@ -1554,8 +1523,8 @@ class ExprLayout:
         # Call calcLayouts on all icons and ListLayoutMgr objects that were deferred (by
         # being wrapped in LazyLayout objects), updating self.partLayouts with results.
         self._expandLazyLayouts(margin)
-        # Expand all of the layout choices to make "flattened" expression lists which
-        # can then be wrapped
+        # Expand all of the layout choices to make "flattened" expression lists, each
+        # with a fixed set of choices and None (no-break) separators removed
         layoutChoiceLists = []
         layoutChoiceIdxs = []
         flattenedLayouts = []
@@ -1573,6 +1542,8 @@ class ExprLayout:
             for chosenLayouts in allCombinations(layoutChoiceLists):
                 flattenedLayout = []
                 for i, partLayout in enumerate(self.partLayouts):
+                    if partLayout is None:
+                        continue  # remove Nones
                     choiceIdx = layoutChoiceIdxs[i]
                     if choiceIdx is None:
                         flattenedLayout.append(partLayout)
@@ -1582,7 +1553,6 @@ class ExprLayout:
         # Wrap the flattened layouts and return the best result
         wrappedLayouts = []
         for flattenedLayout in flattenedLayouts:
-            self._joinConcatenated(flattenedLayout)
             wrappedLayouts.append(self._wrapFlattened(flattenedLayout, margin))
         bestLayout = self._chooseBestLayout(wrappedLayouts)
         # If the layout is for a block owning icon, add the vertical margin for the block
@@ -1627,35 +1597,6 @@ class ExprLayout:
         print('wrap not improved over baseline')  #... remove this
         return baselineLayout
 
-    @staticmethod
-    def _joinConcatenated(partLayouts):
-        """Consolidate layout parts that are not allowed to have line breaks between
-        them (i.e. get rid of None breaks) in partLayouts and normalize to [lo, brkLvl,
-        lo, brkLvl, ..., lo]."""
-        startIdx = 0
-        while True:
-            for idx in range(startIdx, len(partLayouts)):
-                if partLayouts[idx] is None:
-                    leftLayout = partLayouts[idx - 1]
-                    rightLayout = partLayouts[idx + 1]
-                    # While partLayouts is a unique copy of the expression's original
-                    # partLayuts list, it may still points to common _JoinedPartLayouts
-                    # objects, so we must make a copy before appending or prepending.
-                    if isinstance(leftLayout, _JoinedPartLayouts):
-                        partLayouts[idx-1] = leftLayout.copyAppend(rightLayout)
-                        del partLayouts[idx:idx+2]
-                    elif isinstance(rightLayout, _JoinedPartLayouts):
-                        partLayouts[idx+1] = rightLayout.copyPrepend(leftLayout)
-                        del partLayouts[idx-1:idx+1]
-                    else:
-                        joinedLayout = _JoinedPartLayouts(leftLayout)
-                        joinedLayout.append(rightLayout)
-                        partLayouts[idx-1:idx+2] = joinedLayout
-                    startIdx = idx
-                    break
-            else:
-                break
-
     def _expandLazyLayouts(self, marginLimit, accumulatedWidth=0):
         """Find unevaluated layouts in partLayouts (LazyLayout objects indicating an icon
         or series layout waiting for margin restrictions), calculate the new margin
@@ -1686,7 +1627,7 @@ class ExprLayout:
                 partLayout = self.partLayouts[adjIdx]
                 if isinstance(partLayout, LazyLayout):
                     lazyLayouts.append(idx)
-                elif isinstance(partLayout, (_JoinedPartLayouts, Layout)):
+                elif isinstance(partLayout, (_ExprPartLayout, Layout)):
                     allocatedWidth += partLayout.width
             for idx in lazyLayouts:
                 adjIdx = idx + idxShift
@@ -1744,14 +1685,15 @@ class ExprLayout:
                 brkThreshold, margin - indent)
             if brkIdx is None:  # No acceptable break point found
                 return None, False
-            row = [lo for lo in partLayouts[rowStart:brkIdx] if not isinstance(lo, int)]
+            row = [lo for lo in partLayouts[rowStart:brkIdx] if not isinstance(lo,
+                (int, type(None)))]
             rows.append(row)
             # Compute a per-layout site y position adjustment (supSubYAdj).  This is the
             # fine adjustment to the wrap baseline that will be recorded in rowOffsets
             # based on how the sites on the icons fit together (rowOffsets reflects only
             # the original baseline, to which the per-layout deviation in supSubYAdj
             # should be added to get the actual layout Y origin.
-            for layout in _iterateRowList(row):
+            for layout in row:
                 # Note that we're entering the offset for the current icon in supSubYAdj
                 # but computing the offset for the NEXT entry in lastSupSubAdj
                 if isinstance(layout, ListMgrLayout):
@@ -1771,7 +1713,7 @@ class ExprLayout:
             # Compute the height and (baseline) y offset for the row
             rowYOffset = 0
             rowHeightBelow = 0
-            for layout in _iterateRowList(row):
+            for layout in row:
                 if isinstance(layout, ListMgrLayout):
                     yOffset = layout.parentSiteOffset - supSubYAdj[layout]
                 elif isinstance(layout, Layout):
@@ -1795,16 +1737,18 @@ class ExprLayout:
             totalWidth = max(totalWidth, indent + rowWidth +
                 icon.noSiteWrapFromImage.width - 1)
             brkPartLayout = partLayouts[brkIdx-1]
-            if isinstance(brkPartLayout, _JoinedPartLayouts):
-                brkPartLayout = brkPartLayout.partLayouts[-1]
             if isinstance(brkPartLayout, ListMgrLayout):
                 wrapIc = brkPartLayout.icon
                 wrapSite = None
             else:
                 wrapIc, wrapSite = _findRightmostLayoutSite(brkPartLayout)
                 if not wrapIc.childAt(wrapSite):
-                    # Wrap is not between connected icons (no-site wrap)
-                    wrapSite = None
+                    # Wrap is not between connected icons (no-site wrap).  Unfortunately,
+                    # we can't blindly turn this into a no-site wrap, because we could be
+                    # wrapping in to series whose first element happens to be empty
+                    wrapToSeries, wrapToIdx = iconsites.splitSeriesSiteId(wrapSite)
+                    if wrapToSeries is None:
+                        wrapSite = None
             if wrapSite is None:
                 # To indicate no-site-wrap, we put integer instead of site in wrap dict
                 wrapSite = len(wraps[wrapIc]) if wrapIc in wraps else 0
@@ -1821,18 +1765,24 @@ class ExprLayout:
         for rowNum, row in enumerate(rows):
             leftX, baselineY = rowOffsets[rowNum]
             overlap = 1  # Icon overlap in pixels
-            for layoutOrPart in _iterateRowList(row):
+            for layoutOrPart in row:
                 if isinstance(layoutOrPart, _ExprPartLayout):
+                    ic = layoutOrPart.ic
                     if isinstance(layoutOrPart, EmptyArgLayout):
                         # An empty arg is just a space holder and not a real icon part
+                        layout = unifiedPartLayouts.get(ic, None)
+                        if layout is None:
+                            print('_wrapToLevel: EmptyArg should not be on left of icon')
+                        else:
+                            originX, originY = layoutOrigins[ic]
+                            layoutOrPart.incorporateRectIntoLayout(layout,
+                                leftX - originX, baselineY - originY)
                         leftX += layoutOrPart.width - overlap  #... why overlap?
                         continue
-                    ic = layoutOrPart.ic
                     if ic in unifiedPartLayouts:
                         # Incorporate part rectangle into layout rectangle and prototype
                         # icon rectangle.  Note that because of wrapping, we can extend
-                        # the rectangle left of its current origin and therefore need to
-                        # adjust the origin as well.
+                        # the rectangle left of the layout origin.
                         layout = unifiedPartLayouts[ic]
                         originX, originY = layoutOrigins[ic]
                         layoutOrPart.incorporateRectIntoLayout(layout, leftX - originX,
@@ -1957,8 +1907,6 @@ class ExprLayout:
         # figure out from spine calculations (ListMgr) or icon part height
         if self.topIcon.parent() is None:
             firstPartOrLayout = partLayouts[0]
-            if isinstance(firstPartOrLayout, _JoinedPartLayouts):
-                firstPartOrLayout = firstPartOrLayout.partLayouts[0]
             if isinstance(firstPartOrLayout, ListMgrLayout):
                 # First item is a list-manager layout which will (awkwardly) get sequence
                 # sites on its spines for multi-row layouts.  For single-row layouts,
@@ -2020,15 +1968,22 @@ class ExprLayout:
         width = 0
         for idx in range(startIdx, len(partLayouts)):
             layoutOrBrkLvl = partLayouts[idx]
-            if isinstance(layoutOrBrkLvl, int):
+            if layoutOrBrkLvl is None:
+                continue
+            elif isinstance(layoutOrBrkLvl, int):
                 if brkThreshold is None or layoutOrBrkLvl <= brkThreshold:
                     lastBrkIdx = idx
                     lastBrkWidth = width
-            else:  # Layout or _JoinedPartLayout (_joinConcatenated removed Nones)
+            else:
                 width += layoutOrBrkLvl.width - 1  # -1 for icon boundary overlap
                 if width > margin:
                     if lastBrkIdx is None and brkThreshold is None:
-                        return idx + 1, width
+                        # We've exceeded margin and haven't found a break point, yet
+                        for i in range(idx + 1, len(partLayouts)):
+                            if isinstance(partLayouts[i], int):
+                                return i, width
+                            width += layoutOrBrkLvl.width - 1
+                        return len(partLayouts), width
                     return lastBrkIdx, lastBrkWidth
         return len(partLayouts), width
 
@@ -2050,14 +2005,8 @@ class ExprLayout:
                 print(' ' + layoutList[0].icon.dumpName(), end='')
             elif isinstance(layoutList, (int, type(None))):
                 print('', layoutList, end=' ')
-            elif isinstance(layoutList, _JoinedPartLayouts):
-                print('(', end='')
-                for part in layoutList.partLayouts:
-                    if isinstance(part, (list, tuple)):
-                        print(' ' + part[0].icon.dumpName(), end='')
-                    else:
-                        print(part.ic.dumpName(), part.width, end='')
-                print(')', end='')
+            elif isinstance(layoutList, _ExprPartLayout):
+                print(layoutList.ic.dumpName(), layoutList.width, end='')
         print()
 
     def _continuationIndent(self):
@@ -2122,6 +2071,47 @@ def pushBrkLvl(layout, nLevels=1):
             layout.partLayouts[i] += nLevels
     return layout
 
+def setSeqOffsetsToReferred(ic):
+    """If the given icon has an input site coincident with its output or sequence
+    sites, find the child icon that owns the lowest coincident input at that site
+    and set the yOffsets for this layout's icon seqIn and seqOut sites to the Y values
+    from the "referred" icon that will draw them.  This should be called from the
+    doLayout method of any icon that has a coincident input/sequence site and must
+    appear AFTER the call to doSubLayouts to ensure that icon owning the referred
+    sites has finished setting up its site offsets."""
+    coincSite = ic.hasCoincidentSite()
+    if not coincSite:
+        return  # No coincident site: do nothing
+    coincIc, coincSite = iconsites.lowestCoincidentSite(ic, coincSite)
+    childIc = coincIc.childAt(coincSite)
+    if childIc is None:
+        return  # The lowest coincident site is empty: do nothing
+    # There is a valid icon that will get the referred sites: copy its siteOffsets
+    icYOff = childIc.rect[1] - ic.rect[1]
+    found = False
+    newLeft, newTop, newRight, newBottom = ic.rect
+    if childIc.hasSite('seqIn'):
+        ic.sites.seqIn.yOffset = childIc.sites.seqIn.yOffset + icYOff
+        found = True
+        newTop = max(0, ic.rect[1] + ic.sites.seqIn.yOffset)
+    if childIc.hasSite('seqOut'):
+        ic.sites.seqOut.yOffset = childIc.sites.seqOut.yOffset + icYOff
+        newBottom = max(ic.rect[3] + icYOff, ic.rect[1] + ic.sites.seqOut.yOffset)
+        found = True
+    if found:
+        # I am on the fence about expanding the icon's rectangle to encompass the new
+        # site positions.  In practice all of the current code that searches by site
+        # position, looks at entire statements and does not filter sites out based on
+        # their icon rectangle, so as long as we're not drawing them, we don't need the
+        # rectangle to cover them.  The argument for enabling the code below is that the
+        # inconsistency that an icon can own something outside of its rectangle might
+        # be confusing to future developers.
+        # icon.expandIconRect(ic, (newLeft, newTop, newRight, newBottom))
+        pass
+    else:
+        print("setSeqOffsetsToReferred could not find referred site(s) for icon",
+            ic.dumpName(), 'in', childIc.dumpName())
+
 @dataclass
 class _ExprPartLayout:
     """Layout information for a single icon part.  A part for expression layout purposes
@@ -2176,70 +2166,9 @@ class EmptyArgLayout(_ExprPartLayout):
         self.yOffset = icon.minTxtIconHgt // 2
         self.siteYOffset = 0
 
-class _JoinedPartLayouts:
-    """A series of _ExprPartLayout or Layout objects with no breaks between them,
-    simplified to a single rectangle for faster processing"""
-    def __init__(self, layout):
-        self.partLayouts = []
-        self.width = 0
-        # self.height = 0
-        # self.yOffset = 0
-        if layout is not None:
-            self.append(layout)
-
-    def copy(self):
-        new = _JoinedPartLayouts(None)
-        new.partLayouts = self.partLayouts.copy()
-        new.width = self.width
-        # new.height = self.height
-        # new.yOffset = self.yOffset
-        return new
-
-    def append(self, partsOrLayout):
-        """Append an _ExprPartLayout, Layout, or _JoinedPartLayouts object to the series
-        and expand its associated rectangle to incorporate it."""
-        self._addWidthHeight(partsOrLayout)
-        if isinstance(partsOrLayout, (Layout, _ExprPartLayout)):
-            self.partLayouts.append(partsOrLayout)
-        else:  # _JoinedPartLayouts
-            self.partLayouts.extend(partsOrLayout.partLayouts)
-
-    def copyAppend(self, partsOrLayout):
-        new = self.copy()
-        new.append(partsOrLayout)
-        return new
-
-    def prepend(self, partsOrLayout):
-        """Prepend an _ExprPartLayout, Layout, or _JoinedPartLayouts object to the series
-        and expand its associated rectangle to incorporate it."""
-        self._addWidthHeight(partsOrLayout)
-        if isinstance(partsOrLayout, (Layout, _ExprPartLayout, LazyLayout)):
-            self.partLayouts.insert(0, partsOrLayout)
-        else:  # _JoinedPartLayouts
-            self.partLayouts[:0] = partsOrLayout.partLayouts
-
-    def copyPrepend(self, partsOrLayout):
-        new = self.copy()
-        new.prepend(partsOrLayout)
-        return new
-
-    def _addWidthHeight(self, partsOrLayout):
-        overlap = 0 if self.width == 0 else 1
-        self.width += partsOrLayout.width - overlap
-
-def _iterateRowList(rowList):
-    for layoutOrJoined in rowList:
-        if isinstance(layoutOrJoined, Layout):
-            yield layoutOrJoined
-        else:
-            for joined in layoutOrJoined.partLayouts:
-                yield joined
-
 def _findRightmostLayoutSite(layout):
-    """Find the icon and siteName to own the wrap-arrow symbols given the Layout,
-    JoinedPartLayouts, or _ExprPartLayout to the left of the wrap break-point."""
-    if isinstance(layout, _JoinedPartLayouts):
-        layout = layout.partLayouts[-1]
+    """Find the icon and siteName to own the wrap-arrow symbols given the Layout
+    or _ExprPartLayout to the left of the wrap break-point."""
     if isinstance(layout, _ExprPartLayout):
         return layout.ic, layout.siteName
     # layout is Layout object
