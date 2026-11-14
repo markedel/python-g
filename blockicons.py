@@ -122,44 +122,44 @@ returnTypeSiteImage = comn.asciiToImage((
  "ooooooooooooooo"))
 
 lambdaColonImage = comn.asciiToImage( (
- "oooooooo",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "o  %%  o",
- "o  %% o.",
- "o    o..",
- "o     o.",
- "o  %%  o",
- "o  %%  o",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "oooooooo"))
+ "ooooooooo",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o  848  o",
+ "o  4%4  o",
+ "o  848 o.",
+ "o     o..",
+ "o      o.",
+ "o  848  o",
+ "o  4%4  o",
+ "o  848  o",
+ "o       o",
+ "o       o",
+ "o       o",
+ "ooooooooo"))
 
 lambdaColonTypeoverImage = comn.asciiToImage( (
- "oooooooo",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "o  88  o",
- "o  88 o.",
- "o    o..",
- "o     o.",
- "o  88  o",
- "o  88  o",
- "o      o",
- "o      o",
- "o      o",
- "o      o",
- "oooooooo"))
+ "ooooooooo",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o       o",
+ "o  989  o",
+ "o  888  o",
+ "o  989 o.",
+ "o     o..",
+ "o      o.",
+ "o  989  o",
+ "o  888  o",
+ "o  989  o",
+ "o       o",
+ "o       o",
+ "o       o",
+ "ooooooooo"))
 
 class WithIcon(icon.Icon):
     def __init__(self, isAsync=False, createBlockEnd=True, window=None, location=None):
@@ -339,17 +339,7 @@ class WithIcon(icon.Icon):
             self.replaceWith(entryIcon)
         return entryIcon
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, self.stmt)
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'values_0':
             return self._becomeEntryIcon()
         return None
@@ -532,18 +522,8 @@ class WhileIcon(icon.Icon):
         markDependentStmts(self)
         self.window.backspaceIconToEntry(evt, self, "while", "condIcon")
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+    def becomeEntryIcon(self, siteAfter=None):
         markDependentStmts(self)
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'while')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'while', 'condIcon')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'condIcon':
             return self.window.replaceIconWithEntry(self, 'while', 'condIcon')
         return None
@@ -914,17 +894,7 @@ class ForIcon(icon.Icon):
             win.replaceTop(self, entryIcon)
         return entryIcon
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, self.stmt)
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'targets_0':
             return self._becomeEntryIcon()
         return None
@@ -1107,18 +1077,8 @@ class IfIcon(icon.Icon):
         # icon, converting condition to pending argument
         self.window.backspaceIconToEntry(evt, self, "if", "condIcon")
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+    def becomeEntryIcon(self, siteAfter=None):
         markDependentStmts(self)
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'if')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'if', 'condIcon')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == "condIcon":
             return self.window.replaceIconWithEntry(self, 'if', 'condIcon')
         return None
@@ -1278,17 +1238,7 @@ class ElifIcon(icon.Icon):
         # icon, converting condition to pending argument
         self.window.backspaceIconToEntry(evt, self, "elif", "condIcon")
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'elif')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'elif', 'condIcon')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'condIcon':
             return self.window.replaceIconWithEntry(self, 'elif', 'condIcon')
         return None
@@ -1381,18 +1331,8 @@ class TryIcon(icon.Icon):
             return None
         self.window.backspaceIconToEntry(evt, self, "try")
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+    def becomeEntryIcon(self, siteAfter=None):
         markDependentStmts(self)
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'try')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'try')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, 'try')
         return None
@@ -1538,18 +1478,8 @@ class ExceptIcon(icon.Icon):
         # icon, converting typeIcon to pending argument
         self.window.backspaceIconToEntry(evt, self, "except", "typeIcon")
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+    def becomeEntryIcon(self, siteAfter=None):
         markDependentStmts(self)
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'except')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'except', 'typeIcon')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'typeIcon':
             return self.window.replaceIconWithEntry(self, 'except', 'typeIcon')
         return None
@@ -1747,18 +1677,8 @@ class FinallyIcon(icon.Icon):
             return None
         self.window.backspaceIconToEntry(evt, self, "finally")
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+    def becomeEntryIcon(self, siteAfter=None):
         markDependentStmts(self)
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'finally')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'finally')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, 'finally')
         return None
@@ -1901,18 +1821,8 @@ class ElseIcon(icon.Icon):
             return None
         self.window.backspaceIconToEntry(evt, self, "else")
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
+    def becomeEntryIcon(self, siteAfter=None):
         markDependentStmts(self)
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, 'else')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, 'else')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
         if siteAfter is None or siteAfter == 'attrIcon':
             return self.window.replaceIconWithEntry(self, 'else')
         return None
@@ -2032,7 +1942,7 @@ class DefOrClassIcon(icon.Icon):
             lParenWidth = defLParenImage.width
             argX = icon.dragSeqImage.width + bodyWidth + self.nameWidth + lParenWidth
             self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, siteYOffset,
-                cursorTraverseOrder=1)
+                cursorTraverseOrder=1, allowsTrailingComma=True)
             rParenWidth = defRParenImage.width
             if hasReturnType:
                 rParenWidth += returnTypeSiteImage.width - 1
@@ -2077,10 +1987,13 @@ class DefOrClassIcon(icon.Icon):
                 # the return type arrow if the site is populated (self.hasReturnType)
                 drawInputSite = 'returnType' if self.hasSite('returnType') and not \
                     self.hasReturnType else None
+                lParenImg = defLParenTypeoverImage if self.lParenTypeover else \
+                    defLParenImage
+                rParenImg = defRParenTypeoverImage if self.rParenTypeover else \
+                    defRParenImage
                 lParenDrawData, (rParenOffset, rParenImg) = \
-                    self.argList.drawParens(defLParenImage, defLParenExtendDupRows,
-                        defRParenImage, defRParenExtendDupRows,
-                        drawInputSite=drawInputSite)
+                    self.argList.drawParens(lParenImg, defLParenExtendDupRows,
+                        rParenImg, defRParenExtendDupRows, drawInputSite=drawInputSite)
                 self.drawList.append(lParenDrawData)
                 if self.hasReturnType:
                     returnRpImg = Image.new('RGBA', (rParenImg.width +
@@ -2095,7 +2008,8 @@ class DefOrClassIcon(icon.Icon):
                 self.drawList += self.argList.drawListCommas()
                 self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip, skip='returnType')
+        self._drawEmptySites(toDragImage, clip, skip='returnType',
+            allowTrailingComma=True)
         self.dragSiteDrawn = needDragSite
 
     def argIcons(self):
@@ -2354,17 +2268,7 @@ class DefOrClassIcon(icon.Icon):
                 rightmostIc, rightmostSite = icon.rightmostSite(lastArg)
                 self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.dragSeqImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, self.text)
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'nameIcon':
             return self._becomeEntryIcon()
         return None
@@ -2496,8 +2400,12 @@ class ClassDefIcon(DefOrClassIcon):
             for site in self.sites.argIcons:
                 base = site.att
                 if base is None:
-                    if site.name == 'argIcons_0':
-                        continue  # 1st site can be empty, meaning parens but no bases
+                    siteList = self.sites.argIcons
+                    if site is siteList[0] and len(siteList) == 1 or \
+                            site is siteList[-1] and len(siteList) > 0:
+                        # 1st site can be empty when there are parens but no bases.
+                        # Last site can be allowed trailing comma
+                        continue
                     raise icon.IconExecException(self, "Missing argument(s)")
                 if isinstance(base, listicons.ArgAssignIcon):
                     keyIcon = base.sites.leftArg.att
@@ -2772,11 +2680,11 @@ class LambdaIcon(icon.Icon):
         seqX = icon.OUTPUT_SITE_DEPTH - icon.SEQ_SITE_DEPTH
         self.sites.add('seqIn', 'seqIn', seqX, 0)
         self.sites.add('seqOut', 'seqOut', seqX, bodyHeight-1)
-        self.colonWidth = lambdaColonImage.width - icon.inSiteImage.width + 1
         argX = icon.inSiteImage.width - 1 + bodyWidth
         self.argList = iconlayout.ListLayoutMgr(self, 'argIcons', argX, siteYOffset,
-            simpleSpine=True)
-        totalWidth = argX + self.argList.width + self.colonWidth + icon.EMPTY_ARG_WIDTH
+            simpleSpine=True, allowsTrailingComma=True)
+        totalWidth = argX + self.argList.width + lambdaColonImage.width + \
+            icon.EMPTY_ARG_WIDTH
         self.sites.add('exprIcon', 'input', totalWidth, siteYOffset)
         x, y = (0, 0) if location is None else location
         self.rect = (x, y, x + totalWidth, y + bodyHeight)
@@ -2793,24 +2701,23 @@ class LambdaIcon(icon.Icon):
             if needOutSite:
                 outImageY = self.sites.output.yOffset - icon.outSiteImage.height // 2
                 img.paste(icon.outSiteImage, (0, outImageY))
-            bodyTopY = self.sites.seqIn.yOffset
+            bodyTopY = self.sites.output.yOffset - bodyHeight // 2
             if needSeqSites:
                 icon.drawSeqSites(self, img, 0, bodyTopY)
-            self.drawList = [((0, bodyTopY), img)]
-            # Minimal spines (if arg-list has multi-row layout)
-            argsOffset = bodyLeft + bodyWidth - 1 - icon.OUTPUT_SITE_DEPTH
-            cntrSiteY = bodyTopY + bodyHeight // 2
-            self.drawList += self.argList.drawSimpleSpine(argsOffset, cntrSiteY)
-            # Commas
-            self.drawList += self.argList.drawListCommas(bodyWidth - 1,
-                self.sites.output.yOffset)
+            bodyLeftX = self.sites.output.xOffset
+            self.drawList = [((bodyLeftX, bodyTopY), img)]
+            # Minimal spines (if arg-list has multi-row layout) and commas
+            self.drawList += self.argList.drawSimpleSpine()
+            self.drawList += self.argList.drawListCommas()
             # Colon
             colonImg = lambdaColonTypeoverImage if self.colonTypeover else \
                 lambdaColonImage
-            colonX = bodyLeft + bodyWidth - 1 + self.argList.width - 1
-            self.drawList.append(((colonX, bodyTopY), colonImg))
+            colonX = self.sites.exprIcon.xOffset + icon.OUTPUT_SITE_DEPTH - colonImg.width
+            colonY = self.sites.exprIcon.yOffset - colonImg.height // 2
+            self.drawList.append(((colonX, colonY), colonImg))
+            self.drawList += self.drawWrapArrows()
         self._drawFromDrawList(toDragImage, location, clip, style)
-        self._drawEmptySites(toDragImage, clip)
+        self._drawEmptySites(toDragImage, clip, allowTrailingComma=True)
 
     def argIcons(self):
         return [site.att for site in self.sites.argIcons]
@@ -2827,45 +2734,22 @@ class LambdaIcon(icon.Icon):
         return siteSnapLists
 
     def doLayout(self, outSiteX, outSiteY, layout):
-        self.argList.doLayout(layout)
-        bodyWidth, bodyHeight = self.bodySize
-        heightAbove = bodyHeight // 2
-        heightBelow = bodyHeight - heightAbove
-        width = icon.outSiteImage.width - 1 + bodyWidth - 1 + self.argList.width - 1 + \
-            self.colonWidth + icon.EMPTY_ARG_WIDTH
-        if self.argList.simpleSpineWillDraw():
-            heightAbove = max(heightAbove, self.argList.spineTop)
-            heightBelow = max(heightBelow, self.argList.spineHeight -
-                    self.argList.spineTop)
-        self.sites.output.yOffset = heightAbove
-        self.sites.exprIcon.yOffset = heightAbove
-        self.sites.seqIn.yOffset = heightAbove - bodyHeight // 2
-        self.sites.seqOut.yOffset = self.sites.seqIn.yOffset + bodyHeight - 1
-        height = heightAbove + heightBelow
-        left = outSiteX - self.sites.output.xOffset
-        top = outSiteY - self.sites.output.yOffset
-        self.rect = left, top, left + width, top + height
-        layout.updateSiteOffsets(self.sites.output)
-        layout.doSubLayouts(self.sites.output, left, top + heightAbove)
+        self.rect = layout.calcIconRect(outSiteX, outSiteY)
+        layout.updateIconSites()
+        layout.doSubLayouts()
         self.drawList = None
         self.layoutDirty = False
 
     def calcLayouts(self, marginLimit=999999999):
         bodyWidth, bodyHeight = self.bodySize
-        argListLayouts = self.argList.calcLayouts()
-        exprIcon = self.sites.exprIcon.att
-        exprLayouts = [None] if exprIcon is None else exprIcon.calcLayouts()
-        cntrYOff = bodyHeight // 2
-        layouts = []
-        for argListLayout, exprLayout in iconlayout.allCombinations(
-                (argListLayouts, exprLayouts)):
-            layout = iconlayout.Layout(self, bodyWidth, bodyHeight, cntrYOff)
-            argListLayout.mergeInto(layout, bodyWidth - 1, 0)
-            exprXOff = bodyWidth + argListLayout.width - 1 + self.colonWidth
-            layout.addSubLayout(exprLayout, 'exprIcon', exprXOff, 0)
-            exprWidth = icon.EMPTY_ARG_WIDTH if exprLayout is None else exprLayout.width
-            layout.width = exprXOff + exprWidth - 1
-            layouts.append(layout)
+        layouts = iconlayout.ExprLayout(self, siteName='argIcons_0', width=bodyWidth,
+            height=bodyHeight, yOffset=bodyHeight // 2, siteYOffset=0)
+        brkLvl = None if self.argList.inlineLayout() else 0
+        self.argList.appendToExprLayout(layouts, brkLvl=brkLvl, argRequired=False,
+            allowTrailingComma=True, marginLimit=None)
+        layouts.appendPart(None, self, 'exprIcon', lambdaColonImage.width,
+            lambdaColonImage.height, lambdaColonImage.height // 2, 0)
+        layouts.appendArgLayout(0, self, 'exprIcon', argRequired=True)
         return self.debugLayoutFilter(layouts)
 
     def textRepr(self):
@@ -2979,17 +2863,7 @@ class LambdaIcon(icon.Icon):
                 rightmostIc, rightmostSite = icon.rightmostSite(lastArg)
                 self.window.cursor.setToIconSite(rightmostIc, rightmostSite)
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width - 1
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, "lambda")
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'argIcons_0':
             return self._becomeEntryIcon()
         return None
@@ -3086,7 +2960,7 @@ class LambdaIcon(icon.Icon):
             font = icon.boldFont
         else:
             rightSide = self.sites.exprIcon.xOffset + icon.OUTPUT_SITE_DEPTH
-            leftSide = rightSide - self.colonWidth
+            leftSide = rightSide - lambdaColonImage.width + icon.inSiteImage.width - 1
             textCtr = self.sites.exprIcon.yOffset
             text = ':'
             font = None
@@ -3113,11 +2987,15 @@ def _createFnDefArgsAst(defIc):
     accumArgDefaults = normalArgDefaults
     starArgAst = None
     starStarArgAst = None
-    for site in defIc.sites.argIcons:
+    siteList = defIc.sites.argIcons
+    for site in siteList:
         arg = site.att
         if arg is None:
-            if site.name == 'argIcons_0':
-                continue  # 1st site can be empty, meaning "no arguments"
+            if site is siteList[0] and len(siteList) == 1 or \
+                    site is siteList[-1] and len(siteList) > 0:
+                # 1st site can be empty when there are no arguments.  Last site can be
+                # allowed trailing comma.
+                continue
             raise icon.IconExecException(defIc, "Missing argument(s)")
         if isinstance(arg, listicons.ArgAssignIcon):
             argAst = _createArgAst(arg.sites.leftArg.att)

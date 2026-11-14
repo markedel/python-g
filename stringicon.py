@@ -396,8 +396,11 @@ class StringIcon(icon.Icon):
 
     def click(self, x, y):
         self.window.cursor.erase()
-        if self.becomeEntryIcon(clickPos=(x, y)) is None:
+        cursorTextIdx, _ = self.cursorInText((x, y))
+        if cursorTextIdx is None:
             return False
+        # CursorPos index is 0 at start of string body, negative for quote and type
+        self.setCursorPos(cursorTextIdx)
         self.window.cursor.setToText(self)
         return True
 
@@ -662,14 +665,8 @@ class StringIcon(icon.Icon):
         self.setCursorPos(len(self.string))
         self.window.cursor.setToText(self)
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            cursorTextIdx, cursorWindowPos = self.cursorInText(clickPos)
-            if cursorTextIdx is None:
-                return None, None
-            # CursorPos index is 0 at start of string body, negative for quote and type
-            self.setCursorPos(cursorTextIdx)
-            return self, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
+        # Not sure what should go here.  CommentIcon just returns None.
         if siteAfter is None or siteAfter == 'attrIcon':
             return self
         return None

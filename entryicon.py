@@ -1393,8 +1393,11 @@ class EntryIcon(icon.Icon):
             if not self.hasPendingArgs():
                 self.remove(forceDelete=True)
                 siteBefore, siteAfter, text, idx = handlerIc.typeoverSites()
-                if not handlerIc.setTypeover(1, siteAfter):
-                    # Single character typeover, set cursor to site after typeover
+                if not handlerIc.setTypeover(1, siteAfter) or len(self.text) > 0:
+                    # Single character typeover or leftover text in entry icon.  For the
+                    # (so far, single and esoteric 'from ... import') case where there's
+                    # a conflict between typeover and other legal input, allow
+                    # textEntryHandler to signal that all of typeover was fulfilled.
                     self.window.cursor.setToIconSite(handlerIc, siteAfter)
                 else:
                     self.window.cursor.setToTypeover(handlerIc)

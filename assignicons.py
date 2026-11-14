@@ -654,18 +654,7 @@ class AugmentedAssignIcon(icon.Icon):
             # Cursor is on comma input.  Delete if empty or previous site is empty
             listicons.backspaceComma(self, siteId, evt)
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.dragSeqImage.width - 1 + \
-                self.targetWidth - 1 + icon.TEXT_MARGIN
-            textOriginY = self.rect[1] + self.sites.targetIcon.yOffset
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.globalFont, self.op + '=')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'values_0':
             return self._becomeEntryIcon()
         return None

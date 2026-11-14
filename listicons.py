@@ -2197,17 +2197,7 @@ class CprhIfIcon(icon.Icon):
             rightmostIc.replaceChild(entryIcon, rightmostSite)
         return entryIcon
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, ' if')
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(max(0, cursorTextIdx - 1))
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'testIcon':
             return self._becomeEntryIcon()
         return None
@@ -2510,18 +2500,7 @@ class CprhForIcon(icon.Icon):
             rightmostIc.replaceChild(entryIcon, rightmostSite)
         return entryIcon
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN
-            textOriginY = self.rect[1] + comn.rectHeight(self.rect) // 2
-            text = " async for" if self.isAsync else " for"
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.boldFont, text)
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(max(0, cursorTextIdx - 1))
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'targets_0':
             return self._becomeEntryIcon()
         return None

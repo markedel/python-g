@@ -255,18 +255,7 @@ class InfixIcon(icon.Icon):
             return 'leftArg'
         return 'rightArg'
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + self.sites.output.xOffset + \
-                icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
-            textOriginY = self.rect[1] + self.sites.output.yOffset
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, icon.globalFont, self.operator)
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self._becomeEntryIcon()
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'rightArg':
             return self._becomeEntryIcon()
         return None

@@ -4819,7 +4819,7 @@ class Window:
                 # because 1) it fakes out becomeEntryIcon with an icon that is not
                 # technically in the window, and 2) places code with addText() which has
                 # its own questionable side-effects, such as moving the cursor.
-                convertedEntryIc = firstIconOfSelection.becomeEntryIcon(None, None)
+                convertedEntryIc = firstIconOfSelection.becomeEntryIcon()
                 self.removeIcons(selectedSet - {firstIconOfSelection,
                     firstIconOfSelection.blockEnd})
                 insertedIc = insertedSequences[0][0]

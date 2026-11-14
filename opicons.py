@@ -286,17 +286,7 @@ class UnaryOpIcon(icon.Icon):
     def backspace(self, siteId, evt):
         self.window.backspaceIconToEntry(evt, self, self.operator, pendingArgSite=siteId)
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            textOriginX = self.rect[0] + icon.TEXT_MARGIN + icon.outSiteImage.width
-            textOriginY = self.rect[1] + self.sites.output.yOffset
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, self.font, self.operator)
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'argIcon':
             return self.window.replaceIconWithEntry(self, self.operator, 'argIcon')
         return None
@@ -701,20 +691,7 @@ class BinOpIcon(icon.Icon):
     def backspace(self, siteId, evt):
         backspaceBinOpIcon(self, siteId, evt)
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        if clickPos is not None:
-            depthWidth = (self.depthWidth // 2 + 1) if self.depthWidth > 0 else 0
-            textOriginX = self.rect[0] + self.sites.output.xOffset + depthWidth + \
-                icon.outSiteImage.width + self.leftArgWidth + icon.TEXT_MARGIN - 2
-            textOriginY = self.rect[1] + self.sites.output.yOffset
-            cursorTextIdx, cursorWindowPos = icon.cursorInText(
-                (textOriginX, textOriginY), clickPos, self.font, self.operator,
-                padLeft=depthWidth, padRight=depthWidth)
-            if cursorTextIdx is None:
-                return None, None
-            entryIcon = _becomeEntryIcon(self)
-            entryIcon.setCursorPos(cursorTextIdx)
-            return entryIcon, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
         if siteAfter is None or siteAfter == 'rightArg':
             return _becomeEntryIcon(self)
         return None
@@ -1440,6 +1417,13 @@ class IfExpIcon(icon.Icon):
                 self.replaceChild(placedIc, placeSites[i])
         return nPlaced-1, None
 
+    def becomeEntryIcon(self, siteAfter=None):
+        #... This can get called (and does not properly handle) character typed or
+        #    backspace when text cursor is in 'else' part.
+        if siteAfter is None or siteAfter == 'testExpr' or siteAfter == 'falseExpr':
+            return self._becomeEntryIcon()
+        return None
+
     def backspace(self, siteId, evt):
         win = self.window
         if siteId == 'attrIcon':
@@ -1549,6 +1533,10 @@ class IfExpIcon(icon.Icon):
         # can faithfully reconstitute the if regardless of empty sites).  Attach the
         # entry icon to the rightmost site of the trueExpr if it exists, or to the parent
         # if it does not.
+        self._becomeEntryIcon()
+
+    def _becomeEntryIcon(self):
+        win = self.window
         win.requestRedraw(self.topLevelParent().hierRect(), filterRedundantParens=True)
         if self.hasParens:
             # If the operation had parens, place temporary parens for continuity
@@ -1596,6 +1584,7 @@ class IfExpIcon(icon.Icon):
         self.replaceChild(None, 'testExpr')
         self.replaceChild(None, 'falseExpr')
         win.cursor.setToText(entryIcon, drawNew=False)
+        return entryIcon
 
     def updateParens(self):
         needs = needsParens(self)

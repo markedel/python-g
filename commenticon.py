@@ -252,7 +252,10 @@ class CommentIcon(icon.Icon):
         if not icon.pointInRect((x,y), self.rect):
             return False
         self.window.cursor.erase()
-        self.becomeEntryIcon(clickPos=(x, y))
+        cursorTextIdx, _ = self.cursorInText((x, y))
+        if cursorTextIdx is None:
+            return False
+        self.setCursorPos(cursorTextIdx)
         self.window.cursor.setToText(self)
         return True
 
@@ -445,16 +448,8 @@ class CommentIcon(icon.Icon):
         self.setCursorPos('end')
         self.window.cursor.setToText(self)
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        # Note that while this does make the icon editable, it does not make it an entry
-        # icon, and is generally used for translating a window position to a cursor
-        # position (while also fulfilling the click function for the becomeEntryIcon
-        if clickPos is not None:
-            cursorTextIdx, cursorWindowPos = self.cursorInText(clickPos)
-            if cursorTextIdx is None:
-                return None, None
-            self.setCursorPos(cursorTextIdx)
-            return self, cursorWindowPos
+    def becomeEntryIcon(self, siteAfter=None):
+        # Everything seems to work without doing anything, here
         return None
 
     def cursorInText(self, clickPos, nearestToClick=True):

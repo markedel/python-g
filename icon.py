@@ -1901,19 +1901,11 @@ class Icon:
         and attributes attached to the entry icon as pending args/attributes."""
         print('Backspace method not yet implemented for', self.dumpName())
 
-    def becomeEntryIcon(self, clickPos=None, siteAfter=None):
-        """Open the icon for editing by replacing it with a text entry icon.  If clickPos
-        is specified, will verify that the given x,y position is within its editable
-        area.  If siteAfter is specified, will verify that the given siteId is the site
-        following the editable area of the icon.  Returns the new entry icon and, only if
-        clickPos is specified, the window x,y location within the icon where the cursor
-        would have been placed.  If verification of clickPos or siteAfter fails, returns
-        None for the entry icon.  The reason the additional return value in the clickPos
-        case, is so the caller can nudge the window cursor by the appropriate amount to
-        account for layout and font changes between the clicked icon and the entry icon.
-        Icons that do not support text-editing should not define this method."""
-        if clickPos is not None:
-            return None, None
+    def becomeEntryIcon(self, siteAfter=None):
+        """Open the icon for editing by replacing it with a text entry icon.  If
+        siteAfter is specified, will verify that the given siteId is the site following
+        an editable area of the icon.  Returns the new entry icon.  If verification of
+        siteAfter fails, returns None."""
         return None
 
     def placeArgs(self, placementList, startSiteId=None, overwriteStart=False):
